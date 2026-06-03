@@ -342,11 +342,19 @@ pub(crate) fn layout_block_element(
         || style.border.has_any()
         || style.border_radius > 0.0
         || style.box_shadow.is_some();
+    // An absolutely-positioned element is out of normal flow. Its block/SVG
+    // children must be nested inside a single positioned Container so they are
+    // taken out of flow during pagination too — otherwise they leak into the
+    // page's in-flow content as bare elements, advancing the pagination cursor
+    // and producing phantom page breaks (the parent's `position:absolute` is
+    // lost on the child). A style-less absolute wrapper (no bg/border/height)
+    // would otherwise skip the wrapper path, so trigger it explicitly here.
+    let is_absolute = style.position == Position::Absolute;
     // Limit nesting depth to prevent stack overflow on deeply nested HTML.
     // Beyond depth 40, fall back to flat text collection instead of Containers.
     let nesting_depth = ancestors.len();
     let has_block_kids_for_wrapper = nesting_depth < 40
-        && early_has_visual
+        && (early_has_visual || is_absolute)
         && el.children.iter().any(|c| {
             matches!(c, DomNode::Element(e)
                 if (e.tag.is_block() || e.tag == HtmlTag::Svg)
@@ -1157,7 +1165,8 @@ pub(crate) fn layout_block_element(
         || style.aspect_ratio.is_some()
         || style.height.is_some()
         || (positioned_container && (before_is_abs || after_is_abs))
-        || has_abs_children;
+        || has_abs_children
+        || (is_absolute && has_block_kids_for_wrapper);
     let no_inline_content = !had_inline_runs;
 
     let has_abs_pseudo = positioned_container && (before_is_abs || after_is_abs);

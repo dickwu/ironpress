@@ -253,6 +253,26 @@ pub(crate) fn paginate(
                 *containing_block,
                 *positioned_depth,
             ),
+            // A Container can also be positioned (e.g. a style-less
+            // `position:absolute` wrapper around block/SVG children). Extract
+            // its position/offset so the absolute handler below takes it out of
+            // flow; otherwise it would advance the pagination cursor like an
+            // in-flow block and force a phantom page break. Container carries no
+            // clear/containing_block/positioned_depth fields, so those default.
+            LayoutElement::Container {
+                float,
+                position,
+                offset_top,
+                ..
+            } => (
+                *float,
+                Clear::None,
+                *position,
+                *offset_top,
+                0.0,
+                None,
+                0,
+            ),
             _ => (
                 Float::None,
                 Clear::None,
