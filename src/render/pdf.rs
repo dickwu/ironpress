@@ -1,7 +1,7 @@
 use crate::error::IronpressError;
 use crate::layout::engine::{
     ImageFormat, LayoutElement, Page, PngMetadata, TableCell, TextLine, TextRun,
-    layout_element_paint_order, table_cell_content_height,
+    layout_element_paint_order, table_cell_box_height, table_cell_content_height,
 };
 use crate::parser::ttf::TtfFont;
 use crate::render::background::{
@@ -7708,6 +7708,7 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Baseline,
+            min_height: 0.0,
         };
         let mut content = String::new();
         let fonts = HashMap::new();
@@ -9225,6 +9226,7 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Center,
             vertical_align: VerticalAlign::Middle,
+            min_height: 0.0,
         };
         let mut content = String::new();
         let fonts = HashMap::new();
@@ -10215,6 +10217,7 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let cell_visible = TableCell {
             lines: vec![TextLine {
@@ -10233,6 +10236,7 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let element = LayoutElement::TableRow {
             cells: vec![cell_skip, cell_visible],
@@ -10316,6 +10320,7 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let element = LayoutElement::TableRow {
             cells: vec![cell],
@@ -10421,6 +10426,7 @@ mod tests {
             border,
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let element = LayoutElement::TableRow {
             cells: vec![cell],
@@ -10513,6 +10519,7 @@ mod tests {
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: TextAlign::Right,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let mut content_right = String::new();
         render_cell_text(
@@ -10544,6 +10551,7 @@ mod tests {
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: TextAlign::Center,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
         let mut content_center = String::new();
         render_cell_text(
@@ -10621,6 +10629,7 @@ mod tests {
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
 
         let mut content = String::new();
@@ -10685,6 +10694,7 @@ mod tests {
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
 
         let mut content = String::new();
@@ -10748,6 +10758,7 @@ mod tests {
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Top,
+            min_height: 0.0,
         };
 
         let mut content = String::new();

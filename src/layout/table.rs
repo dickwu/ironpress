@@ -40,12 +40,59 @@ pub struct TableCell {
     pub text_align: TextAlign,
     /// Vertical alignment within the row box.
     pub vertical_align: VerticalAlign,
+    /// Resolved CSS `height`/`min-height` floor for this cell's box, in points.
+    /// Includes any height inherited from the owning `<tr>` and any surplus
+    /// distributed from a fixed-height `<table>`. `0.0` means content-driven.
+    pub min_height: f32,
 }
 
 pub(crate) fn table_cell_content_height(cell: &TableCell) -> f32 {
     let text_h: f32 = cell.lines.iter().map(|l| l.height).sum();
     let nested_h: f32 = cell.nested_rows.iter().map(estimate_element_height).sum();
     cell.padding_top + text_h + nested_h + cell.padding_bottom
+}
+
+/// The cell's box height: the larger of its natural content height and any
+/// CSS-specified height floor. Row height aggregates this across cells, while
+/// `table_cell_content_height` stays content-only so `vertical-align` can offset
+/// content within the (possibly taller) box.
+pub(crate) fn table_cell_box_height(cell: &TableCell) -> f32 {
+    table_cell_content_height(cell).max(cell.min_height)
+}
+
+/// Resolve a `<table>`/`<tr>`/`<td>` element's CSS `height` (and `min-height`,
+/// `max-height`) to a concrete points value used as a row/cell height floor.
+///
+/// Percentage heights resolve against `containing_height` (the table's own
+/// resolved height) when one is known, mirroring the block-flow resolver in
+/// `helpers.rs`. Returns `0.0` when no height is specified, which is the
+/// content-driven default for ordinary tables.
+fn resolve_specified_height(style: &ComputedStyle, containing_height: Option<f32>) -> f32 {
+    let mut h = style.height;
+    if let Some(cb) = containing_height
+        && let Some(percent) = style.percentage_sizing.height
+    {
+        h = Some(cb * percent / 100.0);
+    }
+    if let Some(min_h) = style.min_height {
+        h = Some(h.map_or(min_h, |v| v.max(min_h)));
+    }
+    if let Some(cb) = containing_height
+        && let Some(percent) = style.percentage_sizing.min_height
+    {
+        let min_h = cb * percent / 100.0;
+        h = Some(h.map_or(min_h, |v| v.max(min_h)));
+    }
+    if let Some(max_h) = style.max_height {
+        h = h.map(|v| v.min(max_h));
+    }
+    if let Some(cb) = containing_height
+        && let Some(percent) = style.percentage_sizing.max_height
+    {
+        let max_h = cb * percent / 100.0;
+        h = h.map_or(Some(max_h), |v| Some(v.min(max_h)));
+    }
+    h.unwrap_or(0.0).max(0.0)
 }
 
 /// Parse a width for a `<col>` / `<colgroup>` element.
@@ -828,10 +875,23 @@ pub(crate) fn flatten_table(
         }
     };
 
+    // Resolve the table's own CSS height. Row/cell percentage heights resolve
+    // against it; any surplus beyond the summed row heights is distributed back
+    // across the rows so a fixed-height table fills its box.
+    let table_specified_height = resolve_specified_height(style, Some(style.viewport_height));
+    let row_height_basis = if table_specified_height > 0.0 {
+        Some(table_specified_height)
+    } else {
+        None
+    };
+
     // Build layout rows, tracking cells occupied by rowspan from previous rows.
     // Each entry in `occupied` tracks the remaining rowspan count for that column.
     let mut occupied: Vec<usize> = vec![0; num_cols];
     let mut is_first = true;
+    // Collect this table's rows locally so the table-height surplus can be
+    // distributed across them before they are appended to `output`.
+    let mut table_rows: Vec<LayoutElement> = Vec::new();
     for (row_idx, row) in rows.iter().enumerate() {
         let row_classes = row.class_list();
         // Use section-relative index for nth-child matching (browsers count
@@ -866,6 +926,8 @@ pub(crate) fn flatten_table(
             &row_selector_ctx,
         );
         row_style.width = Some(inner_width);
+        // A `<tr style="height">` floor applies to every cell in the row.
+        let row_specified_height = resolve_specified_height(&row_style, row_height_basis);
         let mut cells = Vec::new();
 
         // Current logical column position in the grid
@@ -908,6 +970,7 @@ pub(crate) fn flatten_table(
                     border: LayoutBorder::default(),
                     text_align: TextAlign::Left,
                     vertical_align: VerticalAlign::Baseline,
+                    min_height: row_specified_height,
                 });
                 for i in 0..span_cols {
                     occupied[col_pos + i] -= 1;
@@ -1015,6 +1078,10 @@ pub(crate) fn flatten_table(
                 .or(row_style.background_color)
                 .map(|c: crate::types::Color| c.to_f32_rgba());
 
+            // The cell's height floor is the larger of its own CSS height and
+            // the row's height; either expands the row beyond its content.
+            let cell_specified_height = resolve_specified_height(&cell_style, row_height_basis);
+
             cells.push(TableCell {
                 lines,
                 nested_rows,
@@ -1029,6 +1096,7 @@ pub(crate) fn flatten_table(
                 border: LayoutBorder::from_computed(&cell_style.border),
                 text_align: cell_style.text_align,
                 vertical_align: cell_style.vertical_align,
+                min_height: cell_specified_height.max(row_specified_height),
             });
 
             // Mark subsequent rows as occupied if rowspan > 1
@@ -1047,7 +1115,7 @@ pub(crate) fn flatten_table(
             let is_header = row_section_elements[row_idx]
                 .map(|s| s.tag == HtmlTag::Thead)
                 .unwrap_or(false);
-            output.push(LayoutElement::TableRow {
+            table_rows.push(LayoutElement::TableRow {
                 cells,
                 col_widths: col_widths.clone(),
                 margin_top: if is_first {
@@ -1067,8 +1135,60 @@ pub(crate) fn flatten_table(
     }
 
     // Add bottom margin after the last row
-    if let Some(LayoutElement::TableRow { margin_bottom, .. }) = output.last_mut() {
+    if let Some(LayoutElement::TableRow { margin_bottom, .. }) = table_rows.last_mut() {
         *margin_bottom = style.margin.bottom;
+    }
+
+    // When the table specifies a height larger than the sum of its rows,
+    // distribute the surplus across the rows (proportionally to their current
+    // heights) so the table fills its box. Tables with no specified height are
+    // left untouched, keeping the common content-driven case unchanged.
+    distribute_table_height_surplus(&mut table_rows, table_specified_height);
+
+    output.append(&mut table_rows);
+}
+
+/// Grow each row so the rows together fill `table_height` when the table
+/// specifies a height beyond their natural sum. The surplus is shared in
+/// proportion to each row's current height (falling back to an even split when
+/// every row is zero-height). A `0.0` or already-satisfied target is a no-op,
+/// preserving content-driven tables.
+fn distribute_table_height_surplus(table_rows: &mut [LayoutElement], table_height: f32) {
+    if table_height <= 0.0 || table_rows.is_empty() {
+        return;
+    }
+    let row_heights: Vec<f32> = table_rows
+        .iter()
+        .map(|row| match row {
+            LayoutElement::TableRow { cells, .. } => {
+                cells.iter().map(table_cell_box_height).fold(0.0f32, f32::max)
+            }
+            _ => 0.0,
+        })
+        .collect();
+    let total: f32 = row_heights.iter().sum();
+    let surplus = table_height - total;
+    if surplus <= 0.0 {
+        return;
+    }
+    let row_count = table_rows.len() as f32;
+    for (row, &row_h) in table_rows.iter_mut().zip(row_heights.iter()) {
+        let extra = if total > 0.0 {
+            surplus * (row_h / total)
+        } else {
+            surplus / row_count
+        };
+        let target = row_h + extra;
+        if let LayoutElement::TableRow { cells, .. } = row {
+            for cell in cells.iter_mut() {
+                // Phantom cells (rowspan == 0) belong to a rowspan from an
+                // earlier row; leave their height to that origin row.
+                if cell.rowspan == 0 {
+                    continue;
+                }
+                cell.min_height = cell.min_height.max(target);
+            }
+        }
     }
 }
 

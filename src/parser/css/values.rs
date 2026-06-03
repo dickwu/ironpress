@@ -51,6 +51,29 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
         return number.parse::<f32>().ok().map(CssValue::Number);
     }
 
+    // Absolute physical units resolve straight to points (1in = 72pt).
+    // `mm` is matched before `cm`/`in` so "40mm" is not mistaken for another unit.
+    if let Some(number) = val.strip_suffix("mm") {
+        return number
+            .parse::<f32>()
+            .ok()
+            .map(|value| CssValue::Length(value * 72.0 / 25.4));
+    }
+
+    if let Some(number) = val.strip_suffix("cm") {
+        return number
+            .parse::<f32>()
+            .ok()
+            .map(|value| CssValue::Length(value * 72.0 / 2.54));
+    }
+
+    if let Some(number) = val.strip_suffix("in") {
+        return number
+            .parse::<f32>()
+            .ok()
+            .map(|value| CssValue::Length(value * 72.0));
+    }
+
     val.parse::<f32>().ok().map(CssValue::Length)
 }
 
@@ -298,6 +321,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "word-wrap"
             | "text-transform"
             | "direction"
+            | "vertical-align"
     ) {
         return Some(CssValue::Keyword(val.to_string()));
     }

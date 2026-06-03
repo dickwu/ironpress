@@ -148,10 +148,15 @@ pub(super) struct NestedTextBlock<'a> {
 }
 
 /// Compute the height of a table row from its cells.
+///
+/// Uses each cell's box height so a CSS `height` on a row/cell expands the row
+/// beyond its natural content. `vertical-align` placement (below) compares the
+/// content-only height against this row height to position content within the
+/// expanded box.
 pub(super) fn compute_row_height(cells: &[TableCell]) -> f32 {
     cells
         .iter()
-        .map(table_cell_content_height)
+        .map(table_cell_box_height)
         .fold(0.0f32, f32::max)
 }
 
@@ -484,6 +489,7 @@ pub(super) fn render_nested_text_block(
             border: crate::layout::engine::LayoutBorder::default(),
             text_align: block.text_align,
             vertical_align: VerticalAlign::Baseline,
+            min_height: 0.0,
         };
         render_cell_text(
             content,

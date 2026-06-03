@@ -1,4 +1,4 @@
-use super::engine::{LayoutElement, Page, layout_element_paint_order, table_cell_content_height};
+use super::engine::{LayoutElement, Page, layout_element_paint_order, table_cell_box_height};
 use crate::style::computed::{BorderCollapse, Clear, Float, Overflow, Position};
 use std::collections::HashMap;
 
@@ -81,7 +81,7 @@ fn estimate_element_height_bounded(element: &LayoutElement, depth: usize) -> f32
         } => {
             let row_h = cells
                 .iter()
-                .map(table_cell_content_height)
+                .map(table_cell_box_height)
                 .fold(0.0f32, f32::max);
             margin_top + row_h + margin_bottom
         }
@@ -95,7 +95,7 @@ fn estimate_element_height_bounded(element: &LayoutElement, depth: usize) -> f32
         } => {
             let row_h = cells
                 .iter()
-                .map(table_cell_content_height)
+                .map(table_cell_box_height)
                 .fold(0.0f32, f32::max);
             margin_top + padding_top + row_h + padding_bottom + margin_bottom
         }
@@ -325,7 +325,7 @@ pub(crate) fn paginate(
             } => {
                 let row_height = cells
                     .iter()
-                    .map(table_cell_content_height)
+                    .map(table_cell_box_height)
                     .fold(0.0f32, f32::max);
                 (row_height, *margin_top, *margin_bottom)
             }
@@ -337,7 +337,7 @@ pub(crate) fn paginate(
             } => {
                 let row_height = cells
                     .iter()
-                    .map(table_cell_content_height)
+                    .map(table_cell_box_height)
                     .fold(0.0f32, f32::max);
                 (row_height, *margin_top, *margin_bottom)
             }
@@ -510,7 +510,7 @@ pub(crate) fn paginate(
                     let header_h = match &header {
                         LayoutElement::TableRow { cells, .. } => cells
                             .iter()
-                            .map(table_cell_content_height)
+                            .map(table_cell_box_height)
                             .fold(0.0f32, f32::max),
                         _ => 0.0,
                     };
