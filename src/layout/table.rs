@@ -1304,6 +1304,7 @@ fn collect_table_cell_content_inner(
                         &mut inner_env,
                     );
                 } else if el.tag == HtmlTag::Svg
+                    || el.tag == HtmlTag::Img
                     || (recurse_blocks
                         && style.display != Display::Inline
                         && el.tag != HtmlTag::Br
