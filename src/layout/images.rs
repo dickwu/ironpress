@@ -166,13 +166,28 @@ pub(crate) fn load_image_from_element(
     // Fall back to raster image using the same bytes.
     let image = load_raster_image_bytes(raw, style.blur_radius)?;
 
-    // Determine dimensions from attributes
-    let attr_width = parse_html_image_dimension(el.attributes.get("width"));
-    let attr_height = parse_html_image_dimension(el.attributes.get("height"));
+    // Intrinsic pixel size → points (1px = 0.75pt, the 96dpi convention used by
+    // parse_html_image_dimension) so a single specified dimension preserves the
+    // image's natural aspect ratio instead of squaring it.
+    let intrinsic_w = image.source_width as f32 * 0.75;
+    let intrinsic_h = image.source_height as f32 * 0.75;
 
-    let (width, height) = match (attr_width, attr_height) {
+    // Honour CSS width/height first (e.g. style="width:46mm"), then the HTML
+    // width/height attributes. The raster path previously read only the HTML
+    // attributes, so CSS-sized images fell back to the 200x150 default and
+    // lost their aspect ratio.
+    let spec_width = style
+        .width
+        .or_else(|| parse_html_image_dimension(el.attributes.get("width")));
+    let spec_height = style
+        .height
+        .or_else(|| parse_html_image_dimension(el.attributes.get("height")));
+
+    let (width, height) = match (spec_width, spec_height) {
         (Some(w), Some(h)) => (w, h),
-        (Some(w), None) => (w, w), // fallback: square
+        (Some(w), None) if intrinsic_w > 0.0 => (w, intrinsic_h * (w / intrinsic_w)),
+        (Some(w), None) => (w, w), // degenerate: no intrinsic size
+        (None, Some(h)) if intrinsic_h > 0.0 => (intrinsic_w * (h / intrinsic_h), h),
         (None, Some(h)) => (h, h),
         (None, None) => (available_width.min(200.0), 150.0),
     };
