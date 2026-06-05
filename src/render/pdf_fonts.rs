@@ -990,6 +990,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let line = TextLine {
             runs: vec![run],

@@ -2746,6 +2746,10 @@ fn font_name_for_run(run: &TextRun) -> &str {
 }
 
 fn estimate_run_width(run: &TextRun) -> f32 {
+    // Atomic inline-block boxes reserve their explicit width regardless of text.
+    if let Some(box_width) = run.box_width {
+        return box_width;
+    }
     crate::fonts::str_width(&run.text, run.font_size, &run.font_family, run.bold)
 }
 
@@ -2766,6 +2770,10 @@ fn resolve_font_name(
 
 /// Estimate run width using TTF metrics for custom fonts, falling back to fixed estimation.
 fn estimate_run_width_with_fonts(run: &TextRun, custom_fonts: &HashMap<String, TtfFont>) -> f32 {
+    // Atomic inline-block boxes reserve their explicit width regardless of text.
+    if let Some(box_width) = run.box_width {
+        return box_width;
+    }
     if let Some(width) = crate::text::measure_text_width(
         &run.text,
         run.font_size,
@@ -4306,6 +4314,15 @@ fn merge_runs(runs: &[TextRun]) -> Vec<TextRun> {
                 && prev.background_color == run.background_color
                 && prev.padding == run.padding
                 && prev.border_radius == run.border_radius
+                // Atomic inline-block boxes (fill-in underlines / checkbox
+                // squares) are indivisible: never fold them into a neighbour, or
+                // the box width/border would be applied to the merged text.
+                && prev.box_width.is_none()
+                && prev.box_height.is_none()
+                && prev.border_bottom.is_none()
+                && run.box_width.is_none()
+                && run.box_height.is_none()
+                && run.border_bottom.is_none()
                 // Don't merge across an RTL <-> LTR boundary: the bidi pass
                 // split these into separate runs in visual order, and merging
                 // would give the shaper a mixed-script buffer whose guessed
@@ -6091,6 +6108,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         }
     }
 
@@ -7695,6 +7715,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let non_empty_run = TextRun {
             text: "Hello".to_string(),
@@ -7710,6 +7733,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let cell = TableCell {
             lines: vec![
@@ -7794,6 +7820,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         assert_eq!(font_name_for_run(&run_bi), "Helvetica-BoldOblique");
 
@@ -7811,6 +7840,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         assert_eq!(font_name_for_run(&run_b), "Helvetica-Bold");
 
@@ -7828,6 +7860,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         assert_eq!(font_name_for_run(&run_i), "Helvetica-Oblique");
     }
@@ -9234,6 +9269,9 @@ mod tests {
             background_color: Some((1.0, 0.0, 0.0, 1.0)),
             padding: (4.0, 2.0),
             border_radius: 3.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let cell = TableCell {
             lines: vec![TextLine {
@@ -9290,6 +9328,9 @@ mod tests {
             background_color: Some((1.0, 1.0, 0.0, 1.0)),
             padding: (2.0, 1.0),
             border_radius: 4.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let run_b = TextRun {
             text: "World".to_string(),
@@ -9305,6 +9346,9 @@ mod tests {
             background_color: Some((1.0, 1.0, 0.0, 1.0)),
             padding: (2.0, 1.0),
             border_radius: 8.0, // Different border_radius
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let merged = merge_runs(&[run_a.clone(), run_b.clone()]);
         // Different border_radius should prevent merging
@@ -10220,6 +10264,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let run_visible = TextRun {
             text: "Visible".to_string(),
@@ -10328,6 +10375,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let cell = TableCell {
             lines: vec![TextLine {
@@ -10413,6 +10463,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let mut border = LayoutBorder::default();
         border.top = LayoutBorderSide {
@@ -10525,6 +10578,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
 
         // Test right-align
@@ -10615,6 +10671,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let strike_run = TextRun {
             text: "Strike".to_string(),
@@ -10630,6 +10689,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
 
         let cell = crate::layout::engine::TableCell {
@@ -10701,6 +10763,9 @@ mod tests {
             background_color: Some((0.2, 0.4, 0.8, 1.0)),
             padding: (3.0, 2.0),
             border_radius: 4.0, // Triggers rounded rect for inline background
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
 
         let cell = crate::layout::engine::TableCell {
@@ -10765,6 +10830,9 @@ mod tests {
             background_color: Some((1.0, 1.0, 0.0, 1.0)), // yellow
             padding: (2.0, 1.0),
             border_radius: 0.0, // No rounding — should use rectangle
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
 
         let cell = crate::layout::engine::TableCell {
@@ -11438,5 +11506,114 @@ mod tests {
             "render_pdf and render_pdf_to_writer should produce identical output"
         );
         assert_eq!(pdf_bytes, writer_buf);
+    }
+
+    /// Collect every `TextRun` from all table cells across all pages.
+    fn collect_table_cell_runs(pages: &[crate::layout::engine::Page]) -> Vec<TextRun> {
+        let mut runs = Vec::new();
+        for page in pages {
+            for (_, element) in &page.elements {
+                if let LayoutElement::TableRow { cells, .. } = element {
+                    for cell in cells {
+                        for line in &cell.lines {
+                            runs.extend(line.runs.iter().cloned());
+                        }
+                    }
+                }
+            }
+        }
+        runs
+    }
+
+    #[test]
+    fn inline_block_box_in_table_cell_carries_box_fields() {
+        // A fill-in underline (border-bottom + explicit width) and a checkbox
+        // square (explicit width/height + background) inside a table cell must
+        // each produce ONE atomic TextRun carrying the box geometry, flowing
+        // inline with the sibling label text — not be flattened to plain runs.
+        let html = "<table><tr><td>\
+            NPO <span style=\"border-bottom:0.25mm solid #555;display:inline-block;width:50mm;\">&nbsp;</span> \
+            <span style=\"display:inline-block;width:3mm;height:3mm;background:#cfcfcf;\">.</span>\
+            </td></tr></table>";
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let runs = collect_table_cell_runs(&pages);
+
+        // 50mm = 141.73pt; 3mm = 8.50pt.
+        let underline = runs
+            .iter()
+            .find(|r| r.border_bottom.is_some())
+            .expect("fill-in underline run with border_bottom should exist");
+        let bw = underline.box_width.expect("underline run should carry box_width");
+        assert!(
+            (bw - 141.73).abs() < 1.0,
+            "underline box_width should be ~50mm (141.73pt), got {bw}"
+        );
+        let (line_w, _rgb) = underline.border_bottom.unwrap();
+        assert!(line_w > 0.0, "border_bottom width should be positive");
+
+        let checkbox = runs
+            .iter()
+            .find(|r| {
+                r.box_width.is_some_and(|w| (w - 8.50).abs() < 0.6)
+                    && r.box_height.is_some_and(|h| (h - 8.50).abs() < 0.6)
+            })
+            .expect("3mm x 3mm checkbox run should exist");
+        assert!(
+            checkbox.background_color.is_some(),
+            "checkbox run should carry its background fill"
+        );
+
+        // The plain "NPO" label text must still be present as its own run(s):
+        // the inline box is emitted alongside sibling text, not in place of it.
+        let has_label = runs.iter().any(|r| r.text.contains("NPO"));
+        assert!(has_label, "sibling label text should still be collected");
+    }
+
+    #[test]
+    fn merge_runs_never_merges_atomic_box_runs() {
+        // Two visually identical runs that would normally merge must NOT merge
+        // when either carries an atomic inline-block box field, or the box
+        // width/border would bleed onto the merged text.
+        let plain = TextRun {
+            text: "AB".to_string(),
+            font_size: 12.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            line_through: false,
+            overline: false,
+            color: (0.0, 0.0, 0.0),
+            font_family: FontFamily::Helvetica,
+            link_url: None,
+            background_color: None,
+            padding: (0.0, 0.0),
+            border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
+        };
+        // Sanity: two plain identical runs DO merge.
+        assert_eq!(merge_runs(&[plain.clone(), plain.clone()]).len(), 1);
+
+        let mut boxed = plain.clone();
+        boxed.box_width = Some(40.0);
+        // A box run next to a plain run stays separate (both orders).
+        assert_eq!(
+            merge_runs(&[plain.clone(), boxed.clone()]).len(),
+            2,
+            "plain followed by box run should not merge"
+        );
+        assert_eq!(
+            merge_runs(&[boxed.clone(), plain.clone()]).len(),
+            2,
+            "box run followed by plain should not merge"
+        );
+        // Two box runs never merge either.
+        assert_eq!(
+            merge_runs(&[boxed.clone(), boxed]).len(),
+            2,
+            "two box runs should not merge"
+        );
     }
 }

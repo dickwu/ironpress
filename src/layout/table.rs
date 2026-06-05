@@ -782,6 +782,12 @@ pub(crate) fn flatten_table(
                         let content_width: f32 = runs
                             .iter()
                             .map(|run| {
+                                // Atomic inline-block boxes (fill-in underlines /
+                                // checkbox squares) reserve their explicit width so
+                                // the column is wide enough not to truncate them.
+                                if let Some(box_width) = run.box_width {
+                                    return box_width;
+                                }
                                 // Measure full text width using estimate_word_width
                                 let full_width = estimate_word_width(
                                     &run.text,
@@ -1266,6 +1272,31 @@ fn table_cell_edge_block_margins(
     )
 }
 
+/// Concatenate all descendant text of a node subtree into one string. Used to
+/// build the single atomic text run for a `display:inline-block` box inside a
+/// table cell (its box/border/size are carried on the run; its text is its
+/// flattened content). Whitespace collapsing and `&nbsp;`→space handling are
+/// applied by the caller via `collapse_whitespace`.
+fn flatten_descendant_text(nodes: &[DomNode]) -> String {
+    let mut out = String::new();
+    for node in nodes {
+        match node {
+            DomNode::Text(text) => out.push_str(text),
+            DomNode::Element(el) => out.push_str(&flatten_descendant_text(&el.children)),
+        }
+    }
+    out
+}
+
+/// Whether an inline-block element carries a renderable atomic box: an explicit
+/// `width`/`height`, or any non-zero border. Such boxes (form fill-in
+/// underlines, checkbox squares) must render their geometry rather than being
+/// flattened to plain text runs that drop the border and size.
+fn inline_block_has_box(style: &ComputedStyle) -> bool {
+    style.display == Display::InlineBlock
+        && (style.width.is_some() || style.height.is_some() || style.border.has_any())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_table_cell_content_inner(
     nodes: &[DomNode],
@@ -1351,6 +1382,9 @@ fn collect_table_cell_content_inner(
                             background_color: bg,
                             padding: pad,
                             border_radius: br,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         },
                     );
                 }
@@ -1393,6 +1427,56 @@ fn collect_table_cell_content_inner(
                     &selector_ctx,
                 );
                 if style.display == Display::None {
+                    continue;
+                }
+                // Atomic inline-block box (form fill-in underline / checkbox
+                // square): emit ONE text run carrying the box geometry so the
+                // border and explicit width/height survive, flowing inline with
+                // sibling text. Without this the box is flattened to plain runs
+                // that drop the border and size. Only applies to SVG-free inline
+                // blocks; SVG/Img keep their dedicated branches below.
+                if el.tag != HtmlTag::Svg && el.tag != HtmlTag::Img && inline_block_has_box(&style) {
+                    let raw = flatten_descendant_text(&el.children);
+                    let collapsed = collapse_whitespace(&raw);
+                    // Keep a single space when empty so the run survives merge /
+                    // wrap (which skip empty text); its advance comes from the
+                    // box_width, not the glyph.
+                    let text = if collapsed.is_empty() {
+                        " ".to_string()
+                    } else {
+                        collapsed
+                    };
+                    let bottom = style.border.bottom;
+                    let border_bottom = if bottom.width > 0.0 {
+                        let rgb = bottom
+                            .color
+                            .map(|c| c.to_f32_rgb())
+                            .unwrap_or_else(|| style.color.to_f32_rgb());
+                        Some((bottom.width, rgb))
+                    } else {
+                        None
+                    };
+                    push_text_run(
+                        runs,
+                        TextRun {
+                            text,
+                            font_size: style.font_size,
+                            bold: style.font_weight == FontWeight::Bold,
+                            italic: style.font_style == FontStyle::Italic,
+                            underline: style.text_decoration_underline,
+                            line_through: style.text_decoration_line_through,
+                            overline: style.text_decoration_overline,
+                            color: style.color.to_f32_rgb(),
+                            link_url: link_url.map(String::from),
+                            font_family: resolve_style_font_family(&style, fonts),
+                            background_color: style.background_color.map(|c| c.to_f32_rgba()),
+                            padding: (0.0, 0.0),
+                            border_radius: style.border_radius,
+                            box_width: style.width,
+                            box_height: style.height,
+                            border_bottom,
+                        },
+                    );
                     continue;
                 }
                 let url = if el.tag == HtmlTag::A {
@@ -1522,6 +1606,9 @@ fn push_line_break_run(
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         },
     );
 }

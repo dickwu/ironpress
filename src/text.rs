@@ -426,6 +426,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         assert!(shape_text_run(&run, &fonts).is_none());
     }
@@ -447,6 +450,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         assert!(shape_text_run(&run, &fonts).is_none());
     }
@@ -546,6 +552,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let result = shape_text_run(&run, &fonts);
         let shaped = result.expect("shape_text_run must return Some for a found font");
@@ -574,6 +583,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let shaped = shape_text_run(&run, &fonts).expect("empty text still returns Some");
         assert_eq!(shaped.width, 0.0);

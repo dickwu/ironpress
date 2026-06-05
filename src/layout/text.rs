@@ -89,6 +89,13 @@ pub(crate) fn estimate_word_width(
     crate::fonts::str_width(word, font_size, font_family, false)
 }
 
+/// Whether a run carries an atomic inline-block box (explicit width/height or a
+/// bottom border). Such runs must stay indivisible during wrapping and reserve
+/// their `box_width` rather than the glyph width.
+pub(crate) fn run_has_box(run: &TextRun) -> bool {
+    run.box_width.is_some() || run.box_height.is_some() || run.border_bottom.is_some()
+}
+
 // ---------------------------------------------------------------------------
 // TextWrapOptions
 // ---------------------------------------------------------------------------
@@ -201,6 +208,14 @@ pub(crate) fn wrap_text_runs(
             styled_words.push(("\n".to_string(), run.clone(), false));
             continue;
         }
+        // An atomic inline-block box (form fill-in underline / checkbox square)
+        // must stay one indivisible word: never split on whitespace, and reserve
+        // its `box_width` rather than the glyph width. Treat it as preserved
+        // spacing so the consumption loop measures it via `run_advance`.
+        if run_has_box(run) {
+            styled_words.push((run.text.clone(), run.clone(), true));
+            continue;
+        }
         let has_newlines = run.text.contains('\n');
         let has_preserved_spacing = run.text.chars().next().is_some_and(char::is_whitespace)
             || run.text.chars().last().is_some_and(char::is_whitespace)
@@ -256,14 +271,18 @@ pub(crate) fn wrap_text_runs(
             continue;
         }
 
-        let word_width = estimate_word_width(
-            &word,
-            template.font_size,
-            &template.font_family,
-            template.bold,
-            template.italic,
-            fonts,
-        );
+        let word_width = if let Some(box_width) = template.box_width {
+            box_width
+        } else {
+            estimate_word_width(
+                &word,
+                template.font_size,
+                &template.font_family,
+                template.bold,
+                template.italic,
+                fonts,
+            )
+        };
         let space_width = estimate_word_width(
             " ",
             template.font_size,
@@ -365,6 +384,9 @@ pub(crate) fn wrap_text_runs(
                     background_color: None,
                     padding: (0.0, 0.0),
                     border_radius: 0.0,
+                    box_width: None,
+                    box_height: None,
+                    border_bottom: None,
                 });
                 word
             } else {
@@ -374,14 +396,18 @@ pub(crate) fn wrap_text_runs(
             word
         };
 
-        let w = estimate_word_width(
-            &text,
-            template.font_size,
-            &template.font_family,
-            template.bold,
-            template.italic,
-            fonts,
-        );
+        let w = if let Some(box_width) = template.box_width {
+            box_width
+        } else {
+            estimate_word_width(
+                &text,
+                template.font_size,
+                &template.font_family,
+                template.bold,
+                template.italic,
+                fonts,
+            )
+        };
         current_width += w;
         line_height = line_height.max(template.font_size * line_height_factor);
 
@@ -665,6 +691,9 @@ fn collect_text_runs_inner(
                             background_color: bg,
                             padding: pad,
                             border_radius: br,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         },
                         runs,
                         fonts,
@@ -688,6 +717,9 @@ fn collect_text_runs_inner(
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         });
                     } else if el.attributes.contains_key("data-math") {
                         // Skip math elements — they are rendered as MathBlock
@@ -815,6 +847,9 @@ impl<'a> FlexTextRunCollector<'a> {
                                     .map(|c| c.to_f32_rgba()),
                                 padding: text_padding,
                                 border_radius: 0.0,
+                                box_width: None,
+                                box_height: None,
+                                border_bottom: None,
                             },
                             self.runs,
                             self.fonts,
@@ -875,6 +910,9 @@ impl<'a> FlexTextRunCollector<'a> {
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         });
                         continue;
                     }
@@ -908,6 +946,9 @@ impl<'a> FlexTextRunCollector<'a> {
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         });
                     }
                 }

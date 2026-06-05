@@ -252,7 +252,53 @@ pub(super) fn render_cell_text(
             let (r, g, b) = run.color;
             let run_width = estimate_run_width_with_fonts(run, ctx.custom_fonts);
 
-            if let Some((background_r, background_g, background_b, _background_a)) =
+            // Atomic inline-block box (form fill-in underline / checkbox square):
+            // paint the background as a box_width x box_height rectangle centred
+            // on the text line (approximating vertical-align: middle) and stroke
+            // the bottom border, instead of the text-sized background rect.
+            let is_box =
+                run.box_width.is_some() || run.box_height.is_some() || run.border_bottom.is_some();
+            if is_box {
+                let box_w = run.box_width.unwrap_or(run_width);
+                // Vertical centre of the text line, ~0.3em above the baseline.
+                let mid_y = text_y + run.font_size * 0.3;
+                if let Some(box_h) = run.box_height {
+                    let box_bottom = mid_y - box_h / 2.0;
+                    if let Some((bg_r, bg_g, bg_b, _bg_a)) = run.background_color {
+                        content.push_str(&format!("{bg_r} {bg_g} {bg_b} rg\n"));
+                        if run.border_radius > 0.0 {
+                            content.push_str(&rounded_rect_path(
+                                x,
+                                box_bottom,
+                                box_w,
+                                box_h,
+                                run.border_radius,
+                            ));
+                            content.push_str("\nf\n");
+                        } else {
+                            content.push_str(&format!("{x} {box_bottom} {box_w} {box_h} re\nf\n"));
+                        }
+                    }
+                } else if let Some((bg_r, bg_g, bg_b, _bg_a)) = run.background_color {
+                    // No explicit height: fall back to a text-height background.
+                    let ry = text_y - 2.0;
+                    let rh = run.font_size + 2.0;
+                    content.push_str(&format!("{bg_r} {bg_g} {bg_b} rg\n"));
+                    content.push_str(&format!("{x} {ry} {box_w} {rh} re\nf\n"));
+                }
+                if let Some((bw, (br, bg2, bb))) = run.border_bottom {
+                    // Bottom border line: at the box bottom when a height is set,
+                    // otherwise just below the text baseline (a writing line).
+                    let line_y = match run.box_height {
+                        Some(box_h) => mid_y - box_h / 2.0,
+                        None => text_y - run.font_size * 0.18,
+                    };
+                    let x2 = x + box_w;
+                    content.push_str(&format!(
+                        "{br} {bg2} {bb} RG\n{bw} w\n{x} {line_y} m {x2} {line_y} l\nS\n",
+                    ));
+                }
+            } else if let Some((background_r, background_g, background_b, _background_a)) =
                 run.background_color
             {
                 let (pad_h, pad_v) = run.padding;

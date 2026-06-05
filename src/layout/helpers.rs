@@ -443,6 +443,9 @@ pub(crate) fn build_pseudo_block(
                 background_color: None,
                 padding: (0.0, 0.0),
                 border_radius: 0.0,
+                box_width: None,
+                box_height: None,
+                border_bottom: None,
             },
             &mut runs,
             fonts,
@@ -655,6 +658,9 @@ pub(crate) fn build_pseudo_inline_run(
         background_color: pseudo_style.background_color.map(|c| c.to_f32_rgba()),
         padding: (0.0, 0.0),
         border_radius: 0.0,
+        box_width: None,
+        box_height: None,
+        border_bottom: None,
     }
 }
 

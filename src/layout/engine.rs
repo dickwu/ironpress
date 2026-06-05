@@ -217,6 +217,20 @@ pub struct TextRun {
     pub padding: (f32, f32),
     /// Border radius for inline spans (e.g. badge with rounded corners).
     pub border_radius: f32,
+    /// Explicit `width` (pt) for an atomic `display:inline-block` box carried on
+    /// this run. When `Some`, line layout reserves this advance and any
+    /// `background_color`/`border_bottom` is painted at this width rather than
+    /// the text-glyph width (used for form fill-in underlines and checkbox
+    /// squares inside table cells).
+    pub box_width: Option<f32>,
+    /// Explicit `height` (pt) for an atomic inline-block box carried on this
+    /// run. When `Some`, the box/background is drawn this tall (vertically
+    /// centred on the text line, approximating `vertical-align: middle`).
+    pub box_height: Option<f32>,
+    /// Bottom border of an atomic inline-block box: `(width_pt, rgb)`. When
+    /// `Some`, a line of this width/colour is stroked along the bottom of the
+    /// box spanning `box_width` (or the run advance when no `box_width`).
+    pub border_bottom: Option<(f32, (f32, f32, f32))>,
 }
 
 /// A laid-out line of text runs.
@@ -817,6 +831,9 @@ fn flatten_nodes(
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            box_width: None,
+                            box_height: None,
+                            border_bottom: None,
                         },
                         &mut text_runs,
                         env.fonts,
@@ -1054,6 +1071,9 @@ pub(crate) fn flatten_element(
                 background_color: None,
                 padding: (0.0, 0.0),
                 border_radius: 0.0,
+                box_width: None,
+                box_height: None,
+                border_bottom: None,
             }],
             height: style.font_size * resolved_line_height_factor(&style, env.fonts),
         };
@@ -1219,6 +1239,9 @@ pub(crate) fn flatten_element(
                     background_color: None,
                     padding: (0.0, 0.0),
                     border_radius: 0.0,
+                    box_width: None,
+                    box_height: None,
+                    border_bottom: None,
                 },
                 &mut runs,
                 env.fonts,
@@ -1375,6 +1398,9 @@ pub(crate) fn flatten_element(
                 background_color: None,
                 padding: (0.0, 0.0),
                 border_radius: 0.0,
+                box_width: None,
+                box_height: None,
+                border_bottom: None,
             },
             &mut runs,
             env.fonts,
@@ -1651,6 +1677,9 @@ pub(crate) fn flatten_element(
                         background_color: None,
                         padding: (0.0, 0.0),
                         border_radius: 0.0,
+                        box_width: None,
+                        box_height: None,
+                        border_bottom: None,
                     },
                     &mut runs,
                     env.fonts,
@@ -1701,6 +1730,9 @@ pub(crate) fn flatten_element(
                     background_color: None,
                     padding: (0.0, 0.0),
                     border_radius: 0.0,
+                    box_width: None,
+                    box_height: None,
+                    border_bottom: None,
                 },
                 &mut runs,
                 env.fonts,
@@ -5450,6 +5482,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         // At 12pt, each char ~6pt. "Hi" = 12pt.
         // "Supercalifragilisticexpialidocious" = 34*6 = 204pt.
@@ -5494,6 +5529,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let lines = wrap_text_runs(
             vec![run],
@@ -5525,6 +5563,9 @@ mod tests {
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
         };
         let lines = wrap_text_runs(
             vec![run],
