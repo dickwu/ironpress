@@ -3314,6 +3314,21 @@ fn parse_border_shorthand(k: &str) -> (f32, Option<Color>, BorderStyle) {
             if let Ok(v) = n.parse::<f32>() {
                 width = v;
             }
+        } else if let Some(n) = part.strip_suffix("mm") {
+            // Absolute physical units resolve straight to points (1in = 72pt).
+            // Without these, `mm`/`cm`/`in` border widths silently became
+            // 0-width and the border vanished — print/A4 layouts use mm grids.
+            if let Ok(v) = n.parse::<f32>() {
+                width = v * 72.0 / 25.4;
+            }
+        } else if let Some(n) = part.strip_suffix("cm") {
+            if let Ok(v) = n.parse::<f32>() {
+                width = v * 72.0 / 2.54;
+            }
+        } else if let Some(n) = part.strip_suffix("in") {
+            if let Ok(v) = n.parse::<f32>() {
+                width = v * 72.0;
+            }
         } else {
             match *part {
                 "dashed" => border_style = BorderStyle::Dashed,
