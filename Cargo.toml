@@ -36,7 +36,7 @@ fontdb = "0.23"
 flate2 = "1"
 resvg = "0.47"
 rustybuzz = "0.20"
-subsetter = "0.2.3"
+subsetter = "0.2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "rt"], optional = true }
 ureq = { version = "3", optional = true }
