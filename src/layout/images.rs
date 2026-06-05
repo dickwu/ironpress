@@ -80,7 +80,11 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
             bit_depth: png_info.bit_depth,
         };
         Some(RasterImageAsset {
-            data: png_info.idat_data,
+            // Store the FULL raw PNG bytes (not the deflated IDAT) so the PDF
+            // renderer can fully decode it into a DeviceRGB image + alpha SMask
+            // via add_raw_png_image_object. The legacy Predictor-15 path mishandles
+            // RGBA (DecodeParms /Colors 4 vs /DeviceRGB's 3 components → scanline shear).
+            data: raw,
             source_width: png_info.width,
             source_height: png_info.height,
             format: ImageFormat::Png,

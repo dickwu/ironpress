@@ -685,21 +685,22 @@ pub(super) fn render_nested_layout_elements(
             } => {
                 let img_x = planned_element.origin_x;
                 let img_y = planned_element.top_y - height;
-                let img_obj_id = ctx.pdf_writer.add_image_object(
+                if let Some(img_obj_id) = ctx.pdf_writer.add_layout_image_object(
                     &image.data,
                     image.source_width,
                     image.source_height,
                     image.format,
                     image.png_metadata.as_ref(),
-                );
-                let img_name = format!("Im{img_obj_id}");
-                content.push_str(&format!(
-                    "q\n{width} 0 0 {height} {img_x} {img_y} cm\n/{img_name} Do\nQ\n"
-                ));
-                ctx.page_images.push(ImageRef {
-                    name: img_name,
-                    obj_id: img_obj_id,
-                });
+                ) {
+                    let img_name = format!("Im{img_obj_id}");
+                    content.push_str(&format!(
+                        "q\n{width} 0 0 {height} {img_x} {img_y} cm\n/{img_name} Do\nQ\n"
+                    ));
+                    ctx.page_images.push(ImageRef {
+                        name: img_name,
+                        obj_id: img_obj_id,
+                    });
+                }
             }
             LayoutElement::Svg {
                 tree,

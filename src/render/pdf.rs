@@ -2506,26 +2506,27 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                     let img_x = margin.left;
                     // PDF y-axis is bottom-up; y_pos is top of margin, image draws from bottom-left
                     let img_y = page_size.height - margin.top - y_pos - height;
-                    let img_obj_id = pdf_writer.add_image_object(
+                    if let Some(img_obj_id) = pdf_writer.add_layout_image_object(
                         &image.data,
                         image.source_width,
                         image.source_height,
                         image.format,
                         image.png_metadata.as_ref(),
-                    );
-                    let img_name = format!("Im{img_obj_id}");
-                    content.push_str(&format!(
-                        "q\n{w} 0 0 {h} {x} {y} cm\n/{name} Do\nQ\n",
-                        w = width,
-                        h = height,
-                        x = img_x,
-                        y = img_y,
-                        name = img_name,
-                    ));
-                    page_images.push(ImageRef {
-                        name: img_name,
-                        obj_id: img_obj_id,
-                    });
+                    ) {
+                        let img_name = format!("Im{img_obj_id}");
+                        content.push_str(&format!(
+                            "q\n{w} 0 0 {h} {x} {y} cm\n/{name} Do\nQ\n",
+                            w = width,
+                            h = height,
+                            x = img_x,
+                            y = img_y,
+                            name = img_name,
+                        ));
+                        page_images.push(ImageRef {
+                            name: img_name,
+                            obj_id: img_obj_id,
+                        });
+                    }
                 }
                 LayoutElement::Svg {
                     tree,
@@ -5217,6 +5218,31 @@ impl PdfWriter {
         self.objects.push(header);
         self.binary_objects.insert(id, data.to_vec());
         id
+    }
+
+    /// Add a layout `<img>` image XObject, choosing the correct encoding per
+    /// format: a PNG is fully decoded into a DeviceRGB image (plus an alpha
+    /// `/SMask`) via `add_raw_png_image_object`; a JPEG is embedded as DCTDecode.
+    /// Returns `None` when a PNG cannot be decoded, so the caller skips the image
+    /// rather than emit a corrupt one. Requires `data` to be the raw image bytes.
+    fn add_layout_image_object(
+        &mut self,
+        data: &[u8],
+        source_width: u32,
+        source_height: u32,
+        format: ImageFormat,
+        png_metadata: Option<&PngMetadata>,
+    ) -> Option<usize> {
+        match format {
+            ImageFormat::Png => self.add_raw_png_image_object(data),
+            ImageFormat::Jpeg => Some(self.add_image_object(
+                data,
+                source_width,
+                source_height,
+                format,
+                png_metadata,
+            )),
+        }
     }
 
     fn add_icc_profile_object(&mut self, icc_profile: &[u8]) -> Option<usize> {
