@@ -354,7 +354,7 @@ pub(crate) fn layout_block_element(
     // Beyond depth 40, fall back to flat text collection instead of Containers.
     let nesting_depth = ancestors.len();
     let has_block_kids_for_wrapper = nesting_depth < 40
-        && (early_has_visual || is_absolute)
+        && (early_has_visual || is_absolute || style.page_break_inside_avoid)
         && el.children.iter().any(|c| {
             matches!(c, DomNode::Element(e)
                 if (e.tag.is_block() || e.tag == HtmlTag::Svg)
@@ -487,6 +487,10 @@ pub(crate) fn layout_block_element(
         let has_block_children = !parent_has_visual
             && !early_has_abs_children
             && !has_abs_pseudo_early
+            // page-break-inside: avoid must take the Container wrapper path so
+            // the block paginates as one atom; the fast path would splice its
+            // children into the flat stream where they can split across pages.
+            && !style.page_break_inside_avoid
             && el.children.iter().any(|c| {
                 matches!(c, DomNode::Element(e)
                     if (has_own_margins(e.tag)
@@ -1166,7 +1170,10 @@ pub(crate) fn layout_block_element(
         || style.height.is_some()
         || (positioned_container && (before_is_abs || after_is_abs))
         || has_abs_children
-        || (is_absolute && has_block_kids_for_wrapper);
+        || (is_absolute && has_block_kids_for_wrapper)
+        // page-break-inside: avoid — a Container is the pagination atom, so
+        // wrapping the block makes paginate() move it across pages whole.
+        || style.page_break_inside_avoid;
     let no_inline_content = !had_inline_runs;
 
     let has_abs_pseudo = positioned_container && (before_is_abs || after_is_abs);

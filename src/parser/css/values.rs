@@ -236,7 +236,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return Some(CssValue::Keyword(lower));
     }
 
-    if property.starts_with("page-break") {
+    if property.starts_with("page-break") || property == "break-inside" {
         return Some(CssValue::Keyword(lower));
     }
 

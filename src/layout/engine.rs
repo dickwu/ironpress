@@ -2157,6 +2157,136 @@ mod tests {
         assert!(pages.len() >= 2);
     }
 
+    /// Find the single Container on a page and return how many of its children
+    /// match `pred`. Panics when the page has no Container.
+    fn container_children_matching(page: &Page, pred: fn(&LayoutElement) -> bool) -> usize {
+        page.elements
+            .iter()
+            .find_map(|(_, el)| match el {
+                LayoutElement::Container { children, .. } => {
+                    Some(children.iter().filter(|c| pred(c)).count())
+                }
+                _ => None,
+            })
+            .expect("expected a Container on the page")
+    }
+
+    // A4 content height with default 72pt margins is ~697.9pt. A 450pt filler
+    // leaves ~248pt — too little for the 320pt keep-together pair, but enough
+    // for its first 160pt child. The control (no avoid) therefore splits the
+    // pair across the page boundary; `page-break-inside: avoid` must move the
+    // pair to page 2 as a whole. (Text-carrying divs lay out as single
+    // TextBlocks; the avoid wrapper around two block children must become an
+    // atomic Container.)
+    const KEEP_TOGETHER_HTML: &str = r#"
+        <div style="height: 450pt; background: #eee;">filler</div>
+        <div PROP>
+            <div style="height: 160pt; background: #ddd;">keep-a</div>
+            <div style="height: 160pt; background: #ccc;">keep-b</div>
+        </div>
+    "#;
+
+    #[test]
+    fn block_without_avoid_splits_across_pages() {
+        let html = KEEP_TOGETHER_HTML.replace("PROP", "");
+        let nodes = parse_html(&html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 2, "control doc should span two pages");
+        // filler + keep-a fit on page 1; keep-b overflows to page 2.
+        assert_eq!(pages[0].elements.len(), 2);
+        assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn page_break_inside_avoid_moves_block_to_next_page_whole() {
+        let html = KEEP_TOGETHER_HTML.replace("PROP", r#"style="page-break-inside: avoid;""#);
+        let nodes = parse_html(&html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 2, "doc should span two pages");
+        // Page 1 keeps only the filler; the avoid pair moves whole to page 2
+        // as one atomic Container wrapping both children.
+        assert_eq!(pages[0].elements.len(), 1);
+        assert!(matches!(
+            pages[0].elements[0].1,
+            LayoutElement::TextBlock { .. }
+        ));
+        assert_eq!(pages[1].elements.len(), 1);
+        let kids = container_children_matching(&pages[1], |c| {
+            matches!(c, LayoutElement::TextBlock { .. })
+        });
+        assert_eq!(kids, 2, "both children stay inside the wrapper");
+    }
+
+    #[test]
+    fn break_inside_avoid_alias_also_keeps_block_together() {
+        let html = KEEP_TOGETHER_HTML.replace("PROP", r#"style="break-inside: avoid;""#);
+        let nodes = parse_html(&html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 1);
+        assert!(matches!(
+            pages[1].elements[0].1,
+            LayoutElement::Container { .. }
+        ));
+    }
+
+    #[test]
+    fn page_break_inside_avoid_fitting_block_stays_on_page() {
+        // 2 x 100pt children fit in the ~248pt remainder: no break at all.
+        let html = r#"
+            <div style="height: 450pt; background: #eee;">filler</div>
+            <div style="page-break-inside: avoid;">
+                <div style="height: 100pt; background: #ddd;">keep-a</div>
+                <div style="height: 100pt; background: #ccc;">keep-b</div>
+            </div>
+        "#;
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 1, "fitting block must not force a page break");
+        assert_eq!(pages[0].elements.len(), 2);
+    }
+
+    #[test]
+    fn page_break_inside_avoid_taller_than_page_does_not_loop() {
+        // Degenerate: the keep-together block alone exceeds a full page. It
+        // cannot fit anywhere, so it must stay in place (clipped) rather than
+        // page-break forever.
+        let html = r#"
+            <div style="page-break-inside: avoid;">
+                <div style="height: 400pt;">a</div>
+                <div style="height: 400pt;">b</div>
+            </div>
+        "#;
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].elements.len(), 1);
+    }
+
+    #[test]
+    fn page_break_inside_avoid_does_not_inherit_to_children() {
+        // The avoid wrapper's plain-text child divs (no own avoid property)
+        // must not each become Containers; only the wrapper does. CSS break
+        // properties do not inherit.
+        let html = r#"
+            <div style="page-break-inside: avoid;">
+                <div><p>plain child</p></div>
+            </div>
+        "#;
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].elements.len(), 1);
+        let nested_containers = container_children_matching(&pages[0], |c| {
+            matches!(c, LayoutElement::Container { .. })
+        });
+        assert_eq!(
+            nested_containers, 0,
+            "child blocks must not inherit the avoid wrapper"
+        );
+    }
+
     #[test]
     fn bare_text_node() {
         // Text not wrapped in any element — exercises DomNode::Text branch in flatten_nodes

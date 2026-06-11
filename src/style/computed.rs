@@ -594,6 +594,10 @@ pub struct ComputedStyle {
     pub line_height: f32,
     pub page_break_before: bool,
     pub page_break_after: bool,
+    /// `page-break-inside: avoid` / `break-inside: avoid` — the block must not
+    /// be split by a page break: when it doesn't fit in the remaining page
+    /// space it moves to the next page as a whole.
+    pub page_break_inside_avoid: bool,
     pub border: BorderSides,
     pub display: Display,
     pub width: Option<f32>,
@@ -696,6 +700,7 @@ impl Default for ComputedStyle {
             line_height: f32::NAN,
             page_break_before: false,
             page_break_after: false,
+            page_break_inside_avoid: false,
             border: BorderSides::default(),
             display: Display::Block,
             width: None,
@@ -934,6 +939,8 @@ pub fn compute_style_with_context(
     style.z_index = 0;
     style.row_gap = 0.0;
     style.blur_radius = 0.0;
+    // CSS break properties do not inherit.
+    style.page_break_inside_avoid = false;
     // custom_properties inherit from parent (already cloned)
 
     // Apply tag defaults
@@ -1775,6 +1782,13 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "page-break-after") {
         style.page_break_after = k == "always";
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "page-break-inside") {
+        style.page_break_inside_avoid = k == "avoid";
+    }
+    // Modern alias: `break-inside: avoid | avoid-page` (CSS Fragmentation L3).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "break-inside") {
+        style.page_break_inside_avoid = k == "avoid" || k == "avoid-page";
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "filter") {
