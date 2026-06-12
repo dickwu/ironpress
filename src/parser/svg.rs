@@ -231,6 +231,8 @@ pub enum SvgNode {
         font_bold: Option<bool>,
         /// Per-element font-style override (true = italic/oblique).
         font_italic: Option<bool>,
+        /// `letter-spacing` in SVG user units (plain number / px values only).
+        letter_spacing: Option<f32>,
         /// SVG text-anchor: "start" (default), "middle", or "end".
         text_anchor: SvgTextAnchor,
         content: String,
@@ -735,6 +737,7 @@ fn parse_svg_node_with_viewport(
             let fill_specified = has_fill_specified(el);
             let fill_raw = parse_fill_raw(el);
             let (font_family, font_bold, font_italic) = parse_svg_font_attrs(el);
+            let letter_spacing = parse_svg_letter_spacing(el);
             let content = collect_text_content(el);
             let style = parse_svg_style(el);
             let text_anchor = match el.attributes.get("text-anchor").map(|s| s.as_str()) {
@@ -752,6 +755,7 @@ fn parse_svg_node_with_viewport(
                 font_family,
                 font_bold,
                 font_italic,
+                letter_spacing,
                 text_anchor,
                 content,
                 style,
@@ -1229,6 +1233,19 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
         font_italic,
         opacity,
     }
+}
+
+/// Parse `letter-spacing` from a `<text>` element (attribute or inline style).
+///
+/// Only plain numbers and `px` values are supported (SVG user units);
+/// `normal`, `em`, and percentage values resolve to `None`.
+fn parse_svg_letter_spacing(el: &ElementNode) -> Option<f32> {
+    let raw = style_property_value(el, "letter-spacing")
+        .map(str::to_string)
+        .or_else(|| el.attributes.get("letter-spacing").map(|v| v.to_string()))?;
+    let raw = raw.trim();
+    let raw = raw.strip_suffix("px").unwrap_or(raw).trim();
+    raw.parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
 /// Extract the raw `font-size` value from a `<text>` element.

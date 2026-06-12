@@ -466,6 +466,7 @@ fn render_node(
             font_family,
             font_bold,
             font_italic,
+            letter_spacing,
             text_anchor,
             content,
             style,
@@ -539,15 +540,25 @@ fn render_node(
                 (false, false) => 3,
             };
 
+            // letter-spacing adds a constant advance between glyphs; it is
+            // painted via the Tc operator and included in anchor width math.
+            let letter_spacing = letter_spacing.unwrap_or(0.0);
+            let spacing_gaps = |glyph_count: usize| -> f32 {
+                letter_spacing * glyph_count.saturating_sub(1) as f32
+            };
+
             // Adjust x for text-anchor
             let text_x = match text_anchor {
                 SvgTextAnchor::Start => *x,
                 SvgTextAnchor::Middle | SvgTextAnchor::End => {
                     let text_w = match &custom {
-                        Some((_, _, shaped, _)) => shaped.width,
+                        Some((_, _, shaped, _)) => {
+                            shaped.width + spacing_gaps(shaped.glyphs.len())
+                        }
                         None => {
                             let (ff, is_bold) = font_metrics_font(&font);
                             crate::fonts::str_width(content, size, &ff, is_bold)
+                                + spacing_gaps(content.chars().count())
                         }
                     };
                     if *text_anchor == SvgTextAnchor::Middle {
@@ -563,6 +574,9 @@ fn render_node(
                 .map_or(font.as_str(), |(resource_name, ..)| resource_name.as_str());
             out.push_str("BT\n");
             out.push_str(&format!("/{font_label} {size} Tf\n"));
+            if letter_spacing != 0.0 {
+                out.push_str(&format!("{letter_spacing} Tc\n"));
+            }
             out.push_str(&format!("{text_render_mode} Tr\n"));
             if let Some((r, g, b)) = fill {
                 out.push_str(&format!("{r} {g} {b} rg\n"));
@@ -580,6 +594,11 @@ fn render_node(
                     let encoded = encode_pdf_text(content);
                     out.push_str(&format!("({encoded}) Tj\n"));
                 }
+            }
+            if letter_spacing != 0.0 {
+                // Character spacing survives ET; reset so later text on the
+                // same content stream is unaffected.
+                out.push_str("0 Tc\n");
             }
             out.push_str("ET\n");
             if opacity_wrapped {
@@ -2067,6 +2086,7 @@ mod tests {
             font_family: Some("Helvetica".to_string()),
             font_bold: Some(false),
             font_italic: Some(false),
+            letter_spacing: None,
             text_anchor: SvgTextAnchor::Start,
             content: text.to_string(),
             style: SvgStyle {
@@ -3153,6 +3173,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle {
@@ -3206,6 +3227,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle {
@@ -3263,6 +3285,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle::default(),
@@ -3301,6 +3324,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle {
@@ -3349,6 +3373,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle {
@@ -3403,6 +3428,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     text_anchor: SvgTextAnchor::Start,
                     content: "Hello".to_string(),
                     style: SvgStyle {
@@ -3442,6 +3468,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle {
@@ -3493,6 +3520,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     text_anchor: SvgTextAnchor::Start,
                     content: "Hello".to_string(),
                     style: SvgStyle {
@@ -3532,6 +3560,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 text_anchor: SvgTextAnchor::Start,
                 content: "Hello".to_string(),
                 style: SvgStyle::default(),
