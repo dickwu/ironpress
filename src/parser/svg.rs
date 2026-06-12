@@ -224,7 +224,8 @@ pub enum SvgNode {
         /// True when the element explicitly set `fill` (including `none`).
         fill_specified: bool,
         fill_raw: Option<String>,
-        /// Per-element font-family override (resolved PDF name, e.g. "Helvetica-Bold").
+        /// Per-element font-family override (raw CSS family stack; resolved
+        /// render-side against custom fonts, then base-14 families).
         font_family: Option<String>,
         /// Per-element font-weight override (true = bold).
         font_bold: Option<bool>,
@@ -269,7 +270,7 @@ pub struct SvgStyle {
     pub clip_path: Option<String>,
     /// `stroke-width` is inherited in SVG.
     pub stroke_width: Option<f32>,
-    /// Inherited SVG font-family, resolved to a PDF base family name.
+    /// Inherited SVG font-family (raw CSS family stack; resolved render-side).
     pub font_family: Option<String>,
     /// Inherited SVG font-weight.
     pub font_bold: Option<bool>,
@@ -1250,7 +1251,10 @@ fn parse_svg_font_family_value(val: &str) -> Option<String> {
     if val.is_empty() {
         None
     } else {
-        Some(resolve_svg_font_family(val))
+        // Keep the raw family stack: the renderer resolves it against
+        // add_font-registered custom fonts first, then base-14 families
+        // (see svg_to_pdf::resolve_svg_text_font / resolve_svg_font_family).
+        Some(val.to_string())
     }
 }
 
@@ -1370,7 +1374,7 @@ fn parse_fill_raw(el: &ElementNode) -> Option<String> {
 }
 
 /// Map a CSS font-family value to a PDF base-font family name.
-fn resolve_svg_font_family(css_family: &str) -> String {
+pub(crate) fn resolve_svg_font_family(css_family: &str) -> String {
     let lower = css_family.to_ascii_lowercase();
     if lower.contains("times") || lower == "serif" {
         "Times-Roman".to_string()
@@ -4623,26 +4627,29 @@ mod tests {
     // ── font attribute parsing ─────────────────────────────────────────
 
     #[test]
-    fn parse_svg_font_family_times() {
+    fn parse_svg_font_family_keeps_raw_value_times() {
         let el = make_el("text", vec![("font-family", "Times New Roman")]);
         let svg = make_svg_el(vec![("width", "100"), ("height", "100")], vec![el]);
         let tree = parse_svg_from_element(&svg).unwrap();
         match &tree.children[0] {
             SvgNode::Text { font_family, .. } => {
-                assert_eq!(font_family.as_deref(), Some("Times-Roman"));
+                // Raw value preserved; base-14 mapping happens render-side.
+                assert_eq!(font_family.as_deref(), Some("Times New Roman"));
+                assert_eq!(resolve_svg_font_family("Times New Roman"), "Times-Roman");
             }
             other => panic!("expected Text, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_svg_font_family_courier() {
+    fn parse_svg_font_family_keeps_raw_value_courier() {
         let el = make_el("text", vec![("font-family", "Courier New")]);
         let svg = make_svg_el(vec![("width", "100"), ("height", "100")], vec![el]);
         let tree = parse_svg_from_element(&svg).unwrap();
         match &tree.children[0] {
             SvgNode::Text { font_family, .. } => {
-                assert_eq!(font_family.as_deref(), Some("Courier"));
+                assert_eq!(font_family.as_deref(), Some("Courier New"));
+                assert_eq!(resolve_svg_font_family("Courier New"), "Courier");
             }
             other => panic!("expected Text, got {other:?}"),
         }

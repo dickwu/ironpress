@@ -1667,6 +1667,53 @@ fn main() {
     }
 
     #[test]
+    fn add_font_used_by_svg_text() {
+        // A real shapeable face: SVG custom-font emission requires shaped
+        // glyph output, exactly like the HTML custom-font text path.
+        let ttf_data = include_bytes!("../assets/LiberationSans-Regular.ttf").to_vec();
+        let pdf = HtmlConverter::new()
+            .add_font("testfont", ttf_data)
+            .convert(
+                r##"<svg width="200" height="50" viewBox="0 0 200 50"><text x="10" y="30" font-family="testfont, Helvetica" font-size="20" fill="#000000">Hello</text></svg>"##,
+            )
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(
+            content.contains("/testfont 20 Tf"),
+            "SVG text should bind the registered custom font"
+        );
+        assert!(
+            content.contains("] TJ"),
+            "SVG text with a custom font should emit shaped glyph IDs"
+        );
+        assert!(
+            content.contains("/Subtype /CIDFontType2"),
+            "a custom font used only by SVG text should still be embedded"
+        );
+        assert!(
+            !content.contains("(Hello) Tj"),
+            "custom-font SVG text should not fall back to WinAnsi literal text"
+        );
+    }
+
+    #[test]
+    fn svg_text_with_unregistered_family_falls_back_to_base14() {
+        let pdf = html_to_pdf(
+            r#"<svg width="200" height="50" viewBox="0 0 200 50"><text x="10" y="30" font-family="NoSuchFont" font-size="20">Hello</text></svg>"#,
+        )
+        .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(
+            content.contains("/Helvetica 20 Tf"),
+            "unregistered SVG font families should keep the base-14 mapping"
+        );
+        assert!(
+            content.contains("(Hello) Tj"),
+            "base-14 SVG text should keep literal text emission"
+        );
+    }
+
+    #[test]
     fn custom_font_falls_back_to_helvetica_when_not_registered() {
         let pdf = html_to_pdf(r#"<p style="font-family: 'UnknownFont'">Text</p>"#).unwrap();
         let content = String::from_utf8_lossy(&pdf);
