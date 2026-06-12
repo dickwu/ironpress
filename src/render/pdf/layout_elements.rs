@@ -413,6 +413,10 @@ pub(super) fn render_nested_text_block(
             ctx.shadings,
             ctx.shading_counter,
             Some(ctx.page_ext_gstates),
+            Some(crate::render::svg_to_pdf::SvgFontContext {
+                custom_fonts: ctx.text.custom_fonts,
+                prepared: ctx.text.prepared_custom_fonts,
+            }),
             BackgroundPaintContext::new(
                 SvgViewportBox::new(ref_x, ref_y, ref_w, ref_h),
                 SvgViewportBox::new(
@@ -741,6 +745,10 @@ pub(super) fn render_nested_layout_elements(
                             shading_counter: ctx.shading_counter,
                             ext_gstates: Some(ctx.page_ext_gstates),
                             image_sink: Some(&mut image_sink),
+                            fonts: Some(crate::render::svg_to_pdf::SvgFontContext {
+                                custom_fonts: ctx.text.custom_fonts,
+                                prepared: ctx.text.prepared_custom_fonts,
+                            }),
                         };
                         crate::render::svg_to_pdf::render_svg_tree_with_resources(
                             tree,

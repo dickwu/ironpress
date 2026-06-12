@@ -534,6 +534,10 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                             &mut page_shadings,
                             &mut shading_counter,
                             Some(&mut page_ext_gstates),
+                            Some(crate::render::svg_to_pdf::SvgFontContext {
+                                custom_fonts,
+                                prepared: &prepared_custom_fonts,
+                            }),
                             BackgroundPaintContext::new(
                                 SvgViewportBox::new(ref_x, ref_y, ref_w, ref_h),
                                 SvgViewportBox::new(
@@ -1349,6 +1353,10 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                             &mut page_shadings,
                             &mut shading_counter,
                             Some(&mut page_ext_gstates),
+                            Some(crate::render::svg_to_pdf::SvgFontContext {
+                                custom_fonts,
+                                prepared: &prepared_custom_fonts,
+                            }),
                             BackgroundPaintContext::new(
                                 SvgViewportBox::new(ref_x, ref_y, ref_w, ref_h),
                                 SvgViewportBox::new(
@@ -1726,6 +1734,10 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                                 &mut page_shadings,
                                 &mut shading_counter,
                                 Some(&mut page_ext_gstates),
+                                Some(crate::render::svg_to_pdf::SvgFontContext {
+                                    custom_fonts,
+                                    prepared: &prepared_custom_fonts,
+                                }),
                                 BackgroundPaintContext::new(
                                     SvgViewportBox::new(ref_x, ref_y, ref_w, ref_h),
                                     SvgViewportBox::new(bg_x, bg_y, cell.width, cell_render_h),
@@ -2095,6 +2107,12 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                                                     shading_counter: &mut shading_counter,
                                                     ext_gstates: Some(&mut page_ext_gstates),
                                                     image_sink: Some(&mut image_sink),
+                                                    fonts: Some(
+                                                        crate::render::svg_to_pdf::SvgFontContext {
+                                                            custom_fonts,
+                                                            prepared: &prepared_custom_fonts,
+                                                        },
+                                                    ),
                                                 };
                                             crate::render::svg_to_pdf::render_svg_tree_with_resources(
                                                 tree,
@@ -2569,6 +2587,10 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                                 shading_counter: &mut shading_counter,
                                 ext_gstates: Some(&mut page_ext_gstates),
                                 image_sink: Some(&mut image_sink),
+                                fonts: Some(crate::render::svg_to_pdf::SvgFontContext {
+                                    custom_fonts,
+                                    prepared: &prepared_custom_fonts,
+                                }),
                             };
                             crate::render::svg_to_pdf::render_svg_tree_with_resources(
                                 tree,
@@ -3488,6 +3510,10 @@ fn render_container_children(
                             shading_counter: &mut 0,
                             ext_gstates: Some(page_ext_gstates),
                             image_sink: None,
+                            fonts: Some(crate::render::svg_to_pdf::SvgFontContext {
+                                custom_fonts,
+                                prepared: prepared_custom_fonts,
+                            }),
                         };
                         crate::render::svg_to_pdf::render_svg_tree_with_resources(
                             tree, content, &mut res,
@@ -3500,6 +3526,10 @@ fn render_container_children(
                         shading_counter: &mut 0,
                         ext_gstates: Some(page_ext_gstates),
                         image_sink: None,
+                        fonts: Some(crate::render::svg_to_pdf::SvgFontContext {
+                            custom_fonts,
+                            prepared: prepared_custom_fonts,
+                        }),
                     };
                     crate::render::svg_to_pdf::render_svg_tree_with_resources(
                         tree, content, &mut res,
@@ -4261,7 +4291,7 @@ fn estimate_line_width_with_fonts(line: &TextLine, custom_fonts: &HashMap<String
 }
 
 /// Sanitize a font name for use as a PDF name object (remove spaces, special chars).
-fn sanitize_pdf_name(name: &str) -> String {
+pub(crate) fn sanitize_pdf_name(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
         .collect()
@@ -4426,6 +4456,7 @@ fn render_svg_background(
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
     mut ext_gstates: Option<&mut Vec<(String, f32)>>,
+    fonts: Option<crate::render::svg_to_pdf::SvgFontContext<'_>>,
     paint: BackgroundPaintContext,
 ) {
     // SVG image resources frequently omit explicit width/height and only provide
@@ -4628,6 +4659,7 @@ fn render_svg_background(
                         shading_counter,
                         ext_gstates: ext_gstates.as_deref_mut(),
                         image_sink: Some(&mut image_sink),
+                        fonts,
                     };
                     crate::render::svg_to_pdf::render_svg_tree_with_resources(
                         tree,
@@ -8196,6 +8228,7 @@ mod tests {
             &mut shadings,
             &mut shading_counter,
             None,
+            None,
             BackgroundPaintContext::new(
                 SvgViewportBox::new(0.0, 0.0, 200.0, 100.0),
                 SvgViewportBox::new(0.0, 0.0, 200.0, 100.0),
@@ -8259,6 +8292,7 @@ mod tests {
             &mut shadings,
             &mut shading_counter,
             None,
+            None,
             BackgroundPaintContext::new(
                 SvgViewportBox::new(0.0, 0.0, 200.0, 100.0),
                 SvgViewportBox::new(0.0, 0.0, 200.0, 100.0),
@@ -8317,6 +8351,7 @@ mod tests {
             &mut page_images,
             &mut shadings,
             &mut shading_counter,
+            None,
             None,
             BackgroundPaintContext::new(
                 SvgViewportBox::new(20.0, 10.0, 160.0, 80.0),

@@ -4,16 +4,29 @@ use crate::parser::svg::{
     PathCommand, SvgClipPathUnits, SvgGradientUnits, SvgLinearGradient, SvgNode, SvgPaint,
     SvgRadialGradient, SvgStyle, SvgTextAnchor, SvgTextContext, SvgTransform, SvgTree,
 };
-use crate::render::pdf::encode_pdf_text;
+use crate::parser::ttf::TtfFont;
+use crate::render::pdf::{encode_pdf_text, sanitize_pdf_name};
+use crate::render::pdf_fonts::{PreparedCustomFont, PreparedCustomFonts};
 use crate::render::shading::{ShadingEntry, push_axial_shading, push_radial_shading};
 use crate::render::svg_geometry::{
     SvgPlacementRequest, SvgViewportBox, compute_raster_placement, compute_svg_placement,
 };
 use crate::style::computed::{FontFamily, parse_font_stack};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 pub(crate) trait SvgImageObjectSink {
     fn register_raster(&mut self, raw_image: &[u8]) -> Option<String>;
+}
+
+/// Custom fonts registered via `add_font`, made visible to SVG `<text>` rendering.
+///
+/// `prepared` carries the subset glyph remapping produced by
+/// `prepare_custom_fonts`; content streams must emit remapped glyph IDs.
+#[derive(Clone, Copy)]
+pub(crate) struct SvgFontContext<'a> {
+    pub custom_fonts: &'a HashMap<String, TtfFont>,
+    pub prepared: &'a PreparedCustomFonts,
 }
 
 pub(crate) struct SvgPdfResources<'a> {
@@ -21,6 +34,7 @@ pub(crate) struct SvgPdfResources<'a> {
     pub shading_counter: &'a mut usize,
     pub ext_gstates: Option<&'a mut Vec<(String, f32)>>,
     pub image_sink: Option<&'a mut dyn SvgImageObjectSink>,
+    pub fonts: Option<SvgFontContext<'a>>,
 }
 
 impl<'a> SvgPdfResources<'a> {
@@ -30,6 +44,7 @@ impl<'a> SvgPdfResources<'a> {
             shading_counter,
             ext_gstates: None,
             image_sink: None,
+            fonts: None,
         }
     }
 
@@ -476,6 +491,23 @@ fn render_node(
                 *font_italic,
                 text_ctx,
             );
+            // Prefer an add_font-registered face when the font stack names one;
+            // shaping must succeed for the custom path (glyph IDs + advances).
+            let font_ctx = resources.fonts;
+            let custom = font_ctx.and_then(|fonts| {
+                let (name, ttf) = resolve_svg_custom_font(
+                    style.font_family.as_deref(),
+                    style.font_bold,
+                    style.font_italic,
+                    font_family.as_deref(),
+                    *font_bold,
+                    *font_italic,
+                    text_ctx,
+                    fonts.custom_fonts,
+                )?;
+                let shaped = crate::text::shape_text_with_font(content, size, ttf)?;
+                Some((sanitize_pdf_name(name), ttf, shaped, fonts.prepared.get(name)))
+            });
             if let Some(clip_id) = clip_path.as_deref() {
                 out.push_str("q\n");
                 let (shadings, shading_counter) = resources.shading_state();
@@ -511,8 +543,13 @@ fn render_node(
             let text_x = match text_anchor {
                 SvgTextAnchor::Start => *x,
                 SvgTextAnchor::Middle | SvgTextAnchor::End => {
-                    let (ff, is_bold) = font_metrics_font(&font);
-                    let text_w = crate::fonts::str_width(content, size, &ff, is_bold);
+                    let text_w = match &custom {
+                        Some((_, _, shaped, _)) => shaped.width,
+                        None => {
+                            let (ff, is_bold) = font_metrics_font(&font);
+                            crate::fonts::str_width(content, size, &ff, is_bold)
+                        }
+                    };
                     if *text_anchor == SvgTextAnchor::Middle {
                         x - text_w * 0.5
                     } else {
@@ -521,8 +558,11 @@ fn render_node(
                 }
             };
 
+            let font_label = custom
+                .as_ref()
+                .map_or(font.as_str(), |(resource_name, ..)| resource_name.as_str());
             out.push_str("BT\n");
-            out.push_str(&format!("/{font} {size} Tf\n"));
+            out.push_str(&format!("/{font_label} {size} Tf\n"));
             out.push_str(&format!("{text_render_mode} Tr\n"));
             if let Some((r, g, b)) = fill {
                 out.push_str(&format!("{r} {g} {b} rg\n"));
@@ -532,8 +572,15 @@ fn render_node(
                 out.push_str(&format!("{} w\n", style.stroke_width));
             }
             out.push_str(&format!("1 0 0 -1 {text_x} {y} Tm\n"));
-            let encoded = encode_pdf_text(content);
-            out.push_str(&format!("({encoded}) Tj\n"));
+            match &custom {
+                Some((_, ttf, shaped, prepared)) => {
+                    emit_shaped_glyphs_tj(shaped, ttf, *prepared, size, out);
+                }
+                None => {
+                    let encoded = encode_pdf_text(content);
+                    out.push_str(&format!("({encoded}) Tj\n"));
+                }
+            }
             out.push_str("ET\n");
             if opacity_wrapped {
                 out.push_str("Q\n");
@@ -1194,7 +1241,10 @@ fn resolve_svg_text_font(
         .unwrap_or(text_ctx.font_italic);
 
     if let Some(base) = font_family.or(inherited_font_family) {
-        crate::fonts::pdf_font_name(base, bold, italic).to_string()
+        // `base` is the raw CSS family stack; map it to a base-14 family the
+        // same way the parser used to before resolution moved render-side.
+        let base = crate::parser::svg::resolve_svg_font_family(base);
+        crate::fonts::pdf_font_name(&base, bold, italic).to_string()
     } else if font_bold.is_some()
         || font_italic.is_some()
         || inherited_font_bold.is_some()
@@ -1215,6 +1265,156 @@ fn base_family_from_pdf_name(name: &str) -> &str {
         "Courier"
     } else {
         "Helvetica"
+    }
+}
+
+/// Emit a shaped glyph run as a TJ array with subset-remapped glyph IDs.
+///
+/// Kerning adjustments from shaping are carried as TJ advance adjustments
+/// (thousandths of text space), mirroring the HTML text path.
+fn emit_shaped_glyphs_tj(
+    shaped: &crate::text::ShapedRun,
+    ttf: &TtfFont,
+    prepared: Option<&PreparedCustomFont>,
+    font_size: f32,
+    out: &mut String,
+) {
+    out.push('[');
+    let mut first = true;
+    for glyph in &shaped.glyphs {
+        if !first {
+            out.push(' ');
+        }
+        first = false;
+        let glyph_id = prepared.map_or(glyph.glyph_id, |p| p.pdf_glyph_id(glyph.glyph_id));
+        let _ = write!(out, "<{glyph_id:04X}>");
+        let nominal_advance = ttf.glyph_width_scaled(glyph.glyph_id, font_size);
+        let advance_adjustment = glyph.x_advance - nominal_advance;
+        if advance_adjustment.abs() > 0.001 {
+            let tj = -(advance_adjustment * 1000.0 / font_size.max(f32::EPSILON));
+            let _ = write!(out, " {tj:.2}");
+        }
+    }
+    out.push_str("] TJ\n");
+}
+
+/// Resolve an SVG `<text>` element's font stack against `add_font`-registered
+/// custom fonts, honoring CSS fallback order.
+///
+/// Returns the registered font's key and face when the first resolvable family
+/// in the stack is a registered custom font. Returns `None` when the stack is
+/// absent, when a standard (base-14) family resolves first, or when no listed
+/// custom family is registered — callers then fall back to the base-14 path.
+fn resolve_svg_custom_font<'a>(
+    inherited_font_family: Option<&str>,
+    inherited_font_bold: Option<bool>,
+    inherited_font_italic: Option<bool>,
+    font_family: Option<&str>,
+    font_bold: Option<bool>,
+    font_italic: Option<bool>,
+    text_ctx: &SvgTextContext,
+    custom_fonts: &'a HashMap<String, TtfFont>,
+) -> Option<(&'a str, &'a TtfFont)> {
+    let bold = font_bold
+        .or(inherited_font_bold)
+        .unwrap_or(text_ctx.font_bold);
+    let italic = font_italic
+        .or(inherited_font_italic)
+        .unwrap_or(text_ctx.font_italic);
+    let stack_raw = font_family.or(inherited_font_family)?;
+    for family in parse_font_stack(stack_raw).families() {
+        match family {
+            FontFamily::Custom(name) => {
+                if let Some(hit) =
+                    crate::system_fonts::find_font(custom_fonts, name, bold, italic)
+                {
+                    return Some(hit);
+                }
+                // Unregistered custom name: try the next family in the stack.
+            }
+            // A standard family resolves immediately — base-14 wins from here.
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Walk an SVG tree and report every `<text>` node that resolves to a custom
+/// font, shaped with that font. Used by `prepare_custom_fonts` so SVG glyphs
+/// are included in font subsets before page content is rendered.
+///
+/// Style inheritance mirrors `render_node` so collection and emission always
+/// agree on which font a text node uses.
+pub(crate) fn collect_svg_text_font_usage(
+    tree: &SvgTree,
+    custom_fonts: &HashMap<String, TtfFont>,
+    record: &mut dyn FnMut(&str, crate::text::ShapedRun),
+) {
+    let root_style = ResolvedStyle {
+        color: tree.text_ctx.color,
+        fill: SvgPaint::Color((0.0, 0.0, 0.0)),
+        stroke: SvgPaint::None,
+        clip_path: None,
+        stroke_width: 1.0,
+        font_family: None,
+        font_bold: None,
+        font_italic: None,
+        opacity: 1.0,
+    };
+    for node in &tree.children {
+        collect_text_usage_node(node, &root_style, &tree.text_ctx, custom_fonts, record);
+    }
+}
+
+fn collect_text_usage_node(
+    node: &SvgNode,
+    inherited: &ResolvedStyle,
+    text_ctx: &SvgTextContext,
+    custom_fonts: &HashMap<String, TtfFont>,
+    record: &mut dyn FnMut(&str, crate::text::ShapedRun),
+) {
+    match node {
+        SvgNode::Group {
+            children, style, ..
+        } => {
+            let resolved = resolve_style(inherited.clone(), style);
+            for child in children {
+                collect_text_usage_node(child, &resolved, text_ctx, custom_fonts, record);
+            }
+        }
+        SvgNode::Text {
+            font_size,
+            font_size_attr,
+            font_family,
+            font_bold,
+            font_italic,
+            content,
+            style,
+            ..
+        } => {
+            let style = resolve_style(inherited.clone(), style);
+            let size = font_size_attr
+                .as_deref()
+                .and_then(|raw| resolve_svg_font_size(raw, text_ctx.font_size))
+                .or(*font_size)
+                .unwrap_or(text_ctx.font_size);
+            let Some((name, ttf)) = resolve_svg_custom_font(
+                style.font_family.as_deref(),
+                style.font_bold,
+                style.font_italic,
+                font_family.as_deref(),
+                *font_bold,
+                *font_italic,
+                text_ctx,
+                custom_fonts,
+            ) else {
+                return;
+            };
+            if let Some(shaped) = crate::text::shape_text_with_font(content, size, ttf) {
+                record(name, shaped);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2765,6 +2965,7 @@ mod tests {
             shading_counter: &mut shading_counter,
             ext_gstates: None,
             image_sink: Some(&mut image_sink),
+            fonts: None,
         };
 
         render_svg_tree_with_resources(&tree, &mut out, &mut resources);

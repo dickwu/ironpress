@@ -168,7 +168,7 @@ pub(crate) fn split_run_by_font_coverage(
     segments
 }
 
-fn shape_text_with_font(text: &str, font_size: f32, font: &TtfFont) -> Option<ShapedRun> {
+pub(crate) fn shape_text_with_font(text: &str, font_size: f32, font: &TtfFont) -> Option<ShapedRun> {
     if text.is_empty() {
         return Some(ShapedRun {
             glyphs: Vec::new(),

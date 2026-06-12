@@ -171,8 +171,13 @@ fn collect_font_usage_from_element(
     usage: &mut BTreeMap<String, FontUsage>,
 ) {
     match element {
-        LayoutElement::TextBlock { lines, .. } => {
-            collect_font_usage_from_lines(lines, custom_fonts, usage)
+        LayoutElement::TextBlock {
+            lines,
+            background_svg,
+            ..
+        } => {
+            collect_font_usage_from_lines(lines, custom_fonts, usage);
+            collect_font_usage_from_svg(background_svg.as_ref(), custom_fonts, usage);
         }
         LayoutElement::TableRow { cells, .. } | LayoutElement::GridRow { cells, .. } => {
             for cell in cells {
@@ -182,21 +187,57 @@ fn collect_font_usage_from_element(
                 }
             }
         }
-        LayoutElement::FlexRow { cells, .. } => {
+        LayoutElement::FlexRow {
+            cells,
+            background_svg,
+            ..
+        } => {
             for cell in cells {
                 collect_font_usage_from_lines(&cell.lines, custom_fonts, usage);
+                collect_font_usage_from_svg(cell.background_svg.as_ref(), custom_fonts, usage);
                 for nested in &cell.nested_elements {
                     collect_font_usage_from_element(nested, custom_fonts, usage);
                 }
             }
+            collect_font_usage_from_svg(background_svg.as_ref(), custom_fonts, usage);
         }
-        LayoutElement::Container { children, .. } => {
+        LayoutElement::Container {
+            children,
+            background_svg,
+            ..
+        } => {
             for child in children {
                 collect_font_usage_from_element(child, custom_fonts, usage);
             }
+            collect_font_usage_from_svg(background_svg.as_ref(), custom_fonts, usage);
+        }
+        LayoutElement::Svg { tree, .. } => {
+            collect_font_usage_from_svg(Some(tree), custom_fonts, usage);
         }
         _ => {}
     }
+}
+
+/// Collect custom-font glyph usage from SVG `<text>` nodes so that fonts used
+/// only inside SVGs are still subset, embedded, and registered.
+fn collect_font_usage_from_svg(
+    tree: Option<&crate::parser::svg::SvgTree>,
+    custom_fonts: &HashMap<String, TtfFont>,
+    usage: &mut BTreeMap<String, FontUsage>,
+) {
+    let Some(tree) = tree else {
+        return;
+    };
+    crate::render::svg_to_pdf::collect_svg_text_font_usage(
+        tree,
+        custom_fonts,
+        &mut |font_name, shaped| {
+            let font_usage = usage.entry(font_name.to_string()).or_default();
+            for glyph in shaped.glyphs {
+                font_usage.record_glyph(glyph.glyph_id, glyph.unicode);
+            }
+        },
+    );
 }
 
 fn collect_font_usage_from_lines(
