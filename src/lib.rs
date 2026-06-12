@@ -1697,6 +1697,23 @@ fn main() {
     }
 
     #[test]
+    fn svg_text_letter_spacing_emits_character_spacing() {
+        let pdf = html_to_pdf(
+            r#"<svg width="200" height="50" viewBox="0 0 200 50"><text x="10" y="30" font-size="20" letter-spacing="3">Hello</text></svg>"#,
+        )
+        .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(
+            content.contains("3 Tc"),
+            "letter-spacing should map to the PDF character-spacing operator"
+        );
+        assert!(
+            content.contains("0 Tc"),
+            "character spacing should be reset after the text object"
+        );
+    }
+
+    #[test]
     fn svg_text_with_unregistered_family_falls_back_to_base14() {
         let pdf = html_to_pdf(
             r#"<svg width="200" height="50" viewBox="0 0 200 50"><text x="10" y="30" font-family="NoSuchFont" font-size="20">Hello</text></svg>"#,
