@@ -1,6 +1,6 @@
 use crate::error::IronpressError;
 use crate::layout::engine::{
-    ImageFormat, LayoutElement, Page, PngMetadata, TableCell, TextLine, TextRun,
+    ImageFormat, LayoutElement, Page, PngMetadata, RasterImageAsset, TableCell, TextLine, TextRun,
     layout_element_paint_order, table_cell_box_height, table_cell_content_height,
 };
 use crate::parser::ttf::TtfFont;
@@ -2524,13 +2524,7 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                     let img_x = margin.left;
                     // PDF y-axis is bottom-up; y_pos is top of margin, image draws from bottom-left
                     let img_y = page_size.height - margin.top - y_pos - height;
-                    if let Some(img_obj_id) = pdf_writer.add_layout_image_object(
-                        &image.data,
-                        image.source_width,
-                        image.source_height,
-                        image.format,
-                        image.png_metadata.as_ref(),
-                    ) {
+                    if let Some(img_obj_id) = pdf_writer.add_layout_image_object(image) {
                         let img_name = format!("Im{img_obj_id}");
                         content.push_str(&format!(
                             "q\n{w} 0 0 {h} {x} {y} cm\n/{name} Do\nQ\n",
@@ -5270,26 +5264,26 @@ impl PdfWriter {
     }
 
     /// Add a layout `<img>` image XObject, choosing the correct encoding per
-    /// format: a PNG is fully decoded into a DeviceRGB image (plus an alpha
-    /// `/SMask`) via `add_raw_png_image_object`; a JPEG is embedded as DCTDecode.
-    /// Returns `None` when a PNG cannot be decoded, so the caller skips the image
-    /// rather than emit a corrupt one. Requires `data` to be the raw image bytes.
-    fn add_layout_image_object(
-        &mut self,
-        data: &[u8],
-        source_width: u32,
-        source_height: u32,
-        format: ImageFormat,
-        png_metadata: Option<&PngMetadata>,
-    ) -> Option<usize> {
-        match format {
-            ImageFormat::Png => self.add_raw_png_image_object(data),
+    /// format: PNG layout assets already carry decoded color bytes plus optional
+    /// alpha data, while JPEG assets carry their original DCT stream.
+    fn add_layout_image_object(&mut self, image: &RasterImageAsset) -> Option<usize> {
+        match image.format {
+            ImageFormat::Png => {
+                let meta = image.png_metadata.as_ref()?;
+                self.add_decoded_png_image_object(
+                    &image.data,
+                    meta.alpha_data.as_deref(),
+                    image.source_width,
+                    image.source_height,
+                    meta.color_space.pdf_name(),
+                )
+            }
             ImageFormat::Jpeg => Some(self.add_image_object(
-                data,
-                source_width,
-                source_height,
-                format,
-                png_metadata,
+                &image.data,
+                image.source_width,
+                image.source_height,
+                image.format,
+                image.png_metadata.as_ref(),
             )),
         }
     }
@@ -5328,10 +5322,16 @@ impl PdfWriter {
         Some(id)
     }
 
-    pub(crate) fn add_raw_png_image_object(&mut self, raw_png: &[u8]) -> Option<usize> {
-        let decoded = decode_png_for_pdf(raw_png)?;
-        let color_stream = flate_compress(&decoded.color_data)?;
-        let alpha_stream = if let Some(alpha_data) = decoded.alpha_data.as_deref() {
+    fn add_decoded_png_image_object(
+        &mut self,
+        color_data: &[u8],
+        alpha_data: Option<&[u8]>,
+        width: u32,
+        height: u32,
+        color_space: &'static str,
+    ) -> Option<usize> {
+        let color_stream = flate_compress(color_data)?;
+        let alpha_stream = if let Some(alpha_data) = alpha_data {
             Some(flate_compress(alpha_data)?)
         } else {
             None
@@ -5341,8 +5341,6 @@ impl PdfWriter {
             let id = self.next_id();
             let header = format!(
                 "{id} 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {len} >>\nstream\n",
-                width = decoded.width,
-                height = decoded.height,
                 len = stream.len(),
             );
             self.objects.push(header);
@@ -5353,9 +5351,6 @@ impl PdfWriter {
         let id = self.next_id();
         let mut header = format!(
             "{id} 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {color_space} /BitsPerComponent 8 /Filter /FlateDecode /Length {len}",
-            width = decoded.width,
-            height = decoded.height,
-            color_space = decoded.color_space,
             len = color_stream.len(),
         );
         if let Some(alpha_id) = alpha_id {
@@ -5366,6 +5361,17 @@ impl PdfWriter {
         self.objects.push(header);
         self.binary_objects.insert(id, color_stream);
         Some(id)
+    }
+
+    pub(crate) fn add_raw_png_image_object(&mut self, raw_png: &[u8]) -> Option<usize> {
+        let decoded = decode_png_for_pdf(raw_png)?;
+        self.add_decoded_png_image_object(
+            &decoded.color_data,
+            decoded.alpha_data.as_deref(),
+            decoded.width,
+            decoded.height,
+            decoded.color_space,
+        )
     }
 
     pub(crate) fn add_raw_raster_image_object(&mut self, raw_image: &[u8]) -> Option<usize> {
@@ -7032,8 +7038,8 @@ mod tests {
     #[test]
     fn border_style_parsed_from_shorthand() {
         use crate::parser::dom::HtmlTag;
+        use crate::style::computed::BorderStyle;
         use crate::style::computed::ComputedStyle;
-        use crate::style::computed::{BorderStyle, compute_style_with_context};
         let parent = ComputedStyle::default();
         let style = crate::style::computed::compute_style(
             HtmlTag::Div,
@@ -7258,12 +7264,12 @@ mod tests {
             "PNG image should use FlateDecode filter"
         );
         assert!(
-            content.contains("/Predictor 15"),
-            "PNG image should have Predictor 15 in DecodeParms"
+            content.contains("/ColorSpace /DeviceRGB"),
+            "decoded RGB PNG should use DeviceRGB color space"
         );
         assert!(
-            content.contains("/Colors 3"),
-            "RGB PNG should have Colors 3"
+            !content.contains("/Predictor 15"),
+            "layout PNGs are decoded before embedding and should not use PNG predictor DecodeParms"
         );
         assert!(
             content.contains("Do"),
@@ -7282,7 +7288,7 @@ mod tests {
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/Filter /FlateDecode"));
         assert!(content.contains("/ColorSpace /DeviceGray"));
-        assert!(content.contains("/Colors 1"));
+        assert!(!content.contains("/Predictor 15"));
     }
 
     /// Build a minimal valid PNG (1x1 RGB, 8-bit).
@@ -7292,33 +7298,32 @@ mod tests {
 
     fn build_test_png_with_color_type(color_type: u8) -> Vec<u8> {
         let mut png = Vec::new();
-        // PNG signature
-        png.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
-        // IHDR chunk (13 bytes data)
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&1u32.to_be_bytes()); // width
-        ihdr.extend_from_slice(&1u32.to_be_bytes()); // height
-        ihdr.push(8); // bit depth
-        ihdr.push(color_type);
-        ihdr.push(0); // compression
-        ihdr.push(0); // filter
-        ihdr.push(0); // interlace
-        append_png_chunk(&mut png, b"IHDR", &ihdr);
-        // IDAT chunk with dummy zlib-compressed data
-        let idat = [
-            0x78, 0x01, 0x62, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01,
-        ];
-        append_png_chunk(&mut png, b"IDAT", &idat);
-        // IEND
-        append_png_chunk(&mut png, b"IEND", &[]);
+        match color_type {
+            0 => image::DynamicImage::ImageLuma8(image::ImageBuffer::from_pixel(
+                1,
+                1,
+                image::Luma([128]),
+            )),
+            2 => image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                1,
+                1,
+                image::Rgb([255, 0, 0]),
+            )),
+            4 => image::DynamicImage::ImageLumaA8(image::ImageBuffer::from_pixel(
+                1,
+                1,
+                image::LumaA([128, 200]),
+            )),
+            6 => image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255, 0, 0, 200]),
+            )),
+            _ => panic!("unsupported test PNG color type {color_type}"),
+        }
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
         png
-    }
-
-    fn append_png_chunk(buf: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
-        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        buf.extend_from_slice(chunk_type);
-        buf.extend_from_slice(data);
-        buf.extend_from_slice(&[0, 0, 0, 0]); // CRC placeholder
     }
 
     fn simple_base64_encode_test(data: &[u8]) -> String {
@@ -8618,12 +8623,12 @@ mod tests {
         let pdf_str = String::from_utf8_lossy(&pdf);
 
         assert!(
-            pdf_str.contains("BI\n"),
-            "Expected nested table-cell background block to emit an inline image"
+            pdf_str.contains("/Subtype /Image"),
+            "Expected nested table-cell background block to emit an image XObject"
         );
         assert!(
-            pdf_str.contains("EI\n"),
-            "Expected nested table-cell background block to terminate the inline image"
+            pdf_str.contains(" Do\n"),
+            "Expected nested table-cell background block to draw the image XObject"
         );
     }
 
@@ -11579,7 +11584,9 @@ mod tests {
             .iter()
             .find(|r| r.border_bottom.is_some())
             .expect("fill-in underline run with border_bottom should exist");
-        let bw = underline.box_width.expect("underline run should carry box_width");
+        let bw = underline
+            .box_width
+            .expect("underline run should carry box_width");
         assert!(
             (bw - 141.73).abs() < 1.0,
             "underline box_width should be ~50mm (141.73pt), got {bw}"
@@ -11603,6 +11610,24 @@ mod tests {
         // the inline box is emitted alongside sibling text, not in place of it.
         let has_label = runs.iter().any(|r| r.text.contains("NPO"));
         assert!(has_label, "sibling label text should still be collected");
+    }
+
+    #[test]
+    fn inline_block_with_only_unsupported_side_borders_is_not_atomic_box() {
+        let html = "<table><tr><td>A<span style=\"display:inline-block;border-left:1pt solid red;\"></span>B</td></tr></table>";
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let runs = collect_table_cell_runs(&pages);
+
+        assert!(
+            !runs.iter().any(|r| {
+                r.text == " "
+                    && r.box_width.is_none()
+                    && r.box_height.is_none()
+                    && r.border_bottom.is_none()
+            }),
+            "side-only borders are not preserved by atomic table-cell runs and should not create placeholder box runs"
+        );
     }
 
     #[test]

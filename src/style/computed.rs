@@ -3306,29 +3306,8 @@ fn parse_border_shorthand(k: &str) -> (f32, Option<Color>, BorderStyle) {
     let mut width = 0.0f32;
     let mut border_style = BorderStyle::Solid;
     for part in &parts {
-        if let Some(n) = part.strip_suffix("px") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v * 0.75; // px to pt
-            }
-        } else if let Some(n) = part.strip_suffix("pt") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v;
-            }
-        } else if let Some(n) = part.strip_suffix("mm") {
-            // Absolute physical units resolve straight to points (1in = 72pt).
-            // Without these, `mm`/`cm`/`in` border widths silently became
-            // 0-width and the border vanished — print/A4 layouts use mm grids.
-            if let Ok(v) = n.parse::<f32>() {
-                width = v * 72.0 / 25.4;
-            }
-        } else if let Some(n) = part.strip_suffix("cm") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v * 72.0 / 2.54;
-            }
-        } else if let Some(n) = part.strip_suffix("in") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v * 72.0;
-            }
+        if let Some(points) = crate::parser::css::absolute_length_unit_to_points(part) {
+            width = points;
         } else {
             match *part {
                 "dashed" => border_style = BorderStyle::Dashed,
@@ -3878,6 +3857,22 @@ mod tests {
         assert_eq!(c.r, 0);
         assert_eq!(c.g, 128);
         assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn border_shorthand_physical_units_match_parse_length() {
+        let parent = ComputedStyle::default();
+        for (css, expected) in [
+            ("border: 25.4mm solid black", 72.0),
+            ("border: 2.54cm solid black", 72.0),
+            ("border: 1in solid black", 72.0),
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(css), &parent);
+            assert!(
+                (style.border.top.width - expected).abs() < 0.01,
+                "{css} should resolve to {expected}pt"
+            );
+        }
     }
 
     #[test]

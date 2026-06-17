@@ -1,5 +1,12 @@
 use super::*;
 
+// Atomic inline-block boxes are positioned against the same text baseline as
+// surrounding runs. These ratios preserve the existing visual placement while
+// making the baseline heuristics easy to tune if font metrics vary.
+const INLINE_BOX_MIDDLE_BASELINE_OFFSET_EM: f32 = 0.3;
+const INLINE_BOX_BORDER_BASELINE_OFFSET_EM: f32 = 0.18;
+const INLINE_BACKGROUND_BASELINE_PADDING_PT: f32 = 2.0;
+
 pub(super) struct TextRenderContext<'a> {
     custom_fonts: &'a HashMap<String, TtfFont>,
     prepared_custom_fonts: &'a PreparedCustomFonts,
@@ -260,8 +267,7 @@ pub(super) fn render_cell_text(
                 run.box_width.is_some() || run.box_height.is_some() || run.border_bottom.is_some();
             if is_box {
                 let box_w = run.box_width.unwrap_or(run_width);
-                // Vertical centre of the text line, ~0.3em above the baseline.
-                let mid_y = text_y + run.font_size * 0.3;
+                let mid_y = text_y + run.font_size * INLINE_BOX_MIDDLE_BASELINE_OFFSET_EM;
                 if let Some(box_h) = run.box_height {
                     let box_bottom = mid_y - box_h / 2.0;
                     if let Some((bg_r, bg_g, bg_b, _bg_a)) = run.background_color {
@@ -281,8 +287,8 @@ pub(super) fn render_cell_text(
                     }
                 } else if let Some((bg_r, bg_g, bg_b, _bg_a)) = run.background_color {
                     // No explicit height: fall back to a text-height background.
-                    let ry = text_y - 2.0;
-                    let rh = run.font_size + 2.0;
+                    let ry = text_y - INLINE_BACKGROUND_BASELINE_PADDING_PT;
+                    let rh = run.font_size + INLINE_BACKGROUND_BASELINE_PADDING_PT;
                     content.push_str(&format!("{bg_r} {bg_g} {bg_b} rg\n"));
                     content.push_str(&format!("{x} {ry} {box_w} {rh} re\nf\n"));
                 }
@@ -291,7 +297,7 @@ pub(super) fn render_cell_text(
                     // otherwise just below the text baseline (a writing line).
                     let line_y = match run.box_height {
                         Some(box_h) => mid_y - box_h / 2.0,
-                        None => text_y - run.font_size * 0.18,
+                        None => text_y - run.font_size * INLINE_BOX_BORDER_BASELINE_OFFSET_EM,
                     };
                     let x2 = x + box_w;
                     content.push_str(&format!(
@@ -303,9 +309,9 @@ pub(super) fn render_cell_text(
             {
                 let (pad_h, pad_v) = run.padding;
                 let rx = x - pad_h;
-                let ry = text_y - 2.0 - pad_v;
+                let ry = text_y - INLINE_BACKGROUND_BASELINE_PADDING_PT - pad_v;
                 let rw2 = run_width + pad_h * 2.0;
-                let rh = run.font_size + 2.0 + pad_v * 2.0;
+                let rh = run.font_size + INLINE_BACKGROUND_BASELINE_PADDING_PT + pad_v * 2.0;
                 content.push_str(&format!(
                     "{background_r} {background_g} {background_b} rg\n"
                 ));
@@ -735,13 +741,7 @@ pub(super) fn render_nested_layout_elements(
             } => {
                 let img_x = planned_element.origin_x;
                 let img_y = planned_element.top_y - height;
-                if let Some(img_obj_id) = ctx.pdf_writer.add_layout_image_object(
-                    &image.data,
-                    image.source_width,
-                    image.source_height,
-                    image.format,
-                    image.png_metadata.as_ref(),
-                ) {
+                if let Some(img_obj_id) = ctx.pdf_writer.add_layout_image_object(image) {
                     let img_name = format!("Im{img_obj_id}");
                     content.push_str(&format!(
                         "q\n{width} 0 0 {height} {img_x} {img_y} cm\n/{img_name} Do\nQ\n"

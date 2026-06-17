@@ -52,6 +52,18 @@ fn parse_length_units() {
         parse_length("1.5em"),
         Some(CssValue::Number(v)) if (v - 1.5).abs() < 0.01
     ));
+    assert!(matches!(
+        parse_length("25.4mm"),
+        Some(CssValue::Length(v)) if (v - 72.0).abs() < 0.01
+    ));
+    assert!(matches!(
+        parse_length("2.54cm"),
+        Some(CssValue::Length(v)) if (v - 72.0).abs() < 0.01
+    ));
+    assert!(matches!(
+        parse_length("1in"),
+        Some(CssValue::Length(v)) if (v - 72.0).abs() < 0.01
+    ));
 }
 
 #[test]

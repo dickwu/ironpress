@@ -252,6 +252,23 @@ pub enum ImageFormat {
 pub struct PngMetadata {
     pub channels: u8,
     pub bit_depth: u8,
+    pub color_space: PngColorSpace,
+    pub alpha_data: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngColorSpace {
+    DeviceGray,
+    DeviceRgb,
+}
+
+impl PngColorSpace {
+    pub(crate) const fn pdf_name(self) -> &'static str {
+        match self {
+            Self::DeviceGray => "/DeviceGray",
+            Self::DeviceRgb => "/DeviceRGB",
+        }
+    }
 }
 
 /// Raster image bytes plus the source pixel dimensions required by the PDF renderer.
@@ -2905,30 +2922,14 @@ mod tests {
 
     fn build_test_png_bytes() -> Vec<u8> {
         let mut png_data = Vec::new();
-        png_data.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
-        // IHDR
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.push(8); // bit depth
-        ihdr.push(2); // color type RGB
-        ihdr.push(0);
-        ihdr.push(0);
-        ihdr.push(0);
-        append_test_chunk(&mut png_data, b"IHDR", &ihdr);
-        let idat = [
-            0x78, 0x01, 0x62, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01,
-        ];
-        append_test_chunk(&mut png_data, b"IDAT", &idat);
-        append_test_chunk(&mut png_data, b"IEND", &[]);
+        let image = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0]));
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_data),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
         png_data
-    }
-
-    fn append_test_chunk(buf: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
-        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        buf.extend_from_slice(chunk_type);
-        buf.extend_from_slice(data);
-        buf.extend_from_slice(&[0, 0, 0, 0]);
     }
 
     #[test]
