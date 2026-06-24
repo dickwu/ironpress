@@ -200,7 +200,12 @@ pub(super) fn render_cell_content(
             &cell.nested_rows,
             NestedLayoutFrame::new(
                 placement.cell_x + cell.padding_left,
-                content_top - text_h - cell.padding_bottom,
+                // GFI-298: nested content sits directly below any direct cell text
+                // (content_top is already inset by padding_top + the vertical-align
+                // offset). Subtracting padding_bottom here double-counted the bottom
+                // padding, shoving nested content down by padding_bottom — which left
+                // the food-measurement card badge+text glued low instead of centered.
+                content_top - text_h,
                 placement.nested_frame.initial_origin_x,
                 placement.nested_frame.initial_top_y,
                 (placement.col_width - cell.padding_left - cell.padding_right).max(0.0),
