@@ -90,7 +90,7 @@ fn resolve_specified_height(style: &ComputedStyle, containing_height: Option<f32
         && let Some(percent) = style.percentage_sizing.max_height
     {
         let max_h = cb * percent / 100.0;
-        h = h.map_or(Some(max_h), |v| Some(v.min(max_h)));
+        h = h.map(|v| v.min(max_h));
     }
     h.unwrap_or(0.0).max(0.0)
 }
@@ -1166,9 +1166,10 @@ fn distribute_table_height_surplus(table_rows: &mut [LayoutElement], table_heigh
     let row_heights: Vec<f32> = table_rows
         .iter()
         .map(|row| match row {
-            LayoutElement::TableRow { cells, .. } => {
-                cells.iter().map(table_cell_box_height).fold(0.0f32, f32::max)
-            }
+            LayoutElement::TableRow { cells, .. } => cells
+                .iter()
+                .map(table_cell_box_height)
+                .fold(0.0f32, f32::max),
             _ => 0.0,
         })
         .collect();
@@ -1294,7 +1295,7 @@ fn flatten_descendant_text(nodes: &[DomNode]) -> String {
 /// flattened to plain text runs that drop the border and size.
 fn inline_block_has_box(style: &ComputedStyle) -> bool {
     style.display == Display::InlineBlock
-        && (style.width.is_some() || style.height.is_some() || style.border.has_any())
+        && (style.width.is_some() || style.height.is_some() || style.border.bottom.width > 0.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1435,7 +1436,8 @@ fn collect_table_cell_content_inner(
                 // sibling text. Without this the box is flattened to plain runs
                 // that drop the border and size. Only applies to SVG-free inline
                 // blocks; SVG/Img keep their dedicated branches below.
-                if el.tag != HtmlTag::Svg && el.tag != HtmlTag::Img && inline_block_has_box(&style) {
+                if el.tag != HtmlTag::Svg && el.tag != HtmlTag::Img && inline_block_has_box(&style)
+                {
                     let raw = flatten_descendant_text(&el.children);
                     let collapsed = collapse_whitespace(&raw);
                     // Keep a single space when empty so the run survives merge /
@@ -1611,4 +1613,28 @@ fn push_line_break_run(
             border_bottom: None,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentage_max_height_without_height_does_not_create_floor() {
+        let mut style = ComputedStyle::default();
+        style.percentage_sizing.max_height = Some(50.0);
+
+        assert_eq!(resolve_specified_height(&style, Some(200.0)), 0.0);
+    }
+
+    #[test]
+    fn percentage_max_height_clamps_existing_height() {
+        let mut style = ComputedStyle {
+            height: Some(150.0),
+            ..Default::default()
+        };
+        style.percentage_sizing.max_height = Some(50.0);
+
+        assert_eq!(resolve_specified_height(&style, Some(200.0)), 100.0);
+    }
 }

@@ -5,7 +5,7 @@ use crate::style::computed::{ComputedStyle, Display, FontStyle, FontWeight, Vert
 use crate::util::decode_base64;
 use std::collections::HashMap;
 
-use super::engine::{ImageFormat, LayoutElement, PngMetadata, RasterImageAsset};
+use super::engine::{ImageFormat, LayoutElement, PngColorSpace, PngMetadata, RasterImageAsset};
 use super::text::resolve_style_font_family;
 
 /// Load raw bytes from a `src` attribute value.
@@ -74,19 +74,17 @@ pub(crate) fn try_parse_svg_bytes(raw: &[u8]) -> Option<crate::parser::svg::SvgT
 /// Detect PNG/JPEG format and return a raster asset with source dimensions.
 pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
     if png::is_png(&raw) {
-        let png_info = png::parse_png(&raw)?;
+        let png_info = decode_png_for_layout(&raw)?;
         let metadata = PngMetadata {
             channels: png_info.channels,
-            bit_depth: png_info.bit_depth,
+            bit_depth: 8,
+            color_space: png_info.color_space,
+            alpha_data: png_info.alpha_data,
         };
         Some(RasterImageAsset {
-            // Store the FULL raw PNG bytes (not the deflated IDAT) so the PDF
-            // renderer can fully decode it into a DeviceRGB image + alpha SMask
-            // via add_raw_png_image_object. The legacy Predictor-15 path mishandles
-            // RGBA (DecodeParms /Colors 4 vs /DeviceRGB's 3 components → scanline shear).
-            data: raw,
-            source_width: png_info.width,
-            source_height: png_info.height,
+            data: png_info.color_data,
+            source_width: png_info.source_width,
+            source_height: png_info.source_height,
             format: ImageFormat::Png,
             png_metadata: Some(metadata),
         })
@@ -102,6 +100,66 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
     } else {
         None
     }
+}
+
+struct DecodedLayoutPng {
+    source_width: u32,
+    source_height: u32,
+    channels: u8,
+    color_space: PngColorSpace,
+    color_data: Vec<u8>,
+    alpha_data: Option<Vec<u8>>,
+}
+
+fn decode_png_for_layout(raw: &[u8]) -> Option<DecodedLayoutPng> {
+    let mut decoder = png_decoder::Decoder::new(std::io::Cursor::new(raw));
+    decoder.ignore_checksums(true);
+    let mut reader = decoder.read_info().ok()?;
+    let output_size = reader.output_buffer_size()?;
+    let mut buffer = vec![0; output_size];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let pixels = buffer.get(..info.buffer_size())?;
+
+    let mut color_data = Vec::new();
+    let mut alpha_data = Vec::new();
+    let (channels, color_space, has_alpha) = match info.color_type {
+        png_decoder::ColorType::Rgba => {
+            color_data.reserve((info.width * info.height * 3) as usize);
+            alpha_data.reserve((info.width * info.height) as usize);
+            for chunk in pixels.chunks_exact(4) {
+                color_data.extend_from_slice(&chunk[..3]);
+                alpha_data.push(chunk[3]);
+            }
+            (3, PngColorSpace::DeviceRgb, true)
+        }
+        png_decoder::ColorType::Rgb => {
+            color_data.extend_from_slice(pixels);
+            (3, PngColorSpace::DeviceRgb, false)
+        }
+        png_decoder::ColorType::Grayscale => {
+            color_data.extend_from_slice(pixels);
+            (1, PngColorSpace::DeviceGray, false)
+        }
+        png_decoder::ColorType::GrayscaleAlpha => {
+            color_data.reserve((info.width * info.height) as usize);
+            alpha_data.reserve((info.width * info.height) as usize);
+            for chunk in pixels.chunks_exact(2) {
+                color_data.push(chunk[0]);
+                alpha_data.push(chunk[1]);
+            }
+            (1, PngColorSpace::DeviceGray, true)
+        }
+        _ => return None,
+    };
+
+    Some(DecodedLayoutPng {
+        source_width: info.width,
+        source_height: info.height,
+        channels,
+        color_space,
+        color_data,
+        alpha_data: has_alpha.then_some(alpha_data),
+    })
 }
 
 /// Load image data from an <img> element and return a LayoutElement.
@@ -1024,6 +1082,35 @@ mod tests {
         assert!(
             try_parse_svg_bytes(raw).is_none(),
             "Comment without <svg> should return None"
+        );
+    }
+
+    #[test]
+    fn load_image_bytes_stores_decoded_png_payload_not_source_file() {
+        let mut encoded = Vec::new();
+        let image = image::RgbImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+
+        let asset = load_image_bytes(encoded.clone()).expect("valid PNG should load");
+
+        assert_eq!(asset.format, ImageFormat::Png);
+        assert_eq!(asset.source_width, 2);
+        assert_eq!(asset.source_height, 1);
+        assert_eq!(asset.data.len(), 6);
+        assert!(
+            asset.data.len() < encoded.len(),
+            "layout PNG assets should keep decoded image payloads, not the full PNG file"
         );
     }
 

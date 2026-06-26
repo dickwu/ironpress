@@ -9,6 +9,30 @@ pub(crate) fn is_css_wide_keyword(value: &str) -> bool {
     )
 }
 
+pub(crate) fn absolute_length_unit_to_points(val: &str) -> Option<f32> {
+    if let Some(number) = val.strip_suffix("px") {
+        return number.parse::<f32>().ok().map(|value| value * 0.75);
+    }
+
+    if let Some(number) = val.strip_suffix("pt") {
+        return number.parse::<f32>().ok();
+    }
+
+    if let Some(number) = val.strip_suffix("mm") {
+        return number.parse::<f32>().ok().map(|value| value * 72.0 / 25.4);
+    }
+
+    if let Some(number) = val.strip_suffix("cm") {
+        return number.parse::<f32>().ok().map(|value| value * 72.0 / 2.54);
+    }
+
+    if let Some(number) = val.strip_suffix("in") {
+        return number.parse::<f32>().ok().map(|value| value * 72.0);
+    }
+
+    None
+}
+
 pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
     let val = val.trim();
 
@@ -20,15 +44,8 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
         return Some(calc_value);
     }
 
-    if let Some(number) = val.strip_suffix("px") {
-        return number
-            .parse::<f32>()
-            .ok()
-            .map(|value| CssValue::Length(value * 0.75));
-    }
-
-    if let Some(number) = val.strip_suffix("pt") {
-        return number.parse::<f32>().ok().map(CssValue::Length);
+    if let Some(points) = absolute_length_unit_to_points(val) {
+        return Some(CssValue::Length(points));
     }
 
     if let Some(number) = val.strip_suffix("rem") {
@@ -49,29 +66,6 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
 
     if let Some(number) = val.strip_suffix("em") {
         return number.parse::<f32>().ok().map(CssValue::Number);
-    }
-
-    // Absolute physical units resolve straight to points (1in = 72pt).
-    // `mm` is matched before `cm`/`in` so "40mm" is not mistaken for another unit.
-    if let Some(number) = val.strip_suffix("mm") {
-        return number
-            .parse::<f32>()
-            .ok()
-            .map(|value| CssValue::Length(value * 72.0 / 25.4));
-    }
-
-    if let Some(number) = val.strip_suffix("cm") {
-        return number
-            .parse::<f32>()
-            .ok()
-            .map(|value| CssValue::Length(value * 72.0 / 2.54));
-    }
-
-    if let Some(number) = val.strip_suffix("in") {
-        return number
-            .parse::<f32>()
-            .ok()
-            .map(|value| CssValue::Length(value * 72.0));
     }
 
     val.parse::<f32>().ok().map(CssValue::Length)
