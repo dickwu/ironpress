@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>clip-path polygon</title>
+<style>
+  @page { size: 277px 200px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 200px;
+    height: 200px;
+    background-color: #ef6c00;
+    /* Clip the square into a solid diamond via a 4-point polygon. */
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

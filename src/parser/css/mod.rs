@@ -18,8 +18,9 @@ pub use imports::{is_path_within, parse_import_rules, resolve_imports};
 pub use inline::parse_inline_style;
 pub(crate) use media::{preprocess_media_queries, preprocess_media_queries_with_context};
 pub use model::{
-    AncestorInfo, CalcOp, CalcToken, CssRule, CssValue, FontFaceRule, ImportRule, MediaContext,
-    PageRule, PseudoElement, SelectorContext, StyleMap,
+    AncestorInfo, CalcOp, CalcToken, CssRule, CssValue, FontFaceRule, ImportRule, MarginBox,
+    MarginBoxAlign, MarginBoxBand, MarginBoxPosition, MarginContentToken, MediaContext, PageRule,
+    PageSelector, PseudoElement, SelectorContext, StyleMap,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -31,10 +32,10 @@ pub use page::{parse_font_face_rules, parse_page_rules};
 #[cfg(test)]
 pub(crate) use rules::parse_stylesheet;
 pub(crate) use rules::parse_stylesheet_with_context;
-pub(crate) use selectors::selector_matches_with_context;
-pub(crate) use values::{is_css_wide_keyword, parse_length};
+pub(crate) use selectors::{selector_matches_with_context, specificity};
+pub(crate) use values::{is_css_wide_keyword, parse_color, parse_length};
 #[cfg(test)]
 pub(crate) use values::{
-    parse_border_spacing_component, parse_calc_expression, parse_color, parse_property_value,
-    parse_var_function, tokenize_calc,
+    parse_border_spacing_component, parse_calc_expression, parse_clamp_expression,
+    parse_property_value, parse_var_function, tokenize_calc,
 };

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tables-layout-auto</title>
+<style>
+  @page { size: 422px 136px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; font-family: ParitySans; }
+  table {
+    border-collapse: collapse;
+    table-layout: auto;
+  }
+  td {
+    height: 50px;
+    border: 3px solid #1b1b1e;
+    background: #c5d86d;
+  }
+  .w1 { width: 50px; background: #f7567c; }
+  .w2 { width: 100px; background: #99e1d9; }
+  .w3 { width: 160px; background: #fffae3; }
+</style>
+</head>
+<body>
+  <table>
+    <tr><td class="w1"></td><td class="w2"></td><td class="w3"></td></tr>
+    <tr><td class="w1"></td><td class="w2"></td><td class="w3"></td></tr>
+  </table>
+</body>
+</html>

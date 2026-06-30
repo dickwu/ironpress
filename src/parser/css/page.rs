@@ -1,9 +1,90 @@
-use super::{FontFaceRule, PageRule, extract_url_path, preprocess_media_queries};
+use super::{
+    CssRule, CssValue, FontFaceRule, MarginBox, MarginBoxPosition, MarginContentToken, PageRule,
+    PageSelector, extract_url_path,
+    model::{FontFaceSource, FootnoteAreaStyle, UnicodeRange},
+    parse_inline_style, preprocess_media_queries,
+};
 
 /// Parse a CSS stylesheet and extract `@page` rules.
 pub fn parse_page_rules(css: &str) -> Vec<PageRule> {
     let preprocessed = preprocess_media_queries(css);
-    extract_page_rules(&preprocessed)
+    CssRule::begin_counter_style_stylesheet_scan();
+    CssRule::register_counter_style_rules(extract_counter_style_rules(&preprocessed));
+    let mut rules = extract_page_rules(&preprocessed);
+    rules.extend(
+        extract_footnote_area_rules(&preprocessed)
+            .into_iter()
+            .map(|area| PageRule {
+                footnote_max_height: area.max_height,
+                footnote_padding_top: Some(area.padding_top),
+                footnote_border_top_width: Some(area.border_top_width),
+                footnote_border_top_color: area.border_top_color,
+                ..PageRule::default()
+            }),
+    );
+    rules
+}
+
+fn extract_counter_style_rules(css: &str) -> Vec<CssRule> {
+    let mut rules = Vec::new();
+    let mut remaining = css;
+
+    while let Some(at_pos) = remaining.to_ascii_lowercase().find("@counter-style") {
+        let Some(after_at) = remaining.get(at_pos + "@counter-style".len()..) else {
+            break;
+        };
+        let Some(brace_pos) = after_at.find('{') else {
+            break;
+        };
+        let name = after_at[..brace_pos].trim();
+        let Some(after_brace) = after_at.get(brace_pos + 1..) else {
+            break;
+        };
+        let Some(close_pos) = matching_rule_close(after_brace) else {
+            break;
+        };
+        let declarations = parse_inline_style(&after_brace[..close_pos]);
+        if !name.is_empty() && !declarations.properties.is_empty() {
+            rules.push(CssRule {
+                selector: format!("@counter-style {}", name.to_ascii_lowercase()),
+                declarations,
+                pseudo_element: None,
+            });
+        }
+        remaining = &after_brace[close_pos + 1..];
+    }
+
+    rules
+}
+
+fn matching_rule_close(body: &str) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote = None;
+    let mut escape = false;
+    for (index, ch) in body.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote.is_some() && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '{') => depth += 1,
+            (None, '}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Parse a CSS stylesheet and extract `@font-face` rules.
@@ -46,7 +127,11 @@ pub(crate) fn extract_font_face_rules(css: &str) -> Vec<FontFaceRule> {
 /// Parse the declarations inside an @font-face block.
 pub(crate) fn parse_font_face_declarations(decls: &str) -> Option<FontFaceRule> {
     let mut font_family: Option<String> = None;
-    let mut src_path: Option<String> = None;
+    let mut sources: Vec<FontFaceSource> = Vec::new();
+    let mut font_weight_bold = false;
+    let mut font_style_italic = false;
+    let mut size_adjust = 1.0;
+    let mut unicode_ranges = Vec::new();
 
     for declaration in decls.split(';') {
         let declaration = declaration.trim();
@@ -66,25 +151,214 @@ pub(crate) fn parse_font_face_declarations(decls: &str) -> Option<FontFaceRule> 
                     }
                 }
                 "src" => {
-                    if let Some(path) = extract_url_path(val) {
-                        src_path = Some(path);
-                    }
+                    sources = parse_font_face_sources(val);
+                }
+                "font-weight" => {
+                    font_weight_bold = parse_font_face_weight(val);
+                }
+                "font-style" => {
+                    font_style_italic = parse_font_face_style(val);
+                }
+                "size-adjust" => {
+                    size_adjust = parse_size_adjust_descriptor(val).unwrap_or(1.0);
+                }
+                "unicode-range" => {
+                    unicode_ranges = parse_unicode_ranges(val);
                 }
                 _ => {}
             }
         }
     }
 
-    match (font_family, src_path) {
-        (Some(family), Some(path)) => Some(FontFaceRule {
+    match (font_family, !sources.is_empty()) {
+        (Some(family), true) => Some(FontFaceRule {
             font_family: family,
-            src_path: path,
+            sources,
+            font_weight_bold,
+            font_style_italic,
+            size_adjust,
+            unicode_ranges,
         }),
         _ => None,
     }
 }
 
+fn parse_font_face_sources(raw: &str) -> Vec<FontFaceSource> {
+    split_css_commas(raw)
+        .into_iter()
+        .filter_map(parse_font_face_source)
+        .collect()
+}
+
+fn parse_font_face_source(raw: &str) -> Option<FontFaceSource> {
+    let source = raw.trim();
+    let lower = source.to_ascii_lowercase();
+    if lower.starts_with("local(") {
+        let inner = source.get(6..source.rfind(')')?)?;
+        let name = unquote_css_string(inner.trim());
+        if name.is_empty() {
+            None
+        } else {
+            Some(FontFaceSource::Local(name.to_string()))
+        }
+    } else {
+        extract_url_path(source).map(FontFaceSource::Url)
+    }
+}
+
+fn split_css_commas(raw: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut quote = None;
+    let mut paren_depth = 0usize;
+
+    for (index, ch) in raw.char_indices() {
+        match ch {
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            '(' if quote.is_none() => paren_depth += 1,
+            ')' if quote.is_none() => paren_depth = paren_depth.saturating_sub(1),
+            ',' if quote.is_none() && paren_depth == 0 => {
+                parts.push(raw[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    parts.push(raw[start..].trim());
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+fn unquote_css_string(raw: &str) -> &str {
+    raw.trim().trim_matches('"').trim_matches('\'').trim()
+}
+
+fn parse_font_face_weight(raw: &str) -> bool {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.contains("bold") {
+        return true;
+    }
+    value
+        .split_whitespace()
+        .filter_map(|part| part.parse::<u16>().ok())
+        .max()
+        .is_some_and(|weight| weight >= 600)
+}
+
+fn parse_font_face_style(raw: &str) -> bool {
+    let value = raw.trim().to_ascii_lowercase();
+    value.starts_with("italic") || value.starts_with("oblique")
+}
+
+fn parse_size_adjust_descriptor(raw: &str) -> Option<f32> {
+    let value = raw.trim();
+    if value.eq_ignore_ascii_case("normal") {
+        return Some(1.0);
+    }
+    if let Some(percent) = value.strip_suffix('%') {
+        return percent
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| (v / 100.0).max(0.0));
+    }
+    value.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+fn parse_unicode_ranges(raw: &str) -> Vec<UnicodeRange> {
+    split_css_commas(raw)
+        .into_iter()
+        .filter_map(parse_unicode_range)
+        .collect()
+}
+
+fn parse_unicode_range(raw: &str) -> Option<UnicodeRange> {
+    let value = raw.trim();
+    let body = value
+        .strip_prefix("U+")
+        .or_else(|| value.strip_prefix("u+"))?;
+    if let Some((start, end)) = body.split_once('-') {
+        let start = u32::from_str_radix(start.trim(), 16).ok()?;
+        let end = u32::from_str_radix(end.trim(), 16).ok()?;
+        return (start <= end).then_some(UnicodeRange { start, end });
+    }
+    if body.contains('?') {
+        let start = u32::from_str_radix(&body.replace('?', "0"), 16).ok()?;
+        let end = u32::from_str_radix(&body.replace('?', "F"), 16).ok()?;
+        return Some(UnicodeRange { start, end });
+    }
+    let codepoint = u32::from_str_radix(body.trim(), 16).ok()?;
+    Some(UnicodeRange {
+        start: codepoint,
+        end: codepoint,
+    })
+}
+
+/// Classify the text between `@page` and `{` into a [`PageSelector`]
+/// (CSS Paged Media 3 §3). A bare `@page { }` is [`PageSelector::None`]; a
+/// leading page name yields [`PageSelector::Named`]; otherwise the pseudo-class
+/// (`:first`/`:left`/`:right`/`:blank`) is recognised.
+pub(crate) fn classify_page_selector(text: &str) -> PageSelector {
+    let text = text.trim();
+    if text.is_empty() {
+        return PageSelector::None;
+    }
+    // Preserve legacy selector-list classification: the current page geometry
+    // consumer has subtle list behavior that is regression-covered separately.
+    if text.contains(',') {
+        return classify_legacy_page_selector(text);
+    }
+    // A page name (if any) is the leading identifier before any pseudo-class.
+    let name = text.split(':').next().unwrap_or("").trim();
+    let pseudo = text.split_once(':').map(|(_, pseudo)| pseudo.trim());
+    if !name.is_empty() {
+        // The downstream enum/consumer cannot represent name+pseudo compounds;
+        // keep the pseudo side so spread-specific page geometry can still apply.
+        if let Some(selector) = pseudo.and_then(classify_page_pseudo) {
+            return selector;
+        }
+        return PageSelector::Named(name.to_string());
+    }
+    // No name — classify the first pseudo-class.
+    pseudo
+        .and_then(classify_page_pseudo)
+        .unwrap_or(PageSelector::None)
+}
+
+fn classify_legacy_page_selector(text: &str) -> PageSelector {
+    let text = text.trim();
+    let name = text.split(':').next().unwrap_or("").trim();
+    if !name.is_empty() {
+        return PageSelector::Named(name.to_string());
+    }
+    // No name — classify the first pseudo-class.
+    classify_page_pseudo(text.trim_start_matches(':').trim()).unwrap_or(PageSelector::None)
+}
+
+fn classify_page_pseudo(text: &str) -> Option<PageSelector> {
+    match text
+        .trim_start_matches(':')
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "first" => Some(PageSelector::First),
+        "left" => Some(PageSelector::Left),
+        "right" => Some(PageSelector::Right),
+        "blank" => Some(PageSelector::Blank),
+        _ => None,
+    }
+}
+
 /// Extract @page rules from preprocessed CSS.
+///
+/// The `@page` block is captured with a brace-balanced scan so a nested
+/// page-margin at-rule (e.g. `@top-center { … }`, CSS Paged Media 3 §5) does
+/// NOT truncate the rule at its inner `}` and drop the trailing `size`/`margin`
+/// declarations. The selector text between `@page` and `{` is classified into
+/// the rule's [`PageRule::selector`].
 pub(crate) fn extract_page_rules(css: &str) -> Vec<PageRule> {
     let mut page_rules = Vec::new();
     let mut remaining = css;
@@ -96,115 +370,594 @@ pub(crate) fn extract_page_rules(css: &str) -> Vec<PageRule> {
         let Some(brace_pos) = after_at.find('{') else {
             break;
         };
+        // The selector is everything between `@page` and the opening brace.
+        let selector_text = &after_at[..brace_pos];
         let Some(after_brace) = after_at.get(brace_pos + 1..) else {
             break;
         };
-        let Some(close_pos) = after_brace.find('}') else {
+        // Brace-balanced scan: walk forward tracking nesting depth so the whole
+        // @page block (including any nested margin-box at-rule) is captured and
+        // we close on the MATCHING `}`, not the first one.
+        let mut depth = 1usize;
+        let mut close_pos = None;
+        for (i, ch) in after_brace.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close_pos) = close_pos else {
             break;
         };
         let declarations = &after_brace[..close_pos];
-        if let Some(rule) = parse_page_declarations(declarations) {
-            page_rules.push(rule);
+        // Pull the nested page-margin at-rules (`@top-center { … }`, CSS Paged
+        // Media 3 §5) out FIRST so they do not corrupt the `;`-split + lowercase
+        // pass in `parse_page_declarations`; `clean_decls` is the size/margin/
+        // background remainder.
+        let selector = classify_page_selector(selector_text);
+        let (mut margin_boxes, clean_decls) = split_margin_boxes(declarations);
+        match parse_page_declarations(&clean_decls) {
+            Some(mut rule) => {
+                rule.selector = selector.clone();
+                for mb in &mut margin_boxes {
+                    mb.selector = selector.clone();
+                    mb.page_counter_reset = rule.page_counter_reset;
+                    mb.page_counter_increment = rule.page_counter_increment;
+                }
+                rule.margin_boxes = margin_boxes.clone();
+                page_rules.push(rule);
+            }
+            None if !margin_boxes.is_empty() => {
+                for mb in &mut margin_boxes {
+                    mb.selector = selector.clone();
+                }
+                // A `@page` rule carrying ONLY margin boxes (no size/margin/
+                // background) must still be retained so the running header/footer
+                // is not dropped.
+                page_rules.push(PageRule {
+                    selector: selector.clone(),
+                    margin_boxes: margin_boxes.clone(),
+                    ..PageRule::default()
+                });
+            }
+            None => {}
         }
         remaining = &after_brace[close_pos + 1..];
     }
 
+    synthesize_first_page_spread_cascade(&mut page_rules);
+
     page_rules
+}
+
+pub(crate) fn extract_footnote_area_rules(css: &str) -> Vec<FootnoteAreaStyle> {
+    let mut rules = Vec::new();
+    let mut remaining = css;
+
+    while let Some(at_pos) = remaining.to_ascii_lowercase().find("@footnote") {
+        let Some(after_at) = remaining.get(at_pos + 9..) else {
+            break;
+        };
+        let Some(brace_pos) = after_at.find('{') else {
+            break;
+        };
+        let Some(after_brace) = after_at.get(brace_pos + 1..) else {
+            break;
+        };
+        let mut depth = 1usize;
+        let mut close_pos = None;
+        for (i, ch) in after_brace.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close_pos) = close_pos else {
+            break;
+        };
+        rules.push(parse_footnote_area_declarations(&after_brace[..close_pos]));
+        remaining = &after_brace[close_pos + 1..];
+    }
+
+    rules
+}
+
+fn parse_footnote_area_declarations(decls: &str) -> FootnoteAreaStyle {
+    let mut style = FootnoteAreaStyle::default();
+    for declaration in decls.split(';') {
+        let Some((prop, val)) = declaration.split_once(':') else {
+            continue;
+        };
+        let prop = prop.trim().to_ascii_lowercase();
+        let val = val.trim();
+        match prop.as_str() {
+            "max-height" => {
+                style.max_height = parse_page_length(val);
+            }
+            "padding" => {
+                if let Some(top) = val.split_whitespace().next().and_then(parse_page_length) {
+                    style.padding_top = top;
+                }
+            }
+            "padding-top" => {
+                if let Some(top) = parse_page_length(val) {
+                    style.padding_top = top;
+                }
+            }
+            "border-top" => {
+                parse_footnote_border_top(val, &mut style);
+            }
+            "border-top-width" => {
+                if let Some(width) = parse_page_length(val) {
+                    style.border_top_width = width;
+                }
+            }
+            "border-top-color" => {
+                if let Some(CssValue::Color(color)) = super::parse_color(val) {
+                    style.border_top_color = Some(color);
+                }
+            }
+            _ => {}
+        }
+    }
+    style
+}
+
+fn parse_footnote_border_top(value: &str, style: &mut FootnoteAreaStyle) {
+    for token in value.split_whitespace() {
+        if let Some(width) = parse_page_length(token) {
+            style.border_top_width = width;
+        } else if let Some(CssValue::Color(color)) = super::parse_color(token) {
+            style.border_top_color = Some(color);
+        }
+    }
+}
+
+fn synthesize_first_page_spread_cascade(page_rules: &mut Vec<PageRule>) {
+    type PageSpecificity = (u8, u8, u8);
+    type CascadedMargin = Option<(f32, PageSpecificity, usize)>;
+
+    // Page 1 is both :first and :right. The layout resolver asks for :first
+    // margins exclusively, so append the cascaded union it should see there.
+    let mut has_first = false;
+    let mut has_right = false;
+    let mut margins: [CascadedMargin; 4] = [None; 4];
+
+    for (source_order, rule) in page_rules.iter().enumerate() {
+        let specificity = match rule.selector {
+            PageSelector::First => {
+                has_first = true;
+                (0, 1, 0)
+            }
+            PageSelector::Right => {
+                has_right = true;
+                (0, 0, 1)
+            }
+            _ => continue,
+        };
+        cascade_page_margin(&mut margins[0], rule.margin_top, specificity, source_order);
+        cascade_page_margin(
+            &mut margins[1],
+            rule.margin_right,
+            specificity,
+            source_order,
+        );
+        cascade_page_margin(
+            &mut margins[2],
+            rule.margin_bottom,
+            specificity,
+            source_order,
+        );
+        cascade_page_margin(&mut margins[3], rule.margin_left, specificity, source_order);
+    }
+
+    if !(has_first && has_right) {
+        return;
+    }
+
+    let mut rule = PageRule {
+        selector: PageSelector::First,
+        ..PageRule::default()
+    };
+    let mut any = false;
+    if let Some((value, _, _)) = margins[0] {
+        rule.margin_top = Some(value);
+        any = true;
+    }
+    if let Some((value, _, _)) = margins[1] {
+        rule.margin_right = Some(value);
+        any = true;
+    }
+    if let Some((value, _, _)) = margins[2] {
+        rule.margin_bottom = Some(value);
+        any = true;
+    }
+    if let Some((value, _, _)) = margins[3] {
+        rule.margin_left = Some(value);
+        any = true;
+    }
+    if any {
+        page_rules.push(rule);
+    }
+}
+
+fn cascade_page_margin(
+    slot: &mut Option<(f32, (u8, u8, u8), usize)>,
+    value: Option<f32>,
+    specificity: (u8, u8, u8),
+    source_order: usize,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    let should_replace = slot.is_none_or(|(_, previous_specificity, previous_order)| {
+        specificity > previous_specificity
+            || (specificity == previous_specificity && source_order > previous_order)
+    });
+    if should_replace {
+        *slot = Some((value, specificity, source_order));
+    }
+}
+
+/// Split the page-margin at-rules (`@top-center { … }`, CSS Paged Media 3 §5)
+/// out of an `@page` declaration block. Returns the parsed margin boxes plus the
+/// remaining declarations (size/margin/background) with the nested at-rules
+/// removed, so the remainder is safe to `;`-split.
+pub(crate) fn split_margin_boxes(decls: &str) -> (Vec<MarginBox>, String) {
+    let mut boxes = Vec::new();
+    let mut leftover = String::new();
+    let mut i = 0;
+    while i < decls.len() {
+        let Some(at_rel) = decls[i..].find('@') else {
+            leftover.push_str(&decls[i..]);
+            break;
+        };
+        let at = i + at_rel;
+        leftover.push_str(&decls[i..at]);
+        let after_at = &decls[at + 1..];
+        let Some(brace_rel) = after_at.find('{') else {
+            // A stray `@` with no block — keep the remainder verbatim.
+            leftover.push_str(&decls[at..]);
+            break;
+        };
+        let name = after_at[..brace_rel].trim();
+        let body_start = at + 1 + brace_rel + 1;
+        let body_region = &decls[body_start..];
+        // Brace-balanced scan for the matching close brace.
+        let mut depth = 1usize;
+        let mut close = None;
+        for (j, ch) in body_region.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            // Unbalanced — keep the remainder verbatim and stop.
+            leftover.push_str(&decls[at..]);
+            break;
+        };
+        if let Some(position) = MarginBoxPosition::from_at_name(name) {
+            if let Some((content, color, background_color, font_size)) =
+                extract_margin_box_decls(&body_region[..close])
+            {
+                boxes.push(MarginBox {
+                    position,
+                    selector: PageSelector::None,
+                    page_counter_reset: None,
+                    page_counter_increment: None,
+                    color,
+                    background_color,
+                    font_size,
+                    content,
+                });
+            }
+        }
+        // Resume after the at-rule's matching `}` (drop it from `leftover`).
+        i = body_start + close + 1;
+    }
+    (boxes, leftover)
+}
+
+type ParsedMarginBoxDecls = (
+    Vec<MarginContentToken>,
+    Option<crate::types::Color>,
+    Option<crate::types::Color>,
+    Option<f32>,
+);
+
+/// Find supported declarations inside a margin-box body and parse them.
+fn extract_margin_box_decls(body: &str) -> Option<ParsedMarginBoxDecls> {
+    let mut content = None;
+    let mut color = None;
+    let mut background_color = None;
+    let mut font_size = None;
+    for decl in body.split(';') {
+        if let Some((prop, val)) = decl.split_once(':') {
+            let prop = prop.trim();
+            let val = val.trim();
+            if prop.eq_ignore_ascii_case("content") {
+                content = Some(parse_margin_box_content(val));
+            } else if prop.eq_ignore_ascii_case("color") {
+                if let Some(CssValue::Color(c)) = super::parse_color(val) {
+                    color = Some(c);
+                }
+            } else if prop.eq_ignore_ascii_case("background")
+                || prop.eq_ignore_ascii_case("background-color")
+            {
+                if let Some(CssValue::Color(c)) = super::parse_color(val) {
+                    background_color = Some(c);
+                }
+            } else if prop.eq_ignore_ascii_case("font-size") {
+                font_size = parse_page_length(val);
+            }
+        }
+    }
+    content.map(|content| (content, color, background_color, font_size))
+}
+
+/// Parse a margin-box `content` value (CSS Paged Media 3 §5.3) into a token
+/// list of string literals and the `counter(page)` / `counter(pages)` page
+/// counters, e.g. `"Page " counter(page) " of " counter(pages)`.
+pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < val.len() {
+        let rest = &val[i..];
+        let c = rest.chars().next().unwrap();
+        if c.is_whitespace() {
+            i += c.len_utf8();
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            let after = &rest[c.len_utf8()..];
+            if let Some(end) = after.find(c) {
+                tokens.push(MarginContentToken::Literal(after[..end].to_string()));
+                i += c.len_utf8() + end + c.len_utf8();
+            } else {
+                tokens.push(MarginContentToken::Literal(after.to_string()));
+                break;
+            }
+        } else if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case("counter(") {
+            if let Some(end) = rest.find(')') {
+                // The optional second arg is the counter style; only `decimal`
+                // (the default) is supported, so the style is ignored.
+                let name = rest[8..end]
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                match name.as_str() {
+                    "page" => tokens.push(MarginContentToken::PageNumber),
+                    "pages" => tokens.push(MarginContentToken::PageCount),
+                    _ => {}
+                }
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case("element(") {
+            if let Some(end) = rest.find(')') {
+                let mut parts = rest[8..end].split(',').map(str::trim);
+                let name = parts.next().unwrap_or("");
+                let policy = parts.next().filter(|s| !s.is_empty());
+                if !name.is_empty() {
+                    let mut encoded = name.to_ascii_lowercase();
+                    if let Some(policy) = policy {
+                        encoded.push('|');
+                        encoded.push_str(&policy.to_ascii_lowercase());
+                    }
+                    tokens.push(MarginContentToken::Element(encoded));
+                }
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else if rest.len() >= 7 && rest[..7].eq_ignore_ascii_case("string(") {
+            if let Some(end) = rest.find(')') {
+                let mut parts = rest[7..end].split(',').map(str::trim);
+                let name = parts.next().unwrap_or("");
+                let policy = parts.next().filter(|s| !s.is_empty());
+                if !name.is_empty() {
+                    tokens.push(MarginContentToken::NamedString(
+                        name.to_ascii_lowercase(),
+                        policy.map(|s| s.to_ascii_lowercase()),
+                    ));
+                }
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else {
+            // Unsupported token (string()/attr()/identifier) — advance one char
+            // to keep making progress.
+            i += c.len_utf8();
+        }
+    }
+    tokens
 }
 
 /// Parse the declarations inside an @page block.
 pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
     let mut rule = PageRule::default();
     let mut has_any = false;
+    let declarations: Vec<(String, String)> = decls
+        .split(';')
+        .filter_map(|declaration| {
+            let declaration = declaration.trim();
+            if declaration.is_empty() {
+                return None;
+            }
+            let (prop, val) = declaration.split_once(':')?;
+            Some((
+                prop.trim().to_ascii_lowercase(),
+                val.trim().to_ascii_lowercase(),
+            ))
+        })
+        .collect();
 
-    for declaration in decls.split(';') {
-        let declaration = declaration.trim();
-        if declaration.is_empty() {
-            continue;
-        }
-
-        if let Some((prop, val)) = declaration.split_once(':') {
-            let prop = prop.trim().to_ascii_lowercase();
-            let val = val.trim().to_ascii_lowercase();
-
-            match prop.as_str() {
-                "size" => {
-                    if let Some((w, h)) = parse_page_size(&val) {
-                        rule.width = Some(w);
-                        rule.height = Some(h);
-                        has_any = true;
-                    }
-                }
-                "margin" => {
-                    let parts: Vec<&str> = val.split_whitespace().collect();
-                    match parts.len() {
-                        1 => {
-                            if let Some(v) = parse_page_length(parts[0]) {
-                                rule.margin_top = Some(v);
-                                rule.margin_right = Some(v);
-                                rule.margin_bottom = Some(v);
-                                rule.margin_left = Some(v);
-                                has_any = true;
-                            }
-                        }
-                        2 => {
-                            if let (Some(tb), Some(lr)) =
-                                (parse_page_length(parts[0]), parse_page_length(parts[1]))
-                            {
-                                rule.margin_top = Some(tb);
-                                rule.margin_bottom = Some(tb);
-                                rule.margin_right = Some(lr);
-                                rule.margin_left = Some(lr);
-                                has_any = true;
-                            }
-                        }
-                        4 => {
-                            if let (Some(t), Some(r), Some(b), Some(l)) = (
-                                parse_page_length(parts[0]),
-                                parse_page_length(parts[1]),
-                                parse_page_length(parts[2]),
-                                parse_page_length(parts[3]),
-                            ) {
-                                rule.margin_top = Some(t);
-                                rule.margin_right = Some(r);
-                                rule.margin_bottom = Some(b);
-                                rule.margin_left = Some(l);
-                                has_any = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                "margin-top" => {
-                    if let Some(v) = parse_page_length(&val) {
-                        rule.margin_top = Some(v);
-                        has_any = true;
-                    }
-                }
-                "margin-right" => {
-                    if let Some(v) = parse_page_length(&val) {
-                        rule.margin_right = Some(v);
-                        has_any = true;
-                    }
-                }
-                "margin-bottom" => {
-                    if let Some(v) = parse_page_length(&val) {
-                        rule.margin_bottom = Some(v);
-                        has_any = true;
-                    }
-                }
-                "margin-left" => {
-                    if let Some(v) = parse_page_length(&val) {
-                        rule.margin_left = Some(v);
-                        has_any = true;
-                    }
-                }
-                _ => {}
+    for (prop, val) in &declarations {
+        if prop == "size" {
+            if let Some((w, h)) = parse_page_size(val) {
+                rule.width = Some(w);
+                rule.height = Some(h);
+                has_any = true;
             }
         }
     }
 
-    if has_any { Some(rule) } else { None }
+    let page_margin_width_basis = rule.width;
+    let page_margin_height_basis = rule.height;
+
+    for (prop, val) in &declarations {
+        match prop.as_str() {
+            "size" => {}
+            "margin" => {
+                let parts: Vec<&str> = val.split_whitespace().collect();
+                match parts.len() {
+                    1 => {
+                        if let (Some(tb), Some(lr)) = (
+                            parse_page_margin_length(parts[0], page_margin_height_basis),
+                            parse_page_margin_length(parts[0], page_margin_width_basis),
+                        ) {
+                            rule.margin_top = Some(tb);
+                            rule.margin_right = Some(lr);
+                            rule.margin_bottom = Some(tb);
+                            rule.margin_left = Some(lr);
+                            has_any = true;
+                        }
+                    }
+                    2 => {
+                        if let (Some(tb), Some(lr)) = (
+                            parse_page_margin_length(parts[0], page_margin_height_basis),
+                            parse_page_margin_length(parts[1], page_margin_width_basis),
+                        ) {
+                            rule.margin_top = Some(tb);
+                            rule.margin_bottom = Some(tb);
+                            rule.margin_right = Some(lr);
+                            rule.margin_left = Some(lr);
+                            has_any = true;
+                        }
+                    }
+                    3 => {
+                        if let (Some(t), Some(lr), Some(b)) = (
+                            parse_page_margin_length(parts[0], page_margin_height_basis),
+                            parse_page_margin_length(parts[1], page_margin_width_basis),
+                            parse_page_margin_length(parts[2], page_margin_height_basis),
+                        ) {
+                            rule.margin_top = Some(t);
+                            rule.margin_right = Some(lr);
+                            rule.margin_bottom = Some(b);
+                            rule.margin_left = Some(lr);
+                            has_any = true;
+                        }
+                    }
+                    4 => {
+                        if let (Some(t), Some(r), Some(b), Some(l)) = (
+                            parse_page_margin_length(parts[0], page_margin_height_basis),
+                            parse_page_margin_length(parts[1], page_margin_width_basis),
+                            parse_page_margin_length(parts[2], page_margin_height_basis),
+                            parse_page_margin_length(parts[3], page_margin_width_basis),
+                        ) {
+                            rule.margin_top = Some(t);
+                            rule.margin_right = Some(r);
+                            rule.margin_bottom = Some(b);
+                            rule.margin_left = Some(l);
+                            has_any = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "margin-top" => {
+                if let Some(v) = parse_page_margin_length(val, page_margin_height_basis) {
+                    rule.margin_top = Some(v);
+                    has_any = true;
+                }
+            }
+            "margin-right" => {
+                if let Some(v) = parse_page_margin_length(val, page_margin_width_basis) {
+                    rule.margin_right = Some(v);
+                    has_any = true;
+                }
+            }
+            "margin-bottom" => {
+                if let Some(v) = parse_page_margin_length(val, page_margin_height_basis) {
+                    rule.margin_bottom = Some(v);
+                    has_any = true;
+                }
+            }
+            "margin-left" => {
+                if let Some(v) = parse_page_margin_length(val, page_margin_width_basis) {
+                    rule.margin_left = Some(v);
+                    has_any = true;
+                }
+            }
+            // A `background`/`background-*` declaration on `@page` paints the
+            // page bleed area (CSS Paged Media 3 §3.1). It is NOT parsed here
+            // (the `;`-split + lowercasing above would corrupt data-URI
+            // values); instead we flag its presence so the rule is retained,
+            // and the value is parsed from `raw_declarations` by a CSS-aware
+            // parser in the converter.
+            p if p.starts_with("background") => {
+                has_any = true;
+            }
+            "counter-reset" => {
+                if let Some(value) = parse_page_counter_op(val, "page") {
+                    rule.page_counter_reset = Some(value);
+                    has_any = true;
+                }
+            }
+            "counter-increment" => {
+                if let Some(value) = parse_page_counter_op(val, "page") {
+                    rule.page_counter_increment = Some(value);
+                    has_any = true;
+                }
+            }
+            "bleed" | "marks" | "page-orientation" => {
+                has_any = true;
+            }
+            _ => {}
+        }
+    }
+
+    if has_any {
+        rule.raw_declarations = Some(decls.to_string());
+        Some(rule)
+    } else {
+        None
+    }
+}
+
+fn parse_page_counter_op(val: &str, name: &str) -> Option<i32> {
+    let mut parts = val.split_whitespace();
+    let counter = parts.next()?.trim().to_ascii_lowercase();
+    if counter != name {
+        return None;
+    }
+    Some(parts.next().and_then(|v| v.parse().ok()).unwrap_or(0))
 }
 
 /// Parse a page size value. Returns (width, height) in points.
@@ -216,7 +969,10 @@ pub(crate) fn parse_page_size(val: &str) -> Option<(f32, f32)> {
         "a5" => return Some((419.53, 595.28)),
         "letter" => return Some((612.0, 792.0)),
         "legal" => return Some((612.0, 1008.0)),
+        "ledger" => return Some((792.0, 1224.0)),
         "b5" => return Some((498.9, 708.66)),
+        "jis-b4" => return Some((728.50, 1031.81)),
+        "jis-b5" => return Some((515.91, 728.50)),
         "portrait" => return parse_page_size("a4"),
         "landscape" => return parse_page_size("a4").map(|(width, height)| (height, width)),
         _ => {}
@@ -230,7 +986,11 @@ pub(crate) fn parse_page_size(val: &str) -> Option<(f32, f32)> {
     }
 
     if parts.len() == 2 {
-        let (size_name, orientation) = (parts[0], parts[1]);
+        let (size_name, orientation) = if matches!(parts[0], "portrait" | "landscape") {
+            (parts[1], parts[0])
+        } else {
+            (parts[0], parts[1])
+        };
         if let Some((w, h)) = parse_page_size(size_name) {
             return match orientation {
                 "landscape" => Some((h, w)),
@@ -258,6 +1018,16 @@ pub(crate) fn parse_page_length(val: &str) -> Option<f32> {
     } else {
         val.parse::<f32>().ok()
     }
+}
+
+fn parse_page_margin_length(val: &str, percentage_basis: Option<f32>) -> Option<f32> {
+    let val = val.trim();
+    if let Some(n) = val.strip_suffix('%') {
+        return percentage_basis
+            .zip(n.trim().parse::<f32>().ok())
+            .map(|(basis, value)| basis * value / 100.0);
+    }
+    parse_page_length(val)
 }
 
 #[cfg(test)]
@@ -333,6 +1103,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_page_declarations_margin_3() {
+        let rule = parse_page_declarations("margin: 10pt 20pt 30pt").unwrap();
+        assert_eq!(rule.margin_top, Some(10.0));
+        assert_eq!(rule.margin_right, Some(20.0));
+        assert_eq!(rule.margin_bottom, Some(30.0));
+        assert_eq!(rule.margin_left, Some(20.0));
+    }
+
+    #[test]
     fn parse_page_declarations_margin_4() {
         let rule = parse_page_declarations("margin: 10pt 20pt 30pt 40pt").unwrap();
         assert_eq!(rule.margin_top, Some(10.0));
@@ -367,9 +1146,43 @@ mod tests {
     }
 
     #[test]
-    fn parse_page_declarations_margin_3_ignored() {
-        // 3-value margin is not supported, should not set margins
-        assert!(parse_page_declarations("margin: 10pt 20pt 30pt").is_none());
+    fn parse_page_declarations_margin_percentage_uses_page_axes() {
+        let rule = parse_page_declarations("size: 200px 160px; margin: 10%").unwrap();
+        assert_eq!(rule.width, Some(150.0));
+        assert_eq!(rule.height, Some(120.0));
+        assert_eq!(rule.margin_top, Some(12.0));
+        assert_eq!(rule.margin_right, Some(15.0));
+        assert_eq!(rule.margin_bottom, Some(12.0));
+        assert_eq!(rule.margin_left, Some(15.0));
+    }
+
+    #[test]
+    fn parse_page_declarations_captures_background_raw() {
+        // The @page background is retained verbatim (not lowercased/`;`-split) so
+        // a CSS-aware parser can extract it later; the data-URI case survives.
+        let rule = parse_page_declarations(
+            "margin: 1cm; background-image: url(\"data:image/svg+xml,%3Csvg%3E\"); background-size: cover",
+        )
+        .unwrap();
+        assert_eq!(rule.margin_top, Some(28.3465));
+        let raw = rule.raw_declarations.expect("raw declarations retained");
+        assert!(raw.contains("background-image"));
+        assert!(raw.contains("%3Csvg"), "data-URI case preserved: {raw}");
+    }
+
+    #[test]
+    fn parse_page_declarations_background_only_is_retained() {
+        // An @page rule carrying ONLY a background (no size/margin) must still be
+        // kept so the bleed-area background is not dropped.
+        let rule =
+            parse_page_declarations("background: #abc").expect("background-only @page retained");
+        assert!(rule.width.is_none() && rule.margin_top.is_none());
+        assert!(
+            rule.raw_declarations
+                .as_deref()
+                .unwrap()
+                .contains("background")
+        );
     }
 
     #[test]
@@ -379,7 +1192,53 @@ mod tests {
         );
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].font_family, "MyFont");
-        assert_eq!(rules[0].src_path, "font.ttf");
+        assert_eq!(
+            rules[0].sources,
+            vec![FontFaceSource::Url("font.ttf".into())]
+        );
+    }
+
+    #[test]
+    fn parse_font_face_descriptors() {
+        let rule = parse_font_face_declarations(
+            r#"
+                font-family: Pick;
+                src: local("Parity Serif"), url("fallback.ttf");
+                font-weight: 700;
+                font-style: italic;
+                size-adjust: 150%;
+                unicode-range: U+0041, U+0100-017F, U+4??;
+            "#,
+        )
+        .unwrap();
+        assert_eq!(rule.font_family, "Pick");
+        assert_eq!(
+            rule.sources,
+            vec![
+                FontFaceSource::Local("Parity Serif".into()),
+                FontFaceSource::Url("fallback.ttf".into()),
+            ]
+        );
+        assert!(rule.font_weight_bold);
+        assert!(rule.font_style_italic);
+        assert!((rule.size_adjust - 1.5).abs() < f32::EPSILON);
+        assert_eq!(
+            rule.unicode_ranges,
+            vec![
+                UnicodeRange {
+                    start: 0x41,
+                    end: 0x41,
+                },
+                UnicodeRange {
+                    start: 0x100,
+                    end: 0x17f,
+                },
+                UnicodeRange {
+                    start: 0x400,
+                    end: 0x4ff,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -413,6 +1272,191 @@ mod tests {
     fn extract_page_rules_malformed() {
         assert!(extract_page_rules("@page { bogus }").is_empty());
         assert!(extract_page_rules("@page no-brace").is_empty());
+    }
+
+    #[test]
+    fn extract_page_rules_brace_balanced_keeps_trailing_decls() {
+        // A nested page-margin at-rule must NOT truncate the @page block at its
+        // inner `}` — the trailing `size`/`margin` declarations after the nested
+        // block have to survive (the brace-balance fix).
+        let rules = extract_page_rules(
+            r#"@page { @top-center { content: "Title" }; size: a4; margin: 2cm }"#,
+        );
+        assert_eq!(rules.len(), 1, "the @page rule must be captured whole");
+        assert!(
+            rules[0].width.is_some(),
+            "size after the nested margin box must not be dropped"
+        );
+        let m = 2.0 * 28.3465;
+        assert!((rules[0].margin_top.unwrap() - m).abs() < 0.01);
+        assert!((rules[0].margin_left.unwrap() - m).abs() < 0.01);
+    }
+
+    #[test]
+    fn extract_page_rules_nested_block_does_not_leak_into_next_rule() {
+        // Two @page rules with a nested margin box in the first: the second rule
+        // must still be found (the scan resumes AFTER the first rule's matching
+        // close brace, not its inner one).
+        let rules = extract_page_rules(
+            r#"@page :first { @bottom-right { content: "x" }; margin: 0 } @page { margin: 3cm }"#,
+        );
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].selector, PageSelector::First);
+        assert_eq!(rules[0].margin_top, Some(0.0));
+        assert_eq!(rules[1].selector, PageSelector::None);
+        assert!((rules[1].margin_top.unwrap() - 3.0 * 28.3465).abs() < 0.01);
+    }
+
+    #[test]
+    fn extract_page_rules_captures_selector() {
+        let first = extract_page_rules("@page :first { margin: 0 }");
+        assert_eq!(first[0].selector, PageSelector::First);
+
+        let left = extract_page_rules("@page :left { margin-left: 2cm }");
+        assert_eq!(left[0].selector, PageSelector::Left);
+
+        let right = extract_page_rules("@page :right { margin-right: 2cm }");
+        assert_eq!(right[0].selector, PageSelector::Right);
+
+        let blank = extract_page_rules("@page :blank { margin: 1cm }");
+        assert_eq!(blank[0].selector, PageSelector::Blank);
+
+        let named = extract_page_rules("@page cover { size: a4; margin: 1cm }");
+        assert_eq!(named[0].selector, PageSelector::Named("cover".to_string()));
+
+        let named_left = extract_page_rules("@page chapter:left { margin-left: 2cm }");
+        assert_eq!(named_left[0].selector, PageSelector::Left);
+
+        let default = extract_page_rules("@page { margin: 1cm }");
+        assert_eq!(default[0].selector, PageSelector::None);
+    }
+
+    #[test]
+    fn classify_page_selector_cases() {
+        assert_eq!(classify_page_selector(""), PageSelector::None);
+        assert_eq!(classify_page_selector("  "), PageSelector::None);
+        assert_eq!(classify_page_selector(":first"), PageSelector::First);
+        assert_eq!(classify_page_selector(" :left "), PageSelector::Left);
+        assert_eq!(classify_page_selector(":RIGHT"), PageSelector::Right);
+        assert_eq!(
+            classify_page_selector("cover"),
+            PageSelector::Named("cover".to_string())
+        );
+        assert_eq!(classify_page_selector("chapter:left"), PageSelector::Left);
+        assert_eq!(classify_page_selector("chapter:right"), PageSelector::Right);
+        assert_eq!(
+            classify_page_selector("title, chapter"),
+            PageSelector::Named("title, chapter".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_page_rules_synthesizes_first_right_cascade() {
+        let rules = extract_page_rules(
+            "@page{margin:0}@page :right{margin-left:40pt}@page :first{margin-top:20pt}",
+        );
+        let first_rules: Vec<&PageRule> = rules
+            .iter()
+            .filter(|rule| rule.selector == PageSelector::First)
+            .collect();
+        let synthesized = first_rules.last().expect("synthetic first rule");
+        assert_eq!(synthesized.margin_top, Some(20.0));
+        assert_eq!(synthesized.margin_left, Some(40.0));
+    }
+
+    #[test]
+    fn extract_page_rules_parses_margin_box_counters() {
+        let rules = extract_page_rules(
+            r#"@page { @bottom-center { content: "Page " counter(page) " of " counter(pages) } }"#,
+        );
+        assert_eq!(rules.len(), 1, "a margin-box-only @page must be retained");
+        assert_eq!(rules[0].margin_boxes.len(), 1);
+        let mb = &rules[0].margin_boxes[0];
+        assert_eq!(mb.position, MarginBoxPosition::BottomCenter);
+        assert_eq!(
+            mb.content,
+            vec![
+                MarginContentToken::Literal("Page ".to_string()),
+                MarginContentToken::PageNumber,
+                MarginContentToken::Literal(" of ".to_string()),
+                MarginContentToken::PageCount,
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_page_rules_margin_box_with_geometry() {
+        // Margin boxes coexist with size/margin in the same @page block.
+        let rules = extract_page_rules(
+            r#"@page { size: a4; margin: 2cm; @top-left { content: "Title" }; @top-right { content: counter(page) } }"#,
+        );
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].width.is_some(), "size must survive margin boxes");
+        assert!((rules[0].margin_top.unwrap() - 2.0 * 28.3465).abs() < 0.01);
+        assert_eq!(rules[0].margin_boxes.len(), 2);
+        assert_eq!(
+            rules[0].margin_boxes[0].position,
+            MarginBoxPosition::TopLeft
+        );
+        assert_eq!(
+            rules[0].margin_boxes[1].position,
+            MarginBoxPosition::TopRight
+        );
+        assert_eq!(
+            rules[0].margin_boxes[1].content,
+            vec![MarginContentToken::PageNumber]
+        );
+    }
+
+    #[test]
+    fn parse_margin_box_content_decimal_style_ignored() {
+        // `counter(page, decimal)` resolves like bare `counter(page)`.
+        let toks = parse_margin_box_content(r##""#" counter(page, decimal)"##);
+        assert_eq!(
+            toks,
+            vec![
+                MarginContentToken::Literal("#".to_string()),
+                MarginContentToken::PageNumber,
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_margin_box_content_single_quotes() {
+        let toks = parse_margin_box_content(r#"'p.' counter(page)"#);
+        assert_eq!(
+            toks,
+            vec![
+                MarginContentToken::Literal("p.".to_string()),
+                MarginContentToken::PageNumber,
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_margin_box_content_element_reference() {
+        let toks = parse_margin_box_content("element(runhead)");
+        assert_eq!(
+            toks,
+            vec![MarginContentToken::Element("runhead".to_string())]
+        );
+    }
+
+    #[test]
+    fn margin_box_position_band_and_align() {
+        assert_eq!(
+            MarginBoxPosition::BottomCenter.band(),
+            Some(crate::parser::css::MarginBoxBand::Bottom)
+        );
+        assert_eq!(MarginBoxPosition::LeftMiddle.band(), None);
+        assert_eq!(
+            MarginBoxPosition::TopRight.align(),
+            crate::parser::css::MarginBoxAlign::Right
+        );
+        assert_eq!(
+            MarginBoxPosition::TopRightCorner.align(),
+            crate::parser::css::MarginBoxAlign::Right
+        );
     }
 
     #[test]

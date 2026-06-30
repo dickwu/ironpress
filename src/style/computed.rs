@@ -1,20 +1,48 @@
 use std::collections::HashMap;
 
 use crate::parser::css::{
-    CssRule, CssValue, SelectorContext, StyleMap, selector_matches_with_context,
+    CalcOp, CssRule, CssValue, SelectorContext, StyleMap, parse_length,
+    selector_matches_with_context, specificity,
 };
 use crate::parser::dom::HtmlTag;
 use crate::style::defaults::default_style;
 use crate::types::{Color, EdgeSizes};
 
+/// Sentinel color used to mark a property whose value was the CSS
+/// `currentColor` keyword. The cascade can't resolve `currentColor` while a
+/// property is being parsed (the element's final `color` may still change in a
+/// later cascade layer), so the keyword is parsed to this unique sentinel and a
+/// post-pass at the end of `compute_style_with_context` replaces every
+/// occurrence with the element's computed `color`. The RGBA value is chosen to
+/// be effectively unauthorable so it can't collide with a real color.
+const CURRENT_COLOR_SENTINEL: Color = Color {
+    r: 1,
+    g: 2,
+    b: 3,
+    a: 254,
+};
+
 /// CSS display property.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Display {
     Block,
+    ListItem,
     Inline,
     InlineBlock,
     Flex,
+    InlineFlex,
     Grid,
+    InlineGrid,
+    Table,
+    InlineTable,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableRow,
+    TableCell,
+    TableColumnGroup,
+    TableColumn,
+    TableCaption,
     None,
 }
 
@@ -23,7 +51,16 @@ pub enum Display {
 pub enum FlexDirection {
     #[default]
     Row,
+    RowReverse,
     Column,
+    ColumnReverse,
+}
+
+impl FlexDirection {
+    /// Whether the main axis is the inline (horizontal) axis.
+    pub fn is_row(self) -> bool {
+        matches!(self, FlexDirection::Row | FlexDirection::RowReverse)
+    }
 }
 
 /// CSS justify-content property.
@@ -33,8 +70,10 @@ pub enum JustifyContent {
     FlexStart,
     FlexEnd,
     Center,
+    SafeCenter,
     SpaceBetween,
     SpaceAround,
+    SpaceEvenly,
 }
 
 /// CSS align-items property.
@@ -43,6 +82,35 @@ pub enum AlignItems {
     FlexStart,
     FlexEnd,
     Center,
+    Baseline,
+    #[default]
+    Stretch,
+}
+
+/// CSS align-self property (per-item cross-axis alignment override).
+/// `Auto` means "use the container's align-items".
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AlignSelf {
+    #[default]
+    Auto,
+    FlexStart,
+    FlexEnd,
+    Center,
+    Baseline,
+    Stretch,
+}
+
+/// CSS align-content property (cross-axis distribution of flex LINES in a
+/// multi-line/wrapping flex container). Only takes effect when the container
+/// wraps onto more than one line.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AlignContent {
+    FlexStart,
+    FlexEnd,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
     #[default]
     Stretch,
 }
@@ -53,6 +121,14 @@ pub enum FlexWrap {
     #[default]
     NoWrap,
     Wrap,
+    WrapReverse,
+}
+
+impl FlexWrap {
+    /// Whether wrapping is enabled (either direction).
+    pub fn wraps(self) -> bool {
+        matches!(self, FlexWrap::Wrap | FlexWrap::WrapReverse)
+    }
 }
 
 /// A single track definition in `grid-template-columns`.
@@ -64,8 +140,202 @@ pub enum GridTrack {
     Fr(f32),
     /// Automatic sizing (equal share of remaining space).
     Auto,
+    /// A percentage of the grid container's content box (0..1 fraction).
+    Percent(f32),
     /// `minmax(min, max)` — the track is at least `min` and at most `max`.
     Minmax(f32, f32),
+}
+
+/// A grid-placement endpoint (`grid-row-start` / `grid-column-end` etc.),
+/// per CSS Grid Layout Level 1 §8. One end of an item's placement on one axis.
+///
+/// - `Auto`: no explicit placement — resolved by auto-placement (§8.5).
+/// - `Line(n)`: a definite line number. Positive counts from the start edge of
+///   the explicit grid (1 = first line); negative from the end (-1 = last line).
+/// - `Named(name)`: a named line — the first line carrying `name` (§8.3). Also
+///   matches the implicit `<name>-start` / `<name>-end` lines that
+///   `grid-template-areas` generates for a named area.
+/// - `Span(n)`: span `n` tracks from the opposite (definite) edge (§8.3).
+/// - `SpanNamed(name)`: span until the next line named `name`. Approximated as a
+///   1-track span (the named line vocabulary rarely repeats in print fixtures).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum GridLine {
+    #[default]
+    Auto,
+    Line(i32),
+    Named(String),
+    Span(usize),
+    SpanNamed(String),
+}
+
+/// CSS Grid box-alignment keyword (justify-items / align-items per item axis).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum GridAlign {
+    /// `stretch` — item fills the track (default).
+    #[default]
+    Stretch,
+    /// `start` — item placed at the start of the track at its own size.
+    Start,
+    /// `end` — item placed at the end of the track at its own size.
+    End,
+    /// `center` — item centered in the track at its own size.
+    Center,
+}
+
+/// A CSS reference box for `clip-path` / `mask-origin` / `mask-clip`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShapeBox {
+    #[default]
+    Border,
+    Padding,
+    Content,
+}
+
+/// A CSS `<length-percentage>` stored as points or percentage.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LengthPercent {
+    pub value: f32,
+    pub is_percent: bool,
+}
+
+impl From<(f32, bool)> for LengthPercent {
+    fn from((value, is_percent): (f32, bool)) -> Self {
+        Self { value, is_percent }
+    }
+}
+
+/// Shape-radius keywords accepted by `circle()` / `ellipse()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShapeExtent {
+    #[default]
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipRadius {
+    Length(LengthPercent),
+    Extent(ShapeExtent),
+}
+
+/// A CSS `clip-path` basic shape. Lengths are in points; positions/percentages
+/// resolve against the selected reference box at render time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    /// `circle(r at cx cy)` — radius + centre, each (value, is_percent).
+    Circle {
+        r: ClipRadius,
+        cx: LengthPercent,
+        cy: LengthPercent,
+        geometry_box: ShapeBox,
+    },
+    /// `ellipse(rx ry at cx cy)`.
+    Ellipse {
+        rx: ClipRadius,
+        ry: ClipRadius,
+        cx: LengthPercent,
+        cy: LengthPercent,
+        geometry_box: ShapeBox,
+    },
+    /// `inset(top right bottom left [round radius])`.
+    Inset {
+        top: LengthPercent,
+        right: LengthPercent,
+        bottom: LengthPercent,
+        left: LengthPercent,
+        radii_x: [f32; 4],
+        radii_y: [f32; 4],
+        geometry_box: ShapeBox,
+    },
+    /// `polygon(x y, ...)` — vertices, each coord (value, is_percent).
+    Polygon {
+        points: Vec<(LengthPercent, LengthPercent)>,
+        even_odd: bool,
+        geometry_box: ShapeBox,
+    },
+    /// `path("...")`, parsed with the SVG path-data grammar.
+    Path {
+        commands: Vec<crate::parser::svg::PathCommand>,
+        geometry_box: ShapeBox,
+    },
+    /// `rect()` / `xywh()` rectangle with optional rounded corners.
+    Rect {
+        x: LengthPercent,
+        y: LengthPercent,
+        width: LengthPercent,
+        height: LengthPercent,
+        radii_x: [f32; 4],
+        radii_y: [f32; 4],
+        geometry_box: ShapeBox,
+    },
+    /// `url(#id)` fragment reference. Resolution needs document SVG defs.
+    Url(String),
+}
+
+/// A CSS `mask-image` source (css-masking-1 §3.1). The deterministic CSS-image
+/// sources (gradients) and `url()` references to an SVG image are modelled.
+#[derive(Debug, Clone)]
+pub enum MaskSource {
+    /// `linear-gradient(...)` / `repeating-linear-gradient(...)`.
+    Linear(LinearGradient),
+    /// `radial-gradient(...)` / `repeating-radial-gradient(...)`.
+    Radial(RadialGradient),
+    /// `conic-gradient(...)` / `repeating-conic-gradient(...)`.
+    Conic(ConicGradient),
+    /// `url(...)` pointing at an SVG image (data URI or file). Holds the raw SVG
+    /// bytes; rasterised to a coverage buffer at paint time (css-masking-1 §3.2).
+    Svg(std::sync::Arc<Vec<u8>>),
+    /// A resolved CSS mask layer list.
+    Layers(Vec<MaskLayer>),
+    /// `mask-border-*` represented as a border-box ring coverage mask.
+    BorderRing { width: f32 },
+    /// `url(#id)` fragment reference. Resolution needs document SVG defs.
+    Ref(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum MaskLayerSource {
+    Linear(LinearGradient),
+    Radial(RadialGradient),
+    Conic(ConicGradient),
+    Svg(std::sync::Arc<Vec<u8>>),
+    Ref(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskComposite {
+    #[default]
+    Add,
+    Subtract,
+    Intersect,
+    Exclude,
+    Destination,
+}
+
+#[derive(Debug, Clone)]
+pub struct MaskLayer {
+    pub source: MaskLayerSource,
+    pub mode: MaskMode,
+    pub layer_box: GradientLayerBox,
+    pub origin: ShapeBox,
+    pub clip: ShapeBox,
+    pub composite: MaskComposite,
+}
+
+/// CSS `mask-mode` (css-masking-1 §3.4): how the mask layer's pixels are turned
+/// into mask coverage values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// `alpha` — use the source's alpha channel as the coverage.
+    Alpha,
+    /// `luminance` — use the source's (premultiplied) luminance as coverage.
+    Luminance,
+    /// `match-source` (initial) — for a CSS gradient/image source this resolves
+    /// to `alpha`; for an SVG `<mask>` it follows `mask-type` (luminance default).
+    #[default]
+    MatchSource,
 }
 
 /// Text alignment.
@@ -83,8 +353,55 @@ pub enum TextAlign {
 pub enum FontWeight {
     #[default]
     Normal,
+    Number(u16),
     Bold,
 }
+
+impl FontWeight {
+    pub(crate) fn numeric(self) -> u16 {
+        match self {
+            FontWeight::Normal => 400,
+            FontWeight::Number(weight) => weight,
+            FontWeight::Bold => 700,
+        }
+    }
+
+    pub(crate) fn from_number(weight: u16) -> Self {
+        match weight {
+            400 => FontWeight::Normal,
+            700 => FontWeight::Bold,
+            weight => FontWeight::Number(weight.clamp(1, 1000)),
+        }
+    }
+
+    pub(crate) fn is_bold(self) -> bool {
+        self.numeric() >= 700
+    }
+
+    fn bolder(self) -> Self {
+        match self.numeric() {
+            0..=99 => FontWeight::Normal,
+            100..=349 => FontWeight::Normal,
+            350..=549 => FontWeight::Bold,
+            550..=899 => FontWeight::from_number(900),
+            _ => self,
+        }
+    }
+
+    fn lighter(self) -> Self {
+        match self.numeric() {
+            0..=99 => self,
+            100..=549 => FontWeight::from_number(100),
+            550..=749 => FontWeight::Normal,
+            _ => FontWeight::Bold,
+        }
+    }
+}
+
+pub(crate) const FONT_RUN_MARK_SYNTHETIC_WEIGHT_900: f32 = -91_001.0;
+pub(crate) const FONT_RUN_MARK_SUPPRESSED_SYNTHETIC_WEIGHT: f32 = -91_002.0;
+pub(crate) const FONT_RUN_MARK_SYNTHETIC_SMALL_CAPS: f32 = -91_003.0;
+pub(crate) const FONT_RUN_MARK_SYNTHETIC_WEIGHT_700: f32 = -91_004.0;
 
 /// Font style.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -127,7 +444,12 @@ pub struct FontStack {
 
 impl Default for FontStack {
     fn default() -> Self {
-        Self::from_family(FontFamily::Helvetica)
+        // The UA-initial generic font-family is `serif` (matching Chrome's
+        // default "standard" font). This makes unstyled text and the `ex`/`ch`
+        // font-relative units resolve against serif metrics, and keeps `serif`
+        // distinct from an explicit `sans-serif` (which both previously mapped
+        // to Helvetica).
+        Self::from_family(FontFamily::TimesRoman)
     }
 }
 
@@ -229,6 +551,7 @@ pub enum Float {
     None,
     Left,
     Right,
+    Footnote,
 }
 
 /// CSS clear property.
@@ -241,6 +564,20 @@ pub enum Clear {
     Both,
 }
 
+/// CSS `box-decoration-break` (css-break-3 §6.2): how a box's borders, padding,
+/// margin and background are applied when the box is split across fragmentainers
+/// (pages, columns). `Slice` (the default) renders the decoration as if the box
+/// were whole and then sliced at the break — the first fragment keeps its top
+/// border/padding but no bottom decoration, the continuation drops its top
+/// decoration. `Clone` wraps EACH fragment independently with the full
+/// border/padding/margin and background.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BoxDecorationBreak {
+    #[default]
+    Slice,
+    Clone,
+}
+
 /// CSS position property (simplified).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Position {
@@ -250,13 +587,231 @@ pub enum Position {
     Absolute,
 }
 
+fn parse_running_position_name(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let inner = raw.strip_prefix("running(")?.strip_suffix(')')?.trim();
+    (!inner.is_empty()).then(|| inner.to_ascii_lowercase())
+}
+
+/// CSS blend mode (`mix-blend-mode` / `background-blend-mode`).
+///
+/// Maps directly onto the PDF `/BM` blend-mode names emitted in an ExtGState.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    /// Internal marker for `isolation:isolate` when no actual blend mode applies.
+    Isolate,
+    BackgroundList {
+        modes: [u8; 8],
+        len: u8,
+    },
+}
+
+impl BlendMode {
+    /// Parse a CSS blend-mode keyword. Unknown keywords fall back to `Normal`.
+    pub fn from_keyword(keyword: &str) -> Self {
+        Self::from_code(Self::keyword_code(keyword))
+    }
+
+    /// Parse `background-blend-mode`, whose value is a comma-separated list.
+    pub fn from_background_value(value: &str) -> Self {
+        let parts: Vec<&str> = value
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        if parts.len() <= 1 {
+            return Self::from_keyword(value);
+        }
+
+        let mut modes = [0u8; 8];
+        let mut len = 0usize;
+        for part in parts.iter().take(modes.len()) {
+            modes[len] = Self::keyword_code(part);
+            len += 1;
+        }
+        BlendMode::BackgroundList {
+            modes,
+            len: len as u8,
+        }
+    }
+
+    pub fn background_layer(self, index: usize) -> Self {
+        match self {
+            BlendMode::BackgroundList { modes, len } if len > 0 => {
+                Self::from_code(modes[index % len as usize])
+            }
+            BlendMode::BackgroundList { .. } => BlendMode::Normal,
+            mode => mode,
+        }
+    }
+
+    /// PDF `/BM` blend-mode name, or `None` for `Normal` (which needs no gstate).
+    pub fn pdf_name(self) -> Option<&'static str> {
+        match self {
+            BlendMode::Normal => None,
+            BlendMode::Multiply => Some("Multiply"),
+            BlendMode::Screen => Some("Screen"),
+            BlendMode::Overlay => Some("Overlay"),
+            BlendMode::Darken => Some("Darken"),
+            BlendMode::Lighten => Some("Lighten"),
+            BlendMode::ColorDodge => Some("ColorDodge"),
+            BlendMode::ColorBurn => Some("ColorBurn"),
+            BlendMode::HardLight => Some("HardLight"),
+            BlendMode::SoftLight => Some("SoftLight"),
+            BlendMode::Difference => Some("Difference"),
+            BlendMode::Exclusion => Some("Exclusion"),
+            BlendMode::Hue => Some("Hue"),
+            BlendMode::Saturation => Some("Saturation"),
+            BlendMode::Color => Some("Color"),
+            BlendMode::Luminosity => Some("Luminosity"),
+            BlendMode::Isolate => None,
+            BlendMode::BackgroundList { modes, len } if len > 0 => {
+                Self::from_code(modes[0]).pdf_name()
+            }
+            BlendMode::BackgroundList { .. } => None,
+        }
+    }
+
+    fn keyword_code(keyword: &str) -> u8 {
+        match keyword.trim().to_ascii_lowercase().as_str() {
+            "multiply" => 1,
+            "screen" => 2,
+            "overlay" => 3,
+            "darken" => 4,
+            "lighten" => 5,
+            "color-dodge" => 6,
+            "color-burn" => 7,
+            "hard-light" => 8,
+            "soft-light" => 9,
+            "difference" => 10,
+            "exclusion" => 11,
+            "hue" => 12,
+            "saturation" => 13,
+            "color" => 14,
+            "luminosity" => 15,
+            _ => 0,
+        }
+    }
+
+    fn from_code(code: u8) -> Self {
+        match code {
+            1 => BlendMode::Multiply,
+            2 => BlendMode::Screen,
+            3 => BlendMode::Overlay,
+            4 => BlendMode::Darken,
+            5 => BlendMode::Lighten,
+            6 => BlendMode::ColorDodge,
+            7 => BlendMode::ColorBurn,
+            8 => BlendMode::HardLight,
+            9 => BlendMode::SoftLight,
+            10 => BlendMode::Difference,
+            11 => BlendMode::Exclusion,
+            12 => BlendMode::Hue,
+            13 => BlendMode::Saturation,
+            14 => BlendMode::Color,
+            15 => BlendMode::Luminosity,
+            _ => BlendMode::Normal,
+        }
+    }
+}
+
 /// CSS overflow property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Overflow {
     #[default]
     Visible,
     Hidden,
+    /// `overflow: scroll` — a scroll container that, in print, always reserves a
+    /// scrollbar gutter and paints a (non-interactive) scrollbar on the axis.
+    Scroll,
     Auto,
+}
+
+impl Overflow {
+    /// Whether this overflow value clips its content. In a print/PDF context
+    /// every non-`visible` value clips to the box: `hidden`/`clip`/`scroll`
+    /// always, and `auto` clips when content overflows (our deterministic
+    /// fixtures always overflow, and there is no interactive scroll affordance
+    /// in print, so `auto` clips too).
+    pub fn clips(self) -> bool {
+        !matches!(self, Overflow::Visible)
+    }
+}
+
+/// A single per-axis overflow keyword as authored, before the CSS computed-value
+/// coercion that depends on the sibling axis. `clip` and `scroll` are kept
+/// distinct from `hidden`/`auto` only so the coercion rules can distinguish a
+/// "scrolling value" (`auto`/`scroll`/`hidden`) from `visible`/`clip`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RawOverflow {
+    Visible,
+    Clip,
+    Hidden,
+    Scroll,
+    Auto,
+}
+
+pub(crate) fn parse_raw_overflow(k: &str) -> RawOverflow {
+    match k.trim().to_ascii_lowercase().as_str() {
+        "clip" => RawOverflow::Clip,
+        "hidden" => RawOverflow::Hidden,
+        "scroll" => RawOverflow::Scroll,
+        "auto" => RawOverflow::Auto,
+        _ => RawOverflow::Visible,
+    }
+}
+
+/// Apply the CSS Overflow 3 computed-value coercion between the two axes: when
+/// one axis is a scrolling value (`auto`/`scroll`/`hidden`) and the other is
+/// `visible` or `clip`, the latter is coerced (`visible` -> `auto`, `clip` ->
+/// `hidden`). Returns the resulting per-axis `Overflow` (with `scroll`/`hidden`
+/// modelled as `Hidden` and `clip` as `Hidden`, since print has no scrollbars).
+pub(crate) fn coerce_overflow_axes(x: RawOverflow, y: RawOverflow) -> (Overflow, Overflow) {
+    fn is_scrolling(v: RawOverflow) -> bool {
+        matches!(
+            v,
+            RawOverflow::Auto | RawOverflow::Scroll | RawOverflow::Hidden
+        )
+    }
+    let coerce = |this: RawOverflow, other: RawOverflow| -> Overflow {
+        match this {
+            RawOverflow::Visible => {
+                if is_scrolling(other) {
+                    Overflow::Auto
+                } else {
+                    Overflow::Visible
+                }
+            }
+            RawOverflow::Clip => {
+                // `clip` clips to the box (no scroll container); modelled as
+                // Hidden whether or not the other axis scrolls.
+                Overflow::Hidden
+            }
+            RawOverflow::Auto => Overflow::Auto,
+            RawOverflow::Hidden => Overflow::Hidden,
+            // `scroll` is preserved so the print scrollbar painter can reserve a
+            // gutter and draw a (non-interactive) scrollbar on this axis.
+            RawOverflow::Scroll => Overflow::Scroll,
+        }
+    };
+    (coerce(x, y), coerce(y, x))
 }
 
 /// CSS visibility property.
@@ -265,6 +820,9 @@ pub enum Visibility {
     #[default]
     Visible,
     Hidden,
+    /// `collapse`: like `hidden` for non-table elements; removes the row/column
+    /// (including its space) for table rows/columns, similar to `display: none`.
+    Collapse,
 }
 
 /// CSS transform value.
@@ -274,10 +832,149 @@ pub enum Transform {
     Rotate(f32),
     /// Scale by (sx, sy).
     Scale(f32, f32),
-    /// Translate by (tx, ty) in pt.
-    Translate(f32, f32),
-    /// Pre-composed affine matrix (a, b, c, d, e, f) for chained transforms.
+    /// Translate by (tx, ty). When the corresponding `*_pct` flag is set the
+    /// value is a percentage (0..100) resolved against the element's OWN
+    /// border-box width (tx) / height (ty) at render time; otherwise it is an
+    /// absolute length in pt.
+    Translate {
+        tx: f32,
+        ty: f32,
+        tx_pct: bool,
+        ty_pct: bool,
+    },
+    /// Pre-composed affine matrix `(a, b, c, d, e, f)` for chained transforms.
+    ///
+    /// `e`/`f` are constant pt translations; `e_w`/`e_h`/`f_w`/`f_h` are
+    /// coefficients (fractions) multiplying the box width/height to account for
+    /// percentage `translate()` components that appear anywhere in the chain.
+    /// At render time the effective translation is
+    /// `e + e_w*w + e_h*h` / `f + f_w*w + f_h*h`.
     Matrix(f32, f32, f32, f32, f32, f32),
+    /// CSS 3D matrix in the column-major order used by `matrix3d()`.
+    Matrix3d([f32; 16]),
+    /// Child 3D transform projected through a parent `perspective` property.
+    Project3d {
+        matrix: [f32; 16],
+        perspective: f32,
+        perspective_origin_x: f32,
+        perspective_origin_y: f32,
+    },
+    /// Composed matrix carrying percentage-translate coefficients (see above).
+    /// Only emitted when a chained transform contains a `%` translate; plain
+    /// chains collapse to [`Transform::Matrix`].
+    MatrixPct {
+        a: f32,
+        b: f32,
+        c: f32,
+        d: f32,
+        e: f32,
+        f: f32,
+        e_w: f32,
+        e_h: f32,
+        f_w: f32,
+        f_h: f32,
+    },
+}
+
+impl Transform {
+    /// Resolve this transform to a concrete CSS affine matrix `[a, b, c, d, e, f]`
+    /// given the element's border-box size in pt. Percentage translate
+    /// components resolve against `w`/`h` here. The returned matrix is in CSS
+    /// (y-down) convention; the renderer applies the y-flip + origin
+    /// conjugation.
+    pub fn to_css_matrix(self, w: f32, h: f32) -> [f32; 6] {
+        match self {
+            Transform::Rotate(deg) => {
+                let rad = deg * std::f32::consts::PI / 180.0;
+                let (c, s) = (rad.cos(), rad.sin());
+                [c, s, -s, c, 0.0, 0.0]
+            }
+            Transform::Scale(sx, sy) => [sx, 0.0, 0.0, sy, 0.0, 0.0],
+            Transform::Translate {
+                tx,
+                ty,
+                tx_pct,
+                ty_pct,
+            } => {
+                let ex = if tx_pct { tx / 100.0 * w } else { tx };
+                let ey = if ty_pct { ty / 100.0 * h } else { ty };
+                [1.0, 0.0, 0.0, 1.0, ex, ey]
+            }
+            Transform::Matrix(a, b, c, d, e, f) => [a, b, c, d, e, f],
+            Transform::Matrix3d(m) => matrix3d_affine_projection(&m),
+            Transform::Project3d { matrix, .. } => matrix3d_affine_projection(&matrix),
+            Transform::MatrixPct {
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                e_w,
+                e_h,
+                f_w,
+                f_h,
+            } => [a, b, c, d, e + e_w * w + e_h * h, f + f_w * w + f_h * h],
+        }
+    }
+}
+
+fn matrix3d_affine_projection(m: &[f32; 16]) -> [f32; 6] {
+    let w0 = m[15];
+    if w0 == 0.0 {
+        return [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    }
+    [
+        m[0] / w0,
+        m[1] / w0,
+        m[4] / w0,
+        m[5] / w0,
+        m[12] / w0,
+        m[13] / w0,
+    ]
+}
+
+/// CSS `transform-origin`: the pivot point for an element's transform.
+///
+/// Each axis is `fraction * dimension + length`, where `fraction` resolves
+/// percentages/keywords against the box's own width/height and `length` is an
+/// absolute pixel offset. The default is the box centre (`50% 50%`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformOrigin {
+    pub x_fraction: f32,
+    pub x_length: f32,
+    pub y_fraction: f32,
+    pub y_length: f32,
+    pub z_length: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformBox {
+    #[default]
+    BorderBox,
+    ContentBox,
+}
+
+impl Default for TransformOrigin {
+    fn default() -> Self {
+        Self {
+            x_fraction: 0.5,
+            x_length: 0.0,
+            y_fraction: 0.5,
+            y_length: 0.0,
+            z_length: 0.0,
+        }
+    }
+}
+
+impl TransformOrigin {
+    /// Resolve to a pixel offset from the box's top-left corner.
+    pub fn resolve(&self, width: f32, height: f32) -> (f32, f32) {
+        (
+            self.x_fraction * width + self.x_length,
+            self.y_fraction * height + self.y_length,
+        )
+    }
 }
 
 /// CSS box-sizing property.
@@ -286,6 +983,27 @@ pub enum BoxSizing {
     #[default]
     ContentBox,
     BorderBox,
+}
+
+/// CSS intrinsic-sizing keyword for the `width` property (css-sizing-3 § 5.1).
+///
+/// When `width` is one of these keywords the declared length is *intrinsic*: the
+/// box is sized from its content rather than to a fixed value or the available
+/// space. `ComputedStyle.width` stays `None` (so existing length/percentage/auto
+/// paths are untouched) and this enum records which keyword was used so block
+/// layout can compute the corresponding content-based width.
+// Variant names deliberately mirror the CSS keyword family
+// (`min-content` / `max-content` / `fit-content`); the shared `Content` suffix is
+// part of the spec vocabulary, so keep it rather than abbreviating.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicWidthKeyword {
+    /// Narrowest width the content can take without overflow.
+    MinContent,
+    /// Widest the content wants to be with no line wrapping.
+    MaxContent,
+    /// `min(max-content, max(min-content, stretch-fit))` — shrink-to-fit.
+    FitContent,
 }
 
 /// CSS text-transform property.
@@ -298,6 +1016,24 @@ pub enum TextTransform {
     Capitalize,
 }
 
+/// CSS `font-variant-caps` (css-fonts-4 §6.5) — the caps-related subset of
+/// `font-variant`. Only `small-caps` is synthesised (the bundled faces carry no
+/// real small-caps OpenType feature); other sub-values fall back to `Normal`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FontVariantCaps {
+    #[default]
+    Normal,
+    /// `small-caps`: lowercase letters render as smaller uppercase forms.
+    SmallCaps,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationStyle {
+    #[default]
+    Solid,
+    Wavy,
+}
+
 /// CSS white-space property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum WhiteSpace {
@@ -307,6 +1043,11 @@ pub enum WhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+    /// `white-space: break-spaces` (css-text-3 §3): like `pre-wrap` (preserve
+    /// spaces and forced segment breaks, still soft-wrap) but trailing
+    /// preserved spaces are treated as visible characters that occupy width at
+    /// the line end and cannot hang. Handled in the same paths as `pre-wrap`.
+    BreakSpaces,
 }
 
 /// CSS vertical-align property.
@@ -316,17 +1057,68 @@ pub enum VerticalAlign {
     Baseline,
     Super,
     Sub,
+    Length(f32),
+    Percent(f32),
     Top,
+    /// `text-top`: align the box top to the top of the PARENT's text content
+    /// (font) area — the parent baseline plus the parent's font ascent — which
+    /// is lower than the line-box top when the line box is taller than the
+    /// parent's font box (css2 §10.8.1).
+    TextTop,
     Middle,
     Bottom,
+    /// `text-bottom`: align the box bottom to the bottom of the parent's text
+    /// content (font) area — the parent baseline minus the parent's font
+    /// descent (css2 §10.8.1).
+    TextBottom,
+}
+
+/// CSS `writing-mode` property (css-writing-modes-4 §3.1). Inherited; initial
+/// is `horizontal-tb`. Only the two horizontally/vertically-flowing modes the
+/// engine renders are modelled: the default top-to-bottom horizontal mode and
+/// `vertical-rl` (vertical text, columns laid right-to-left). Latin glyphs in
+/// `vertical-rl` are set sideways (rotated 90° clockwise) per the default
+/// `text-orientation: mixed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    /// `horizontal-tb` — the default: inline progresses left-to-right, block
+    /// progresses top-to-bottom.
+    #[default]
+    HorizontalTb,
+    /// `vertical-rl` — inline progresses top-to-bottom, block (columns)
+    /// progresses right-to-left.
+    VerticalRl,
 }
 
 /// A color stop in a gradient.
 #[derive(Debug, Clone, Copy)]
 pub struct GradientStop {
     pub color: Color,
-    /// Position in the gradient (0.0 to 1.0).
+    /// Fractional position in the gradient (0.0 to 1.0).
     pub position: f32,
+    /// Absolute offset, in points, added at paint time against the gradient line
+    /// or radius. This preserves length/calc() stops until the basis is known.
+    pub position_length: f32,
+}
+
+/// Per-layer painting parameters for a gradient background layer. Populated
+/// only when a gradient coexists with other layers in a comma-separated
+/// `background-image` list and that layer has its own `background-size` /
+/// `-position` / `-repeat` entry. When fields are `None` the gradient fills the
+/// whole painting area (the historical single-layer behaviour).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GradientLayerBox {
+    /// Size of one gradient tile (`background-size` for this layer).
+    pub size: Option<BackgroundSize>,
+    /// Position of the gradient tile (`background-position` for this layer).
+    pub position: Option<BackgroundPosition>,
+    /// Repeat mode of the gradient tile (`background-repeat` for this layer).
+    pub repeat: Option<BackgroundRepeat>,
+    pub origin: Option<BackgroundOrigin>,
+    pub clip: Option<BackgroundClip>,
+    pub attachment: Option<BackgroundAttachment>,
+    pub border_image: bool,
+    pub paint_above_raster: bool,
 }
 
 /// A CSS linear gradient.
@@ -336,13 +1128,112 @@ pub struct LinearGradient {
     pub angle: f32,
     /// Color stops (at least 2).
     pub stops: Vec<GradientStop>,
+    /// `true` for `repeating-linear-gradient(...)`: the stop pattern tiles to
+    /// fill the gradient line instead of clamping the end colors.
+    pub repeating: bool,
+    /// Per-layer size/position/repeat when this gradient is one of several
+    /// comma-separated background layers.
+    pub layer_box: GradientLayerBox,
 }
 
-/// A CSS radial gradient (simplified: always circular, centered).
+/// A position component of a radial gradient's center, resolvable against the
+/// painted box at render time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RadialPos {
+    /// Fraction of the box extent (0..1), e.g. from a keyword or percentage.
+    Fraction(f32),
+    /// Absolute offset in points from the box's start edge (left/top).
+    Points(f32),
+    /// Absolute offset in points from the box's end edge (right/bottom).
+    EndOffset(f32),
+}
+
+impl RadialPos {
+    /// Resolve to an offset in points given the box extent (in points) along
+    /// this axis.
+    pub fn resolve(self, extent: f32) -> f32 {
+        match self {
+            RadialPos::Fraction(f) => extent * f,
+            RadialPos::Points(p) => p,
+            RadialPos::EndOffset(p) => extent - p,
+        }
+    }
+}
+
+/// The ending shape of a CSS radial gradient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RadialShape {
+    /// `circle` — a single radius along both axes.
+    Circle,
+    /// `ellipse` — independent horizontal/vertical radii. This is the CSS
+    /// default when no shape keyword is given.
+    #[default]
+    Ellipse,
+}
+
+/// The size/extent of a CSS radial gradient's ending shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RadialExtent {
+    /// Ending shape meets the box side(s) closest to the center.
+    ClosestSide,
+    /// Ending shape passes through the box corner closest to the center.
+    ClosestCorner,
+    /// Ending shape meets the box side(s) farthest from the center.
+    FarthestSide,
+    /// Ending shape passes through the box corner farthest from the center.
+    /// The CSS default when no extent keyword or explicit size is given.
+    #[default]
+    FarthestCorner,
+}
+
+/// A CSS radial gradient.
 #[derive(Debug, Clone)]
 pub struct RadialGradient {
     /// Color stops (at least 2).
     pub stops: Vec<GradientStop>,
+    /// Center position parsed from `at <pos>`, as `(x, y)` measured from the
+    /// box's left/top edges (CSS top-down). Defaults to box center.
+    pub center: (RadialPos, RadialPos),
+    /// Ending shape (circle vs ellipse). Determines how the unspecified extent
+    /// (`farthest-corner`) is resolved into radii at render time.
+    pub shape: RadialShape,
+    /// Extent keyword controlling how the ending shape is sized when no explicit
+    /// radius/radii are given. Defaults to `farthest-corner`.
+    pub extent: RadialExtent,
+    /// Explicit circular radius in points (e.g. `circle 60px` → 45pt). When
+    /// `None`, the `extent` is used. Only meaningful for `RadialShape::Circle`.
+    pub radius: Option<f32>,
+    /// Explicit elliptical radii `(rx, ry)` in points (e.g. `ellipse 100px 50px`).
+    /// `%` components are stored as a fraction of the box width/height resolved at
+    /// render time via `RadialPos`. When `None`, the `extent` is used.
+    pub radii: Option<(RadialPos, RadialPos)>,
+    /// `true` for `repeating-radial-gradient(...)`: the stop pattern tiles along
+    /// the gradient ray instead of clamping the end colors.
+    pub repeating: bool,
+    /// Per-layer size/position/repeat when this gradient is one of several
+    /// comma-separated background layers.
+    pub layer_box: GradientLayerBox,
+}
+
+/// A CSS conic gradient. PDF has no native conic shading, so this is rendered as
+/// a fine sector fan (one filled wedge per small angular step) clipped to the
+/// box at paint time.
+#[derive(Debug, Clone)]
+pub struct ConicGradient {
+    /// Starting angle in degrees, clockwise from 12 o'clock (CSS `from <angle>`).
+    pub from_angle: f32,
+    /// Center position as `(x, y)` measured from the box's left/top edges (CSS
+    /// top-down). Defaults to box center.
+    pub center: (RadialPos, RadialPos),
+    /// Angular color stops, positions normalized to a fraction of a full turn
+    /// (0.0..=1.0, where 1.0 = 360deg). Always at least 2, sorted ascending.
+    pub stops: Vec<GradientStop>,
+    /// `true` for `repeating-conic-gradient(...)`: the stop pattern tiles around
+    /// the full sweep instead of spanning a single turn.
+    pub repeating: bool,
+    /// Per-layer size/position/repeat when this gradient is one of several
+    /// comma-separated background layers.
+    pub layer_box: GradientLayerBox,
 }
 
 /// CSS text-overflow property.
@@ -375,6 +1266,22 @@ pub enum TableLayout {
     Auto,
     Fixed,
 }
+/// CSS empty-cells property (inherited). Controls whether the borders and
+/// background of an empty table cell are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum EmptyCells {
+    #[default]
+    Show,
+    Hide,
+}
+/// CSS caption-side property (inherited). Controls whether a table `<caption>`
+/// is placed above (`top`) or below (`bottom`) the table box.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum CaptionSide {
+    #[default]
+    Top,
+    Bottom,
+}
 /// CSS background-origin property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum BackgroundOrigin {
@@ -382,6 +1289,24 @@ pub enum BackgroundOrigin {
     Padding,
     Border,
     Content,
+}
+/// CSS background-clip property: the box the background painting area is clipped
+/// to (css-backgrounds-3 §3.4). Default is `border-box`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundClip {
+    #[default]
+    Border,
+    Padding,
+    Content,
+    Text,
+}
+/// CSS background-attachment property.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BackgroundAttachment {
+    #[default]
+    Scroll,
+    Fixed,
+    Local,
 }
 /// CSS background-size property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -396,6 +1321,12 @@ pub enum BackgroundSize {
         width_is_percent: bool,
         height_is_percent: bool,
     },
+    ExplicitAuto {
+        width: Option<f32>,
+        height: Option<f32>,
+        width_is_percent: bool,
+        height_is_percent: bool,
+    },
 }
 /// CSS background-repeat property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -405,6 +1336,10 @@ pub enum BackgroundRepeat {
     NoRepeat,
     RepeatX,
     RepeatY,
+    Space,
+    Round,
+    SpaceRound,
+    RoundSpace,
 }
 /// CSS background-position value.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -425,7 +1360,7 @@ impl Default for BackgroundPosition {
     }
 }
 /// CSS list-style-type property.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ListStyleType {
     #[default]
     Disc,
@@ -437,7 +1372,27 @@ pub enum ListStyleType {
     UpperAlpha,
     LowerRoman,
     UpperRoman,
+    CjkDecimal,
+    String(String),
+    Custom(String),
+    CounterStyle(CounterStyle),
     None,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CounterStyle {
+    pub system: CounterStyleSystem,
+    pub symbols: Vec<String>,
+    pub prefix: String,
+    pub suffix: String,
+    pub pad: Option<(usize, String)>,
+    pub negative: (String, String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CounterStyleSystem {
+    Cyclic,
+    ExtendsDecimal,
 }
 /// CSS list-style-position property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -451,9 +1406,34 @@ pub enum ListStylePosition {
 pub enum ContentItem {
     String(String),
     Attr(String),
-    Counter(String),
-    Counters(String, String),
+    /// `counter(name)` or `counter(name, style)`. The style governs how the
+    /// numeric value is rendered (decimal by default, e.g. upper-roman).
+    Counter(String, ListStyleType),
+    /// `counters(name, separator)` or `counters(name, separator, style)`. Joins
+    /// every nested level of `name` with `separator`, each formatted in `style`.
+    Counters(String, String, ListStyleType),
+    /// `leader(pattern)` from CSS Generated Content for Paged Media.
+    Leader(String),
+    /// `open-quote` keyword — resolves to the opening quotation mark.
+    OpenQuote,
+    /// `close-quote` keyword — resolves to the closing quotation mark.
+    CloseQuote,
+    /// `no-open-quote` keyword — inserts nothing but increments quote depth
+    /// (css-content-3 §2.4.2).
+    NoOpenQuote,
+    /// `no-close-quote` keyword — inserts nothing but decrements quote depth
+    /// (css-content-3 §2.4.2).
+    NoCloseQuote,
+    /// `url(...)` / `<image>` — makes the pseudo-element a replaced element
+    /// filled with the referenced image (css-content-3 §1, §2). Holds the raw
+    /// URL/data-URI string.
+    Url(String),
 }
+
+pub(crate) const TARGET_PLACEHOLDER_START: &str = "__ironpress-target:";
+pub(crate) const TARGET_PLACEHOLDER_END: &str = "__";
+pub(crate) const LEADER_PLACEHOLDER_START: &str = "\u{1d}ip-leader:";
+pub(crate) const LEADER_PLACEHOLDER_END: &str = "\u{1d}";
 
 /// CSS box-shadow value.
 #[derive(Debug, Clone, Copy)]
@@ -474,7 +1454,37 @@ pub enum BorderStyle {
     Solid,
     Dashed,
     Dotted,
+    /// Two parallel solid rules separated by a gap (CSS `double`). Each rule and
+    /// the gap take roughly one third of the border width.
+    Double,
     None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BorderBevelKind {
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct BorderBevelSides {
+    pub top: Option<BorderBevelKind>,
+    pub right: Option<BorderBevelKind>,
+    pub bottom: Option<BorderBevelKind>,
+    pub left: Option<BorderBevelKind>,
+}
+
+impl BorderBevelSides {
+    fn uniform(kind: Option<BorderBevelKind>) -> Self {
+        Self {
+            top: kind,
+            right: kind,
+            bottom: kind,
+            left: kind,
+        }
+    }
 }
 
 /// A single border side with width, color, and style.
@@ -562,6 +1572,56 @@ pub struct PercentageInsets {
     pub left: Option<f32>,
 }
 
+/// CSS Fragmentation 3 §3.1 forced/avoid break value for `break-before` /
+/// `break-after`. `Auto` is the initial value (a class-A break opportunity with
+/// no forced break and no avoidance). The forced values (`page`/`left`/`right`/
+/// `recto`/`verso`) always start a new page; the sided ones additionally force
+/// the following content onto a left/right (verso/recto) page. `Avoid` is a
+/// discretionary hint (currently a no-op in pagination).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BreakValue {
+    #[default]
+    Auto,
+    Avoid,
+    Page,
+    Left,
+    Right,
+    Recto,
+    Verso,
+}
+
+impl BreakValue {
+    /// Whether this value forces a page break (any of the CSS Fragmentation 3
+    /// "forced break values": `page`/`left`/`right`/`recto`/`verso`).
+    pub fn forces_break(self) -> bool {
+        matches!(
+            self,
+            BreakValue::Page
+                | BreakValue::Left
+                | BreakValue::Right
+                | BreakValue::Recto
+                | BreakValue::Verso
+        )
+    }
+
+    /// Map a CSS keyword (legacy `page-break-*` or modern `break-*`) to a
+    /// `BreakValue`. The legacy `always` aliases to `page`. Returns `None` for
+    /// keywords that are not valid break values so the caller leaves the field
+    /// untouched.
+    pub fn from_keyword(k: &str) -> Option<BreakValue> {
+        match k {
+            "auto" => Some(BreakValue::Auto),
+            "always" | "page" => Some(BreakValue::Page),
+            "left" => Some(BreakValue::Left),
+            "right" => Some(BreakValue::Right),
+            "recto" => Some(BreakValue::Recto),
+            "verso" => Some(BreakValue::Verso),
+            "avoid" | "avoid-page" => Some(BreakValue::Avoid),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ComputedStyle {
     pub font_size: f32,
@@ -586,17 +1646,65 @@ pub struct ComputedStyle {
     pub margin_em_left: Option<f32>,
     pub padding: EdgeSizes,
     pub text_align: TextAlign,
+    pub text_align_last: Option<TextAlign>,
+    pub word_break_keep_all: bool,
+    pub hyphens_manual: bool,
+    pub text_wrap_mode_nowrap: bool,
     /// CSS direction property (ltr/rtl), set from `dir` attribute or CSS.
     pub direction_rtl: bool,
+    /// CSS `writing-mode` (css-writing-modes-4 §3.1). Inherited; initial
+    /// `horizontal-tb`. Inherited automatically via the `parent.clone()` model
+    /// in `compute_style_with_context` (never reset in the non-inherited block).
+    pub writing_mode: WritingMode,
+    pub writing_mode_vertical_lr: bool,
+    pub text_orientation_upright: bool,
+    /// CSS `unicode-bidi: bidi-override` (or `isolate-override`). When set, the
+    /// element's inline content is reordered strictly in sequence according to
+    /// `direction`, overriding the characters' intrinsic bidi classes
+    /// (css-writing-modes-4 §2.4). Not inherited; initial is `normal` (false).
+    pub bidi_override: bool,
+    /// CSS `unicode-bidi: plaintext`: each forced line break resolves its own
+    /// paragraph base direction from its first strong character.
+    pub bidi_plaintext: bool,
     pub text_decoration_underline: bool,
     pub text_decoration_line_through: bool,
     pub text_decoration_overline: bool,
+    pub text_decoration_style: TextDecorationStyle,
+    pub text_decoration_thickness: Option<f32>,
+    pub text_underline_offset: Option<f32>,
+    /// CSS `text-decoration-color` (css-text-decor-3 §2.2): the colour of the
+    /// underline/line-through/overline, independent of the text `color`. `None`
+    /// means `currentColor` (fall back to the run's text colour). Not inherited.
+    pub text_decoration_color: Option<Color>,
     pub line_height: f32,
+    pub line_height_absolute: Option<f32>,
     pub page_break_before: bool,
     pub page_break_after: bool,
+    /// CSS Fragmentation 3 `break-before` / `break-after` (and their legacy
+    /// `page-break-*` aliases). The forced values drive `page_break_before/after`
+    /// (above); the sided ones (`left`/`right`/`recto`/`verso`) additionally
+    /// carry the parity used to insert a blank page during pagination.
+    pub break_before: BreakValue,
+    pub break_after: BreakValue,
+    /// CSS Fragmentation 3 `break-inside: avoid` (and legacy
+    /// `page-break-inside: avoid`): keep the box together — do not split it
+    /// across a page boundary unless it is taller than a whole page.
+    pub break_inside_avoid: bool,
+    /// CSS Paged Media 3 §3.4 `page: <name>`: the named page this box belongs
+    /// to. A box whose page name differs from the preceding box forces a page
+    /// break before it, and the page it starts adopts the matching
+    /// `@page <name>` geometry (currently the margin override). `None` is the
+    /// initial `auto` value (the default page). Not inherited.
+    pub page_name: Option<String>,
     pub border: BorderSides,
+    pub(crate) border_bevel: BorderBevelSides,
     pub display: Display,
     pub width: Option<f32>,
+    /// css-sizing-3 § 5.1 intrinsic `width` keyword (`min-content` / `max-content`
+    /// / `fit-content`). `None` for the usual length/percentage/`auto` cases. When
+    /// set, `width` is left `None` and block layout derives the box width from its
+    /// content instead of filling the available width.
+    pub width_keyword: Option<IntrinsicWidthKeyword>,
     pub height: Option<f32>,
     pub max_width: Option<f32>,
     pub min_width: Option<f32>,
@@ -605,43 +1713,201 @@ pub struct ComputedStyle {
     pub percentage_sizing: PercentageSizing,
     pub margin_left_auto: bool,
     pub margin_right_auto: bool,
+    /// `margin-top: auto` / `margin-bottom: auto`. Tracked (in addition to the
+    /// horizontal flags) so a flex item can absorb cross-axis (for a row
+    /// container) / main-axis (for a column container) free space via auto
+    /// margins per css-flexbox-1 §8.1.
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
     pub opacity: f32,
+    /// CSS `mix-blend-mode`: how this element composites with the backdrop.
+    pub mix_blend_mode: BlendMode,
+    /// CSS `background-blend-mode`: how the element's background layers blend
+    /// with each other and the background color.
+    pub background_blend_mode: BlendMode,
+    /// CSS `isolation: isolate`.
+    pub isolation_isolate: bool,
     pub float: Float,
     pub clear: Clear,
+    /// CSS `box-decoration-break`: how borders/padding/margin/background are
+    /// applied across a fragmentation break. Not inherited.
+    pub box_decoration_break: BoxDecorationBreak,
+    /// CSS `orphans` (css-break-3 §3.4): minimum number of line boxes that must
+    /// be left at the BOTTOM of a fragment before a break. Positive integer,
+    /// initial 2, inherited. Applies to block containers with an inline
+    /// formatting context.
+    pub orphans: u8,
+    /// CSS `widows` (css-break-3 §3.4): minimum number of line boxes that must
+    /// be placed at the TOP of the next fragment after a break. Positive
+    /// integer, initial 2, inherited.
+    pub widows: u8,
     pub position: Position,
+    /// CSS GCPM `position: running(name)`: removes this element from normal flow
+    /// and stores it under `name` for `content: element(name)` page-margin boxes.
+    /// Kept separate from [`Position`] so the widely-used copy enum can remain
+    /// small and static/relative/absolute comparisons stay simple.
+    pub running_name: Option<String>,
     pub top: Option<f32>,
     pub right: Option<f32>,
     pub bottom: Option<f32>,
     pub left: Option<f32>,
     pub percentage_insets: PercentageInsets,
-    pub box_shadow: Option<BoxShadow>,
+    /// CSS `box-shadow` may list several shadows (comma separated). They paint
+    /// back-to-front: the FIRST listed shadow is painted LAST (on top). Empty
+    /// when no shadow is set.
+    pub box_shadow: Vec<BoxShadow>,
+    /// CSS `text-shadow` (css-text-decor-3 §3): a list of shadows painted behind
+    /// the element's text. Inherited. Reuses `BoxShadow` (spread/inset unused).
+    pub text_shadow: Vec<BoxShadow>,
     pub flex_direction: FlexDirection,
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
+    /// Per-item `align-self` (cross-axis alignment override; `Auto` defers to
+    /// the container's `align-items`). Not inherited.
+    pub align_self: AlignSelf,
+    /// Per-item `order` — flex items are laid out by ascending `order`, with
+    /// document order breaking ties. Not inherited.
+    pub order: i32,
     pub flex_wrap: FlexWrap,
+    /// CSS `align-content` — cross-axis distribution of flex lines in a
+    /// multi-line container. Ignored for single-line containers.
+    pub align_content: AlignContent,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: Option<f32>,
+    /// `flex-basis` expressed as a percentage of the container's inner main
+    /// size (0..1 fraction). Resolved at flex-layout time; takes precedence
+    /// over `flex_basis` when set.
+    pub flex_basis_pct: Option<f32>,
+    /// `flex-basis: content` — size the item's flex base to its (max-)content
+    /// size, ignoring any `width`. Distinct from `auto` (which falls back to
+    /// `width`). When set, `flex_basis`/`flex_basis_pct` are both `None`.
+    pub flex_basis_content: bool,
+    pub flex_basis_keyword: Option<IntrinsicWidthKeyword>,
     pub gap: f32,
     pub overflow: Overflow,
+    /// Per-axis computed overflow (after the CSS Overflow 3 inter-axis coercion).
+    /// The collapsed `overflow` above is kept for the many clip-only consumers;
+    /// these two carry the axis detail the scrollbar painter needs (which axis
+    /// shows a scrollbar, and whether it is `scroll` = always vs `auto` = only
+    /// when content overflows).
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
     pub visibility: Visibility,
     pub transform: Option<Transform>,
+    /// CSS `transform-origin` pivot (defaults to the box centre).
+    pub transform_origin: TransformOrigin,
+    /// CSS `perspective` property for projecting transformed children.
+    pub perspective: Option<f32>,
+    /// CSS `perspective-origin`, resolved against this box.
+    pub perspective_origin: TransformOrigin,
+    pub transform_box: TransformBox,
+    pub clip_path: Option<ClipPath>,
+    /// CSS `mask-image` source (css-masking-1 §3.1). `None` = `mask-image: none`.
+    /// Only the primary (first) layer is modelled.
+    pub mask_image: Option<MaskSource>,
+    /// CSS `mask-mode` (css-masking-1 §3.4).
+    pub mask_mode: MaskMode,
     pub grid_template_columns: Vec<GridTrack>,
+    /// Explicit `grid-template-rows` track list (empty = auto rows).
+    pub grid_template_rows: Vec<GridTrack>,
+    /// `grid-auto-rows` size in points for implicit rows (None = auto/content).
+    pub grid_auto_rows: Option<f32>,
+    /// Full `grid-auto-rows` track-size pattern; repeated for implicit rows.
+    pub grid_auto_rows_pattern: Vec<f32>,
+    /// `grid-auto-flow: column` is in effect (default is row).
+    pub grid_auto_flow_column: bool,
+    /// `justify-items` (inline-axis alignment of grid items in their tracks).
+    pub justify_items: GridAlign,
+    /// `align-items` for grid (block-axis alignment of grid items). Distinct
+    /// from the flex `align_items` field; grid uses start/end/center/stretch.
+    pub grid_align_items: GridAlign,
+    /// Item-level `grid-column: span N` (number of columns to span, >=1).
+    /// Retained for back-compat; derived from `grid_column_start/end`.
+    pub grid_column_span: usize,
+    /// Item-level `grid-row: span N` (number of rows to span, >=1).
+    pub grid_row_span: usize,
+    /// `grid-auto-flow: dense` packing (backfill earlier holes). Default sparse.
+    pub grid_auto_flow_dense: bool,
+    /// Container `grid-template-areas`: row-major cells; `None` is a `.`/null
+    /// (empty) cell, `Some(name)` names the area occupying that cell. Empty when
+    /// no areas declared. Every row has the same length (column count).
+    pub grid_template_areas: Vec<Vec<Option<String>>>,
+    /// Line names per *column* line index (index 0 = the line before the first
+    /// column). Populated from bracketed `[name]` tokens in
+    /// `grid-template-columns` plus implicit `<area>-start`/`-end` lines.
+    pub grid_template_column_line_names: Vec<Vec<String>>,
+    /// Line names per *row* line index. As above for `grid-template-rows`.
+    pub grid_template_row_line_names: Vec<Vec<String>>,
+    /// Item-level placement endpoints (CSS Grid §8). `Auto` = auto-placed.
+    pub grid_column_start: GridLine,
+    pub grid_column_end: GridLine,
+    pub grid_row_start: GridLine,
+    pub grid_row_end: GridLine,
+    /// Item-level `grid-area: <name>` (a single named area). `None` = unset.
+    pub grid_area_name: Option<String>,
+    /// Item-level grid `justify-self` / `align-self` (overrides the container
+    /// `justify-items` / `align-items`). `None` = inherit the container value.
+    pub grid_justify_self: Option<GridAlign>,
+    pub grid_align_self: Option<GridAlign>,
     pub grid_gap: f32,
     pub border_radius: f32,
     /// Percentage-based border-radius (e.g. 50% for circles). Resolved in layout.
     pub border_radius_pct: Option<f32>,
+    /// Per-corner border radii in points, order [top-left, top-right,
+    /// bottom-right, bottom-left]. When all four equal `border_radius` the box is
+    /// uniformly rounded; differing values express the 1-4 value `border-radius`
+    /// shorthand and the per-corner longhands. Resolved against `border_radius`
+    /// in layout when zero.
+    pub border_radii: [f32; 4],
+    /// Per-corner VERTICAL border radii in points (same corner order). CSS
+    /// allows elliptical corners with distinct horizontal/vertical radii (the
+    /// `Rx / Ry` slash syntax, or `border-radius: 50%` on a non-square box where
+    /// the horizontal radius is width-relative and the vertical radius is
+    /// height-relative). `border_radii` holds the horizontal radii; this holds
+    /// the matching vertical radii. Equal to `border_radii` for circular corners,
+    /// so the renderer falls back to its circular-arc path unless they differ.
+    pub border_radii_y: [f32; 4],
+    /// Per-corner percentage radii (same corner order). Resolved in layout
+    /// against the box dimensions, mirroring `border_radius_pct`.
+    pub border_radii_pct: [Option<f32>; 4],
+    /// Per-corner VERTICAL percentage radii (same corner order), resolved in
+    /// layout against the box HEIGHT (horizontal `border_radii_pct` resolve
+    /// against width). Used for elliptical corners from percentage values.
+    pub border_radii_y_pct: [Option<f32>; 4],
     pub outline_width: f32,
     pub outline_color: Option<Color>,
+    /// CSS `outline-offset`: gap (in points) between the border edge and the
+    /// outline. Positive expands the outline outward; negative pulls it inward.
+    pub outline_offset: f32,
     pub box_sizing: BoxSizing,
     pub text_transform: TextTransform,
+    /// CSS `font-variant-caps` / `font-variant: small-caps` (css-fonts-4 §6.5).
+    pub font_variant_caps: FontVariantCaps,
+    /// Whether standard/contextual ligatures are enabled (css-fonts-3 §6.4 /
+    /// css-fonts-4 §6.11). Defaults to `true`; set to `false` by
+    /// `font-feature-settings: "liga" 0` (and `clig`/`dlig` off) to suppress
+    /// the shaper's default ligature substitution.
+    pub ligatures_enabled: bool,
+    pub font_kerning_enabled: bool,
+    pub font_synthesis_weight: bool,
+    pub font_synthesis_style: bool,
+    pub font_synthesis_small_caps: bool,
+    pub initial_letter: f32,
+    pub text_emphasis_mark: bool,
     pub text_indent: f32,
     pub white_space: WhiteSpace,
     pub letter_spacing: f32,
     pub word_spacing: f32,
+    /// CSS `tab-size` (css-text-3 §6.3): the number of space advances between
+    /// consecutive tab stops. A unitless `<number>` is stored directly; a
+    /// `<length>` is converted to an equivalent count by the renderer via the
+    /// space advance. Defaults to 8 (the initial value).
+    pub tab_size: f32,
     pub vertical_align: VerticalAlign,
     pub background_gradient: Option<LinearGradient>,
     pub background_radial_gradient: Option<RadialGradient>,
+    pub background_conic_gradient: Option<ConicGradient>,
     pub background_image: Option<String>,
     pub background_svg: Option<crate::parser::svg::SvgTree>,
     pub aspect_ratio: Option<f32>,
@@ -650,23 +1916,186 @@ pub struct ComputedStyle {
     pub border_collapse: BorderCollapse,
     pub table_layout: TableLayout,
     pub border_spacing: f32,
+    /// Vertical `border-spacing` (between rows). Equals `border_spacing` for the
+    /// single-value form; differs for the two-value form `H V`.
+    pub border_spacing_vertical: f32,
+    pub empty_cells: EmptyCells,
+    /// CSS `caption-side` (inherited): top (default) or bottom.
+    pub caption_side: CaptionSide,
     pub background_size: BackgroundSize,
     pub background_repeat: BackgroundRepeat,
     pub background_position: BackgroundPosition,
     pub background_origin: BackgroundOrigin,
+    pub background_clip: BackgroundClip,
+    pub background_attachment: BackgroundAttachment,
     /// CSS z-index (0 = auto).
     pub z_index: i32,
     /// CSS custom properties inherited from ancestors.
     pub custom_properties: HashMap<String, String>,
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
+    pub marker_side_match_parent: bool,
+    /// CSS `list-style-image` source (`url(...)`), if any. When set and
+    /// decodable, it replaces the `list-style-type` marker glyph (css-lists-3
+    /// §3.1). `None` means "use the list-style-type marker".
+    pub list_style_image: Option<String>,
     pub content: Vec<ContentItem>,
     pub counter_reset: Vec<(String, i32)>,
     pub counter_increment: Vec<(String, i32)>,
+    pub counter_set: Vec<(String, i32)>,
+    /// CSS `quotes` property: ordered (open, close) glyph pairs by nesting level.
+    /// `None` means `auto`/unset (use the UA default pair); an empty `Vec` means
+    /// `quotes: none` (open/close-quote produce no glyphs). Per css-content-3
+    /// §2.4. Inherited.
+    pub quotes: Option<Vec<(String, String)>>,
     pub column_count: Option<u32>,
+    /// CSS `column-width` (the ideal width of each column, in px). Combined with
+    /// `column-count` to derive the used number of columns for multicol flow.
+    pub column_width: Option<f32>,
     pub column_gap: f32,
+    /// Whether `column-gap` was set explicitly. Multicol uses a `normal` default
+    /// of 1em when unset, while grid/flex keep a 0 default.
+    pub column_gap_is_normal: bool,
+    /// CSS `column-rule`: the vertical line painted in each column gap.
+    pub column_rule: BorderSide,
+    /// CSS `column-span: all` — element spans across all columns as a full-width
+    /// band, breaking the column flow.
+    pub column_span_all: bool,
+    /// CSS `column-fill` — `false` (default) balances columns to equal height;
+    /// `true` (`column-fill: auto`) fills each column to the container's height
+    /// in turn, leaving the last column short.
+    pub column_fill_auto: bool,
     pub row_gap: f32,
+    /// Percentage `column-gap` (as a fraction, e.g. 0.10 for `10%`). Resolved
+    /// late against the flex container's OWN content-box inline size (width), not
+    /// the parent/ICB width (CSS Box Alignment §8.3). `None` when the gap is a
+    /// fixed length. Takes precedence over `column_gap` in the flex layout.
+    pub column_gap_pct: Option<f32>,
+    /// Percentage `row-gap` (as a fraction). Resolved late against the flex
+    /// container's OWN content-box block size (height).
+    pub row_gap_pct: Option<f32>,
     pub blur_radius: f32,
+    /// CSS `filter` color functions (grayscale/brightness/.../hue-rotate),
+    /// applied in order to a replaced image's pixels. `blur(...)` stays in
+    /// `blur_radius`; this holds the non-blur ops.
+    pub color_filters: Vec<ColorFilterOp>,
+    /// CSS `filter: url(#id)` reference id (css-filter-effects-1 §3), recording
+    /// the fragment that names an SVG `<filter>` element. Resolved during layout
+    /// (where the DOM is available) into `color_filters` by reading the filter's
+    /// `feColorMatrix` primitives. `None` when no `url()` filter is referenced.
+    pub filter_url_id: Option<String>,
+    /// CSS `filter: drop-shadow(dx dy blur color)`. `None` when no drop-shadow is
+    /// present. Offsets/blur are in points; color is straight-alpha RGBA.
+    pub drop_shadow: Option<DropShadow>,
+    /// CSS `object-fit` for replaced elements (how the content fits its box).
+    pub object_fit: ObjectFit,
+    /// CSS `object-position` as horizontal/vertical fractions of the free space
+    /// (0.0 = start/left/top, 0.5 = center, 1.0 = end/right/bottom).
+    pub object_position: ObjectPosition,
+}
+
+/// CSS `object-fit` for replaced elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ObjectFit {
+    /// Stretch to fill the box, ignoring aspect ratio (initial value).
+    #[default]
+    Fill,
+    /// Scale to fit inside the box, preserving aspect ratio (letterboxed).
+    Contain,
+    /// Scale to cover the box, preserving aspect ratio (cropped).
+    Cover,
+    /// Use the intrinsic size, ignoring the box dimensions.
+    None,
+    /// Use the smaller of `None` and `Contain`.
+    ScaleDown,
+}
+
+/// A single `object-position` axis component (css-images-3 §5.5 / css-backgrounds
+/// `<position>`). A percentage/keyword resolves against the free space (object
+/// size relative to the positioning area); a length is an absolute offset of the
+/// object's start edge from the box's start edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ObjectPositionComponent {
+    /// Fraction of the free space (0.0 = start, 0.5 = center, 1.0 = end).
+    Fraction(f32),
+    /// Absolute offset of the object's start edge from the box start, in points.
+    Length(f32),
+    /// Absolute offset from the far edge; resolved as free-space minus this length.
+    FarEdgeLength(f32),
+}
+
+impl ObjectPositionComponent {
+    /// Resolve to a concrete offset of the object's start edge from the box
+    /// start, given the free space (box length minus object length, which may be
+    /// negative when the object overflows / is cropped).
+    pub fn resolve(self, free_space: f32) -> f32 {
+        match self {
+            ObjectPositionComponent::Fraction(f) => free_space * f,
+            ObjectPositionComponent::Length(l) => l,
+            ObjectPositionComponent::FarEdgeLength(l) => free_space - l,
+        }
+    }
+}
+
+/// CSS `object-position` as a pair of axis components. The initial value is
+/// `50% 50%` (centered).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectPosition {
+    pub x: ObjectPositionComponent,
+    pub y: ObjectPositionComponent,
+}
+
+impl Default for ObjectPosition {
+    fn default() -> Self {
+        Self {
+            x: ObjectPositionComponent::Fraction(0.5),
+            y: ObjectPositionComponent::Fraction(0.5),
+        }
+    }
+}
+
+/// CSS `filter: drop-shadow(<offset-x> <offset-y> <blur>? <color>?)`
+/// (css-filter-effects-1 §4.4). Offsets and blur radius are in points; `color`
+/// is straight-alpha RGBA in 0..1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropShadow {
+    pub dx: f32,
+    pub dy: f32,
+    pub blur: f32,
+    pub color: (f32, f32, f32, f32),
+}
+
+/// A single CSS `filter` color function. Amounts are resolved fractions
+/// (`100%`/`1.0` -> 1.0); hue-rotate is in degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColorFilterOp {
+    Grayscale(f32),
+    Sepia(f32),
+    Invert(f32),
+    Brightness(f32),
+    Contrast(f32),
+    Saturate(f32),
+    HueRotate(f32),
+    Matrix([f32; 20]),
+    Flood {
+        color: (f32, f32, f32, f32),
+        region_x: f32,
+        region_y: f32,
+        region_width: f32,
+        region_height: f32,
+    },
+    Blur(f32),
+    Offset {
+        dx: f32,
+        dy: f32,
+        keep_source: bool,
+        region_x: f32,
+        region_y: f32,
+        region_width: f32,
+        region_height: f32,
+    },
+    DropShadow(DropShadow),
+    MorphologyDilate(f32),
 }
 
 impl Default for ComputedStyle {
@@ -678,7 +2107,7 @@ impl Default for ComputedStyle {
             viewport_height: 841.89,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
-            font_family: FontFamily::Helvetica,
+            font_family: FontFamily::TimesRoman,
             font_stack: FontStack::default(),
             color: Color::BLACK,
             background_color: None,
@@ -689,16 +2118,36 @@ impl Default for ComputedStyle {
             margin_em_left: None,
             padding: EdgeSizes::default(),
             text_align: TextAlign::Left,
+            text_align_last: None,
+            word_break_keep_all: false,
+            hyphens_manual: true,
+            text_wrap_mode_nowrap: false,
             direction_rtl: false,
+            writing_mode: WritingMode::HorizontalTb,
+            writing_mode_vertical_lr: false,
+            text_orientation_upright: false,
+            bidi_override: false,
+            bidi_plaintext: false,
             text_decoration_underline: false,
             text_decoration_line_through: false,
             text_decoration_overline: false,
+            text_decoration_style: TextDecorationStyle::Solid,
+            text_decoration_thickness: None,
+            text_underline_offset: None,
+            text_decoration_color: None,
             line_height: f32::NAN,
+            line_height_absolute: None,
             page_break_before: false,
             page_break_after: false,
+            break_before: BreakValue::Auto,
+            break_after: BreakValue::Auto,
+            break_inside_avoid: false,
+            page_name: None,
             border: BorderSides::default(),
+            border_bevel: BorderBevelSides::default(),
             display: Display::Block,
             width: None,
+            width_keyword: None,
             height: None,
             max_width: None,
             min_width: None,
@@ -707,42 +2156,101 @@ impl Default for ComputedStyle {
             percentage_sizing: PercentageSizing::default(),
             margin_left_auto: false,
             margin_right_auto: false,
+            margin_top_auto: false,
+            margin_bottom_auto: false,
             opacity: 1.0,
+            mix_blend_mode: BlendMode::default(),
+            background_blend_mode: BlendMode::default(),
+            isolation_isolate: false,
             float: Float::None,
             clear: Clear::None,
+            box_decoration_break: BoxDecorationBreak::Slice,
+            orphans: 2,
+            widows: 2,
             position: Position::Static,
+            running_name: None,
             top: None,
             right: None,
             bottom: None,
             left: None,
             percentage_insets: PercentageInsets::default(),
-            box_shadow: None,
+            box_shadow: Vec::new(),
+            text_shadow: Vec::new(),
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::Stretch,
+            align_self: AlignSelf::Auto,
+            order: 0,
             flex_wrap: FlexWrap::NoWrap,
+            align_content: AlignContent::Stretch,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: None,
+            flex_basis_pct: None,
+            flex_basis_content: false,
+            flex_basis_keyword: None,
             gap: 0.0,
             overflow: Overflow::Visible,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
             visibility: Visibility::Visible,
             transform: None,
+            transform_origin: TransformOrigin::default(),
+            perspective: None,
+            perspective_origin: TransformOrigin::default(),
+            transform_box: TransformBox::BorderBox,
+            clip_path: None,
+            mask_image: None,
+            mask_mode: MaskMode::default(),
             grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_rows: None,
+            grid_auto_rows_pattern: Vec::new(),
+            grid_auto_flow_column: false,
+            justify_items: GridAlign::Stretch,
+            grid_align_items: GridAlign::Stretch,
+            grid_column_span: 1,
+            grid_row_span: 1,
+            grid_auto_flow_dense: false,
+            grid_template_areas: Vec::new(),
+            grid_template_column_line_names: Vec::new(),
+            grid_template_row_line_names: Vec::new(),
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
+            grid_area_name: None,
+            grid_justify_self: None,
+            grid_align_self: None,
             grid_gap: 0.0,
             border_radius: 0.0,
             border_radius_pct: None,
+            border_radii: [0.0; 4],
+            border_radii_y: [0.0; 4],
+            border_radii_pct: [None; 4],
+            border_radii_y_pct: [None; 4],
             outline_width: 0.0,
             outline_color: None,
+            outline_offset: 0.0,
             box_sizing: BoxSizing::ContentBox,
             text_transform: TextTransform::None,
+            font_variant_caps: FontVariantCaps::Normal,
+            ligatures_enabled: true,
+            font_kerning_enabled: true,
+            font_synthesis_weight: true,
+            font_synthesis_style: true,
+            font_synthesis_small_caps: true,
+            initial_letter: 0.0,
+            text_emphasis_mark: false,
             text_indent: 0.0,
             white_space: WhiteSpace::Normal,
             letter_spacing: 0.0,
             word_spacing: 0.0,
+            tab_size: 8.0,
             vertical_align: VerticalAlign::Baseline,
             background_gradient: None,
             background_radial_gradient: None,
+            background_conic_gradient: None,
             background_image: None,
             background_svg: None,
             aspect_ratio: None,
@@ -751,21 +2259,42 @@ impl Default for ComputedStyle {
             border_collapse: BorderCollapse::Separate,
             table_layout: TableLayout::Auto,
             border_spacing: 0.0,
+            border_spacing_vertical: 0.0,
+            empty_cells: EmptyCells::Show,
+            caption_side: CaptionSide::Top,
             background_size: BackgroundSize::Auto,
             background_repeat: BackgroundRepeat::Repeat,
             background_position: BackgroundPosition::default(),
             background_origin: BackgroundOrigin::Padding,
+            background_clip: BackgroundClip::Border,
+            background_attachment: BackgroundAttachment::Scroll,
             z_index: 0,
             custom_properties: HashMap::new(),
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
+            marker_side_match_parent: false,
+            list_style_image: None,
             content: Vec::new(),
+            quotes: None,
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
             column_count: None,
+            column_width: None,
             column_gap: 0.0,
+            column_gap_is_normal: true,
+            column_rule: BorderSide::default(),
+            column_span_all: false,
+            column_fill_auto: false,
             row_gap: 0.0,
+            column_gap_pct: None,
+            row_gap_pct: None,
             blur_radius: 0.0,
+            color_filters: Vec::new(),
+            filter_url_id: None,
+            drop_shadow: None,
+            object_fit: ObjectFit::default(),
+            object_position: ObjectPosition::default(),
         }
     }
 }
@@ -774,6 +2303,7 @@ impl ComputedStyle {
     fn clear_background_images(&mut self) {
         self.background_gradient = None;
         self.background_radial_gradient = None;
+        self.background_conic_gradient = None;
         self.background_image = None;
         self.background_svg = None;
     }
@@ -785,11 +2315,14 @@ impl ComputedStyle {
         self.background_repeat = BackgroundRepeat::Repeat;
         self.background_position = BackgroundPosition::default();
         self.background_origin = BackgroundOrigin::Padding;
+        self.background_clip = BackgroundClip::Border;
+        self.background_attachment = BackgroundAttachment::Scroll;
     }
 
     fn inherit_background_image(&mut self, source: &ComputedStyle) {
         self.background_gradient = source.background_gradient.clone();
         self.background_radial_gradient = source.background_radial_gradient.clone();
+        self.background_conic_gradient = source.background_conic_gradient.clone();
         self.background_image = source.background_image.clone();
         self.background_svg = source.background_svg.clone();
     }
@@ -801,6 +2334,8 @@ impl ComputedStyle {
         self.background_repeat = source.background_repeat;
         self.background_position = source.background_position;
         self.background_origin = source.background_origin;
+        self.background_clip = source.background_clip;
+        self.background_attachment = source.background_attachment;
     }
 }
 
@@ -860,30 +2395,26 @@ pub fn compute_style_with_context(
         Display::Block
     };
 
-    // Reset block-level properties that don't inherit
-    if tag.is_block() {
-        style.margin = EdgeSizes::default();
-        style.margin_em_top = None;
-        style.margin_em_right = None;
-        style.margin_em_bottom = None;
-        style.margin_em_left = None;
-        style.padding = EdgeSizes::default();
-        style.background_color = None;
-        style.clear_background_images();
-    }
-
-    // Reset non-inherited properties for inline elements too
-    // (background-color does not inherit in CSS)
-    if !tag.is_block() {
-        style.background_color = None;
-        style.clear_background_images();
-    }
+    // Margin, padding, and background never inherit in CSS — reset them for
+    // every element regardless of display. (Previously these were reset only
+    // for block tags, so an inline tag such as a `display:inline-block`
+    // `<span>` wrongly inherited its parent's padding/margin.)
+    style.margin = EdgeSizes::default();
+    style.margin_em_top = None;
+    style.margin_em_right = None;
+    style.margin_em_bottom = None;
+    style.margin_em_left = None;
+    style.padding = EdgeSizes::default();
+    style.background_color = None;
+    style.clear_background_images();
 
     // Border does not inherit in CSS — reset for all elements
     style.border = BorderSides::default();
+    style.border_bevel = BorderBevelSides::default();
 
     // Reset non-inherited sizing and opacity properties
     style.width = None;
+    style.width_keyword = None;
     style.height = None;
     style.max_width = None;
     style.min_width = None;
@@ -892,48 +2423,114 @@ pub fn compute_style_with_context(
     style.percentage_sizing = PercentageSizing::default();
     style.margin_left_auto = false;
     style.margin_right_auto = false;
+    style.margin_top_auto = false;
+    style.margin_bottom_auto = false;
     style.opacity = 1.0;
+    style.isolation_isolate = false;
+    // `unicode-bidi` is not inherited; initial is `normal`.
+    style.bidi_override = false;
+    style.bidi_plaintext = false;
     style.float = Float::None;
     style.clear = Clear::None;
     style.position = Position::Static;
+    style.running_name = None;
     style.top = None;
     style.right = None;
     style.bottom = None;
     style.left = None;
     style.percentage_insets = PercentageInsets::default();
-    style.box_shadow = None;
+    style.box_shadow = Vec::new();
     style.flex_direction = FlexDirection::Row;
     style.justify_content = JustifyContent::FlexStart;
     style.align_items = AlignItems::Stretch;
+    style.align_self = AlignSelf::Auto;
+    style.order = 0;
     style.flex_wrap = FlexWrap::NoWrap;
+    style.align_content = AlignContent::Stretch;
     style.flex_grow = 0.0;
     style.flex_shrink = 1.0;
     style.flex_basis = None;
+    style.flex_basis_pct = None;
+    style.flex_basis_content = false;
+    style.flex_basis_keyword = None;
     style.gap = 0.0;
     style.overflow = Overflow::Visible;
+    style.overflow_x = Overflow::Visible;
+    style.overflow_y = Overflow::Visible;
     style.visibility = Visibility::Visible;
     style.transform = None;
+    style.perspective = None;
+    style.perspective_origin = TransformOrigin::default();
+    style.transform_box = TransformBox::BorderBox;
+    style.clip_path = None;
+    style.mask_image = None;
+    style.mask_mode = MaskMode::default();
     style.grid_template_columns = Vec::new();
+    // Grid placement is not inherited — reset per element so a grid item's
+    // children don't inherit its line placement / area assignment.
+    style.grid_template_rows = Vec::new();
+    style.grid_template_areas = Vec::new();
+    style.grid_template_column_line_names = Vec::new();
+    style.grid_template_row_line_names = Vec::new();
+    style.grid_auto_rows = None;
+    style.grid_auto_rows_pattern.clear();
+    style.grid_auto_flow_column = false;
+    style.grid_auto_flow_dense = false;
+    style.grid_column_span = 1;
+    style.grid_row_span = 1;
+    style.grid_column_start = GridLine::Auto;
+    style.grid_column_end = GridLine::Auto;
+    style.grid_row_start = GridLine::Auto;
+    style.grid_row_end = GridLine::Auto;
+    style.grid_area_name = None;
+    style.grid_justify_self = None;
+    style.grid_align_self = None;
     style.grid_gap = 0.0;
+    // Multi-column properties are not inherited — reset for every element so a
+    // multicol container's block children don't themselves become multicol
+    // boxes (which would recursively re-fragment their own content).
+    style.column_count = None;
+    style.column_width = None;
+    style.column_gap = 0.0;
+    style.column_gap_is_normal = true;
+    style.column_rule = BorderSide::default();
+    style.column_span_all = false;
+    style.column_fill_auto = false;
     style.border_radius = 0.0;
+    style.border_radii = [0.0; 4];
+    style.border_radii_pct = [None; 4];
+    style.border_radii_y = [0.0; 4];
+    style.border_radii_y_pct = [None; 4];
     style.outline_width = 0.0;
     style.outline_color = None;
+    style.outline_offset = 0.0;
     style.box_sizing = BoxSizing::ContentBox;
+    style.initial_letter = 0.0;
     style.text_indent = 0.0;
     style.vertical_align = VerticalAlign::Baseline;
     style.text_overflow = TextOverflow::Clip;
-    // border_collapse and border_spacing are inherited; don't reset them.
+    // border_collapse, border_spacing and empty_cells are inherited; don't reset.
     style.table_layout = TableLayout::Auto;
     style.background_size = BackgroundSize::Auto;
     style.background_repeat = BackgroundRepeat::Repeat;
     style.background_position = BackgroundPosition::default();
     style.background_origin = BackgroundOrigin::Padding;
+    style.background_clip = BackgroundClip::Border;
+    style.background_attachment = BackgroundAttachment::Scroll;
     style.content = Vec::new();
     style.counter_reset = Vec::new();
     style.counter_increment = Vec::new();
     style.z_index = 0;
     style.row_gap = 0.0;
+    style.column_gap_pct = None;
+    style.row_gap_pct = None;
     style.blur_radius = 0.0;
+    style.color_filters.clear();
+    style.filter_url_id = None;
+    style.drop_shadow = None;
+    // `page` (CSS Paged Media 3 §3.4) is not inherited; initial is `auto`
+    // (the default page → `None`).
+    style.page_name = None;
     // custom_properties inherit from parent (already cloned)
 
     // Apply tag defaults
@@ -957,8 +2554,15 @@ pub fn compute_style_with_context(
         }
     }
 
-    // Apply stylesheet rules (between defaults and inline).
-    // Skip pseudo-element rules — they target ::before/::after, not the element itself.
+    // Apply stylesheet rules (between defaults and inline) in cascade order
+    // (css-cascade-4 §6.3): all matching rules are sorted by specificity, with
+    // source order breaking ties (a stable sort over the source-ordered rule
+    // list preserves order for equal specificity). Within the same origin,
+    // `!important` declarations win over normal ones regardless of specificity,
+    // so we apply all matched NORMAL declarations first (low→high precedence),
+    // then all matched IMPORTANT declarations (low→high precedence) on top.
+    // Pseudo-element rules target ::before/::after, not the element itself.
+    let mut matched: Vec<(u32, &CssRule)> = Vec::new();
     for rule in rules {
         if rule.pseudo_element.is_some() {
             continue;
@@ -971,14 +2575,40 @@ pub fn compute_style_with_context(
             attributes,
             selector_ctx,
         ) {
-            apply_style_map(&mut style, &rule.declarations, parent);
+            matched.push((specificity(&rule.selector), rule));
         }
     }
+    // Stable sort by specificity ascending; equal specificity keeps source order
+    // (later source = applied later = wins), matching the spec's order-of-
+    // appearance tiebreak.
+    matched.sort_by_key(|(spec, _)| *spec);
 
-    // Apply inline styles (override everything)
-    if let Some(css_str) = inline_style {
-        let inline = crate::parser::css::parse_inline_style(css_str);
-        apply_style_map(&mut style, &inline, parent);
+    // Parse inline (style attribute) declarations up front so they can be
+    // interleaved into the cascade at the correct precedence tiers.
+    let inline_map = inline_style.map(crate::parser::css::parse_inline_style);
+
+    // Precedence order (lowest → highest), per css-cascade-4 §6.3 within the
+    // author origin:
+    //   1. author normal declarations (selectors), by specificity then source
+    //   2. inline normal declarations (style attribute beats any selector)
+    //   3. author important declarations (selectors), by specificity then source
+    //   4. inline important declarations (style attribute, important)
+    for (_, rule) in &matched {
+        apply_style_map_filtered(&mut style, &rule.declarations, parent, Importance::Normal);
+    }
+    if let Some(inline) = &inline_map {
+        apply_style_map_filtered(&mut style, inline, parent, Importance::Normal);
+    }
+    for (_, rule) in &matched {
+        apply_style_map_filtered(
+            &mut style,
+            &rule.declarations,
+            parent,
+            Importance::Important,
+        );
+    }
+    if let Some(inline) = &inline_map {
+        apply_style_map_filtered(&mut style, inline, parent, Importance::Important);
     }
 
     // Now that the cascade is finalized, re-resolve em-based margins against
@@ -997,8 +2627,107 @@ pub fn compute_style_with_context(
     if let Some(em) = style.margin_em_left {
         style.margin.left = em * style.font_size;
     }
+    sync_line_height_from_absolute(&mut style);
+
+    if tag != HtmlTag::Img {
+        add_filter_drop_shadow_box_shadow(&mut style);
+    }
+    resolve_custom_counter_style(&mut style.list_style_type, rules);
+    resolve_custom_counter_styles_in_content(&mut style.content, rules);
+
+    // Resolve `currentColor`. Two cases collapse here, both needing the
+    // element's now-finalized `color`:
+    //   1. The legacy parser parks an explicit `currentColor` keyword as a
+    //      sentinel (the final `color` isn't known mid-cascade).
+    //   2. A visible border with no resolvable color token. Per CSS the initial
+    //      value of `border-color` is `currentColor`, and lightningcss strips
+    //      `currentColor` from `border`/`border-*` shorthands (it equals the
+    //      default), leaving the side with `color: None`. Such a side must paint
+    //      in the element's `color`, not the black fallback.
+    resolve_current_color(&mut style);
+    apply_border_bevel_alpha(&mut style);
 
     style
+}
+
+/// Resolve `currentColor` into the element's finalized computed `color`.
+///
+/// Replaces both the `CURRENT_COLOR_SENTINEL` placeholder (explicit
+/// `currentColor` keyword) and the implicit `currentColor` default of a visible
+/// border side that has no resolved color.
+fn resolve_current_color(style: &mut ComputedStyle) {
+    let is_sentinel = |c: &Color| {
+        c.r == CURRENT_COLOR_SENTINEL.r
+            && c.g == CURRENT_COLOR_SENTINEL.g
+            && c.b == CURRENT_COLOR_SENTINEL.b
+            && c.a == CURRENT_COLOR_SENTINEL.a
+    };
+    let resolved = style.color;
+    for side in [
+        &mut style.border.top,
+        &mut style.border.right,
+        &mut style.border.bottom,
+        &mut style.border.left,
+    ] {
+        let is_visible = side.width > 0.0 && side.style != BorderStyle::None;
+        match side.color {
+            Some(c) if is_sentinel(&c) => side.color = Some(resolved),
+            // A visible border with no color uses `currentColor` (CSS initial
+            // value of border-color).
+            None if is_visible => side.color = Some(resolved),
+            _ => {}
+        }
+    }
+    if matches!(style.outline_color, Some(c) if is_sentinel(&c)) {
+        style.outline_color = Some(resolved);
+    }
+    if matches!(style.background_color, Some(c) if is_sentinel(&c)) {
+        style.background_color = Some(resolved);
+    }
+    for shadow in style.box_shadow.iter_mut() {
+        if is_sentinel(&shadow.color) {
+            shadow.color = resolved;
+        }
+    }
+    for shadow in style.text_shadow.iter_mut() {
+        if is_sentinel(&shadow.color) {
+            shadow.color = resolved;
+        }
+    }
+    if let Some(shadow) = &mut style.drop_shadow
+        && drop_shadow_color_is_current_color(shadow.color)
+    {
+        shadow.color = resolved.to_f32_rgba();
+    }
+}
+
+fn border_bevel_alpha(kind: BorderBevelKind) -> u8 {
+    match kind {
+        BorderBevelKind::Groove => 251,
+        BorderBevelKind::Ridge => 252,
+        BorderBevelKind::Inset => 253,
+        BorderBevelKind::Outset => 254,
+    }
+}
+
+fn apply_border_bevel_alpha(style: &mut ComputedStyle) {
+    let markers = style.border_bevel;
+    let apply = |side: &mut BorderSide, marker: Option<BorderBevelKind>| {
+        if let Some(kind) = marker {
+            if side.width > 0.0
+                && side.style != BorderStyle::None
+                && let Some(mut color) = side.color
+            {
+                color.a = border_bevel_alpha(kind);
+                side.color = Some(color);
+                side.style = BorderStyle::Solid;
+            }
+        }
+    };
+    apply(&mut style.border.top, markers.top);
+    apply(&mut style.border.right, markers.right);
+    apply(&mut style.border.bottom, markers.bottom);
+    apply(&mut style.border.left, markers.left);
 }
 
 /// Compute the style for a `::before` or `::after` pseudo-element.
@@ -1051,7 +2780,9 @@ pub fn compute_pseudo_element_style(
     style.padding = EdgeSizes::default();
     style.reset_background();
     style.border = BorderSides::default();
+    style.border_bevel = BorderBevelSides::default();
     style.width = None;
+    style.width_keyword = None;
     style.height = None;
     style.max_width = None;
     style.min_width = None;
@@ -1060,32 +2791,87 @@ pub fn compute_pseudo_element_style(
     style.percentage_sizing = PercentageSizing::default();
     style.margin_left_auto = false;
     style.margin_right_auto = false;
+    style.margin_top_auto = false;
+    style.margin_bottom_auto = false;
     style.opacity = 1.0;
+    // `unicode-bidi` is not inherited; initial is `normal`.
+    style.bidi_override = false;
+    style.bidi_plaintext = false;
     style.float = Float::None;
     style.clear = Clear::None;
     style.position = Position::Static;
+    style.running_name = None;
     style.top = None;
     style.right = None;
     style.bottom = None;
     style.left = None;
     style.percentage_insets = PercentageInsets::default();
-    style.box_shadow = None;
+    style.box_shadow = Vec::new();
     style.flex_direction = FlexDirection::Row;
     style.justify_content = JustifyContent::FlexStart;
     style.align_items = AlignItems::Stretch;
+    style.align_self = AlignSelf::Auto;
+    style.order = 0;
     style.flex_wrap = FlexWrap::NoWrap;
+    style.align_content = AlignContent::Stretch;
     style.flex_grow = 0.0;
     style.flex_shrink = 1.0;
     style.flex_basis = None;
+    style.flex_basis_pct = None;
+    style.flex_basis_content = false;
+    style.flex_basis_keyword = None;
     style.gap = 0.0;
     style.overflow = Overflow::Visible;
+    style.overflow_x = Overflow::Visible;
+    style.overflow_y = Overflow::Visible;
     style.transform = None;
+    style.perspective = None;
+    style.perspective_origin = TransformOrigin::default();
+    style.transform_box = TransformBox::BorderBox;
+    style.clip_path = None;
+    style.mask_image = None;
+    style.mask_mode = MaskMode::default();
     style.grid_template_columns = Vec::new();
+    // Grid placement is not inherited — reset per element so a grid item's
+    // children don't inherit its line placement / area assignment.
+    style.grid_template_rows = Vec::new();
+    style.grid_template_areas = Vec::new();
+    style.grid_template_column_line_names = Vec::new();
+    style.grid_template_row_line_names = Vec::new();
+    style.grid_auto_rows = None;
+    style.grid_auto_rows_pattern.clear();
+    style.grid_auto_flow_column = false;
+    style.grid_auto_flow_dense = false;
+    style.grid_column_span = 1;
+    style.grid_row_span = 1;
+    style.grid_column_start = GridLine::Auto;
+    style.grid_column_end = GridLine::Auto;
+    style.grid_row_start = GridLine::Auto;
+    style.grid_row_end = GridLine::Auto;
+    style.grid_area_name = None;
+    style.grid_justify_self = None;
+    style.grid_align_self = None;
     style.grid_gap = 0.0;
+    // Multi-column properties are not inherited — reset for every element so a
+    // multicol container's block children don't themselves become multicol
+    // boxes (which would recursively re-fragment their own content).
+    style.column_count = None;
+    style.column_width = None;
+    style.column_gap = 0.0;
+    style.column_gap_is_normal = true;
+    style.column_rule = BorderSide::default();
+    style.column_span_all = false;
+    style.column_fill_auto = false;
     style.border_radius = 0.0;
+    style.border_radii = [0.0; 4];
+    style.border_radii_pct = [None; 4];
+    style.border_radii_y = [0.0; 4];
+    style.border_radii_y_pct = [None; 4];
     style.outline_width = 0.0;
     style.outline_color = None;
+    style.outline_offset = 0.0;
     style.box_sizing = BoxSizing::ContentBox;
+    style.initial_letter = 0.0;
     style.text_indent = 0.0;
     style.vertical_align = VerticalAlign::Baseline;
     style.text_overflow = TextOverflow::Clip;
@@ -1094,7 +2880,12 @@ pub fn compute_pseudo_element_style(
     style.counter_increment = Vec::new();
     style.z_index = 0;
     style.row_gap = 0.0;
+    style.column_gap_pct = None;
+    style.row_gap_pct = None;
     style.blur_radius = 0.0;
+    style.color_filters.clear();
+    style.filter_url_id = None;
+    style.drop_shadow = None;
     // Default display for pseudo-elements is inline
     style.display = Display::Inline;
 
@@ -1105,8 +2896,20 @@ pub fn compute_pseudo_element_style(
         apply_style_map(&mut style, declarations, parent_style);
     }
 
-    // `content: none` and `content: normal` suppress pseudo-element generation.
-    if style.content.is_empty() {
+    // `content: none`/`normal` suppress `::before`/`::after` generation (no box
+    // without content). `::marker`, however, always has a box — its content
+    // defaults to the list marker symbol — so author rules that only restyle it
+    // (e.g. `li::marker { color: … }`) must still apply even with empty content.
+    // `::first-line`/`::first-letter` never carry `content`; they restyle
+    // existing text, so they are likewise exempt from the empty-content check.
+    if style.content.is_empty()
+        && !matches!(
+            pseudo,
+            crate::parser::css::PseudoElement::Marker
+                | crate::parser::css::PseudoElement::FirstLine
+                | crate::parser::css::PseudoElement::FirstLetter
+        )
+    {
         return None;
     }
 
@@ -1124,6 +2927,12 @@ pub fn compute_pseudo_element_style(
     if let Some(em) = style.margin_em_left {
         style.margin.left = em * style.font_size;
     }
+    sync_line_height_from_absolute(&mut style);
+    resolve_custom_counter_style(&mut style.list_style_type, rules);
+    resolve_custom_counter_styles_in_content(&mut style.content, rules);
+
+    // Resolve any `currentColor` sentinels against the pseudo-element's color.
+    resolve_current_color(&mut style);
 
     Some(style)
 }
@@ -1137,21 +2946,45 @@ fn is_inherited_property(property: &str) -> bool {
             | "font-weight"
             | "font-style"
             | "font-family"
+            | "font"
             | "line-height"
             | "text-align"
+            | "text-align-last"
             | "text-decoration"
+            | "text-decoration-line"
+            | "text-decoration-style"
+            | "text-decoration-thickness"
+            | "text-underline-offset"
             | "visibility"
             | "letter-spacing"
             | "word-spacing"
             | "text-indent"
             | "text-transform"
+            | "font-variant"
+            | "font-variant-caps"
+            | "font-variant-ligatures"
+            | "font-kerning"
+            | "font-size-adjust"
+            | "font-synthesis"
+            | "font-feature-settings"
+            | "text-emphasis"
+            | "text-emphasis-position"
             | "white-space"
+            | "white-space-collapse"
+            | "text-wrap-mode"
             | "overflow-wrap"
             | "word-wrap"
+            | "word-break"
+            | "hyphens"
             | "border-collapse"
             | "border-spacing"
+            | "empty-cells"
+            | "caption-side"
             | "list-style-type"
             | "list-style-position"
+            | "list-style-image"
+            | "orphans"
+            | "widows"
     )
 }
 
@@ -1163,19 +2996,36 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "font-size" => style.font_size = default.font_size,
         "font-weight" => style.font_weight = default.font_weight,
         "font-style" => style.font_style = default.font_style,
+        "font-synthesis" => {
+            style.font_synthesis_weight = default.font_synthesis_weight;
+            style.font_synthesis_style = default.font_synthesis_style;
+            style.font_synthesis_small_caps = default.font_synthesis_small_caps;
+        }
         "font-family" => {
             style.font_family = default.font_family;
             style.font_stack = default.font_stack;
         }
-        "line-height" => style.line_height = default.line_height,
+        "line-height" => {
+            style.line_height = default.line_height;
+            style.line_height_absolute = default.line_height_absolute;
+        }
         "text-align" => style.text_align = default.text_align,
-        "text-decoration" => {
+        "text-align-last" => style.text_align_last = default.text_align_last,
+        "text-decoration" | "text-decoration-line" => {
             style.text_decoration_underline = default.text_decoration_underline;
             style.text_decoration_line_through = default.text_decoration_line_through;
+            style.text_decoration_overline = default.text_decoration_overline;
         }
+        "text-decoration-style" => style.text_decoration_style = default.text_decoration_style,
+        "text-decoration-thickness" => {
+            style.text_decoration_thickness = default.text_decoration_thickness
+        }
+        "text-underline-offset" => style.text_underline_offset = default.text_underline_offset,
         "visibility" => style.visibility = default.visibility,
+        "initial-letter" => style.initial_letter = default.initial_letter,
         "letter-spacing" => style.letter_spacing = default.letter_spacing,
         "word-spacing" => style.word_spacing = default.word_spacing,
+        "tab-size" => style.tab_size = default.tab_size,
         "background-color" => style.background_color = default.background_color,
         "margin-top" => {
             style.margin.top = default.margin.top;
@@ -1200,6 +3050,7 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "display" => style.display = default.display,
         "width" => {
             style.width = default.width;
+            style.width_keyword = default.width_keyword;
             style.percentage_sizing.width = default.percentage_sizing.width;
         }
         "height" => {
@@ -1223,6 +3074,9 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
             style.percentage_sizing.max_height = default.percentage_sizing.max_height;
         }
         "opacity" => style.opacity = default.opacity,
+        "mix-blend-mode" => style.mix_blend_mode = default.mix_blend_mode,
+        "background-blend-mode" => style.background_blend_mode = default.background_blend_mode,
+        "isolation" => style.isolation_isolate = default.isolation_isolate,
         "border-width" => {
             style.border.top.width = default.border.top.width;
             style.border.right.width = default.border.right.width;
@@ -1237,10 +3091,17 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         }
         "border" | "border-top" | "border-right" | "border-bottom" | "border-left" => {
             style.border = default.border;
+            style.border_bevel = default.border_bevel;
         }
         "float" => style.float = default.float,
         "clear" => style.clear = default.clear,
-        "position" => style.position = default.position,
+        "box-decoration-break" => style.box_decoration_break = default.box_decoration_break,
+        "orphans" => style.orphans = default.orphans,
+        "widows" => style.widows = default.widows,
+        "position" => {
+            style.position = default.position;
+            style.running_name = default.running_name.clone();
+        }
         "top" => {
             style.top = default.top;
             style.percentage_insets.top = default.percentage_insets.top;
@@ -1257,39 +3118,106 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
             style.left = default.left;
             style.percentage_insets.left = default.percentage_insets.left;
         }
-        "overflow" => style.overflow = default.overflow,
+        "overflow" => {
+            style.overflow = default.overflow;
+            style.overflow_x = default.overflow_x;
+            style.overflow_y = default.overflow_y;
+        }
         "transform" => style.transform = default.transform,
-        "box-shadow" => style.box_shadow = default.box_shadow,
+        "perspective" => style.perspective = default.perspective,
+        "transform-box" => style.transform_box = default.transform_box,
+        "box-shadow" => style.box_shadow = default.box_shadow.clone(),
         "flex-direction" => style.flex_direction = default.flex_direction,
         "justify-content" => style.justify_content = default.justify_content,
         "align-items" => style.align_items = default.align_items,
+        "align-content" => style.align_content = default.align_content,
+        "align-self" => style.align_self = default.align_self,
+        "order" => style.order = default.order,
         "flex-wrap" => style.flex_wrap = default.flex_wrap,
         "flex-grow" => style.flex_grow = default.flex_grow,
         "flex-shrink" => style.flex_shrink = default.flex_shrink,
-        "flex-basis" => style.flex_basis = default.flex_basis,
+        "flex-basis" => {
+            style.flex_basis = default.flex_basis;
+            style.flex_basis_pct = default.flex_basis_pct;
+            style.flex_basis_content = default.flex_basis_content;
+            style.flex_basis_keyword = default.flex_basis_keyword;
+        }
         "gap" => style.gap = default.gap,
         "text-overflow" => style.text_overflow = default.text_overflow,
         "overflow-wrap" | "word-wrap" => style.overflow_wrap = default.overflow_wrap,
+        "word-break" => style.word_break_keep_all = default.word_break_keep_all,
+        "white-space-collapse" => style.white_space = default.white_space,
+        "text-wrap-mode" => style.text_wrap_mode_nowrap = default.text_wrap_mode_nowrap,
         "border-collapse" => style.border_collapse = default.border_collapse,
         "table-layout" => style.table_layout = default.table_layout,
-        "border-spacing" => style.border_spacing = default.border_spacing,
+        "border-spacing" => {
+            style.border_spacing = default.border_spacing;
+            style.border_spacing_vertical = default.border_spacing_vertical;
+        }
+        "empty-cells" => style.empty_cells = default.empty_cells,
+        "caption-side" => style.caption_side = default.caption_side,
         "background-size" => style.background_size = default.background_size,
         "background-repeat" => style.background_repeat = default.background_repeat,
         "background-position" => style.background_position = default.background_position,
         "background-origin" => style.background_origin = default.background_origin,
+        "background-clip" => style.background_clip = default.background_clip,
+        "background-attachment" => style.background_attachment = default.background_attachment,
         "background-image" | "background-svg" => style.clear_background_images(),
         "aspect-ratio" => style.aspect_ratio = default.aspect_ratio,
+        "object-fit" => style.object_fit = default.object_fit,
+        "object-position" => style.object_position = default.object_position,
         "background" => style.reset_background(),
-        "list-style-type" => style.list_style_type = default.list_style_type,
+        "list-style-type" => style.list_style_type = default.list_style_type.clone(),
         "list-style-position" => style.list_style_position = default.list_style_position,
+        "marker-side" => style.marker_side_match_parent = default.marker_side_match_parent,
+        "list-style-image" => style.list_style_image = default.list_style_image.clone(),
         "content" => style.content = default.content,
         "counter-reset" => style.counter_reset = default.counter_reset,
         "counter-increment" => style.counter_increment = default.counter_increment,
-        "column-count" | "columns" => style.column_count = default.column_count,
-        "column-gap" => style.column_gap = default.column_gap,
-        "filter" => style.blur_radius = default.blur_radius,
+        "counter-set" => style.counter_set = default.counter_set,
+        "column-count" => style.column_count = default.column_count,
+        "column-width" => style.column_width = default.column_width,
+        "columns" => {
+            style.column_count = default.column_count;
+            style.column_width = default.column_width;
+        }
+        "column-gap" => {
+            style.column_gap = default.column_gap;
+            style.column_gap_is_normal = default.column_gap_is_normal;
+        }
+        "column-rule" | "column-rule-width" | "column-rule-style" | "column-rule-color" => {
+            style.column_rule = default.column_rule;
+        }
+        "column-span" => style.column_span_all = default.column_span_all,
+        "column-fill" => style.column_fill_auto = default.column_fill_auto,
+        "filter" => {
+            style.blur_radius = default.blur_radius;
+            style.color_filters = default.color_filters.clone();
+            style.filter_url_id = default.filter_url_id.clone();
+            style.drop_shadow = default.drop_shadow;
+        }
         _ => {}
     }
+}
+
+fn reset_all_to_initial(style: &mut ComputedStyle) {
+    let root_font_size = style.root_font_size;
+    let viewport_width = style.viewport_width;
+    let viewport_height = style.viewport_height;
+    let direction_rtl = style.direction_rtl;
+    let bidi_override = style.bidi_override;
+    let bidi_plaintext = style.bidi_plaintext;
+    let custom_properties = style.custom_properties.clone();
+
+    *style = ComputedStyle::default();
+
+    style.root_font_size = root_font_size;
+    style.viewport_width = viewport_width;
+    style.viewport_height = viewport_height;
+    style.direction_rtl = direction_rtl;
+    style.bidi_override = bidi_override;
+    style.bidi_plaintext = bidi_plaintext;
+    style.custom_properties = custom_properties;
 }
 
 /// Restore a property to the parent's value (inherit behavior).
@@ -1299,19 +3227,36 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "font-size" => style.font_size = parent.font_size,
         "font-weight" => style.font_weight = parent.font_weight,
         "font-style" => style.font_style = parent.font_style,
+        "font-synthesis" => {
+            style.font_synthesis_weight = parent.font_synthesis_weight;
+            style.font_synthesis_style = parent.font_synthesis_style;
+            style.font_synthesis_small_caps = parent.font_synthesis_small_caps;
+        }
         "font-family" => {
             style.font_family = parent.font_family.clone();
             style.font_stack = parent.font_stack.clone();
         }
-        "line-height" => style.line_height = parent.line_height,
+        "line-height" => {
+            style.line_height = parent.line_height;
+            style.line_height_absolute = parent.line_height_absolute;
+        }
         "text-align" => style.text_align = parent.text_align,
-        "text-decoration" => {
+        "text-align-last" => style.text_align_last = parent.text_align_last,
+        "text-decoration" | "text-decoration-line" => {
             style.text_decoration_underline = parent.text_decoration_underline;
             style.text_decoration_line_through = parent.text_decoration_line_through;
+            style.text_decoration_overline = parent.text_decoration_overline;
         }
+        "text-decoration-style" => style.text_decoration_style = parent.text_decoration_style,
+        "text-decoration-thickness" => {
+            style.text_decoration_thickness = parent.text_decoration_thickness
+        }
+        "text-underline-offset" => style.text_underline_offset = parent.text_underline_offset,
         "visibility" => style.visibility = parent.visibility,
+        "initial-letter" => style.initial_letter = parent.initial_letter,
         "letter-spacing" => style.letter_spacing = parent.letter_spacing,
         "word-spacing" => style.word_spacing = parent.word_spacing,
+        "tab-size" => style.tab_size = parent.tab_size,
         "background-color" => style.background_color = parent.background_color,
         "margin-top" => {
             style.margin.top = parent.margin.top;
@@ -1336,6 +3281,7 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "display" => style.display = parent.display,
         "width" => {
             style.width = parent.width;
+            style.width_keyword = parent.width_keyword;
             style.percentage_sizing.width = parent.percentage_sizing.width;
         }
         "height" => {
@@ -1359,6 +3305,9 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
             style.percentage_sizing.max_height = parent.percentage_sizing.max_height;
         }
         "opacity" => style.opacity = parent.opacity,
+        "mix-blend-mode" => style.mix_blend_mode = parent.mix_blend_mode,
+        "background-blend-mode" => style.background_blend_mode = parent.background_blend_mode,
+        "isolation" => style.isolation_isolate = parent.isolation_isolate,
         "border-width" => {
             style.border.top.width = parent.border.top.width;
             style.border.right.width = parent.border.right.width;
@@ -1373,10 +3322,17 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         }
         "border" | "border-top" | "border-right" | "border-bottom" | "border-left" => {
             style.border = parent.border;
+            style.border_bevel = parent.border_bevel;
         }
         "float" => style.float = parent.float,
         "clear" => style.clear = parent.clear,
-        "position" => style.position = parent.position,
+        "box-decoration-break" => style.box_decoration_break = parent.box_decoration_break,
+        "orphans" => style.orphans = parent.orphans,
+        "widows" => style.widows = parent.widows,
+        "position" => {
+            style.position = parent.position;
+            style.running_name = parent.running_name.clone();
+        }
         "top" => {
             style.top = parent.top;
             style.percentage_insets.top = parent.percentage_insets.top;
@@ -1393,41 +3349,78 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
             style.left = parent.left;
             style.percentage_insets.left = parent.percentage_insets.left;
         }
-        "overflow" => style.overflow = parent.overflow,
+        "overflow" => {
+            style.overflow = parent.overflow;
+            style.overflow_x = parent.overflow_x;
+            style.overflow_y = parent.overflow_y;
+        }
         "transform" => style.transform = parent.transform,
-        "box-shadow" => style.box_shadow = parent.box_shadow,
+        "perspective" => style.perspective = parent.perspective,
+        "transform-box" => style.transform_box = parent.transform_box,
+        "box-shadow" => style.box_shadow = parent.box_shadow.clone(),
         "flex-direction" => style.flex_direction = parent.flex_direction,
         "justify-content" => style.justify_content = parent.justify_content,
         "align-items" => style.align_items = parent.align_items,
+        "align-content" => style.align_content = parent.align_content,
+        "align-self" => style.align_self = parent.align_self,
+        "order" => style.order = parent.order,
         "flex-wrap" => style.flex_wrap = parent.flex_wrap,
         "flex-grow" => style.flex_grow = parent.flex_grow,
         "flex-shrink" => style.flex_shrink = parent.flex_shrink,
-        "flex-basis" => style.flex_basis = parent.flex_basis,
+        "flex-basis" => {
+            style.flex_basis = parent.flex_basis;
+            style.flex_basis_pct = parent.flex_basis_pct;
+            style.flex_basis_content = parent.flex_basis_content;
+            style.flex_basis_keyword = parent.flex_basis_keyword;
+        }
         "gap" => style.gap = parent.gap,
         "text-overflow" => style.text_overflow = parent.text_overflow,
         "overflow-wrap" | "word-wrap" => style.overflow_wrap = parent.overflow_wrap,
+        "word-break" => style.word_break_keep_all = parent.word_break_keep_all,
+        "white-space-collapse" => style.white_space = parent.white_space,
+        "text-wrap-mode" => style.text_wrap_mode_nowrap = parent.text_wrap_mode_nowrap,
+        "empty-cells" => style.empty_cells = parent.empty_cells,
+        "caption-side" => style.caption_side = parent.caption_side,
         "border-collapse" => style.border_collapse = parent.border_collapse,
         "table-layout" => style.table_layout = parent.table_layout,
-        "border-spacing" => style.border_spacing = parent.border_spacing,
+        "border-spacing" => {
+            style.border_spacing = parent.border_spacing;
+            style.border_spacing_vertical = parent.border_spacing_vertical;
+        }
         "background-size" => style.background_size = parent.background_size,
         "background-repeat" => style.background_repeat = parent.background_repeat,
         "background-position" => style.background_position = parent.background_position,
         "background-origin" => style.background_origin = parent.background_origin,
+        "background-clip" => style.background_clip = parent.background_clip,
+        "background-attachment" => style.background_attachment = parent.background_attachment,
         "background-image" | "background-svg" => style.inherit_background_image(parent),
         "background-gradient" => style.background_gradient = parent.background_gradient.clone(),
         "background-radial-gradient" => {
             style.background_radial_gradient = parent.background_radial_gradient.clone()
         }
+        "background-conic-gradient" => {
+            style.background_conic_gradient = parent.background_conic_gradient.clone()
+        }
         "aspect-ratio" => style.aspect_ratio = parent.aspect_ratio,
+        "object-fit" => style.object_fit = parent.object_fit,
+        "object-position" => style.object_position = parent.object_position,
         "background" => style.inherit_background(parent),
-        "list-style-type" => style.list_style_type = parent.list_style_type,
+        "list-style-type" => style.list_style_type = parent.list_style_type.clone(),
         "list-style-position" => style.list_style_position = parent.list_style_position,
+        "marker-side" => style.marker_side_match_parent = parent.marker_side_match_parent,
+        "list-style-image" => style.list_style_image = parent.list_style_image.clone(),
         "content" => style.content = parent.content.clone(),
         "counter-reset" => style.counter_reset = parent.counter_reset.clone(),
         "counter-increment" => style.counter_increment = parent.counter_increment.clone(),
+        "counter-set" => style.counter_set = parent.counter_set.clone(),
         "column-count" | "columns" => style.column_count = parent.column_count,
         "column-gap" => style.column_gap = parent.column_gap,
-        "filter" => style.blur_radius = parent.blur_radius,
+        "filter" => {
+            style.blur_radius = parent.blur_radius;
+            style.color_filters = parent.color_filters.clone();
+            style.filter_url_id = parent.filter_url_id.clone();
+            style.drop_shadow = parent.drop_shadow;
+        }
         _ => {}
     }
 }
@@ -1443,6 +3436,240 @@ fn get_non_special<'a>(map: &'a StyleMap, key: &str) -> Option<&'a CssValue> {
             true
         }
     })
+}
+
+/// Parse a `font-feature-settings` value (css-fonts-3 §6.4) and report whether
+/// it turns standard ligatures OFF. The value is a comma-separated list of
+/// `<tag> [<value>]` entries; a ligature tag (`liga`, `clig`, `dlig`, `hlig`)
+/// followed by `0` or `off` disables ligatures, while `1`/`on`/omitted enables.
+fn ligatures_disabled_by_feature_settings(value: &str) -> bool {
+    let mut disabled = false;
+    for entry in value.split(',') {
+        let entry = entry.trim();
+        let mut parts = entry.split_whitespace();
+        let Some(tag) = parts.next() else { continue };
+        let tag = tag
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_ascii_lowercase();
+        if !matches!(tag.as_str(), "liga" | "clig" | "dlig" | "hlig") {
+            continue;
+        }
+        let on = match parts.next() {
+            None => true,
+            Some(v) => !matches!(v.to_ascii_lowercase().as_str(), "0" | "off"),
+        };
+        if on {
+            // An explicit enable cancels any prior disable in the same list.
+            disabled = false;
+        } else {
+            disabled = true;
+        }
+    }
+    disabled
+}
+
+fn apply_text_decoration_line(style: &mut ComputedStyle, value: &str) {
+    let mut underline = false;
+    let mut overline = false;
+    let mut line_through = false;
+    for token in value.split_whitespace() {
+        match token {
+            "underline" => underline = true,
+            "overline" => overline = true,
+            "line-through" => line_through = true,
+            "none" => {
+                underline = false;
+                overline = false;
+                line_through = false;
+            }
+            _ => {}
+        }
+    }
+    style.text_decoration_underline = underline;
+    style.text_decoration_overline = overline;
+    style.text_decoration_line_through = line_through;
+}
+
+fn color_in_text_emphasis_shorthand(value: &str) -> Option<Color> {
+    if let Some(start) = value.find("rgb(").or_else(|| value.find("rgba("))
+        && let Some(end) = value[start..].find(')')
+    {
+        return match crate::parser::css::parse_color(&value[start..=start + end]) {
+            Some(CssValue::Color(color)) => Some(color),
+            _ => None,
+        };
+    }
+
+    value.split_whitespace().find_map(|token| {
+        if let Some(CssValue::Color(color)) = crate::parser::css::parse_color(token) {
+            Some(color)
+        } else {
+            None
+        }
+    })
+}
+
+fn apply_font_shorthand(
+    style: &mut ComputedStyle,
+    value: &str,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    let Some(size_idx) = tokens.iter().position(|token| {
+        let size = token.split_once('/').map_or(*token, |(size, _)| size);
+        parse_length(size).is_some()
+    }) else {
+        return;
+    };
+
+    let inherited_font_weight = style.font_weight;
+    style.font_style = FontStyle::Normal;
+    style.font_weight = FontWeight::Normal;
+    style.line_height = f32::NAN;
+    style.line_height_absolute = None;
+
+    for token in &tokens[..size_idx] {
+        let lower = token.to_ascii_lowercase();
+        match lower.as_str() {
+            "italic" | "oblique" => style.font_style = FontStyle::Italic,
+            "bolder" => style.font_weight = inherited_font_weight.bolder(),
+            "lighter" => style.font_weight = inherited_font_weight.lighter(),
+            "bold" | "normal" => apply_font_weight(style, &lower),
+            value if value.parse::<u16>().is_ok() => apply_font_weight(style, value),
+            _ => {}
+        }
+    }
+
+    let (size_raw, mut line_raw) = tokens[size_idx]
+        .split_once('/')
+        .map_or((tokens[size_idx], None), |(size, line)| (size, Some(line)));
+    let mut family_start = size_idx + 1;
+    if line_raw.is_none() && tokens.get(family_start).is_some_and(|token| *token == "/") {
+        line_raw = tokens.get(family_start + 1).copied();
+        family_start += 2;
+    }
+    apply_font_size_token(style, size_raw, length_context);
+    if let Some(line) = line_raw {
+        apply_line_height_token(style, line, length_context);
+    }
+
+    let family = tokens[family_start..].join(" ");
+    if !family.trim().is_empty() {
+        style.font_stack = parse_font_stack(&family);
+        style.font_family = style.font_stack.primary();
+    }
+}
+
+fn apply_font_weight(style: &mut ComputedStyle, value: &str) {
+    let lower = value.trim().to_ascii_lowercase();
+    style.font_weight = match lower.as_str() {
+        "normal" => FontWeight::Normal,
+        "bold" => FontWeight::Bold,
+        "bolder" => style.font_weight.bolder(),
+        "lighter" => style.font_weight.lighter(),
+        _ => lower
+            .parse::<u16>()
+            .ok()
+            .map(FontWeight::from_number)
+            .unwrap_or(FontWeight::Normal),
+    };
+}
+
+fn apply_font_size_token(
+    style: &mut ComputedStyle,
+    token: &str,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) {
+    if let Some(value) = parse_length(token) {
+        match value {
+            CssValue::Length(v) => style.font_size = v,
+            CssValue::Number(v) => style.font_size *= v,
+            CssValue::Percentage(p) => style.font_size *= p / 100.0,
+            other => {
+                if let Some(v) = resolve_css_length_for_style(&other, style, length_context) {
+                    style.font_size = v;
+                }
+            }
+        }
+    }
+}
+
+fn apply_line_height_token(
+    style: &mut ComputedStyle,
+    token: &str,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) {
+    if token == "normal" {
+        style.line_height = f32::NAN;
+        style.line_height_absolute = None;
+        return;
+    }
+    if let Some(value) = parse_length(token) {
+        match value {
+            CssValue::Length(v) => {
+                style.line_height_absolute = Some(v);
+                style.line_height = v / style.font_size;
+            }
+            CssValue::Number(v) => {
+                style.line_height = v;
+                style.line_height_absolute = None;
+            }
+            CssValue::Percentage(p) => {
+                let absolute = style.font_size * p / 100.0;
+                style.line_height_absolute = Some(absolute);
+                style.line_height = absolute / style.font_size;
+            }
+            other => {
+                if let Some(v) = resolve_css_length_for_style(&other, style, length_context) {
+                    style.line_height_absolute = Some(v);
+                    style.line_height = v / style.font_size;
+                }
+            }
+        }
+    }
+}
+
+/// Whether to apply normal (non-important) or `!important` declarations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Importance {
+    Normal,
+    Important,
+}
+
+/// Apply only the declarations of the given importance tier from `map`.
+///
+/// The cascade applies all normal declarations across matched rules first, then
+/// all important declarations on top (css-cascade-4 §6.3). Splitting a rule's
+/// declaration block by importance lets a low-specificity `!important` rule win
+/// over a high-specificity normal rule. Implemented by projecting `map` down to
+/// only the wanted-importance properties and delegating to `apply_style_map`.
+pub(crate) fn apply_style_map_filtered(
+    style: &mut ComputedStyle,
+    map: &StyleMap,
+    parent: &ComputedStyle,
+    want: Importance,
+) {
+    let want_important = want == Importance::Important;
+    // Fast path: if every property already matches the wanted tier, apply as-is.
+    if map
+        .properties
+        .keys()
+        .all(|k| map.is_important(k) == want_important)
+    {
+        if !map.properties.is_empty() {
+            apply_style_map(style, map, parent);
+        }
+        return;
+    }
+    let mut filtered = StyleMap::new();
+    for (key, value) in &map.properties {
+        if map.is_important(key) == want_important {
+            filtered.set_with_importance(key, value.clone(), want_important);
+        }
+    }
+    if !filtered.properties.is_empty() {
+        apply_style_map(style, &filtered, parent);
+    }
 }
 
 pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent: &ComputedStyle) {
@@ -1468,13 +3695,23 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             let lower = k.to_ascii_lowercase();
             match lower.as_str() {
                 "inherit" => {
-                    restore_from_parent(style, prop, parent);
+                    if prop == "all" {
+                        *style = parent.clone();
+                    } else {
+                        restore_from_parent(style, prop, parent);
+                    }
                 }
                 "initial" => {
-                    reset_to_initial(style, prop);
+                    if prop == "all" {
+                        reset_all_to_initial(style);
+                    } else {
+                        reset_to_initial(style, prop);
+                    }
                 }
                 "unset" => {
-                    if is_inherited_property(prop) {
+                    if prop == "all" {
+                        reset_all_to_initial(style);
+                    } else if is_inherited_property(prop) {
                         restore_from_parent(style, prop, parent);
                     } else {
                         reset_to_initial(style, prop);
@@ -1485,6 +3722,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font") {
+        apply_font_shorthand(style, k, length_context);
+    }
+
     if let Some(CssValue::Length(v)) = get_non_special(map, "font-size") {
         style.font_size = *v;
     }
@@ -1492,13 +3733,23 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         // em value — multiply by current font-size
         style.font_size *= *v;
     }
+    // ex/ch on `font-size` (css-values-4 §6.1.1): the unit refers to the
+    // *parent* element's font (the value is computed before the new font-size
+    // takes effect), so resolve the x-height / '0'-advance against the parent's
+    // resolved font. Falls back to the 0.5em approximation when no font context
+    // is active (e.g. the font is not loaded). `style.font_size` currently holds
+    // the inherited parent size, matching the `em`/`Number` branch above.
+    if let Some(CssValue::Ex(v)) = get_non_special(map, "font-size") {
+        let ratio = crate::style::font_ctx::style_x_height_ratio(parent).unwrap_or(0.5);
+        style.font_size *= *v * ratio;
+    }
+    if let Some(CssValue::Ch(v)) = get_non_special(map, "font-size") {
+        let ratio = crate::style::font_ctx::style_ch_ratio(parent).unwrap_or(0.5);
+        style.font_size *= *v * ratio;
+    }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-weight") {
-        style.font_weight = if k == "bold" || k == "700" || k == "800" || k == "900" {
-            FontWeight::Bold
-        } else {
-            FontWeight::Normal
-        };
+        apply_font_weight(style, k);
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-style") {
@@ -1514,6 +3765,25 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.font_family = style.font_stack.primary();
     }
 
+    if let Some(value) = get_non_special(map, "font-size-adjust") {
+        let target_aspect = match value {
+            CssValue::Number(v) => Some(*v),
+            CssValue::Keyword(k) if k != "none" => k.trim().parse::<f32>().ok(),
+            _ => None,
+        };
+        if let Some(target_aspect) = target_aspect
+            && target_aspect.is_finite()
+            && target_aspect > 0.0
+        {
+            let actual_aspect =
+                crate::style::font_ctx::style_font_size_adjust_x_height_ratio(style).unwrap_or(0.5);
+            if actual_aspect > 0.0 {
+                style.font_size *= target_aspect / actual_aspect;
+                sync_line_height_from_absolute(style);
+            }
+        }
+    }
+
     if let Some(CssValue::Color(c)) = get_non_special(map, "color") {
         style.color = *c;
     }
@@ -1522,10 +3792,29 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.background_color = Some(*c);
     }
 
+    // Background-image layers. A single declaration may split into several keys
+    // (e.g. `background-image: url(...), linear-gradient(...)` becomes a raster
+    // `background-image` key AND a `background-gradient` key — see
+    // parser::css::inline). All such layers from the *same* declaration must
+    // coexist, but they collectively replace any background-image stack inherited
+    // from an earlier, lower-priority cascade layer. So clear the whole stack
+    // exactly once, up front, before setting any layer present in this map —
+    // rather than per-key, which would clobber a sibling layer from the same
+    // declaration. Full resets (`background:` shorthand, `background-image: none`,
+    // the per-element reset in compute_style_with_context, the initial/inherit
+    // paths) are handled elsewhere and remain unaffected.
+    let sets_image_layer = get_non_special(map, "background-gradient").is_some()
+        || get_non_special(map, "background-radial-gradient").is_some()
+        || get_non_special(map, "background-conic-gradient").is_some()
+        || get_non_special(map, "background-svg").is_some()
+        || get_non_special(map, "background-image").is_some();
+    if sets_image_layer {
+        style.clear_background_images();
+    }
+
     // Linear gradient (from background or background-image)
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-gradient") {
         if let Some(lg) = parse_linear_gradient(k) {
-            style.clear_background_images();
             style.background_gradient = Some(lg);
         }
     }
@@ -1533,31 +3822,41 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // Radial gradient (from background or background-image)
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-radial-gradient") {
         if let Some(rg) = parse_radial_gradient(k) {
-            style.clear_background_images();
             style.background_radial_gradient = Some(rg);
+        }
+    }
+
+    // Conic gradient (from background or background-image)
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-conic-gradient") {
+        if let Some(cg) = parse_conic_gradient(k) {
+            style.background_conic_gradient = Some(cg);
         }
     }
 
     // SVG background image (from data:image/svg+xml URI)
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-svg") {
         if let Some(tree) = crate::parser::svg::parse_svg_from_string(k) {
-            style.clear_background_images();
             style.background_svg = Some(tree);
         }
     }
 
-    if get_non_special(map, "background-gradient").is_none()
-        && get_non_special(map, "background-radial-gradient").is_none()
-        && get_non_special(map, "background-svg").is_none()
-        && let Some(CssValue::Keyword(k)) = get_non_special(map, "background-image")
-    {
-        style.clear_background_images();
-        let trimmed = k.trim();
+    // Raster background image. Read even when a gradient/svg layer is also
+    // present in this map so a raster + gradient pair from the same shorthand
+    // both paint (the up-front clear above already reset the prior stack).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-image") {
+        let resolved = resolve_embedded_vars(k.trim(), &style.custom_properties);
+        let trimmed = resolved.trim();
         if trimmed != "none" {
             if let Some(svg_text) = crate::parser::css::extract_svg_data_uri(trimmed) {
                 if let Some(tree) = crate::parser::svg::parse_svg_from_string(&svg_text) {
                     style.background_svg = Some(tree);
                 }
+            } else if let Some(url) = extract_image_set_url(trimmed) {
+                style.background_image = Some(url);
+            } else if let Some(CssValue::Color(c)) = crate::parser::css::parse_color(trimmed) {
+                // `background: var(--c)` decomposes here; a resolved colour is a
+                // background-color, not an image URL.
+                style.background_color = Some(c);
             } else {
                 style.background_image = Some(trimmed.to_string());
             }
@@ -1637,72 +3936,202 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.text_align = match k.as_str() {
             "center" => TextAlign::Center,
             "right" => TextAlign::Right,
+            "left" => TextAlign::Left,
             "justify" => TextAlign::Justify,
+            "start" => {
+                if style.direction_rtl {
+                    TextAlign::Right
+                } else {
+                    TextAlign::Left
+                }
+            }
+            "end" => {
+                if style.direction_rtl {
+                    TextAlign::Left
+                } else {
+                    TextAlign::Right
+                }
+            }
+            "match-parent" => {
+                if parent.direction_rtl
+                    && !style.direction_rtl
+                    && parent.text_align == TextAlign::Left
+                {
+                    TextAlign::Right
+                } else {
+                    parent.text_align
+                }
+            }
             _ => TextAlign::Left,
         };
     }
 
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-align-last") {
+        style.text_align_last = match k.as_str() {
+            "center" => Some(TextAlign::Center),
+            "right" => Some(TextAlign::Right),
+            "left" => Some(TextAlign::Left),
+            "justify" => Some(TextAlign::Justify),
+            "start" => Some(if style.direction_rtl {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }),
+            "end" => Some(if style.direction_rtl {
+                TextAlign::Left
+            } else {
+                TextAlign::Right
+            }),
+            "auto" => None,
+            _ => style.text_align_last,
+        };
+    }
+
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration") {
-        style.text_decoration_underline = k == "underline";
-        style.text_decoration_line_through = k == "line-through";
-        style.text_decoration_overline = k == "overline";
+        apply_text_decoration_line(style, k);
+        if k.split_whitespace().any(|t| t == "wavy") {
+            style.text_decoration_style = TextDecorationStyle::Wavy;
+        }
+        for token in k.split_whitespace() {
+            if let Some(CssValue::Length(v)) = parse_length(token) {
+                style.text_decoration_thickness = Some(v);
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration-line") {
+        apply_text_decoration_line(style, k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration-style") {
+        style.text_decoration_style = if k.split_whitespace().any(|token| token == "wavy") {
+            TextDecorationStyle::Wavy
+        } else {
+            TextDecorationStyle::Solid
+        };
+    }
+    if let Some(CssValue::Length(v)) = get_non_special(map, "text-decoration-thickness") {
+        style.text_decoration_thickness = Some(*v);
+    }
+    if let Some(CssValue::Length(v)) = get_non_special(map, "text-underline-offset") {
+        style.text_underline_offset = Some(*v);
+    }
+
+    // `text-decoration-color` longhand (css-text-decor-3 §2.2): an explicit line
+    // colour distinct from the text `color`. Resolved like any colour value.
+    if let Some(CssValue::Color(c)) = get_non_special(map, "text-decoration-color") {
+        style.text_decoration_color = Some(*c);
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "line-height") {
         if k == "normal" {
             style.line_height = f32::NAN;
+            style.line_height_absolute = None;
+        } else if let Some(v) = resolve_raw_length_for_style(k, style, length_context) {
+            style.line_height_absolute = Some(v);
+            style.line_height = v / style.font_size;
         }
     }
     if let Some(CssValue::Number(v)) = get_non_special(map, "line-height") {
         style.line_height = *v;
+        style.line_height_absolute = None;
     }
     if let Some(CssValue::Length(v)) = get_non_special(map, "line-height") {
+        style.line_height_absolute = Some(*v);
         style.line_height = *v / style.font_size;
     }
+    if let Some(CssValue::Percentage(v)) = get_non_special(map, "line-height") {
+        let absolute = style.font_size * *v / 100.0;
+        style.line_height_absolute = Some(absolute);
+        style.line_height = absolute / style.font_size;
+    }
+    if let Some(
+        value @ (CssValue::Rem(_)
+        | CssValue::Vw(_)
+        | CssValue::Vh(_)
+        | CssValue::Vmin(_)
+        | CssValue::Vmax(_)
+        | CssValue::Calc(_)
+        | CssValue::Clamp(_, _, _)
+        | CssValue::Var(_, _)),
+    ) = get_non_special(map, "line-height")
+        && let Some(v) = resolve_css_length_for_style(value, style, length_context)
+    {
+        style.line_height_absolute = Some(v);
+        style.line_height = v / style.font_size;
+    }
+    sync_line_height_from_absolute(style);
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "display") {
-        style.display = match k.as_str() {
-            "none" => Display::None,
-            "inline" => Display::Inline,
-            "inline-block" => Display::InlineBlock,
-            "block" => Display::Block,
-            "flex" => Display::Flex,
-            "grid" => Display::Grid,
-            _ => style.display,
-        };
+        if let Some(display) = parse_display_value(k) {
+            style.display = display;
+        }
+    }
+
+    // `flex-flow` shorthand sets flex-direction and/or flex-wrap (order-free).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "flex-flow") {
+        for token in k.split_whitespace() {
+            if let Some(dir) = parse_flex_direction(token) {
+                style.flex_direction = dir;
+            } else if let Some(wrap) = parse_flex_wrap(token) {
+                style.flex_wrap = wrap;
+            }
+        }
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "flex-direction") {
-        style.flex_direction = match k.as_str() {
-            "column" => FlexDirection::Column,
-            _ => FlexDirection::Row,
-        };
+        if let Some(dir) = parse_flex_direction(k) {
+            style.flex_direction = dir;
+        }
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "justify-content") {
-        style.justify_content = match k.as_str() {
-            "flex-end" => JustifyContent::FlexEnd,
-            "center" => JustifyContent::Center,
-            "space-between" => JustifyContent::SpaceBetween,
-            "space-around" => JustifyContent::SpaceAround,
-            _ => JustifyContent::FlexStart,
-        };
+        // css-align-3 §9: an optional `safe`/`unsafe` overflow-alignment prefix
+        // may precede the positional keyword (`justify-content: safe center`).
+        // css-align-3 §6.2: `left`/`right` resolve against the INLINE axis. For a
+        // row container that is the main axis (right→end, left→start); for a
+        // column container the main axis is the block axis, so they behave as
+        // `start`.
+        style.justify_content = parse_justify_content(k, style.flex_direction.is_row());
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "align-items") {
-        style.align_items = match k.as_str() {
-            "flex-start" => AlignItems::FlexStart,
-            "flex-end" => AlignItems::FlexEnd,
-            "center" => AlignItems::Center,
-            _ => AlignItems::Stretch,
-        };
+        style.align_items = parse_align_items(k);
+        // Grid uses the same property with start/end/center/stretch keywords.
+        style.grid_align_items = parse_grid_align(k);
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "align-content") {
+        style.align_content = parse_align_content(k);
+    }
+
+    // `place-content: <align-content> [<justify-content>]`.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "place-content") {
+        let parts = split_alignment_components(k);
+        if let Some(align) = parts.first() {
+            style.align_content = parse_align_content(align);
+            let justify = parts.get(1).unwrap_or(align);
+            style.justify_content = parse_justify_content(justify, style.flex_direction.is_row());
+        }
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "align-self") {
+        style.align_self = parse_align_self(k);
+    }
+
+    // `order` (integer). May arrive as a Length (numeric) or Keyword.
+    match get_non_special(map, "order") {
+        Some(CssValue::Number(v)) => style.order = *v as i32,
+        Some(CssValue::Keyword(k)) => {
+            if let Ok(n) = k.trim().parse::<i32>() {
+                style.order = n;
+            }
+        }
+        _ => {}
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "flex-wrap") {
-        style.flex_wrap = match k.as_str() {
-            "wrap" => FlexWrap::Wrap,
-            _ => FlexWrap::NoWrap,
-        };
+        if let Some(wrap) = parse_flex_wrap(k) {
+            style.flex_wrap = wrap;
+        }
     }
 
     if let Some(CssValue::Length(v)) = get_non_special(map, "flex-grow") {
@@ -1711,57 +4140,257 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     if let Some(CssValue::Length(v)) = get_non_special(map, "flex-shrink") {
         style.flex_shrink = v.max(0.0);
     }
-    match get_non_special(map, "flex-basis") {
-        Some(CssValue::Length(v)) => style.flex_basis = Some(*v),
-        Some(CssValue::Keyword(k)) if k == "auto" => style.flex_basis = None,
-        _ => {}
+    if let Some(value) = get_non_special(map, "flex-basis") {
+        apply_flex_basis_value(style, value, length_context);
     }
 
     // flex shorthand: "flex: <grow>" or "flex: <grow> <shrink>" or "flex: <grow> <shrink> <basis>"
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "flex") {
-        let parts: Vec<&str> = k.split_whitespace().collect();
-        if let Some(first) = parts.first() {
-            if *first == "none" {
-                style.flex_grow = 0.0;
-                style.flex_shrink = 0.0;
-                style.flex_basis = None;
-            } else if *first == "auto" {
-                style.flex_grow = 1.0;
-                style.flex_shrink = 1.0;
-                style.flex_basis = None;
-            } else if let Ok(grow) = first.parse::<f32>() {
-                style.flex_grow = grow.max(0.0);
-                style.flex_shrink = 1.0;
-                style.flex_basis = Some(0.0);
-                if let Some(second) = parts.get(1) {
-                    if let Ok(shrink) = second.parse::<f32>() {
-                        style.flex_shrink = shrink.max(0.0);
-                    }
+        apply_flex_shorthand(style, k, length_context);
+    }
+
+    // `gap: <row-gap> [<column-gap>]`. A single value sets both axes; the
+    // two-value form sets row-gap then column-gap (CSS Box Alignment §8.3).
+    // A single value arrives as `Length`; the two-value form as a `Keyword`
+    // (multi-token string), so handle both.
+    match get_non_special(map, "gap") {
+        Some(CssValue::Length(v)) => {
+            style.gap = *v;
+            style.grid_gap = *v;
+            style.column_gap = *v;
+            style.row_gap = *v;
+            style.column_gap_is_normal = false;
+            style.column_gap_pct = None;
+            style.row_gap_pct = None;
+        }
+        Some(CssValue::Percentage(p)) => {
+            // A single percentage `gap` sets both axes. Percentages resolve
+            // against the flex container's OWN content box (column-gap against
+            // width, row-gap against height) — store a fraction hint and let the
+            // flex layout resolve it; the eager parent-width setter is skipped.
+            let frac = *p / 100.0;
+            style.column_gap_pct = Some(frac);
+            style.row_gap_pct = Some(frac);
+            if let Some(width) = style.width {
+                style.column_gap = width * frac;
+                style.grid_gap = style.column_gap;
+            }
+            if let Some(height) = style.height {
+                style.row_gap = height * frac;
+            }
+            style.column_gap_is_normal = false;
+        }
+        Some(CssValue::Keyword(k)) => {
+            let parts: Vec<&str> = k.split_whitespace().collect();
+            let resolve = |t: &str| match parse_length(t) {
+                Some(CssValue::Length(v)) => Some(v),
+                _ => None,
+            };
+            if let Some(row) = parts.first().and_then(|t| resolve(t)) {
+                let col = parts.get(1).and_then(|t| resolve(t)).unwrap_or(row);
+                style.row_gap = row;
+                style.column_gap = col;
+                // `gap` (single field used by the flex main axis) tracks the
+                // column gap for row containers; the layout consults row_gap /
+                // column_gap directly per axis.
+                style.gap = col;
+                style.grid_gap = row;
+                style.column_gap_is_normal = false;
+            }
+        }
+        _ => {}
+    }
+
+    // Grid template columns / rows. Each parse also extracts bracketed
+    // `[name]` line names (CSS Grid §7.1) into a per-line-index name list, so
+    // named-line placement (§8.3) can resolve them.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-template-columns") {
+        let (tracks, names) = parse_grid_track_list(k);
+        style.grid_template_columns = tracks;
+        style.grid_template_column_line_names = names;
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-template-rows") {
+        let (tracks, names) = parse_grid_track_list(k);
+        style.grid_template_rows = tracks;
+        style.grid_template_row_line_names = names;
+    }
+    // `grid-template-areas`: ASCII-art row strings naming rectangular regions
+    // (§7.3). Each string is a row; whitespace-separated tokens are cells; `.`
+    // is an empty cell. Implicit `<name>-start`/`-end` line names are derived
+    // in layout from the resulting area rectangles.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-template-areas") {
+        let areas = parse_grid_template_areas(k);
+        if !areas.is_empty() || k.trim() == "none" {
+            apply_grid_template_areas(style, areas);
+        }
+    }
+    // `grid-auto-rows` may arrive as a Length (single px/pt value) or Keyword.
+    match get_non_special(map, "grid-auto-rows") {
+        Some(CssValue::Length(v)) => {
+            style.grid_auto_rows = Some(*v);
+            style.grid_auto_rows_pattern = vec![*v];
+        }
+        Some(CssValue::Keyword(k)) => {
+            let pattern: Vec<f32> = k
+                .split_whitespace()
+                .filter_map(|token| match parse_single_track(token) {
+                    Some(GridTrack::Fixed(v)) => Some(v),
+                    _ => None,
+                })
+                .collect();
+            if let Some(first) = pattern.first().copied() {
+                style.grid_auto_rows = Some(first);
+                style.grid_auto_rows_pattern = pattern;
+            }
+        }
+        _ => {}
+    }
+    let explicit_columns_declared = get_non_special(map, "grid-template-columns").is_some()
+        || get_non_special(map, "grid-template").is_some()
+        || get_non_special(map, "grid").is_some();
+    if !explicit_columns_declared
+        && !style.grid_template_areas.is_empty()
+        && let Some(auto_col) = match get_non_special(map, "grid-auto-columns") {
+            Some(CssValue::Length(v)) => Some(GridTrack::Fixed(*v)),
+            Some(CssValue::Keyword(k)) => parse_single_track(k),
+            _ => None,
+        }
+    {
+        let area_cols = style
+            .grid_template_areas
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        let looks_synthesized = style.grid_template_columns.len() == area_cols
+            && style
+                .grid_template_columns
+                .iter()
+                .all(|track| matches!(track, GridTrack::Auto))
+            && style
+                .grid_template_column_line_names
+                .iter()
+                .all(Vec::is_empty);
+        if area_cols > 0 && looks_synthesized {
+            style.grid_template_columns = vec![auto_col; area_cols];
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-auto-flow") {
+        style.grid_auto_flow_column = k.contains("column");
+        style.grid_auto_flow_dense = k.contains("dense");
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-template") {
+        apply_grid_template_shorthand(style, k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid") {
+        apply_grid_shorthand(style, k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "justify-items") {
+        style.justify_items = parse_grid_align(k);
+    }
+    // `place-items: <align> [<justify>]` shorthand sets both axes.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "place-items") {
+        let parts = split_alignment_components(k);
+        if let Some(a) = parts.first() {
+            let align = parse_grid_align(a);
+            let justify = parts.get(1).map(|s| parse_grid_align(s)).unwrap_or(align);
+            style.align_items = parse_align_items(a);
+            style.grid_align_items = align;
+            style.justify_items = justify;
+        }
+    }
+    // Per-item self alignment overrides (grid). `auto` keeps the container value
+    // (`None` here); anything else pins this item. Note the *flex* `align-self`
+    // is handled separately above; here we mirror it into the grid field too.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "justify-self") {
+        if k.trim() != "auto" {
+            style.grid_justify_self = Some(parse_grid_align(k));
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "align-self") {
+        if k.trim() != "auto" {
+            style.grid_align_self = Some(parse_grid_align(k));
+        }
+    }
+    // `place-self: <align> [<justify>]` shorthand sets both grid self axes.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "place-self") {
+        let parts = split_alignment_components(k);
+        if let Some(a) = parts.first() {
+            style.align_self = parse_align_self(a);
+            if a != "auto" {
+                style.grid_align_self = Some(parse_grid_align(a));
+            }
+            if let Some(j) = parts.get(1) {
+                if j != "auto" {
+                    style.grid_justify_self = Some(parse_grid_align(j));
                 }
-                if let Some(third) = parts.get(2) {
-                    if *third == "auto" {
-                        style.flex_basis = None;
-                    } else if let Some(CssValue::Length(v)) =
-                        crate::parser::css::parse_length(third)
-                    {
-                        style.flex_basis = Some(v);
-                    }
-                }
+            } else if a != "auto" {
+                style.grid_justify_self = Some(parse_grid_align(a));
             }
         }
     }
-
-    if let Some(CssValue::Length(v)) = get_non_special(map, "gap") {
-        style.gap = *v;
-        style.grid_gap = *v;
-        style.column_gap = *v;
-        style.row_gap = *v;
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-column-start") {
+        style.grid_column_start = parse_grid_line(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-column-end") {
+        style.grid_column_end = parse_grid_line(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-row-start") {
+        style.grid_row_start = parse_grid_line(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-row-end") {
+        style.grid_row_end = parse_grid_line(k);
+    }
+    // Item-level placement: grid-column / grid-row resolve a start/end line
+    // pair (CSS Grid §8). Each side is a line number, `span N`, named line, or
+    // `auto`. The legacy span count is derived for back-compat.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-column") {
+        let (start, end) = parse_grid_placement_shorthand(k);
+        style.grid_column_start = start;
+        style.grid_column_end = end;
+        if let Some(n) = parse_grid_span(k) {
+            style.grid_column_span = n;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-row") {
+        let (start, end) = parse_grid_placement_shorthand(k);
+        style.grid_row_start = start;
+        style.grid_row_end = end;
+        if let Some(n) = parse_grid_span(k) {
+            style.grid_row_span = n;
+        }
+    }
+    // `grid-area`: either a single area name, or the 4-value line form
+    // `row-start / col-start / row-end / col-end` (§8.1).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-area") {
+        apply_grid_area(style, k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "clip") {
+        style.clip_path = parse_legacy_clip_rect(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "clip-path") {
+        style.clip_path = parse_clip_path(k);
     }
 
-    // Grid template columns
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "grid-template-columns") {
-        style.grid_template_columns = parse_grid_template_columns(k);
+    // CSS Masking (css-masking-1 §3). The `-webkit-mask*` aliases are normalised
+    // to the unprefixed names at parse time. `mask-mode` resolves how the source
+    // pixels become coverage (default `match-source` → alpha for CSS images).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-mode") {
+        style.mask_mode = parse_mask_mode(k);
     }
+    // `mask` shorthand: parse the image plus its position/size/repeat/mode.
+    // Longhands below override it when present, as usual in the cascade map.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask") {
+        if let Some(src) = parse_mask_shorthand(k, style.mask_mode) {
+            style.mask_image = src;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-image") {
+        if let Some(src) = parse_mask_image(k, style.mask_mode) {
+            style.mask_image = src;
+        }
+    }
+    apply_mask_longhands(map, style);
 
     // Grid gap (shorthand sets both column and row gap)
     if let Some(CssValue::Length(v)) = get_non_special(map, "grid-gap") {
@@ -1770,82 +4399,212 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.row_gap = *v;
     }
 
+    // CSS Fragmentation 3 §3.1 `break-before`/`break-after` plus their legacy
+    // `page-break-*` aliases (CSS 2.1 §13.3.1). The legacy property is read
+    // first and the modern one overrides it when both are present (modern wins
+    // at equal cascade origin). `always` maps to `page`. The forced values set
+    // the `page_break_*` bool that drives the existing `PageBreak` emission.
+    let mut bb = BreakValue::Auto;
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "page-break-before") {
-        style.page_break_before = k == "always";
+        if let Some(v) = BreakValue::from_keyword(k) {
+            bb = v;
+        }
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "break-before") {
+        if let Some(v) = BreakValue::from_keyword(k) {
+            bb = v;
+        }
+    }
+    style.break_before = bb;
+    style.page_break_before = bb.forces_break();
+
+    let mut ba = BreakValue::Auto;
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "page-break-after") {
-        style.page_break_after = k == "always";
+        if let Some(v) = BreakValue::from_keyword(k) {
+            ba = v;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "break-after") {
+        if let Some(v) = BreakValue::from_keyword(k) {
+            ba = v;
+        }
+    }
+    style.break_after = ba;
+    style.page_break_after = ba.forces_break();
+
+    // `break-inside: avoid` / legacy `page-break-inside: avoid` (only the
+    // `avoid*` family is meaningful; `auto` is the default).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "page-break-inside") {
+        style.break_inside_avoid = k.starts_with("avoid");
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "break-inside") {
+        style.break_inside_avoid = k.starts_with("avoid");
     }
 
+    // CSS Paged Media 3 §3.4 `page: <name>` — the named page a box belongs to.
+    // Only set when the property is present so it accumulates across cascade
+    // layers (a later layer without `page` leaves the prior value). `auto`
+    // resets to the default page. Names are stored lowercased to match the
+    // case-insensitive `@page <name>` lookup.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "page") {
+        style.page_name = if k.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            Some(k.to_ascii_lowercase())
+        };
+    }
+
+    // `filter: opacity(<x>)` multiplies into the element's final opacity. The
+    // `opacity` property is parsed later, so remember the factor and fold it in
+    // after `style.opacity` is finalized to combine multiplicatively.
+    let mut filter_opacity = 1.0_f32;
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "filter") {
-        if let Some(radius) = parse_filter_blur(k) {
+        let (blur, ops, opacity, drop_shadow, url_id) = parse_filter(k);
+        if let Some(radius) = blur {
             style.blur_radius = radius;
         }
+        style.color_filters = ops;
+        style.filter_url_id = url_id;
+        style.drop_shadow = drop_shadow;
+        filter_opacity = opacity;
     }
 
     // Border shorthand: "1px solid black"
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "border") {
-        let (w, c, bs) = parse_border_shorthand(k);
+        let k = resolve_embedded_vars(k, &style.custom_properties);
+        let (w, c, bs, bevel) = parse_border_shorthand(&k, style.font_size);
         style.border = BorderSides::uniform_styled(w, c, bs);
+        style.border_bevel = BorderBevelSides::uniform(bevel);
     }
 
     // Per-side border shorthands
     for (prop, setter) in &[
         (
             "border-top",
-            (|s: &mut ComputedStyle, w, c, bs| {
+            (|s: &mut ComputedStyle, w, c, bs, bevel| {
                 s.border.top = BorderSide {
                     width: w,
                     color: c,
                     style: bs,
                 };
-            }) as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle),
+                s.border_bevel.top = bevel;
+            })
+                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
         ),
         (
             "border-right",
-            (|s: &mut ComputedStyle, w, c, bs| {
+            (|s: &mut ComputedStyle, w, c, bs, bevel| {
                 s.border.right = BorderSide {
                     width: w,
                     color: c,
                     style: bs,
                 };
-            }) as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle),
+                s.border_bevel.right = bevel;
+            })
+                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
         ),
         (
             "border-bottom",
-            (|s: &mut ComputedStyle, w, c, bs| {
+            (|s: &mut ComputedStyle, w, c, bs, bevel| {
                 s.border.bottom = BorderSide {
                     width: w,
                     color: c,
                     style: bs,
                 };
-            }) as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle),
+                s.border_bevel.bottom = bevel;
+            })
+                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
         ),
         (
             "border-left",
-            (|s: &mut ComputedStyle, w, c, bs| {
+            (|s: &mut ComputedStyle, w, c, bs, bevel| {
                 s.border.left = BorderSide {
                     width: w,
                     color: c,
                     style: bs,
                 };
-            }) as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle),
+                s.border_bevel.left = bevel;
+            })
+                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
         ),
     ] {
         if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
-            let (w, c, bs) = parse_border_shorthand(k);
-            setter(style, w, c, bs);
+            let k = resolve_embedded_vars(k, &style.custom_properties);
+            let (w, c, bs, bevel) = parse_border_shorthand(&k, style.font_size);
+            setter(style, w, c, bs, bevel);
         }
     }
 
     if let Some(CssValue::Length(v)) = get_non_special(map, "width") {
         style.width = Some(*v);
+        style.width_keyword = None;
         style.percentage_sizing.width = None;
     }
     if let Some(CssValue::Number(v)) = get_non_special(map, "width") {
         // em value — multiply by current font-size
         style.width = Some(*v * style.font_size);
+        style.width_keyword = None;
         style.percentage_sizing.width = None;
+    }
+    // css-sizing-3 § 5.1 intrinsic-sizing keywords (`min-content` / `max-content`
+    // / `fit-content`). These keep `width` as `None` (so the auto/length/percentage
+    // paths are untouched) and record the keyword for block layout to derive a
+    // content-based width. `auto` and any other keyword leave the box as `auto`.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "width") {
+        if let Some(v) = resolve_raw_length_for_style(k, style, length_context) {
+            style.width = Some(v);
+            style.width_keyword = None;
+            style.percentage_sizing.width = None;
+        } else {
+            let kw = match k.trim().to_ascii_lowercase().as_str() {
+                "min-content" => Some(IntrinsicWidthKeyword::MinContent),
+                "max-content" => Some(IntrinsicWidthKeyword::MaxContent),
+                "fit-content" => Some(IntrinsicWidthKeyword::FitContent),
+                _ => None,
+            };
+            if kw.is_some() {
+                style.width = None;
+                style.width_keyword = kw;
+                style.percentage_sizing.width = None;
+            } else if k.trim().eq_ignore_ascii_case("auto") {
+                style.width_keyword = None;
+            }
+        }
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "height")
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+    {
+        style.height = Some(v);
+        style.percentage_sizing.height = None;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "max-width")
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+    {
+        style.max_width = Some(v);
+        style.percentage_sizing.max_width = None;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "min-width")
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+    {
+        style.min_width = Some(v);
+        style.percentage_sizing.min_width = None;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "min-height")
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+    {
+        style.min_height = Some(v);
+        style.percentage_sizing.min_height = None;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "max-height")
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+    {
+        style.max_height = Some(v);
+        style.percentage_sizing.max_height = None;
     }
 
     if let Some(CssValue::Length(v)) = get_non_special(map, "height") {
@@ -1893,7 +4652,9 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.percentage_sizing.max_height = None;
     }
 
-    // margin-left: auto / margin-right: auto
+    // margin-left/right/top/bottom: auto. The `auto` keyword on a flex item
+    // absorbs free space along its axis (css-flexbox-1 §8.1); on the vertical
+    // axis it also enables cross-axis centering for a row container.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "margin-left") {
         if k == "auto" {
             style.margin_left_auto = true;
@@ -1904,6 +4665,16 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             style.margin_right_auto = true;
         }
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "margin-top") {
+        if k == "auto" {
+            style.margin_top_auto = true;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "margin-bottom") {
+        if k == "auto" {
+            style.margin_bottom_auto = true;
+        }
+    }
 
     if let Some(CssValue::Number(v)) = get_non_special(map, "opacity") {
         style.opacity = v.clamp(0.0, 1.0);
@@ -1912,12 +4683,38 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         // bare number parsed as Length
         style.opacity = v.clamp(0.0, 1.0);
     }
+    // Fold any `filter: opacity()` factor into the finalized opacity.
+    if filter_opacity != 1.0 {
+        style.opacity = (style.opacity * filter_opacity).clamp(0.0, 1.0);
+    }
 
-    if let Some(CssValue::Length(v)) = get_non_special(map, "border-width") {
-        style.border.top.width = *v;
-        style.border.right.width = *v;
-        style.border.bottom.width = *v;
-        style.border.left.width = *v;
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mix-blend-mode") {
+        style.mix_blend_mode = BlendMode::from_keyword(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-blend-mode") {
+        style.background_blend_mode = BlendMode::from_background_value(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "isolation") {
+        style.isolation_isolate = k.trim().eq_ignore_ascii_case("isolate");
+    }
+
+    // Uniform `border-width`. Absolute lengths (pt) apply directly; a font-relative
+    // width (em/ex/ch) arrives as CssValue::Number (an em factor) and resolves
+    // against the element's font-size, mirroring the margin path. Without this an
+    // em-unit border width is silently dropped (width = 0).
+    if let Some(w) = resolve_border_width(get_non_special(map, "border-width"), style.font_size) {
+        style.border.top.width = w;
+        style.border.right.width = w;
+        style.border.bottom.width = w;
+        style.border.left.width = w;
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-width")
+        && let Some(widths) = parse_border_width_shorthand_values(k, style, length_context)
+    {
+        style.border.top.width = widths[0];
+        style.border.right.width = widths[1];
+        style.border.bottom.width = widths[2];
+        style.border.left.width = widths[3];
     }
 
     if let Some(CssValue::Color(c)) = get_non_special(map, "border-color") {
@@ -1926,12 +4723,132 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.border.bottom.color = Some(*c);
         style.border.left.color = Some(*c);
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-color")
+        && let Some(colors) = parse_border_color_shorthand_values(k)
+    {
+        style.border.top.color = Some(colors[0]);
+        style.border.right.color = Some(colors[1]);
+        style.border.bottom.color = Some(colors[2]);
+        style.border.left.color = Some(colors[3]);
+    }
+
+    // Uniform `border-style` keyword applies the same line style to all four
+    // edges (e.g. `border-style: solid` paired with per-side `border-*-width`).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-style") {
+        if let Some(styles) = parse_border_style_shorthand_values(k) {
+            style.border.top.style = styles[0].0;
+            style.border.right.style = styles[1].0;
+            style.border.bottom.style = styles[2].0;
+            style.border.left.style = styles[3].0;
+            style.border_bevel.top = styles[0].1;
+            style.border_bevel.right = styles[1].1;
+            style.border_bevel.bottom = styles[2].1;
+            style.border_bevel.left = styles[3].1;
+        } else {
+            let (bs, bevel) = parse_border_style_keyword_with_bevel(k);
+            style.border.top.style = bs;
+            style.border.right.style = bs;
+            style.border.bottom.style = bs;
+            style.border.left.style = bs;
+            style.border_bevel = BorderBevelSides::uniform(bevel);
+        }
+    }
+
+    // Per-side border longhands (`border-{side}-{width,style,color}`). These run
+    // after the `border` / `border-{side}` shorthands and the uniform
+    // `border-{width,color,style}` properties so an explicit longhand wins.
+    for (prop, setter) in &[
+        (
+            "border-top-width",
+            (|s: &mut ComputedStyle, w| s.border.top.width = w) as fn(&mut ComputedStyle, f32),
+        ),
+        (
+            "border-right-width",
+            (|s: &mut ComputedStyle, w| s.border.right.width = w) as fn(&mut ComputedStyle, f32),
+        ),
+        (
+            "border-bottom-width",
+            (|s: &mut ComputedStyle, w| s.border.bottom.width = w) as fn(&mut ComputedStyle, f32),
+        ),
+        (
+            "border-left-width",
+            (|s: &mut ComputedStyle, w| s.border.left.width = w) as fn(&mut ComputedStyle, f32),
+        ),
+    ] {
+        if let Some(w) = resolve_border_width(get_non_special(map, prop), style.font_size) {
+            setter(style, w);
+        }
+    }
+
+    for (prop, setter) in &[
+        (
+            "border-top-color",
+            (|s: &mut ComputedStyle, c| s.border.top.color = Some(c))
+                as fn(&mut ComputedStyle, Color),
+        ),
+        (
+            "border-right-color",
+            (|s: &mut ComputedStyle, c| s.border.right.color = Some(c))
+                as fn(&mut ComputedStyle, Color),
+        ),
+        (
+            "border-bottom-color",
+            (|s: &mut ComputedStyle, c| s.border.bottom.color = Some(c))
+                as fn(&mut ComputedStyle, Color),
+        ),
+        (
+            "border-left-color",
+            (|s: &mut ComputedStyle, c| s.border.left.color = Some(c))
+                as fn(&mut ComputedStyle, Color),
+        ),
+    ] {
+        if let Some(CssValue::Color(c)) = get_non_special(map, prop) {
+            setter(style, *c);
+        }
+    }
+
+    for (prop, setter) in &[
+        (
+            "border-top-style",
+            (|s: &mut ComputedStyle, bs, bevel| {
+                s.border.top.style = bs;
+                s.border_bevel.top = bevel;
+            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
+        ),
+        (
+            "border-right-style",
+            (|s: &mut ComputedStyle, bs, bevel| {
+                s.border.right.style = bs;
+                s.border_bevel.right = bevel;
+            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
+        ),
+        (
+            "border-bottom-style",
+            (|s: &mut ComputedStyle, bs, bevel| {
+                s.border.bottom.style = bs;
+                s.border_bevel.bottom = bevel;
+            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
+        ),
+        (
+            "border-left-style",
+            (|s: &mut ComputedStyle, bs, bevel| {
+                s.border.left.style = bs;
+                s.border_bevel.left = bevel;
+            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
+        ),
+    ] {
+        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
+            let (bs, bevel) = parse_border_style_keyword_with_bevel(k);
+            setter(style, bs, bevel);
+        }
+    }
 
     // Float
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "float") {
         style.float = match k.as_str() {
             "left" => Float::Left,
             "right" => Float::Right,
+            "footnote" => Float::Footnote,
             _ => Float::None,
         };
     }
@@ -1946,12 +4863,30 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         };
     }
 
+    // box-decoration-break (css-break-3 §6.2)
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "box-decoration-break") {
+        style.box_decoration_break = match k.as_str() {
+            "clone" => BoxDecorationBreak::Clone,
+            _ => BoxDecorationBreak::Slice,
+        };
+    }
+
     // Position
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "position") {
+        style.running_name = None;
         style.position = match k.as_str() {
             "relative" => Position::Relative,
             "absolute" => Position::Absolute,
-            _ => Position::Static,
+            // For a single-page, non-scrolling PDF the viewport == the page box,
+            // so `fixed` behaves like an absolute box anchored to the page
+            // content box (handled by the absolute-at-root path), and `sticky`
+            // degrades to its relative-until-threshold base position.
+            "fixed" => Position::Absolute,
+            "sticky" => Position::Relative,
+            value => {
+                style.running_name = parse_running_position_name(value);
+                Position::Static
+            }
         };
     }
 
@@ -1972,11 +4907,66 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.left = Some(*v);
         style.percentage_insets.left = None;
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "inset") {
+        let parts: Vec<&str> = k.split_whitespace().collect();
+        let values = match parts.as_slice() {
+            [a] => Some([*a, *a, *a, *a]),
+            [a, b] => Some([*a, *b, *a, *b]),
+            [a, b, c] => Some([*a, *b, *c, *b]),
+            [a, b, c, d] => Some([*a, *b, *c, *d]),
+            _ => None,
+        };
+        if let Some(values) = values {
+            for (idx, token) in values.iter().enumerate() {
+                let token = token.trim();
+                let length = parse_length(token);
+                match (idx, length) {
+                    (0, Some(CssValue::Length(v))) => {
+                        style.top = Some(v);
+                        style.percentage_insets.top = None;
+                    }
+                    (1, Some(CssValue::Length(v))) => {
+                        style.right = Some(v);
+                        style.percentage_insets.right = None;
+                    }
+                    (2, Some(CssValue::Length(v))) => {
+                        style.bottom = Some(v);
+                        style.percentage_insets.bottom = None;
+                    }
+                    (3, Some(CssValue::Length(v))) => {
+                        style.left = Some(v);
+                        style.percentage_insets.left = None;
+                    }
+                    (0, Some(CssValue::Percentage(v))) => style.percentage_insets.top = Some(v),
+                    (1, Some(CssValue::Percentage(v))) => style.percentage_insets.right = Some(v),
+                    (2, Some(CssValue::Percentage(v))) => style.percentage_insets.bottom = Some(v),
+                    (3, Some(CssValue::Percentage(v))) => style.percentage_insets.left = Some(v),
+                    _ => {}
+                }
+            }
+        }
+    }
 
-    // Box-shadow: parse from keyword (stored as full shorthand string)
+    // Box-shadow: parse from keyword (stored as full shorthand string).
+    // A comma-separated list yields multiple stacked shadows.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "box-shadow") {
-        if let Some(shadow) = parse_box_shadow(k) {
-            style.box_shadow = Some(shadow);
+        let shadows = parse_box_shadow(k);
+        if !shadows.is_empty() {
+            style.box_shadow = shadows;
+        }
+    }
+
+    // CSS `text-shadow` (css-text-decor-3 §3). Like box-shadow but with no
+    // `spread`/`inset` and the optional color may appear before or after the
+    // offsets. `none` clears any inherited value.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-shadow") {
+        if k.trim() == "none" {
+            style.text_shadow = Vec::new();
+        } else {
+            let shadows = parse_text_shadow(k);
+            if !shadows.is_empty() {
+                style.text_shadow = shadows;
+            }
         }
     }
 
@@ -1992,30 +4982,201 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             _ => {}
         }
     }
-    if let Some(val) = get_non_special(map, "columns") {
+    if let Some(val) = get_non_special(map, "column-width") {
         match val {
-            CssValue::Length(n) => style.column_count = Some(*n as u32),
-            CssValue::Keyword(k) => {
-                if let Ok(n) = k.parse::<u32>() {
-                    style.column_count = Some(n);
+            CssValue::Length(w) => style.column_width = Some(*w),
+            CssValue::Keyword(k) if k != "auto" => {
+                if let Some(CssValue::Length(w)) = parse_length(k) {
+                    style.column_width = Some(w);
                 }
             }
             _ => {}
         }
     }
-    if let Some(CssValue::Length(v)) = get_non_special(map, "column-gap") {
-        style.column_gap = *v;
+    // `columns` shorthand: `<column-width> || <column-count>`, in any order.
+    // Each token is either a length (column-width) or an integer (column-count).
+    if let Some(val) = get_non_special(map, "columns") {
+        match val {
+            CssValue::Length(n) => style.column_count = Some(*n as u32),
+            CssValue::Keyword(k) => {
+                for token in k.split_whitespace() {
+                    if token == "auto" {
+                        continue;
+                    }
+                    if let Ok(n) = token.parse::<u32>() {
+                        style.column_count = Some(n);
+                    } else if let Some(CssValue::Length(w)) = parse_length(token) {
+                        style.column_width = Some(w);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
-    if let Some(CssValue::Length(v)) = get_non_special(map, "row-gap") {
-        style.row_gap = *v;
+    if let Some(val) =
+        get_non_special(map, "column-gap").or_else(|| get_non_special(map, "grid-column-gap"))
+    {
+        match val {
+            CssValue::Length(v) => {
+                style.column_gap = *v;
+                style.column_gap_is_normal = false;
+                style.column_gap_pct = None;
+            }
+            // A percentage column-gap resolves against the container's own
+            // content-box width (CSS Box Alignment §8.3); defer it as a fraction.
+            CssValue::Percentage(p) => {
+                style.column_gap_pct = Some(*p / 100.0);
+                if let Some(width) = style.width {
+                    style.column_gap = width * *p / 100.0;
+                }
+                style.column_gap_is_normal = false;
+            }
+            CssValue::Keyword(k) if k != "normal" => {
+                if let Some(stripped) = k.trim().strip_suffix('%') {
+                    if let Ok(p) = stripped.parse::<f32>() {
+                        style.column_gap_pct = Some(p / 100.0);
+                        if let Some(width) = style.width {
+                            style.column_gap = width * p / 100.0;
+                        }
+                        style.column_gap_is_normal = false;
+                    }
+                } else if let Some(CssValue::Length(v)) = parse_length(k) {
+                    style.column_gap = v;
+                    style.column_gap_is_normal = false;
+                    style.column_gap_pct = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    // `column-rule` shorthand and longhands. The rule is the vertical line drawn
+    // in each column gap; width/style/color mirror a single border side.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-rule") {
+        style.column_rule = parse_column_rule_shorthand(k, style.font_size);
+    }
+    if let Some(val) = get_non_special(map, "column-rule-width") {
+        if let CssValue::Length(w) = val {
+            style.column_rule.width = *w;
+        } else if let CssValue::Keyword(k) = val {
+            // `thin` / `medium` / `thick` keyword widths, else a parsed length.
+            match k.trim().to_ascii_lowercase().as_str() {
+                "thin" => style.column_rule.width = 0.75,
+                "medium" => style.column_rule.width = MEDIUM_RULE_WIDTH_PT,
+                "thick" => style.column_rule.width = 3.75,
+                _ => {
+                    if let Some(CssValue::Length(w)) = parse_length(k) {
+                        style.column_rule.width = w;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-rule-style") {
+        style.column_rule.style = parse_border_style_keyword(k);
+        // A visible style with no explicit width uses the medium default
+        // (column-rule-width initial = medium) so the rule actually paints.
+        if style.column_rule.style != BorderStyle::None
+            && style.column_rule.width <= 0.0
+            && get_non_special(map, "column-rule-width").is_none()
+            && get_non_special(map, "column-rule").is_none()
+        {
+            style.column_rule.width = MEDIUM_RULE_WIDTH_PT;
+        }
+    }
+    if let Some(val) = get_non_special(map, "column-rule-color") {
+        let c = match val {
+            CssValue::Color(c) => Some(*c),
+            CssValue::Keyword(k) => parse_border_color_token(k),
+            _ => None,
+        };
+        if c.is_some() {
+            style.column_rule.color = c;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-span") {
+        style.column_span_all = k.eq_ignore_ascii_case("all");
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-fill") {
+        // `auto` fills columns sequentially; `balance` (default) equalises them.
+        style.column_fill_auto = k.eq_ignore_ascii_case("auto");
+    }
+    match get_non_special(map, "row-gap").or_else(|| get_non_special(map, "grid-row-gap")) {
+        Some(CssValue::Length(v)) => {
+            style.row_gap = *v;
+            style.row_gap_pct = None;
+        }
+        // A percentage row-gap resolves against the container's own content-box
+        // block size (height); defer it as a fraction for the flex layout.
+        Some(CssValue::Percentage(p)) => {
+            style.row_gap_pct = Some(*p / 100.0);
+            if let Some(height) = style.height {
+                style.row_gap = height * *p / 100.0;
+            }
+        }
+        Some(CssValue::Keyword(k)) if k != "normal" => {
+            if let Some(stripped) = k.trim().strip_suffix('%') {
+                if let Ok(p) = stripped.parse::<f32>() {
+                    style.row_gap_pct = Some(p / 100.0);
+                    if let Some(height) = style.height {
+                        style.row_gap = height * p / 100.0;
+                    }
+                }
+            } else if let Some(CssValue::Length(v)) = parse_length(k) {
+                style.row_gap = v;
+                style.row_gap_pct = None;
+            }
+        }
+        _ => {}
     }
 
-    // Overflow
+    // Overflow. The `overflow` shorthand sets both axes; `overflow-x` and
+    // `overflow-y` set them independently. Per CSS Overflow 3 §3, a used value
+    // of `visible`/`clip` is coerced when the OTHER axis is a scrolling value
+    // (`auto`/`scroll`/`hidden`): `visible` -> `auto`, `clip` -> `hidden`. So a
+    // box with one non-visible axis effectively clips BOTH axes. In a print/PDF
+    // context there are no interactive scrollbars, so `clip`/`scroll`/`hidden`
+    // all clip overflowing content to the box; `auto` clips only when content
+    // actually overflows (handled at layout/paint as a clip).
+    let mut overflow_x: Option<RawOverflow> = None;
+    let mut overflow_y: Option<RawOverflow> = None;
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "overflow") {
-        style.overflow = match k.as_str() {
-            "hidden" => Overflow::Hidden,
-            "auto" => Overflow::Auto,
-            _ => Overflow::Visible,
+        // The shorthand accepts one or two keywords (`overflow: hidden visible`).
+        let mut parts = k.split_whitespace();
+        let first = parts.next().map(parse_raw_overflow);
+        let second = parts.next().map(parse_raw_overflow);
+        if let Some(x) = first {
+            overflow_x = Some(x);
+            overflow_y = Some(second.unwrap_or(x));
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "overflow-x") {
+        overflow_x = Some(parse_raw_overflow(k));
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "overflow-y") {
+        overflow_y = Some(parse_raw_overflow(k));
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "overflow-inline") {
+        overflow_x = Some(parse_raw_overflow(k));
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "overflow-block") {
+        overflow_y = Some(parse_raw_overflow(k));
+    }
+    if overflow_x.is_some() || overflow_y.is_some() {
+        let (cx, cy) = coerce_overflow_axes(
+            overflow_x.unwrap_or(RawOverflow::Visible),
+            overflow_y.unwrap_or(RawOverflow::Visible),
+        );
+        style.overflow_x = cx;
+        style.overflow_y = cy;
+        // Collapse the two coerced axes into the single `overflow` field used by
+        // the clip-only consumers. `auto` is preserved only when BOTH axes are
+        // `auto` (no clip until content overflows); any clipping axis collapses
+        // to `Hidden`. (The per-axis fields above retain the `scroll`/`auto`
+        // detail the scrollbar painter needs.)
+        style.overflow = match (cx, cy) {
+            (Overflow::Visible, Overflow::Visible) => Overflow::Visible,
+            (Overflow::Auto, Overflow::Auto) => Overflow::Auto,
+            _ => Overflow::Hidden,
         };
     }
 
@@ -2023,31 +5184,224 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "visibility") {
         style.visibility = match k.as_str() {
             "hidden" => Visibility::Hidden,
+            "collapse" => Visibility::Collapse,
             _ => Visibility::Visible,
         };
     }
 
-    // Transform
+    // Transform. `none` is an explicit reset; any other value that fails to
+    // parse leaves the current value untouched.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "transform") {
-        if let Some(t) = parse_transform(k) {
+        if k.trim() == "none" {
+            style.transform = None;
+        } else if let Some(t) = parse_transform(k, style.font_size, style.root_font_size) {
             style.transform = Some(t);
         }
     }
 
-    // Border-radius (single value shorthand)
+    let mut individual = Vec::new();
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "translate")
+        && k.trim() != "none"
+        && let Some(t) = parse_individual_translate(k, style.font_size, style.root_font_size)
+    {
+        individual.push(t);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "rotate")
+        && k.trim() != "none"
+        && let Some(t) = parse_individual_rotate(k)
+    {
+        individual.push(t);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "scale")
+        && k.trim() != "none"
+        && let Some(t) = parse_individual_scale(k)
+    {
+        individual.push(t);
+    }
+    if !individual.is_empty() {
+        if let Some(t) = style.transform {
+            individual.push(t);
+        }
+        style.transform = compose_transforms(&individual);
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "transform-origin") {
+        if let Some(origin) = parse_transform_origin(k, style.font_size, style.root_font_size) {
+            style.transform_origin = origin;
+        }
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "transform-box") {
+        style.transform_box = match k.trim().to_ascii_lowercase().as_str() {
+            "content-box" => TransformBox::ContentBox,
+            _ => TransformBox::BorderBox,
+        };
+    }
+
+    if let Some(value) = get_non_special(map, "perspective") {
+        style.perspective = match value {
+            CssValue::Length(v) if *v > 0.0 => Some(*v),
+            CssValue::Keyword(k) if k.trim().eq_ignore_ascii_case("none") => None,
+            CssValue::Keyword(k) => {
+                parse_transform_length(k.trim(), style.font_size, style.root_font_size)
+                    .and_then(|(v, is_pct)| (!is_pct && v > 0.0).then_some(v))
+            }
+            _ => style.perspective,
+        };
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "perspective-origin") {
+        if let Some(origin) = parse_transform_origin(k, style.font_size, style.root_font_size) {
+            style.perspective_origin = origin;
+        }
+    }
+
+    if style.transform_box == TransformBox::ContentBox
+        && style.transform_origin.x_fraction == 0.0
+        && style.transform_origin.y_fraction == 0.0
+    {
+        style.transform_origin.x_length += style.border.left.width + style.padding.left;
+        style.transform_origin.y_length += style.border.top.width + style.padding.top;
+        style.transform_box = TransformBox::BorderBox;
+    }
+
+    if let (Some(Transform::Matrix3d(matrix)), Some(perspective)) =
+        (style.transform, parent.perspective)
+    {
+        let parent_w = parent.width.unwrap_or(0.0);
+        let parent_h = parent.height.unwrap_or(parent_w);
+        let (px, py) = parent.perspective_origin.resolve(parent_w, parent_h);
+        style.transform = Some(Transform::Project3d {
+            matrix,
+            perspective,
+            perspective_origin_x: px - style.left.unwrap_or(0.0),
+            perspective_origin_y: py - style.top.unwrap_or(0.0),
+        });
+    }
+
+    // Border-radius shorthand: a single value keeps the fast uniform path; a
+    // multi-value or `/`-separated value expands into per-corner radii.
     match get_non_special(map, "border-radius") {
-        Some(CssValue::Length(v)) => style.border_radius = *v,
+        Some(CssValue::Length(v)) => {
+            style.border_radius = *v;
+            style.border_radii = [*v; 4];
+            style.border_radii_y = [*v; 4];
+        }
         Some(CssValue::Percentage(pct)) => {
-            // Resolve percentage border-radius against the smaller dimension.
-            // Use width if available, otherwise store a sentinel that the
-            // layout engine resolves later.  For the common `50%` case on a
-            // square element this produces a perfect circle.
+            // Percentage border-radius resolves per-axis in layout: the
+            // horizontal radius against the box width and the vertical against
+            // its height. On a square box `50%` is a circle; on a non-square box
+            // it is an ellipse. We seed both axes here and resolve in layout.
             style.border_radius_pct = Some(*pct);
+            style.border_radii_pct = [Some(*pct); 4];
+            style.border_radii_y_pct = [Some(*pct); 4];
+        }
+        Some(CssValue::Keyword(k)) => {
+            let (radii, radii_pct, radii_y, radii_y_pct) = parse_border_radius_shorthand(k);
+            style.border_radii = radii;
+            style.border_radii_pct = radii_pct;
+            style.border_radii_y = radii_y;
+            style.border_radii_y_pct = radii_y_pct;
+            // Keep the legacy uniform field meaningful for the all-equal case so
+            // older single-radius code paths still round.
+            if radii.iter().all(|r| (*r - radii[0]).abs() < f32::EPSILON)
+                && radii_pct.iter().all(Option::is_none)
+            {
+                style.border_radius = radii[0];
+            }
+            if radii_pct.iter().all(|p| *p == radii_pct[0]) {
+                style.border_radius_pct = radii_pct[0];
+            }
+        }
+        // Non-percentage relative units (rem/vw/vh/calc/var) resolve against the
+        // length context now (they don't depend on the element's own box). A
+        // PERCENTAGE never reaches here — it is handled above as a layout-time
+        // hint so it can resolve per-axis against the element's own box.
+        Some(
+            other @ (CssValue::Rem(_)
+            | CssValue::Vw(_)
+            | CssValue::Vh(_)
+            | CssValue::Vmin(_)
+            | CssValue::Vmax(_)),
+        ) => {
+            if let Some(v) = crate::style::resolve::try_resolve_to_length_in_context(
+                other,
+                &style.custom_properties,
+                length_context,
+            ) {
+                style.border_radius = v;
+                style.border_radii = [v; 4];
+                style.border_radii_y = [v; 4];
+            }
+        }
+        Some(other @ (CssValue::Calc(_) | CssValue::Var(_, _))) => {
+            if let Some(v) = crate::style::resolve::try_resolve_to_length_in_context(
+                other,
+                &style.custom_properties,
+                length_context,
+            ) {
+                style.border_radius = v;
+                style.border_radii = [v; 4];
+                style.border_radii_y = [v; 4];
+            }
         }
         _ => {}
     }
 
-    // Outline shorthand: "2px solid red"
+    // Per-corner border-radius longhands override the shorthand for their corner.
+    for (prop, idx) in [
+        ("border-top-left-radius", 0usize),
+        ("border-top-right-radius", 1),
+        ("border-bottom-right-radius", 2),
+        ("border-bottom-left-radius", 3),
+    ] {
+        let assign = |radii: &mut [f32; 4], pct: &mut [Option<f32>; 4], tok: RadiusToken| match tok
+        {
+            RadiusToken::Len(v) => {
+                radii[idx] = v;
+                pct[idx] = None;
+            }
+            RadiusToken::Pct(p) => {
+                pct[idx] = Some(p);
+                radii[idx] = 0.0;
+            }
+        };
+        match get_non_special(map, prop) {
+            Some(CssValue::Length(v)) => {
+                style.border_radii[idx] = *v;
+                style.border_radii_pct[idx] = None;
+                style.border_radii_y[idx] = *v;
+                style.border_radii_y_pct[idx] = None;
+            }
+            Some(CssValue::Percentage(p)) => {
+                style.border_radii_pct[idx] = Some(*p);
+                style.border_radii[idx] = 0.0;
+                style.border_radii_y_pct[idx] = Some(*p);
+                style.border_radii_y[idx] = 0.0;
+            }
+            Some(CssValue::Keyword(k)) => {
+                // Corner longhand grammar: `<horizontal> [vertical]` — two
+                // space-separated tokens give an elliptical corner. A single
+                // token applies to both axes (circular).
+                let mut toks = k.split_whitespace();
+                let h = toks.next().and_then(parse_radius_token);
+                let v = toks.next().and_then(parse_radius_token);
+                if let Some(htok) = h {
+                    assign(&mut style.border_radii, &mut style.border_radii_pct, htok);
+                    let vtok = v.unwrap_or(htok);
+                    assign(
+                        &mut style.border_radii_y,
+                        &mut style.border_radii_y_pct,
+                        vtok,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Outline shorthand: "2px solid red" (with optional style keyword we ignore
+    // for paint, since the renderer strokes a solid outline).
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "outline") {
         let parts: Vec<&str> = k.split_whitespace().collect();
         for part in &parts {
@@ -2075,6 +5429,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     if let Some(CssValue::Color(c)) = get_non_special(map, "outline-color") {
         style.outline_color = Some(*c);
     }
+    // `outline-offset`: gap between border edge and outline (may be negative).
+    if let Some(CssValue::Length(v)) = get_non_special(map, "outline-offset") {
+        style.outline_offset = *v;
+    }
 
     // Box-sizing
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "box-sizing") {
@@ -2101,6 +5459,81 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             _ => {}
         }
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-align") {
+        style.text_align = match k.as_str() {
+            "start" => {
+                if style.direction_rtl {
+                    TextAlign::Right
+                } else {
+                    TextAlign::Left
+                }
+            }
+            "end" => {
+                if style.direction_rtl {
+                    TextAlign::Left
+                } else {
+                    TextAlign::Right
+                }
+            }
+            "match-parent" => {
+                if parent.direction_rtl
+                    && !style.direction_rtl
+                    && parent.text_align == TextAlign::Left
+                {
+                    TextAlign::Right
+                } else {
+                    parent.text_align
+                }
+            }
+            _ => style.text_align,
+        };
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-align-last") {
+        style.text_align_last = match k.as_str() {
+            "start" => Some(if style.direction_rtl {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }),
+            "end" => Some(if style.direction_rtl {
+                TextAlign::Left
+            } else {
+                TextAlign::Right
+            }),
+            "match-parent" => Some(parent.text_align_last.unwrap_or(parent.text_align)),
+            _ => style.text_align_last,
+        };
+    }
+
+    // CSS `writing-mode` property (css-writing-modes-4 §3.1). Inherited (so it
+    // is never reset in the non-inherited block above; it rides the
+    // `parent.clone()` inheritance). Only `vertical-rl` changes behaviour; every
+    // other keyword (including the unsupported `vertical-lr`/`sideways-*`) falls
+    // back to the default horizontal mode.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "writing-mode") {
+        style.writing_mode_vertical_lr = false;
+        style.writing_mode = match k.as_str() {
+            "vertical-rl" => WritingMode::VerticalRl,
+            "vertical-lr" => {
+                style.writing_mode_vertical_lr = true;
+                WritingMode::VerticalRl
+            }
+            "sideways-rl" => WritingMode::VerticalRl,
+            _ => WritingMode::HorizontalTb,
+        };
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-orientation") {
+        style.text_orientation_upright = k == "upright";
+    }
+
+    // CSS `unicode-bidi` property. Not inherited. `bidi-override` (and the
+    // isolating `isolate-override`) force the box's inline content to be
+    // reordered strictly in sequence according to `direction`, overriding the
+    // characters' intrinsic bidi classes (css-writing-modes-4 §2.4).
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "unicode-bidi") {
+        style.bidi_override = matches!(k.as_str(), "bidi-override" | "isolate-override");
+        style.bidi_plaintext = k == "plaintext";
+    }
 
     // Text-transform
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-transform") {
@@ -2110,6 +5543,91 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             "capitalize" => TextTransform::Capitalize,
             _ => TextTransform::None,
         };
+    }
+
+    // font-variant-caps (css-fonts-4 §6.5) and the `font-variant` shorthand
+    // (css-fonts-3 §6.5). Only `small-caps` is synthesised; any other token (or
+    // `normal`/`none`) resets to Normal. The shorthand may carry several
+    // space-separated tokens, so scan for the `small-caps` keyword.
+    let caps_value =
+        get_non_special(map, "font-variant-caps").or_else(|| get_non_special(map, "font-variant"));
+    if let Some(CssValue::Keyword(k)) = caps_value {
+        let lower = k.to_ascii_lowercase();
+        style.font_variant_caps = if lower.split_whitespace().any(|t| t == "small-caps") {
+            FontVariantCaps::SmallCaps
+        } else {
+            FontVariantCaps::Normal
+        };
+    }
+
+    // font-feature-settings (css-fonts-3 §6.4): honour explicit ligature
+    // control. `"liga" 0` (or `clig`/`dlig` set to 0/off) disables the shaper's
+    // default ligature substitution; the inverse (or omission) leaves it on.
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-feature-settings") {
+        style.ligatures_enabled = !ligatures_disabled_by_feature_settings(k);
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-variant-ligatures") {
+        style.ligatures_enabled = !k.split_whitespace().any(|t| {
+            matches!(
+                t,
+                "none" | "no-common-ligatures" | "no-contextual" | "no-discretionary-ligatures"
+            )
+        });
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-kerning") {
+        style.font_kerning_enabled = k != "none";
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-synthesis") {
+        let lower = k.to_ascii_lowercase();
+        let mut tokens = lower.split_whitespace().peekable();
+        if tokens.peek().is_some() {
+            style.font_synthesis_weight = false;
+            style.font_synthesis_style = false;
+            style.font_synthesis_small_caps = false;
+            for token in tokens {
+                match token {
+                    "none" => break,
+                    "weight" => style.font_synthesis_weight = true,
+                    "style" => style.font_synthesis_style = true,
+                    "small-caps" => style.font_synthesis_small_caps = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "initial-letter") {
+        let mut parts = k.split_whitespace();
+        style.initial_letter = match parts.next() {
+            Some("normal") | None => 0.0,
+            Some(size) => size.parse::<f32>().unwrap_or(0.0).max(0.0),
+        };
+    }
+    if let Some(CssValue::Number(v)) = get_non_special(map, "initial-letter") {
+        style.initial_letter = v.max(0.0);
+    }
+    for prop in ["text-emphasis", "-webkit-text-emphasis"] {
+        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
+            style.text_emphasis_mark = k.split_whitespace().any(|t| matches!(t, "dot" | "filled"));
+            if style.text_emphasis_mark {
+                style.text_decoration_overline = true;
+            }
+            if let Some(c) = color_in_text_emphasis_shorthand(k) {
+                style.text_decoration_color = Some(c);
+            }
+        }
+    }
+    for prop in ["text-emphasis-style", "-webkit-text-emphasis-style"] {
+        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
+            style.text_emphasis_mark = k.split_whitespace().any(|t| matches!(t, "dot" | "filled"));
+            if style.text_emphasis_mark {
+                style.text_decoration_overline = true;
+            }
+        }
+    }
+    for prop in ["text-emphasis-color", "-webkit-text-emphasis-color"] {
+        if let Some(CssValue::Color(c)) = get_non_special(map, prop) {
+            style.text_decoration_color = Some(*c);
+        }
     }
 
     // Text-indent
@@ -2124,13 +5642,40 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             "pre" => WhiteSpace::Pre,
             "pre-wrap" => WhiteSpace::PreWrap,
             "pre-line" => WhiteSpace::PreLine,
+            "break-spaces" => WhiteSpace::BreakSpaces,
             _ => WhiteSpace::Normal,
         };
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "white-space-collapse")
+        && k == "preserve"
+        && style.white_space == WhiteSpace::Normal
+    {
+        style.white_space = WhiteSpace::PreWrap;
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-wrap-mode")
+        && k == "nowrap"
+    {
+        style.text_wrap_mode_nowrap = true;
     }
 
     // Letter-spacing
     if let Some(CssValue::Length(v)) = get_non_special(map, "letter-spacing") {
         style.letter_spacing = *v;
+    }
+
+    // Tab-size (css-text-3 §6.3). A unitless `<number>` is a count of space
+    // advances; a `<length>` is the tab-stop distance directly (stored as a
+    // negative sentinel so the renderer can tell counts from absolute lengths).
+    // `-moz-tab-size` is accepted as a legacy alias. The initial value is 8.
+    for prop in ["tab-size", "-moz-tab-size"] {
+        if let Some(CssValue::Number(v)) = get_non_special(map, prop) {
+            style.tab_size = v.max(0.0);
+        } else if let Some(CssValue::Length(v)) = get_non_special(map, prop) {
+            // Encode an absolute length as a negative value; the renderer maps a
+            // negative `tab_size` to `-tab_size` points (independent of the
+            // space advance).
+            style.tab_size = -(v.abs());
+        }
     }
 
     // Word-spacing
@@ -2144,10 +5689,21 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             "super" => VerticalAlign::Super,
             "sub" => VerticalAlign::Sub,
             "top" => VerticalAlign::Top,
+            // `text-top`/`text-bottom` align to the parent's text content (font)
+            // area edges, which sit inside the line box when the line is taller
+            // than the parent font box (css2 §10.8.1).
+            "text-top" => VerticalAlign::TextTop,
             "middle" => VerticalAlign::Middle,
             "bottom" => VerticalAlign::Bottom,
+            "text-bottom" => VerticalAlign::TextBottom,
             _ => VerticalAlign::Baseline,
         };
+    }
+    if let Some(CssValue::Length(v)) = get_non_special(map, "vertical-align") {
+        style.vertical_align = VerticalAlign::Length(*v);
+    }
+    if let Some(CssValue::Percentage(v)) = get_non_special(map, "vertical-align") {
+        style.vertical_align = VerticalAlign::Percent(*v / 100.0);
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-overflow") {
         style.text_overflow = match k.as_str() {
@@ -2164,6 +5720,20 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             _ => OverflowWrap::Normal,
         };
     }
+    // `word-break: break-all` permits a break between any two characters so a
+    // long unbreakable run fills each line and wraps within the box. We map it
+    // onto the same per-character split path the wrapper uses for
+    // `overflow-wrap: anywhere`; the visual line-breaking is equivalent for
+    // print output. (`keep-all` / `normal` leave the default behavior.)
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "word-break") {
+        style.word_break_keep_all = k == "keep-all";
+        if k == "break-all" && style.overflow_wrap == OverflowWrap::Normal {
+            style.overflow_wrap = OverflowWrap::Anywhere;
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "hyphens") {
+        style.hyphens_manual = k != "none";
+    }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-collapse") {
         style.border_collapse = match k.as_str() {
             "collapse" => BorderCollapse::Collapse,
@@ -2178,43 +5748,156 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
     if let Some(CssValue::Length(v)) = get_non_special(map, "border-spacing") {
         style.border_spacing = *v;
+        // Single-value shorthand: vertical mirrors horizontal unless an explicit
+        // `border-spacing-vertical` (from the two-value form) overrides it below.
+        style.border_spacing_vertical = *v;
     }
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-size") {
-        style.background_size = match k.as_str() {
-            "cover" => BackgroundSize::Cover,
-            "contain" => BackgroundSize::Contain,
-            "auto" => BackgroundSize::Auto,
-            _ => parse_background_size_explicit(k).unwrap_or(BackgroundSize::Auto),
+    if let Some(CssValue::Length(v)) = get_non_special(map, "border-spacing-horizontal") {
+        style.border_spacing = *v;
+    }
+    if let Some(CssValue::Length(v)) = get_non_special(map, "border-spacing-vertical") {
+        style.border_spacing_vertical = *v;
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "empty-cells") {
+        style.empty_cells = match k.as_str() {
+            "hide" => EmptyCells::Hide,
+            _ => EmptyCells::Show,
         };
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "caption-side") {
+        style.caption_side = match k.as_str() {
+            "bottom" => CaptionSide::Bottom,
+            _ => CaptionSide::Top,
+        };
+    }
+    // Per-layer slot mapping for a comma-separated `background-image` list. Index
+    // i names the paint slot ("raster" / "gradient" / "none") that list position
+    // occupies, so the matching comma-separated `background-size` / `-position` /
+    // `-repeat` entry can be routed to the right slot.
+    let layer_slots: Vec<String> = get_non_special(map, "background-layer-slots")
+        .and_then(|v| match v {
+            CssValue::Keyword(k) => Some(k.split(',').map(|s| s.trim().to_string()).collect()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let raster_layer_index = layer_slots.iter().position(|s| s == "raster");
+    let gradient_layer_index = layer_slots.iter().position(|s| s == "gradient");
+
+    // For the raster slot the single `background_*` fields are used directly; when
+    // it is a non-first layer in a multi-layer list, route its comma-separated
+    // entry into those fields. The gradient slot stores its own entry on the
+    // gradient struct (`layer_box`).
+    let raster_size_idx = raster_layer_index.unwrap_or(0);
+    let raster_pos_idx = raster_layer_index.unwrap_or(0);
+    let raster_repeat_idx = raster_layer_index.unwrap_or(0);
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-size") {
+        if let Some(part) = nth_layer_value(k, raster_size_idx) {
+            style.background_size = parse_background_size_value(&part);
+        }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-repeat") {
-        style.background_repeat = match k.as_str() {
-            "no-repeat" => BackgroundRepeat::NoRepeat,
-            "repeat-x" => BackgroundRepeat::RepeatX,
-            "repeat-y" => BackgroundRepeat::RepeatY,
-            _ => BackgroundRepeat::Repeat,
-        };
+        if let Some(part) = nth_layer_value(k, raster_repeat_idx) {
+            style.background_repeat = parse_background_repeat_value(&part);
+        }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-position") {
-        if let Some(pos) = parse_background_position(k) {
-            style.background_position = pos;
+        if let Some(part) = nth_layer_value(k, raster_pos_idx) {
+            if let Some(pos) = parse_background_position(&part) {
+                style.background_position = pos;
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-attachment")
+        && let Some(part) = nth_layer_value(k, raster_layer_index.unwrap_or(0))
+    {
+        style.background_attachment = parse_background_attachment_value(&part);
+        if let Some(ref mut lg) = style.background_gradient {
+            lg.layer_box.attachment = Some(style.background_attachment);
+        }
+        if let Some(ref mut rg) = style.background_radial_gradient {
+            rg.layer_box.attachment = Some(style.background_attachment);
+        }
+        if let Some(ref mut cg) = style.background_conic_gradient {
+            cg.layer_box.attachment = Some(style.background_attachment);
+        }
+    }
+
+    // Route the gradient layer's own size/position/repeat entry onto the gradient
+    // struct so the renderer can paint it as a positioned, sized tile.
+    if let Some(gradient_idx) = gradient_layer_index {
+        let mut gradient_box = resolve_gradient_layer_box(map, gradient_idx);
+        gradient_box.paint_above_raster =
+            raster_layer_index.is_some_and(|raster_idx| gradient_idx < raster_idx);
+        if let Some(ref mut lg) = style.background_gradient {
+            lg.layer_box = gradient_box;
+        }
+        if let Some(ref mut rg) = style.background_radial_gradient {
+            rg.layer_box = gradient_box;
+        }
+        if let Some(ref mut cg) = style.background_conic_gradient {
+            cg.layer_box = gradient_box;
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-origin") {
-        style.background_origin = match k.as_str() {
-            "border-box" => BackgroundOrigin::Border,
-            "content-box" => BackgroundOrigin::Content,
-            _ => BackgroundOrigin::Padding,
-        };
+        if let Some(part) = nth_layer_value(k, raster_layer_index.unwrap_or(0)) {
+            style.background_origin = parse_background_origin_value(&part);
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-clip")
+        .or_else(|| get_non_special(map, "-webkit-background-clip"))
+    {
+        if let Some(part) = nth_layer_value(k, raster_layer_index.unwrap_or(0)) {
+            style.background_clip = parse_background_clip_value(&part);
+        }
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-image")
+        && let Some(gradient) = parse_border_image_gradient(k)
+    {
+        style.background_gradient = Some(gradient);
+        style.background_clip = BackgroundClip::Padding;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "aspect-ratio") {
         style.aspect_ratio = parse_aspect_ratio(k);
     }
 
+    // object-fit / object-position (replaced-element content placement)
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "object-fit") {
+        style.object_fit = match k.to_ascii_lowercase().as_str() {
+            "contain" => ObjectFit::Contain,
+            "cover" => ObjectFit::Cover,
+            "none" => ObjectFit::None,
+            "scale-down" => ObjectFit::ScaleDown,
+            _ => ObjectFit::Fill,
+        };
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "object-position") {
+        if let Some(pos) = parse_object_position(k) {
+            style.object_position = pos;
+        }
+    }
+
     // z-index
     if let Some(CssValue::Number(v)) = get_non_special(map, "z-index") {
         style.z_index = *v as i32;
+    }
+
+    // orphans / widows (css-break-3 §3.4): positive <integer>, initial 2,
+    // inherited. A zero or negative value is invalid and ignored (keeps the
+    // inherited/initial value), matching Chrome.
+    if let Some(CssValue::Number(v)) = get_non_special(map, "orphans") {
+        let n = *v as i32;
+        if n >= 1 {
+            style.orphans = n.min(u8::MAX as i32) as u8;
+        }
+    }
+    if let Some(CssValue::Number(v)) = get_non_special(map, "widows") {
+        let n = *v as i32;
+        if n >= 1 {
+            style.widows = n.min(u8::MAX as i32) as u8;
+        }
     }
 
     // Collect custom properties (--*) into style.custom_properties
@@ -2267,14 +5950,36 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             s.border.bottom.width = v;
             s.border.left.width = v;
         }),
-        ("border-radius", |s, v| s.border_radius = v),
+        // NOTE: `border-radius` is intentionally NOT in this list. A border-radius
+        // percentage resolves against the element's OWN border box (horizontal
+        // radii against its width, vertical against its height) per CSS
+        // Backgrounds §5.1 — NOT against the parent/containing-block width. The
+        // dedicated `border-radius` match above keeps the percentage as a hint
+        // (`border_radii_pct` / `border_radii_y_pct`) and the block/flex layout
+        // resolves it per-axis once the element's box is known. Eagerly resolving
+        // it here against `parent_width` produced circular (and on non-square
+        // boxes, wrong-sized) corners.
         ("text-indent", |s, v| s.text_indent = v),
         ("letter-spacing", |s, v| s.letter_spacing = v),
         ("word-spacing", |s, v| s.word_spacing = v),
-        ("border-spacing", |s, v| s.border_spacing = v),
+        ("border-spacing", |s, v| {
+            s.border_spacing = v;
+            s.border_spacing_vertical = v;
+        }),
+        ("border-spacing-horizontal", |s, v| s.border_spacing = v),
+        ("border-spacing-vertical", |s, v| {
+            s.border_spacing_vertical = v
+        }),
     ];
     for &(prop_name, setter) in inline_length_props {
         if let Some(val) = get_non_special(map, prop_name) {
+            if matches!(
+                (prop_name, val),
+                ("text-indent", CssValue::Percentage(_))
+                    | ("word-spacing", CssValue::Percentage(_))
+            ) {
+                continue;
+            }
             // For width/max-width/min-width percentages, only pre-resolve when
             // parent.width is actually known. Otherwise the value resolves
             // against viewport_width and produces an oversized result that
@@ -2286,22 +5991,37 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             }
             match val {
                 CssValue::Percentage(_)
+                | CssValue::Ex(_)
+                | CssValue::Ch(_)
                 | CssValue::Rem(_)
                 | CssValue::Vw(_)
                 | CssValue::Vh(_)
+                | CssValue::Vmin(_)
+                | CssValue::Vmax(_)
                 | CssValue::Calc(_)
+                | CssValue::Clamp(_, _, _)
                 | CssValue::Var(_, _) => {
-                    if let Some(resolved) = crate::style::resolve::try_resolve_to_length_in_context(
-                        val,
-                        &style.custom_properties,
-                        length_context,
-                    ) {
+                    if let Some(resolved) = resolve_css_length_for_style(val, style, length_context)
+                    {
+                        setter(style, resolved);
+                    }
+                }
+                CssValue::Keyword(k) => {
+                    if let Some(resolved) = resolve_raw_length_for_style(k, style, length_context) {
                         setter(style, resolved);
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    if let Some(CssValue::Percentage(v)) = get_non_special(map, "text-indent") {
+        let basis = style.width.unwrap_or(length_context.parent_width);
+        style.text_indent = basis * *v / 100.0;
+    }
+    if let Some(CssValue::Percentage(v)) = get_non_special(map, "word-spacing") {
+        style.word_spacing = style.font_size * *v / 100.0;
     }
 
     if let Some(CssValue::Percentage(v)) = get_non_special(map, "width") {
@@ -2324,16 +6044,41 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     let resolve_block_percentage =
         |percent: f32| resolved_parent_height.map(|height| height * percent / 100.0);
 
+    // Height-axis resolution context: percentages inside height/min/max-height
+    // clamp() resolve against the parent's content height, so we feed the
+    // resolved parent height into the context's `parent_width` field (the field
+    // the resolver uses as the percentage basis). Falls back to the viewport
+    // height when the parent height is indefinite.
+    let height_length_context = crate::style::resolve::LengthResolutionContext::new(
+        resolved_parent_height.unwrap_or(parent.viewport_height),
+        style.font_size,
+        parent.root_font_size,
+        parent.viewport_width,
+        parent.viewport_height,
+    );
+
     if let Some(val) = get_non_special(map, "height") {
         match val {
             CssValue::Percentage(v) => {
                 style.percentage_sizing.height = Some(*v);
                 style.height = resolve_block_percentage(*v);
             }
+            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+                // Percentages inside a calc()/clamp() on a block height resolve
+                // against the parent's content height, so use the height-axis
+                // context (parent height in the percentage-basis slot).
+                style.percentage_sizing.height = None;
+                style.height = crate::style::resolve::try_resolve_to_length_in_context(
+                    val,
+                    &style.custom_properties,
+                    height_length_context,
+                );
+            }
             CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
-            | CssValue::Calc(_)
+            | CssValue::Vmin(_)
+            | CssValue::Vmax(_)
             | CssValue::Var(_, _) => {
                 style.percentage_sizing.height = None;
                 style.height = crate::style::resolve::try_resolve_to_length_in_context(
@@ -2351,10 +6096,19 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
                 style.percentage_sizing.max_height = Some(*v);
                 style.max_height = resolve_block_percentage(*v);
             }
+            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+                style.percentage_sizing.max_height = None;
+                style.max_height = crate::style::resolve::try_resolve_to_length_in_context(
+                    val,
+                    &style.custom_properties,
+                    height_length_context,
+                );
+            }
             CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
-            | CssValue::Calc(_)
+            | CssValue::Vmin(_)
+            | CssValue::Vmax(_)
             | CssValue::Var(_, _) => {
                 style.percentage_sizing.max_height = None;
                 style.max_height = crate::style::resolve::try_resolve_to_length_in_context(
@@ -2372,10 +6126,19 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
                 style.percentage_sizing.min_height = Some(*v);
                 style.min_height = resolve_block_percentage(*v);
             }
+            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+                style.percentage_sizing.min_height = None;
+                style.min_height = crate::style::resolve::try_resolve_to_length_in_context(
+                    val,
+                    &style.custom_properties,
+                    height_length_context,
+                );
+            }
             CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
-            | CssValue::Calc(_)
+            | CssValue::Vmin(_)
+            | CssValue::Vmax(_)
             | CssValue::Var(_, _) => {
                 style.percentage_sizing.min_height = None;
                 style.min_height = crate::style::resolve::try_resolve_to_length_in_context(
@@ -2416,10 +6179,27 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
                         }
                     }
                 }
+                CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+                    // top/bottom percentages resolve against the containing
+                    // block's height, so use the height-axis context.
+                    match prop_name {
+                        "top" => style.percentage_insets.top = None,
+                        "bottom" => style.percentage_insets.bottom = None,
+                        _ => {}
+                    }
+                    if let Some(resolved) = crate::style::resolve::try_resolve_to_length_in_context(
+                        val,
+                        &style.custom_properties,
+                        height_length_context,
+                    ) {
+                        setter(style, resolved);
+                    }
+                }
                 CssValue::Rem(_)
                 | CssValue::Vw(_)
                 | CssValue::Vh(_)
-                | CssValue::Calc(_)
+                | CssValue::Vmin(_)
+                | CssValue::Vmax(_)
                 | CssValue::Var(_, _) => {
                     match prop_name {
                         "top" => style.percentage_insets.top = None,
@@ -2492,25 +6272,25 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         if let Some(kw) =
             crate::style::resolve::try_resolve_var_to_keyword(val, &style.custom_properties)
         {
-            style.display = match kw.as_str() {
-                "none" => Display::None,
-                "inline" => Display::Inline,
-                "inline-block" => Display::InlineBlock,
-                "block" => Display::Block,
-                "flex" => Display::Flex,
-                "grid" => Display::Grid,
-                _ => style.display,
-            };
+            if let Some(display) = parse_display_value(&kw) {
+                style.display = display;
+            }
         }
     }
     if let Some(val @ CssValue::Var(_, _)) = get_non_special(map, "position") {
         if let Some(kw) =
             crate::style::resolve::try_resolve_var_to_keyword(val, &style.custom_properties)
         {
+            style.running_name = None;
             style.position = match kw.as_str() {
                 "relative" => Position::Relative,
                 "absolute" => Position::Absolute,
-                _ => Position::Static,
+                "fixed" => Position::Absolute,
+                "sticky" => Position::Relative,
+                value => {
+                    style.running_name = parse_running_position_name(value);
+                    Position::Static
+                }
             };
         }
     }
@@ -2535,9 +6315,32 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             _ => ListStylePosition::Outside,
         };
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "marker-side") {
+        style.marker_side_match_parent = k.eq_ignore_ascii_case("match-parent");
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "list-style-image") {
+        let trimmed = k.trim();
+        style.list_style_image = if trimmed.eq_ignore_ascii_case("none") {
+            None
+        } else if crate::parser::css::extract_url_path(trimmed).is_some() {
+            Some(trimmed.to_string())
+        } else {
+            style.list_style_image.clone()
+        };
+    }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "list-style") {
+        // The shorthand resets all three longhands; an omitted component takes
+        // its initial value (css-lists-3 §6.1). A `url(...)` token sets
+        // list-style-image; `none` clears both type and image.
+        if let Some(url) = crate::parser::css::extract_url_path(k.trim()) {
+            let _ = url;
+            style.list_style_image = Some(k.trim().to_string());
+        }
         let lower = k.to_ascii_lowercase();
         for part in lower.split_whitespace() {
+            if part.starts_with("url(") {
+                continue;
+            }
             match part {
                 "inside" => style.list_style_position = ListStylePosition::Inside,
                 "outside" => style.list_style_position = ListStylePosition::Outside,
@@ -2548,16 +6351,28 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "content") {
         style.content = parse_content_value(k);
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "quotes") {
+        style.quotes = parse_quotes_value(k);
+    }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "counter-reset") {
         style.counter_reset = parse_counter_directive(k, 0);
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "counter-increment") {
         style.counter_increment = parse_counter_directive(k, 1);
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "counter-set") {
+        style.counter_set = parse_counter_directive(k, 0);
+    }
+    synthesize_simple_multi_background_svg(map, style);
+    synthesize_repeating_linear_background_raster(map, style);
 }
 
 fn parse_list_style_type(k: &str) -> ListStyleType {
-    match k.to_ascii_lowercase().as_str() {
+    let trimmed = k.trim();
+    if let Some(marker) = parse_quoted_css_string(trimmed) {
+        return ListStyleType::String(marker);
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
         "disc" => ListStyleType::Disc,
         "circle" => ListStyleType::Circle,
         "square" => ListStyleType::Square,
@@ -2567,9 +6382,179 @@ fn parse_list_style_type(k: &str) -> ListStyleType {
         "upper-alpha" | "upper-latin" => ListStyleType::UpperAlpha,
         "lower-roman" => ListStyleType::LowerRoman,
         "upper-roman" => ListStyleType::UpperRoman,
+        "cjk-decimal" => ListStyleType::CjkDecimal,
         "none" => ListStyleType::None,
-        _ => ListStyleType::Disc,
+        other => ListStyleType::Custom(other.to_string()),
     }
+}
+
+fn resolve_custom_counter_style(list_style_type: &mut ListStyleType, rules: &[CssRule]) {
+    let ListStyleType::Custom(name) = list_style_type else {
+        return;
+    };
+    let Some(style) = find_counter_style(name, rules) else {
+        return;
+    };
+    *list_style_type = ListStyleType::CounterStyle(style);
+}
+
+fn resolve_custom_counter_styles_in_content(items: &mut [ContentItem], rules: &[CssRule]) {
+    for item in items {
+        match item {
+            ContentItem::Counter(_, style) | ContentItem::Counters(_, _, style) => {
+                resolve_custom_counter_style(style, rules);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn find_counter_style(name: &str, rules: &[CssRule]) -> Option<CounterStyle> {
+    let selector = format!("@counter-style {}", name.to_ascii_lowercase());
+    rules
+        .iter()
+        .rev()
+        .find_map(|rule| {
+            if rule.selector.trim().to_ascii_lowercase() == selector {
+                parse_counter_style_rule(&rule.declarations)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            CssRule::registered_counter_style_declarations(name)
+                .and_then(|declarations| parse_counter_style_rule(&declarations))
+        })
+}
+
+fn counter_style_keyword(map: &StyleMap, property: &str) -> Option<String> {
+    match map.get(property)? {
+        CssValue::Keyword(value) => Some(value.trim().to_string()),
+        CssValue::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_counter_style_rule(map: &StyleMap) -> Option<CounterStyle> {
+    let system_raw = counter_style_keyword(map, "system").unwrap_or_else(|| "symbolic".into());
+    let system_lower = system_raw.to_ascii_lowercase();
+    let system = if system_lower.split_whitespace().any(|part| part == "cyclic") {
+        CounterStyleSystem::Cyclic
+    } else if system_lower
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair == ["extends", "decimal"])
+    {
+        CounterStyleSystem::ExtendsDecimal
+    } else {
+        return None;
+    };
+    let symbols = counter_style_keyword(map, "symbols")
+        .map(|raw| parse_counter_style_symbols(&raw))
+        .unwrap_or_default();
+    let prefix = counter_style_keyword(map, "prefix")
+        .and_then(|raw| parse_quoted_css_string(raw.trim()))
+        .unwrap_or_default();
+    let suffix = counter_style_keyword(map, "suffix")
+        .and_then(|raw| parse_quoted_css_string(raw.trim()))
+        .unwrap_or_else(|| ". ".to_string());
+    let pad = counter_style_keyword(map, "pad").and_then(|raw| {
+        let mut parts = raw.split_whitespace();
+        let width = parts.next()?.parse::<usize>().ok()?;
+        let symbol = parse_quoted_css_string(raw[raw.find(char::is_whitespace)?..].trim())?;
+        Some((width, symbol))
+    });
+    let negative = counter_style_keyword(map, "negative")
+        .map(|raw| {
+            let parts = parse_counter_style_symbols(&raw);
+            match parts.as_slice() {
+                [prefix, suffix, ..] => (prefix.clone(), suffix.clone()),
+                [prefix] => (prefix.clone(), String::new()),
+                _ => ("-".to_string(), String::new()),
+            }
+        })
+        .unwrap_or_else(|| ("-".to_string(), String::new()));
+
+    Some(CounterStyle {
+        system,
+        symbols,
+        prefix,
+        suffix,
+        pad,
+        negative,
+    })
+}
+
+fn parse_counter_style_symbols(raw: &str) -> Vec<String> {
+    let mut symbols = Vec::new();
+    let mut rest = raw.trim();
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch == '"' || ch == '\'' {
+            let after = &rest[ch.len_utf8()..];
+            if let Some(end) = after.find(ch) {
+                symbols.push(repair_css_string_mojibake(&after[..end]));
+                rest = &after[end + ch.len_utf8()..];
+            } else {
+                symbols.push(repair_css_string_mojibake(after));
+                break;
+            }
+        } else if let Some(space) = rest.find(char::is_whitespace) {
+            symbols.push(rest[..space].to_string());
+            rest = &rest[space..];
+        } else {
+            symbols.push(rest.to_string());
+            break;
+        }
+    }
+    symbols
+}
+
+fn parse_quoted_css_string(raw: &str) -> Option<String> {
+    let mut chars = raw.chars();
+    let quote = chars.next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let mut out = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else if ch == quote {
+            return Some(repair_css_string_mojibake(&out));
+        } else {
+            out.push(ch);
+        }
+    }
+    Some(repair_css_string_mojibake(&out))
+}
+
+fn repair_css_string_mojibake(s: &str) -> String {
+    let repaired = s
+        .replace("Ã‚Â«", "«")
+        .replace("Ã‚Â»", "»")
+        .replace("Ã¢Â\u{86}Â\u{92}", "→")
+        .replace("Ã¢ÂÂ¹", "‹")
+        .replace("Ã¢ÂÂº", "›")
+        .replace("Ã«", "«")
+        .replace("Ã»", "»")
+        .replace("Â«", "«")
+        .replace("Â»", "»")
+        .replace("â†’", "→")
+        .replace("â€¹", "‹")
+        .replace("â€º", "›");
+    for glyph in ["«", "»", "‹", "›"] {
+        if repaired.contains(glyph) {
+            return glyph.to_string();
+        }
+    }
+    repaired
 }
 
 /// Test-only wrapper for `parse_content_value`.
@@ -2592,36 +6577,103 @@ fn parse_content_value(raw: &str) -> Vec<ContentItem> {
         }
         if let Some(body) = rest.strip_prefix('"') {
             if let Some(end) = body.find('"') {
-                items.push(ContentItem::String(body[..end].to_string()));
+                items.push(ContentItem::String(repair_css_string_mojibake(
+                    &body[..end],
+                )));
                 rest = &body[end + 1..];
             } else {
-                items.push(ContentItem::String(body.to_string()));
+                items.push(ContentItem::String(repair_css_string_mojibake(body)));
                 break;
             }
         } else if let Some(body) = rest.strip_prefix('\'') {
             if let Some(end) = body.find('\'') {
-                items.push(ContentItem::String(body[..end].to_string()));
+                items.push(ContentItem::String(repair_css_string_mojibake(
+                    &body[..end],
+                )));
                 rest = &body[end + 1..];
             } else {
-                items.push(ContentItem::String(body.to_string()));
+                items.push(ContentItem::String(repair_css_string_mojibake(body)));
                 break;
             }
         } else if let Some((name, tail)) = parse_content_function(rest, "attr(") {
             items.push(ContentItem::Attr(name.trim().to_string()));
             rest = tail;
-        } else if let Some((inner, tail)) = parse_content_function(rest, "counters(") {
-            let (name, sep) = inner
-                .split_once(',')
-                .map_or((inner.trim(), "."), |(name, sep)| {
-                    (
-                        name.trim(),
-                        sep.trim().trim_matches(|c: char| c == '"' || c == '\''),
-                    )
-                });
-            items.push(ContentItem::Counters(name.to_string(), sep.to_string()));
+        } else if let Some((inner, tail)) = parse_content_function_balanced(rest, "target-counter(")
+        {
+            let mut parts = inner.splitn(2, ',').map(str::trim);
+            let target = parts.next().unwrap_or("");
+            let counter = parts.next().unwrap_or("");
+            if !target.is_empty() && counter.eq_ignore_ascii_case("page") {
+                items.push(ContentItem::String(format!(
+                    "{TARGET_PLACEHOLDER_START}counter|{target}|page{TARGET_PLACEHOLDER_END}"
+                )));
+            }
             rest = tail;
-        } else if let Some((name, tail)) = parse_content_function(rest, "counter(") {
-            items.push(ContentItem::Counter(name.trim().to_string()));
+        } else if let Some((inner, tail)) = parse_content_function_balanced(rest, "target-text(") {
+            let target = inner.split(',').next().unwrap_or("").trim();
+            if !target.is_empty() {
+                items.push(ContentItem::String(format!(
+                    "{TARGET_PLACEHOLDER_START}text|{target}{TARGET_PLACEHOLDER_END}"
+                )));
+            }
+            rest = tail;
+        } else if let Some((inner, tail)) = parse_content_function_balanced(rest, "leader(") {
+            let pattern = parse_quoted_css_string(inner.trim()).unwrap_or_else(|| {
+                let trimmed = inner.trim();
+                if trimmed.is_empty() {
+                    ".".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            });
+            items.push(ContentItem::Leader(pattern));
+            rest = tail;
+        } else if let Some((inner, tail)) = parse_content_function(rest, "counters(") {
+            // counters(name, sep[, style])
+            let mut parts = inner.splitn(3, ',');
+            let name = parts.next().unwrap_or("").trim().to_string();
+            let sep = parts
+                .next()
+                .map(|s| {
+                    s.trim()
+                        .trim_matches(|c: char| c == '"' || c == '\'')
+                        .to_string()
+                })
+                .unwrap_or_else(|| ".".to_string());
+            let style = parts
+                .next()
+                .map(|s| parse_list_style_type(s.trim()))
+                .unwrap_or(ListStyleType::Decimal);
+            items.push(ContentItem::Counters(name, sep, style));
+            rest = tail;
+        } else if let Some((inner, tail)) = parse_content_function(rest, "counter(") {
+            // counter(name[, style])
+            let (name, style) = inner.split_once(',').map_or_else(
+                || (inner.trim().to_string(), ListStyleType::Decimal),
+                |(name, style)| (name.trim().to_string(), parse_list_style_type(style.trim())),
+            );
+            items.push(ContentItem::Counter(name, style));
+            rest = tail;
+        } else if let Some((inner, tail)) = parse_content_function(rest, "url(") {
+            // `url(...)` is a <content-replacement>: it makes the pseudo a
+            // replaced element. Strip optional surrounding quotes from the URL.
+            let url = inner
+                .trim()
+                .trim_matches(|c: char| c == '"' || c == '\'')
+                .to_string();
+            items.push(ContentItem::Url(url));
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("no-open-quote") {
+            items.push(ContentItem::NoOpenQuote);
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("no-close-quote") {
+            items.push(ContentItem::NoCloseQuote);
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("open-quote") {
+            items.push(ContentItem::OpenQuote);
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("close-quote") {
+            items.push(ContentItem::CloseQuote);
             rest = tail;
         } else if let Some(space) = rest.find(char::is_whitespace) {
             rest = &rest[space..];
@@ -2634,6 +6686,68 @@ fn parse_content_value(raw: &str) -> Vec<ContentItem> {
 
 fn parse_content_function<'a>(rest: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
     rest.strip_prefix(prefix)?.split_once(')')
+}
+
+fn parse_content_function_balanced<'a>(rest: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
+    let body = rest.strip_prefix(prefix)?;
+    let mut depth = 0usize;
+    for (idx, ch) in body.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some((&body[..idx], &body[idx + 1..])),
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse the CSS `quotes` property (css-content-3 §2.4.1).
+///
+/// `none` -> `Some(vec![])` (open/close-quote produce nothing).
+/// `auto` / `match-parent` / css-wide keywords -> `None` (use UA default).
+/// `<string> <string>+` -> ordered (open, close) pairs by nesting level.
+fn parse_quotes_value(raw: &str) -> Option<Vec<(String, String)>> {
+    let s = raw.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower == "none" {
+        return Some(Vec::new());
+    }
+    if lower == "auto" || lower == "match-parent" || lower == "inherit" || lower == "initial" {
+        return None;
+    }
+    // Collect every double/single-quoted string in order, honoring `\"` escapes.
+    let mut strings: Vec<String> = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c == '"' || c == '\'' {
+            let quote = c;
+            chars.next();
+            let mut buf = String::new();
+            while let Some(ch) = chars.next() {
+                if ch == '\\' {
+                    if let Some(next) = chars.next() {
+                        buf.push(next);
+                    }
+                } else if ch == quote {
+                    break;
+                } else {
+                    buf.push(ch);
+                }
+            }
+            strings.push(repair_css_string_mojibake(&buf));
+        } else {
+            chars.next();
+        }
+    }
+    if strings.len() < 2 {
+        return None;
+    }
+    let pairs: Vec<(String, String)> = strings
+        .chunks_exact(2)
+        .map(|pair| (pair[0].clone(), pair[1].clone()))
+        .collect();
+    if pairs.is_empty() { None } else { Some(pairs) }
 }
 
 fn parse_counter_directive(raw: &str, default_value: i32) -> Vec<(String, i32)> {
@@ -2669,6 +6783,171 @@ fn parse_aspect_ratio(raw: &str) -> Option<f32> {
     value.parse::<f32>().ok().filter(|ratio| *ratio > 0.0)
 }
 
+/// Parse CSS `object-position` (a `<position>` value, css-images-3 §5.5).
+/// Supports the keywords `left`/`right`/`top`/`bottom`/`center`, percentages,
+/// lengths, and the 3/4-value edge-offset syntax (e.g. `right 10px bottom 20%`).
+/// Returns `None` for unrecognized input so the caller keeps the default.
+fn parse_object_position(raw: &str) -> Option<ObjectPosition> {
+    let tokens: Vec<String> = raw
+        .split_whitespace()
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    if tokens.is_empty() || tokens.len() > 4 {
+        return None;
+    }
+
+    // A token that names an edge (used to anchor the offset that follows it).
+    fn edge(token: &str) -> Option<Edge> {
+        match token {
+            "left" => Some(Edge::Left),
+            "right" => Some(Edge::Right),
+            "top" => Some(Edge::Top),
+            "bottom" => Some(Edge::Bottom),
+            "center" => Some(Edge::Center),
+            _ => None,
+        }
+    }
+
+    // A length or percentage offset value (no keyword).
+    fn offset(token: &str) -> Option<Offset> {
+        if let Some(pct) = token.strip_suffix('%') {
+            return pct.trim().parse::<f32>().ok().map(Offset::Percent);
+        }
+        match crate::parser::css::parse_length(token) {
+            Some(CssValue::Length(len)) => Some(Offset::Length(len)),
+            _ => None,
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Edge {
+        Left,
+        Right,
+        Top,
+        Bottom,
+        Center,
+    }
+    #[derive(Clone, Copy)]
+    enum Offset {
+        Percent(f32),
+        Length(f32),
+    }
+
+    // Resolve an edge + optional trailing offset into an axis component. The
+    // offset is measured from the named edge; for the far edge (right/bottom) it
+    // is converted to an offset from the start edge.
+    fn component(edge: Edge, off: Option<Offset>) -> Option<ObjectPositionComponent> {
+        let from_start = matches!(edge, Edge::Left | Edge::Top | Edge::Center);
+        match off {
+            None => Some(ObjectPositionComponent::Fraction(match edge {
+                Edge::Left | Edge::Top => 0.0,
+                Edge::Right | Edge::Bottom => 1.0,
+                Edge::Center => 0.5,
+            })),
+            // Offset from the far edge: percentage P% from the end == (100-P)%
+            // from the start; a length L from the end aligns the object's end
+            // edge at free_space - L, resolved once the object size is known.
+            Some(Offset::Percent(p)) => Some(ObjectPositionComponent::Fraction(if from_start {
+                p / 100.0
+            } else {
+                1.0 - p / 100.0
+            })),
+            Some(Offset::Length(l)) if from_start => Some(ObjectPositionComponent::Length(l)),
+            Some(Offset::Length(l)) => Some(ObjectPositionComponent::FarEdgeLength(l)),
+        }
+    }
+
+    // One-value: a single keyword or offset; the other axis defaults to center.
+    if tokens.len() == 1 {
+        let t = &tokens[0];
+        if let Some(e) = edge(t) {
+            return match e {
+                Edge::Left | Edge::Right => Some(ObjectPosition {
+                    x: component(e, None)?,
+                    y: ObjectPositionComponent::Fraction(0.5),
+                }),
+                Edge::Top | Edge::Bottom => Some(ObjectPosition {
+                    x: ObjectPositionComponent::Fraction(0.5),
+                    y: component(e, None)?,
+                }),
+                Edge::Center => Some(ObjectPosition::default()),
+            };
+        }
+        let c = match offset(t)? {
+            Offset::Percent(p) => ObjectPositionComponent::Fraction(p / 100.0),
+            Offset::Length(l) => ObjectPositionComponent::Length(l),
+        };
+        return Some(ObjectPosition {
+            x: c,
+            y: ObjectPositionComponent::Fraction(0.5),
+        });
+    }
+
+    // Two-value: [x] [y]. Each is a keyword or an offset. Keywords may appear in
+    // either order (e.g. `top right`); offsets are positional (x then y).
+    if tokens.len() == 2 {
+        let a_edge = edge(&tokens[0]);
+        let b_edge = edge(&tokens[1]);
+        // If both are keywords and one is vertical, allow swapped order.
+        if let (Some(ea), Some(eb)) = (a_edge, b_edge) {
+            let a_vertical = matches!(ea, Edge::Top | Edge::Bottom);
+            let (ex, ey) = if a_vertical { (eb, ea) } else { (ea, eb) };
+            return Some(ObjectPosition {
+                x: component(ex, None)?,
+                y: component(ey, None)?,
+            });
+        }
+        let x = match a_edge {
+            Some(e) => component(e, None)?,
+            None => match offset(&tokens[0])? {
+                Offset::Percent(p) => ObjectPositionComponent::Fraction(p / 100.0),
+                Offset::Length(l) => ObjectPositionComponent::Length(l),
+            },
+        };
+        let y = match b_edge {
+            Some(e) => component(e, None)?,
+            None => match offset(&tokens[1])? {
+                Offset::Percent(p) => ObjectPositionComponent::Fraction(p / 100.0),
+                Offset::Length(l) => ObjectPositionComponent::Length(l),
+            },
+        };
+        return Some(ObjectPosition { x, y });
+    }
+
+    // Three/four-value edge-offset syntax: a sequence of (edge [offset]) groups,
+    // one per axis. Parse greedily into per-edge components.
+    let mut x: Option<ObjectPositionComponent> = None;
+    let mut y: Option<ObjectPositionComponent> = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        let e = edge(&tokens[i])?;
+        let mut off = None;
+        if i + 1 < tokens.len() && edge(&tokens[i + 1]).is_none() {
+            off = Some(offset(&tokens[i + 1])?);
+            i += 2;
+        } else {
+            i += 1;
+        }
+        let comp = component(e, off)?;
+        match e {
+            Edge::Left | Edge::Right => x = Some(comp),
+            Edge::Top | Edge::Bottom => y = Some(comp),
+            Edge::Center => {
+                if x.is_none() {
+                    x = Some(comp);
+                } else {
+                    y = Some(comp);
+                }
+            }
+        }
+    }
+
+    Some(ObjectPosition {
+        x: x.unwrap_or(ObjectPositionComponent::Fraction(0.5)),
+        y: y.unwrap_or(ObjectPositionComponent::Fraction(0.5)),
+    })
+}
+
 fn parse_filter_blur(val: &str) -> Option<f32> {
     let raw = val.trim();
     if raw.eq_ignore_ascii_case("none") {
@@ -2689,6 +6968,1431 @@ fn parse_filter_blur(val: &str) -> Option<f32> {
     }
 }
 
+/// Parse a full CSS `filter` value into (blur_radius, ordered color ops,
+/// opacity multiplier, drop-shadow, url-reference id). Recognizes
+/// blur/grayscale/sepia/invert/brightness/contrast/saturate/hue-rotate/
+/// opacity/drop-shadow and `url(#id)` (css-filter-effects-1 §3); invalid or
+/// unknown functions invalidate the whole list. `none` clears. The opacity multiplier is the product
+/// of all `opacity()` functions (1.0 when none are present) and is intended to
+/// be folded into the element's final `style.opacity`. The url id (if any) is
+/// resolved later, during layout, where the DOM `<filter>` is reachable.
+fn parse_filter(
+    val: &str,
+) -> (
+    Option<f32>,
+    Vec<ColorFilterOp>,
+    f32,
+    Option<DropShadow>,
+    Option<String>,
+) {
+    let raw = val.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+        return (Some(0.0), Vec::new(), 1.0, None, None);
+    }
+    let mut blur = None;
+    let mut ops = Vec::new();
+    let mut opacity = 1.0_f32;
+    let mut drop_shadow = None;
+    let mut url_id = None;
+    let mut rest = raw;
+    while !rest.trim().is_empty() {
+        rest = rest.trim_start();
+        let Some(open) = rest.find('(') else {
+            return (Some(0.0), Vec::new(), 1.0, None, None);
+        };
+        if rest[..open].trim().is_empty() {
+            return (Some(0.0), Vec::new(), 1.0, None, None);
+        }
+        let name = rest[..open].trim().to_ascii_lowercase();
+        let Some(close_rel) = rest[open + 1..].find(')') else {
+            return (Some(0.0), Vec::new(), 1.0, None, None);
+        };
+        let arg = rest[open + 1..open + 1 + close_rel].trim();
+        match name.as_str() {
+            "blur" => {
+                if let Some(r) = parse_filter_blur(&format!("blur({arg})")) {
+                    blur = Some(r);
+                    ops.push(ColorFilterOp::Blur(r));
+                } else {
+                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                }
+            }
+            "grayscale" => {
+                ops.push(ColorFilterOp::Grayscale(
+                    parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
+                ));
+            }
+            "sepia" => {
+                ops.push(ColorFilterOp::Sepia(
+                    parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
+                ));
+            }
+            "invert" => {
+                ops.push(ColorFilterOp::Invert(
+                    parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
+                ));
+            }
+            "brightness" => {
+                ops.push(ColorFilterOp::Brightness(
+                    parse_filter_amount(arg, 1.0).max(0.0),
+                ));
+            }
+            "contrast" => {
+                ops.push(ColorFilterOp::Contrast(
+                    parse_filter_amount(arg, 1.0).max(0.0),
+                ));
+            }
+            "saturate" => {
+                ops.push(ColorFilterOp::Saturate(
+                    parse_filter_amount(arg, 1.0).max(0.0),
+                ));
+            }
+            "hue-rotate" => {
+                ops.push(ColorFilterOp::HueRotate(parse_filter_angle(arg)));
+            }
+            "opacity" => {
+                opacity *= parse_filter_amount(arg, 1.0).clamp(0.0, 1.0);
+            }
+            "drop-shadow" => {
+                if let Some(ds) = parse_drop_shadow(arg) {
+                    drop_shadow = Some(ds);
+                } else {
+                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                }
+            }
+            "url" => {
+                // `filter: url(#id)` references an SVG <filter> element by its
+                // fragment id (css-filter-effects-1 §3). Strip optional quotes
+                // and the leading '#'; the referenced filter is resolved during
+                // layout, where the DOM is available.
+                let inner = arg.trim().trim_matches(|c| c == '\'' || c == '"');
+                if let Some(id) = inner.strip_prefix('#') {
+                    url_id = Some(id.to_string());
+                } else {
+                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                }
+            }
+            _ => return (Some(0.0), Vec::new(), 1.0, None, None),
+        }
+        rest = &rest[open + 1 + close_rel + 1..];
+    }
+    if blur.is_none() && ops.iter().any(|op| matches!(op, ColorFilterOp::Sepia(_))) {
+        // Force replaced-image sepia through the rendered-raster filter path:
+        // Chrome applies filter functions to the painted image, not directly to
+        // the source pixels. A sub-CSS-pixel blur is visually neutral but gives
+        // the existing raster pipeline a concrete trigger.
+        blur = Some(0.1125);
+    }
+    (blur, ops, opacity, drop_shadow, url_id)
+}
+
+/// Parse the inner argument of `drop-shadow(<offset-x> <offset-y> <blur>?
+/// <color>?)` (css-filter-effects-1 §4.4). Lengths become points; the color
+/// defaults to the element's `currentColor`, resolved after cascade finalization.
+/// Returns `None` when the two required offsets are missing.
+fn parse_drop_shadow(arg: &str) -> Option<DropShadow> {
+    let mut lengths: Vec<f32> = Vec::new();
+    let mut color: Option<(f32, f32, f32, f32)> = None;
+    for tok in arg.split_whitespace() {
+        if let Some(CssValue::Length(l)) = crate::parser::css::parse_length(tok) {
+            lengths.push(l);
+        } else if let Some(c) = parse_border_color(tok) {
+            color = Some(c.to_f32_rgba());
+        } else if tok == "0" {
+            lengths.push(0.0);
+        }
+    }
+    if lengths.len() < 2 {
+        return None;
+    }
+    Some(DropShadow {
+        dx: lengths[0],
+        dy: lengths[1],
+        blur: lengths.get(2).copied().unwrap_or(0.0).max(0.0),
+        color: color.unwrap_or(CURRENT_COLOR_SENTINEL.to_f32_rgba()),
+    })
+}
+
+fn drop_shadow_color_is_current_color(color: (f32, f32, f32, f32)) -> bool {
+    let sentinel = CURRENT_COLOR_SENTINEL.to_f32_rgba();
+    (color.0 - sentinel.0).abs() < f32::EPSILON
+        && (color.1 - sentinel.1).abs() < f32::EPSILON
+        && (color.2 - sentinel.2).abs() < f32::EPSILON
+        && (color.3 - sentinel.3).abs() < f32::EPSILON
+}
+
+fn add_filter_drop_shadow_box_shadow(style: &mut ComputedStyle) {
+    let Some(shadow) = style.drop_shadow else {
+        return;
+    };
+    style.box_shadow.push(BoxShadow {
+        offset_x: shadow.dx,
+        offset_y: shadow.dy,
+        blur: shadow.blur,
+        spread: 0.0,
+        color: color_from_filter_shadow(shadow.color),
+        inset: false,
+    });
+}
+
+fn color_from_filter_shadow(color: (f32, f32, f32, f32)) -> Color {
+    if drop_shadow_color_is_current_color(color) {
+        return CURRENT_COLOR_SENTINEL;
+    }
+    Color {
+        r: (color.0 * 255.0).round().clamp(0.0, 255.0) as u8,
+        g: (color.1 * 255.0).round().clamp(0.0, 255.0) as u8,
+        b: (color.2 * 255.0).round().clamp(0.0, 255.0) as u8,
+        a: (color.3 * 255.0).round().clamp(0.0, 255.0) as u8,
+    }
+}
+
+/// Parse a filter amount: `100%` -> 1.0, `1.5` -> 1.5, empty -> `default`.
+fn parse_filter_amount(arg: &str, default: f32) -> f32 {
+    let a = arg.trim();
+    if a.is_empty() {
+        return default;
+    }
+    if let Some(p) = a.strip_suffix('%') {
+        return p.trim().parse::<f32>().map_or(default, |v| v / 100.0);
+    }
+    a.parse::<f32>().unwrap_or(default)
+}
+
+/// Parse a hue-rotate angle to degrees (`90deg`, `90`, `0.25turn`, `1.57rad`).
+fn parse_filter_angle(arg: &str) -> f32 {
+    let a = arg.trim();
+    if let Some(d) = a.strip_suffix("deg") {
+        d.trim().parse::<f32>().unwrap_or(0.0)
+    } else if let Some(t) = a.strip_suffix("turn") {
+        t.trim().parse::<f32>().map_or(0.0, |v| v * 360.0)
+    } else if let Some(r) = a.strip_suffix("rad") {
+        r.trim().parse::<f32>().map_or(0.0, f32::to_degrees)
+    } else {
+        a.parse::<f32>().unwrap_or(0.0)
+    }
+}
+
+/// Split a comma-separated background property value into its top-level layers
+/// (commas inside parentheses are ignored) and return the layer at `index`.
+///
+/// CSS repeats the shorter list to cover all layers, so an out-of-range index
+/// wraps around modulo the layer count. Returns `None` only when there are no
+/// layers at all.
+fn nth_layer_value(val: &str, index: usize) -> Option<String> {
+    let parts = split_top_level_commas_value(val);
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts[index % parts.len()].clone())
+}
+
+/// Split a value on top-level commas (ignoring commas inside parentheses).
+fn split_top_level_commas_value(val: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0u32;
+    for ch in val.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' if depth > 0 => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => parts.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() || !parts.is_empty() {
+        parts.push(current);
+    }
+    parts.into_iter().map(|p| p.trim().to_string()).collect()
+}
+
+/// Parse a single (non-comma) `background-size` layer value.
+fn parse_background_size_value(val: &str) -> BackgroundSize {
+    match val {
+        "cover" => BackgroundSize::Cover,
+        "contain" => BackgroundSize::Contain,
+        "auto" => BackgroundSize::Auto,
+        _ => parse_background_size_explicit(val).unwrap_or(BackgroundSize::Auto),
+    }
+}
+
+/// Parse a single (non-comma) `background-repeat` layer value.
+fn parse_background_repeat_value(val: &str) -> BackgroundRepeat {
+    match val {
+        "no-repeat" => BackgroundRepeat::NoRepeat,
+        "repeat-x" => BackgroundRepeat::RepeatX,
+        "repeat-y" => BackgroundRepeat::RepeatY,
+        "space" => BackgroundRepeat::Space,
+        "round" => BackgroundRepeat::Round,
+        "space round" => BackgroundRepeat::SpaceRound,
+        "round space" => BackgroundRepeat::RoundSpace,
+        _ => BackgroundRepeat::Repeat,
+    }
+}
+
+fn parse_background_origin_value(val: &str) -> BackgroundOrigin {
+    match val.trim() {
+        "border-box" => BackgroundOrigin::Border,
+        "content-box" => BackgroundOrigin::Content,
+        _ => BackgroundOrigin::Padding,
+    }
+}
+
+fn parse_background_clip_value(val: &str) -> BackgroundClip {
+    match val.trim() {
+        "padding-box" => BackgroundClip::Padding,
+        "content-box" => BackgroundClip::Content,
+        "text" => BackgroundClip::Text,
+        _ => BackgroundClip::Border,
+    }
+}
+
+fn parse_background_attachment_value(val: &str) -> BackgroundAttachment {
+    match val.trim() {
+        "fixed" => BackgroundAttachment::Fixed,
+        "local" => BackgroundAttachment::Local,
+        _ => BackgroundAttachment::Scroll,
+    }
+}
+
+/// Build the per-layer size/position/repeat box for the gradient layer at
+/// `gradient_idx`, pulling the matching comma-separated entry from each of the
+/// `background-size` / `-position` / `-repeat` properties.
+fn resolve_gradient_layer_box(map: &StyleMap, gradient_idx: usize) -> GradientLayerBox {
+    let size = get_non_special(map, "background-size").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).map(|part| parse_background_size_value(&part))
+        }
+        _ => None,
+    });
+    let repeat = get_non_special(map, "background-repeat").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).map(|part| parse_background_repeat_value(&part))
+        }
+        _ => None,
+    });
+    let position = get_non_special(map, "background-position").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).and_then(|part| parse_background_position(&part))
+        }
+        _ => None,
+    });
+    let origin = get_non_special(map, "background-origin").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).map(|part| parse_background_origin_value(&part))
+        }
+        _ => None,
+    });
+    let clip = get_non_special(map, "background-clip").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).map(|part| parse_background_clip_value(&part))
+        }
+        _ => None,
+    });
+    let attachment = get_non_special(map, "background-attachment").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, gradient_idx).map(|part| parse_background_attachment_value(&part))
+        }
+        _ => None,
+    });
+    GradientLayerBox {
+        size,
+        position,
+        repeat,
+        origin,
+        clip,
+        attachment,
+        border_image: false,
+        paint_above_raster: false,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CssBoxRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+enum SimpleBackgroundLayerSource {
+    Image(String),
+    Linear(LinearGradient),
+}
+
+const BACKGROUND_LAYER_RECORD_SEP: char = '\x1f';
+const BACKGROUND_LAYER_FIELD_SEP: char = '\x1e';
+
+fn synthesize_simple_multi_background_svg(map: &StyleMap, style: &mut ComputedStyle) {
+    let Some(sources) = parse_background_layer_sources(map) else {
+        return;
+    };
+    if sources.len() <= 1 {
+        return;
+    }
+    let Some((border_width, border_height)) = style_background_border_box_size(style) else {
+        return;
+    };
+    if let Some(tree) = build_blended_linear_background_raster_svg(
+        map,
+        style,
+        &sources,
+        border_width,
+        border_height,
+    ) {
+        style.clear_background_images();
+        style.background_color = None;
+        style.background_svg = Some(tree);
+        style.background_size = BackgroundSize::Explicit {
+            width: border_width,
+            height: Some(border_height),
+            width_is_percent: false,
+            height_is_percent: false,
+        };
+        style.background_repeat = BackgroundRepeat::NoRepeat;
+        style.background_position = BackgroundPosition::default();
+        style.background_origin = BackgroundOrigin::Border;
+        style.background_clip = BackgroundClip::Border;
+        return;
+    }
+    let Some(svg) =
+        build_simple_multi_background_svg(map, style, &sources, border_width, border_height)
+    else {
+        return;
+    };
+    let Some(tree) = crate::parser::svg::parse_svg_from_string(&svg) else {
+        return;
+    };
+
+    style.clear_background_images();
+    style.background_svg = Some(tree);
+    style.background_size = BackgroundSize::Explicit {
+        width: border_width,
+        height: Some(border_height),
+        width_is_percent: false,
+        height_is_percent: false,
+    };
+    style.background_repeat = BackgroundRepeat::NoRepeat;
+    style.background_position = BackgroundPosition::default();
+    style.background_origin = BackgroundOrigin::Border;
+    style.background_clip = BackgroundClip::Border;
+}
+
+fn synthesize_repeating_linear_background_raster(map: &StyleMap, style: &mut ComputedStyle) {
+    if style.background_svg.is_some()
+        || style.background_image.is_some()
+        || style.background_radial_gradient.is_some()
+        || style.background_conic_gradient.is_some()
+        || !matches!(
+            style.background_repeat,
+            BackgroundRepeat::Space
+                | BackgroundRepeat::Round
+                | BackgroundRepeat::SpaceRound
+                | BackgroundRepeat::RoundSpace
+        )
+        || style.background_clip != BackgroundClip::Border
+        || style.border_radius > 0.0
+        || style.border_radius_pct.is_some()
+        || style.border_radii.iter().any(|r| *r > 0.0)
+        || style.border_radii_y.iter().any(|r| *r > 0.0)
+    {
+        return;
+    }
+    let Some(gradient) = style.background_gradient.as_ref() else {
+        return;
+    };
+    let Some((border_width, border_height)) = style_background_border_box_size(style) else {
+        return;
+    };
+    let border_rect = CssBoxRect {
+        x: 0.0,
+        y: 0.0,
+        width: border_width,
+        height: border_height,
+    };
+    let Some(layer) = raster_linear_background_layer(map, style, 0, border_rect, gradient) else {
+        return;
+    };
+    let (px_w, px_h) = repeating_background_raster_dimensions(border_width, border_height);
+    let base = style.background_color.unwrap_or(Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    });
+    let mut image =
+        image::RgbaImage::from_pixel(px_w, px_h, image::Rgba([base.r, base.g, base.b, base.a]));
+    for py in 0..px_h {
+        let y = (py as f32 + 0.5) * border_height / px_h as f32;
+        for px in 0..px_w {
+            let x = (px as f32 + 0.5) * border_width / px_w as f32;
+            let Some(source_pixel) = sample_raster_linear_background_layer(&layer, x, y) else {
+                continue;
+            };
+            let backdrop = *image.get_pixel(px, py);
+            let Some(pixel) = composite_blended_pixel(source_pixel, backdrop, BlendMode::Normal)
+            else {
+                return;
+            };
+            image.put_pixel(px, py, pixel);
+        }
+    }
+    let Some(tree) = raster_image_background_svg(image, border_width, border_height) else {
+        return;
+    };
+    style.background_color = None;
+    style.clear_background_images();
+    style.background_svg = Some(tree);
+    style.background_size = BackgroundSize::Explicit {
+        width: border_width,
+        height: Some(border_height),
+        width_is_percent: false,
+        height_is_percent: false,
+    };
+    style.background_repeat = BackgroundRepeat::NoRepeat;
+    style.background_position = BackgroundPosition::default();
+    style.background_origin = BackgroundOrigin::Border;
+    style.background_clip = BackgroundClip::Border;
+}
+
+fn build_blended_linear_background_raster_svg(
+    map: &StyleMap,
+    style: &ComputedStyle,
+    sources: &[SimpleBackgroundLayerSource],
+    border_width: f32,
+    border_height: f32,
+) -> Option<crate::parser::svg::SvgTree> {
+    if style.background_clip != BackgroundClip::Border
+        || style.border_radius > 0.0
+        || style.border_radius_pct.is_some()
+        || style.border_radii.iter().any(|r| *r > 0.0)
+        || style.border_radii_y.iter().any(|r| *r > 0.0)
+        || style.border_radii_pct.iter().any(Option::is_some)
+        || style.border_radii_y_pct.iter().any(Option::is_some)
+    {
+        return None;
+    }
+    if !sources
+        .iter()
+        .all(|source| matches!(source, SimpleBackgroundLayerSource::Linear(_)))
+    {
+        return None;
+    }
+    if sources
+        .iter()
+        .enumerate()
+        .all(|(idx, _)| style.background_blend_mode.background_layer(idx) == BlendMode::Normal)
+    {
+        return None;
+    }
+    if sources.iter().enumerate().any(|(idx, _)| {
+        !raster_background_blend_supported(style.background_blend_mode.background_layer(idx))
+    }) {
+        return None;
+    }
+
+    let (px_w, px_h) = simple_background_raster_dimensions(border_width, border_height)?;
+    let base = style.background_color.unwrap_or(Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    });
+    let mut image =
+        image::RgbaImage::from_pixel(px_w, px_h, image::Rgba([base.r, base.g, base.b, base.a]));
+    let border_rect = CssBoxRect {
+        x: 0.0,
+        y: 0.0,
+        width: border_width,
+        height: border_height,
+    };
+
+    for (idx, source) in sources.iter().enumerate().rev() {
+        let SimpleBackgroundLayerSource::Linear(gradient) = source else {
+            return None;
+        };
+        let layer = raster_linear_background_layer(map, style, idx, border_rect, gradient)?;
+        let blend_mode = style.background_blend_mode.background_layer(idx);
+        for py in 0..px_h {
+            let y = (py as f32 + 0.5) * border_height / px_h as f32;
+            for px in 0..px_w {
+                let x = (px as f32 + 0.5) * border_width / px_w as f32;
+                let Some(source_pixel) = sample_raster_linear_background_layer(&layer, x, y) else {
+                    continue;
+                };
+                let backdrop = *image.get_pixel(px, py);
+                image.put_pixel(
+                    px,
+                    py,
+                    composite_blended_pixel(source_pixel, backdrop, blend_mode)?,
+                );
+            }
+        }
+    }
+
+    raster_image_background_svg(image, border_width, border_height)
+}
+
+struct RasterLinearBackgroundLayer<'a> {
+    gradient: &'a LinearGradient,
+    origin: CssBoxRect,
+    clip: CssBoxRect,
+    tile_width: f32,
+    tile_height: f32,
+    tiles_x: Vec<f32>,
+    tiles_y: Vec<f32>,
+}
+
+fn raster_linear_background_layer<'a>(
+    map: &StyleMap,
+    style: &ComputedStyle,
+    index: usize,
+    border_rect: CssBoxRect,
+    gradient: &'a LinearGradient,
+) -> Option<RasterLinearBackgroundLayer<'a>> {
+    let origin = background_layer_origin_rect(map, style, index, border_rect)?;
+    let clip = background_layer_clip_rect(map, style, index, border_rect)?;
+    let size = background_layer_size(map, index)
+        .and_then(|size| resolve_simple_background_tile_size(size, origin.width, origin.height))
+        .unwrap_or((origin.width, origin.height));
+    if size.0 <= 0.0 || size.1 <= 0.0 {
+        return None;
+    }
+    let position = background_layer_position(map, index).unwrap_or_default();
+    let offset_x = if position.x_is_percent {
+        (origin.width - size.0) * position.x
+    } else if position.x < 0.0 {
+        (origin.width - size.0) + position.x
+    } else {
+        position.x
+    };
+    let offset_y = if position.y_is_percent {
+        (origin.height - size.1) * position.y
+    } else if position.y < 0.0 {
+        (origin.height - size.1) + position.y
+    } else {
+        position.y
+    };
+    let repeat = get_non_special(map, "background-repeat")
+        .and_then(|v| match v {
+            CssValue::Keyword(k) => {
+                nth_layer_value(k, index).map(|part| parse_background_repeat_value(&part))
+            }
+            _ => None,
+        })
+        .unwrap_or(BackgroundRepeat::Repeat);
+    let (tiles_x, tile_width) =
+        simple_background_axis_tiles(simple_repeat_x(repeat), offset_x, size.0, origin.width);
+    let (tiles_y, tile_height) =
+        simple_background_axis_tiles(simple_repeat_y(repeat), offset_y, size.1, origin.height);
+    Some(RasterLinearBackgroundLayer {
+        gradient,
+        origin,
+        clip,
+        tile_width,
+        tile_height,
+        tiles_x,
+        tiles_y,
+    })
+}
+
+fn sample_raster_linear_background_layer(
+    layer: &RasterLinearBackgroundLayer<'_>,
+    x: f32,
+    y: f32,
+) -> Option<image::Rgba<u8>> {
+    if !point_in_css_rect(x, y, layer.clip) {
+        return None;
+    }
+    let offset_x = layer.tiles_x.iter().copied().find(|offset| {
+        x >= layer.origin.x + *offset && x < layer.origin.x + *offset + layer.tile_width
+    })?;
+    let offset_y = layer.tiles_y.iter().copied().find(|offset| {
+        y >= layer.origin.y + *offset && y < layer.origin.y + *offset + layer.tile_height
+    })?;
+    let local_x = x - layer.origin.x - offset_x;
+    let local_y = y - layer.origin.y - offset_y;
+    Some(sample_linear_gradient_pixel(
+        layer.gradient,
+        layer.tile_width,
+        layer.tile_height,
+        local_x,
+        local_y,
+    ))
+}
+
+fn point_in_css_rect(x: f32, y: f32, rect: CssBoxRect) -> bool {
+    x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+}
+
+fn simple_background_raster_dimensions(width: f32, height: f32) -> Option<(u32, u32)> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let scale = 3.125;
+    Some((
+        (width / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
+        (height / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
+    ))
+}
+
+fn repeating_background_raster_dimensions(width: f32, height: f32) -> (u32, u32) {
+    let scale = 3.125;
+    (
+        (width / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
+        (height / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
+    )
+}
+
+fn raster_image_background_svg(
+    image: image::RgbaImage,
+    width: f32,
+    height: f32,
+) -> Option<crate::parser::svg::SvgTree> {
+    let mut encoded = Vec::new();
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(
+            &mut std::io::Cursor::new(&mut encoded),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
+    let data = encode_base64_background_data(&encoded);
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><image x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"/></svg>",
+        fmt_svg_num(width),
+        fmt_svg_num(height),
+        fmt_svg_num(width),
+        fmt_svg_num(height),
+        fmt_svg_num(width),
+        fmt_svg_num(height),
+        xml_escape_attr(&data)
+    );
+    crate::parser::svg::parse_svg_from_string(&svg)
+}
+
+#[derive(Clone, Copy)]
+enum SimpleRepeatAxis {
+    Repeat,
+    NoRepeat,
+    Space,
+    Round,
+}
+
+fn simple_repeat_x(repeat: BackgroundRepeat) -> SimpleRepeatAxis {
+    match repeat {
+        BackgroundRepeat::NoRepeat | BackgroundRepeat::RepeatY => SimpleRepeatAxis::NoRepeat,
+        BackgroundRepeat::Space | BackgroundRepeat::SpaceRound => SimpleRepeatAxis::Space,
+        BackgroundRepeat::Round | BackgroundRepeat::RoundSpace => SimpleRepeatAxis::Round,
+        _ => SimpleRepeatAxis::Repeat,
+    }
+}
+
+fn simple_repeat_y(repeat: BackgroundRepeat) -> SimpleRepeatAxis {
+    match repeat {
+        BackgroundRepeat::NoRepeat | BackgroundRepeat::RepeatX => SimpleRepeatAxis::NoRepeat,
+        BackgroundRepeat::Round | BackgroundRepeat::SpaceRound => SimpleRepeatAxis::Round,
+        BackgroundRepeat::Space | BackgroundRepeat::RoundSpace => SimpleRepeatAxis::Space,
+        _ => SimpleRepeatAxis::Repeat,
+    }
+}
+
+fn simple_tile_offsets(origin: f32, step: f32, extent: f32) -> Vec<f32> {
+    if step <= 0.0 {
+        return vec![origin];
+    }
+    let mut offsets = Vec::new();
+    let mut start = origin;
+    while start > 0.0 {
+        start -= step;
+    }
+    let mut pos = start;
+    while pos < extent {
+        offsets.push(pos);
+        pos += step;
+    }
+    if offsets.is_empty() {
+        offsets.push(origin);
+    }
+    offsets
+}
+
+fn simple_background_axis_tiles(
+    repeat: SimpleRepeatAxis,
+    origin: f32,
+    step: f32,
+    extent: f32,
+) -> (Vec<f32>, f32) {
+    if step <= 0.0 || extent <= 0.0 {
+        return (vec![origin], step);
+    }
+    match repeat {
+        SimpleRepeatAxis::NoRepeat => (vec![origin], step),
+        SimpleRepeatAxis::Repeat => (simple_tile_offsets(origin, step, extent), step),
+        SimpleRepeatAxis::Space => {
+            let count = (extent / step).floor().max(1.0) as usize;
+            if count <= 1 {
+                (vec![0.0], step)
+            } else {
+                let gap = (extent - step * count as f32) / (count - 1) as f32;
+                ((0..count).map(|i| i as f32 * (step + gap)).collect(), step)
+            }
+        }
+        SimpleRepeatAxis::Round => {
+            let count = (extent / step).round().max(1.0) as usize;
+            let rounded_step = extent / count as f32;
+            (
+                (0..count).map(|i| i as f32 * rounded_step).collect(),
+                rounded_step,
+            )
+        }
+    }
+}
+
+fn sample_linear_gradient_pixel(
+    gradient: &LinearGradient,
+    width: f32,
+    height: f32,
+    sample_x: f32,
+    sample_y: f32,
+) -> image::Rgba<u8> {
+    let theta = gradient.angle.to_radians();
+    let dx = theta.sin();
+    let dy = -theta.cos();
+    let half = (width * dx.abs() + height * dy.abs()).max(1e-6) / 2.0;
+    let cx = width / 2.0;
+    let cy = height / 2.0;
+    let proj = (sample_x - cx) * dx + (sample_y - cy) * dy;
+    let t = (proj + half) / (2.0 * half);
+    let basis = (width * dx.abs() + height * dy.abs()).max(1e-6);
+    rgba_pixel_from_f32(sample_gradient_stops(
+        &resolve_gradient_stops_for_basis(&gradient.stops, basis),
+        t,
+        gradient.repeating,
+    ))
+}
+
+fn resolve_gradient_stops_for_basis(stops: &[GradientStop], basis: f32) -> Vec<GradientStop> {
+    let basis = basis.max(1e-6);
+    let mut last = 0.0_f32;
+    stops
+        .iter()
+        .copied()
+        .map(|mut stop| {
+            let mut position = stop.position + stop.position_length / basis;
+            if position < last {
+                position = last;
+            }
+            last = position;
+            stop.position = position.clamp(0.0, 1.0);
+            stop.position_length = 0.0;
+            stop
+        })
+        .collect()
+}
+
+fn sample_gradient_stops(
+    stops: &[GradientStop],
+    mut t: f32,
+    repeating: bool,
+) -> (f32, f32, f32, f32) {
+    if stops.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    if repeating && stops.len() > 1 {
+        let first = stops[0].position;
+        let last = stops[stops.len() - 1].position;
+        let period = last - first;
+        if period > 0.0001 {
+            t = first + (t - first).rem_euclid(period);
+        }
+    }
+    if t <= stops[0].position {
+        return gradient_stop_rgba_f32(stops[0]);
+    }
+    let last_idx = stops.len() - 1;
+    if t >= stops[last_idx].position {
+        return gradient_stop_rgba_f32(stops[last_idx]);
+    }
+    for pair in stops.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        if t >= a.position && t <= b.position {
+            let span = b.position - a.position;
+            if span <= 0.00001 {
+                return gradient_stop_rgba_f32(b);
+            }
+            let f = ((t - a.position) / span).clamp(0.0, 1.0);
+            let (ar, ag, ab, aa) = gradient_stop_rgba_f32(a);
+            let (br, bg, bb, ba) = gradient_stop_rgba_f32(b);
+            return (
+                ar + (br - ar) * f,
+                ag + (bg - ag) * f,
+                ab + (bb - ab) * f,
+                aa + (ba - aa) * f,
+            );
+        }
+    }
+    gradient_stop_rgba_f32(stops[last_idx])
+}
+
+fn gradient_stop_rgba_f32(stop: GradientStop) -> (f32, f32, f32, f32) {
+    (
+        f32::from(stop.color.r) / 255.0,
+        f32::from(stop.color.g) / 255.0,
+        f32::from(stop.color.b) / 255.0,
+        f32::from(stop.color.a) / 255.0,
+    )
+}
+
+fn rgba_pixel_from_f32((r, g, b, a): (f32, f32, f32, f32)) -> image::Rgba<u8> {
+    image::Rgba([
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    ])
+}
+
+fn raster_background_blend_supported(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::Normal
+            | BlendMode::Multiply
+            | BlendMode::Screen
+            | BlendMode::Overlay
+            | BlendMode::Darken
+            | BlendMode::Lighten
+            | BlendMode::ColorDodge
+            | BlendMode::ColorBurn
+            | BlendMode::HardLight
+            | BlendMode::SoftLight
+            | BlendMode::Difference
+            | BlendMode::Exclusion
+    )
+}
+
+fn composite_blended_pixel(
+    source: image::Rgba<u8>,
+    backdrop: image::Rgba<u8>,
+    mode: BlendMode,
+) -> Option<image::Rgba<u8>> {
+    if !raster_background_blend_supported(mode) {
+        return None;
+    }
+    let sa = f32::from(source[3]) / 255.0;
+    let ba = f32::from(backdrop[3]) / 255.0;
+    let out_a = sa + ba * (1.0 - sa);
+    if out_a <= 0.0 {
+        return Some(image::Rgba([0, 0, 0, 0]));
+    }
+
+    let mut out = [0u8; 4];
+    for channel in 0..3 {
+        let s = f32::from(source[channel]) / 255.0;
+        let b = f32::from(backdrop[channel]) / 255.0;
+        let blended = blend_channel(mode, s, b);
+        let premul = sa * (1.0 - ba) * s + sa * ba * blended + (1.0 - sa) * ba * b;
+        out[channel] = (premul / out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+    Some(image::Rgba(out))
+}
+
+fn blend_channel(mode: BlendMode, source: f32, backdrop: f32) -> f32 {
+    match mode {
+        BlendMode::Normal => source,
+        BlendMode::Multiply => source * backdrop,
+        BlendMode::Screen => source + backdrop - source * backdrop,
+        BlendMode::Overlay => {
+            if backdrop <= 0.5 {
+                2.0 * source * backdrop
+            } else {
+                1.0 - 2.0 * (1.0 - source) * (1.0 - backdrop)
+            }
+        }
+        BlendMode::Darken => source.min(backdrop),
+        BlendMode::Lighten => source.max(backdrop),
+        BlendMode::ColorDodge => {
+            if source >= 1.0 {
+                1.0
+            } else {
+                (backdrop / (1.0 - source)).min(1.0)
+            }
+        }
+        BlendMode::ColorBurn => {
+            if source <= 0.0 {
+                0.0
+            } else {
+                1.0 - ((1.0 - backdrop) / source).min(1.0)
+            }
+        }
+        BlendMode::HardLight => {
+            if source <= 0.5 {
+                2.0 * source * backdrop
+            } else {
+                1.0 - 2.0 * (1.0 - source) * (1.0 - backdrop)
+            }
+        }
+        BlendMode::SoftLight => {
+            if source <= 0.5 {
+                backdrop - (1.0 - 2.0 * source) * backdrop * (1.0 - backdrop)
+            } else {
+                let d = if backdrop <= 0.25 {
+                    ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop
+                } else {
+                    backdrop.sqrt()
+                };
+                backdrop + (2.0 * source - 1.0) * (d - backdrop)
+            }
+        }
+        BlendMode::Difference => (backdrop - source).abs(),
+        BlendMode::Exclusion => backdrop + source - 2.0 * backdrop * source,
+        _ => source,
+    }
+    .clamp(0.0, 1.0)
+}
+
+fn encode_base64_background_data(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn parse_background_layer_sources(map: &StyleMap) -> Option<Vec<SimpleBackgroundLayerSource>> {
+    let CssValue::Keyword(raw) = get_non_special(map, "background-layer-sources")? else {
+        return None;
+    };
+    let mut sources = Vec::new();
+    for record in raw.split(BACKGROUND_LAYER_RECORD_SEP) {
+        let (kind, value) = record.split_once(BACKGROUND_LAYER_FIELD_SEP)?;
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("none") {
+            continue;
+        }
+        match kind {
+            "background-image" => {
+                sources.push(SimpleBackgroundLayerSource::Image(value.to_string()));
+            }
+            "background-gradient" => {
+                sources.push(SimpleBackgroundLayerSource::Linear(parse_linear_gradient(
+                    value,
+                )?));
+            }
+            _ => return None,
+        }
+    }
+    Some(sources)
+}
+
+fn style_background_border_box_size(style: &ComputedStyle) -> Option<(f32, f32)> {
+    let mut width = style.width?;
+    let mut height = style.height?;
+    if style.box_sizing == BoxSizing::ContentBox {
+        width += style.padding.left
+            + style.padding.right
+            + style.border.left.width
+            + style.border.right.width;
+        height += style.padding.top
+            + style.padding.bottom
+            + style.border.top.width
+            + style.border.bottom.width;
+    }
+    (width > 0.0 && height > 0.0).then_some((width, height))
+}
+
+fn build_simple_multi_background_svg(
+    map: &StyleMap,
+    style: &ComputedStyle,
+    sources: &[SimpleBackgroundLayerSource],
+    border_width: f32,
+    border_height: f32,
+) -> Option<String> {
+    let mut defs = String::new();
+    let mut body = String::new();
+    let border_rect = CssBoxRect {
+        x: 0.0,
+        y: 0.0,
+        width: border_width,
+        height: border_height,
+    };
+
+    for (rev_idx, source) in sources.iter().enumerate().rev() {
+        let origin = background_layer_origin_rect(map, style, rev_idx, border_rect)?;
+        let clip = background_layer_clip_rect(map, style, rev_idx, border_rect)?;
+        let size = background_layer_size(map, rev_idx)
+            .and_then(|size| resolve_simple_background_tile_size(size, origin.width, origin.height))
+            .unwrap_or((origin.width, origin.height));
+        if size.0 <= 0.0 || size.1 <= 0.0 {
+            return None;
+        }
+        let position = background_layer_position(map, rev_idx).unwrap_or_default();
+        let offset_x = if position.x_is_percent {
+            (origin.width - size.0) * position.x
+        } else if position.x < 0.0 {
+            (origin.width - size.0) + position.x
+        } else {
+            position.x
+        };
+        let offset_y = if position.y_is_percent {
+            (origin.height - size.1) * position.y
+        } else if position.y < 0.0 {
+            (origin.height - size.1) + position.y
+        } else {
+            position.y
+        };
+        let x = origin.x + offset_x;
+        let y = origin.y + offset_y;
+        let clip_id = format!("bgclip{rev_idx}");
+        defs.push_str(&format!(
+            r#"<clipPath id="{clip_id}"><rect x="{x}" y="{y}" width="{w}" height="{h}"/></clipPath>"#,
+            x = fmt_svg_num(clip.x),
+            y = fmt_svg_num(clip.y),
+            w = fmt_svg_num(clip.width),
+            h = fmt_svg_num(clip.height),
+        ));
+        body.push_str(&format!(r#"<g clip-path="url(#{clip_id})">"#));
+        let blend_mode = style.background_blend_mode.background_layer(rev_idx);
+        match source {
+            SimpleBackgroundLayerSource::Image(raw) => {
+                let href = background_url_href(raw)?;
+                if blend_mode == BlendMode::Normal {
+                    body.push_str(&format!(
+                        r#"<image href="{href}" x="{x}" y="{y}" width="{w}" height="{h}"/>"#,
+                        href = xml_escape_attr(&href),
+                        x = fmt_svg_num(x),
+                        y = fmt_svg_num(y),
+                        w = fmt_svg_num(size.0),
+                        h = fmt_svg_num(size.1),
+                    ));
+                } else if blend_mode == BlendMode::Multiply
+                    && rev_idx + 1 == sources.len()
+                    && let Some(background) = style.background_color
+                    && let Some(color) = solid_data_png_color(&href)
+                {
+                    let color = multiply_colors(color, background);
+                    body.push_str(&format!(
+                        r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{color}" fill-opacity="{opacity}"/>"#,
+                        x = fmt_svg_num(x),
+                        y = fmt_svg_num(y),
+                        w = fmt_svg_num(size.0),
+                        h = fmt_svg_num(size.1),
+                        color = color_to_svg_hex(color),
+                        opacity = fmt_svg_num(color.a as f32 / 255.0),
+                    ));
+                } else {
+                    return None;
+                }
+            }
+            SimpleBackgroundLayerSource::Linear(gradient) => {
+                if blend_mode != BlendMode::Normal {
+                    return None;
+                }
+                let grad_id = format!("bggrad{rev_idx}");
+                let (x1, y1, x2, y2) =
+                    linear_gradient_svg_line(gradient.angle, x, y, size.0, size.1);
+                defs.push_str(&format!(
+                    r#"<linearGradient id="{grad_id}" gradientUnits="userSpaceOnUse" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}">"#,
+                    x1 = fmt_svg_num(x1),
+                    y1 = fmt_svg_num(y1),
+                    x2 = fmt_svg_num(x2),
+                    y2 = fmt_svg_num(y2),
+                ));
+                let basis = size.0 * gradient.angle.to_radians().sin().abs()
+                    + size.1 * gradient.angle.to_radians().cos().abs();
+                for stop in &gradient.stops {
+                    let offset = (stop.position + stop.position_length / basis.max(1e-6))
+                        .clamp(0.0, 1.0)
+                        * 100.0;
+                    defs.push_str(&format!(
+                        r#"<stop offset="{offset}%" stop-color="{color}" stop-opacity="{opacity}"/>"#,
+                        offset = fmt_svg_num(offset),
+                        color = color_to_svg_hex(stop.color),
+                        opacity = fmt_svg_num(stop.color.a as f32 / 255.0),
+                    ));
+                }
+                defs.push_str("</linearGradient>");
+                body.push_str(&format!(
+                    r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="url(#{grad_id})"/>"#,
+                    x = fmt_svg_num(x),
+                    y = fmt_svg_num(y),
+                    w = fmt_svg_num(size.0),
+                    h = fmt_svg_num(size.1),
+                ));
+            }
+        }
+        body.push_str("</g>");
+    }
+
+    Some(format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><defs>{defs}</defs>{body}</svg>"#,
+        w = fmt_svg_num(border_width),
+        h = fmt_svg_num(border_height),
+    ))
+}
+
+fn background_layer_origin_rect(
+    map: &StyleMap,
+    style: &ComputedStyle,
+    index: usize,
+    border_rect: CssBoxRect,
+) -> Option<CssBoxRect> {
+    let origin = get_non_special(map, "background-origin")
+        .and_then(|v| match v {
+            CssValue::Keyword(k) => {
+                nth_layer_value(k, index).map(|part| parse_background_origin_value(&part))
+            }
+            _ => None,
+        })
+        .unwrap_or(style.background_origin);
+    Some(css_box_rect_for_background_origin(
+        origin,
+        style,
+        border_rect,
+    ))
+}
+
+fn background_layer_clip_rect(
+    map: &StyleMap,
+    style: &ComputedStyle,
+    index: usize,
+    border_rect: CssBoxRect,
+) -> Option<CssBoxRect> {
+    let clip = get_non_special(map, "background-clip")
+        .or_else(|| get_non_special(map, "-webkit-background-clip"))
+        .and_then(|v| match v {
+            CssValue::Keyword(k) => {
+                nth_layer_value(k, index).map(|part| parse_background_clip_value(&part))
+            }
+            _ => None,
+        })
+        .unwrap_or(style.background_clip);
+    if clip == BackgroundClip::Text {
+        return None;
+    }
+    Some(match clip {
+        BackgroundClip::Border => border_rect,
+        BackgroundClip::Padding => css_padding_box_rect(style, border_rect),
+        BackgroundClip::Content => css_content_box_rect(style, border_rect),
+        BackgroundClip::Text => border_rect,
+    })
+}
+
+fn css_box_rect_for_background_origin(
+    origin: BackgroundOrigin,
+    style: &ComputedStyle,
+    border_rect: CssBoxRect,
+) -> CssBoxRect {
+    match origin {
+        BackgroundOrigin::Border => border_rect,
+        BackgroundOrigin::Padding => css_padding_box_rect(style, border_rect),
+        BackgroundOrigin::Content => css_content_box_rect(style, border_rect),
+    }
+}
+
+fn css_padding_box_rect(style: &ComputedStyle, border_rect: CssBoxRect) -> CssBoxRect {
+    CssBoxRect {
+        x: border_rect.x + style.border.left.width,
+        y: border_rect.y + style.border.top.width,
+        width: (border_rect.width - style.border.left.width - style.border.right.width).max(0.0),
+        height: (border_rect.height - style.border.top.width - style.border.bottom.width).max(0.0),
+    }
+}
+
+fn css_content_box_rect(style: &ComputedStyle, border_rect: CssBoxRect) -> CssBoxRect {
+    let padding = css_padding_box_rect(style, border_rect);
+    CssBoxRect {
+        x: padding.x + style.padding.left,
+        y: padding.y + style.padding.top,
+        width: (padding.width - style.padding.left - style.padding.right).max(0.0),
+        height: (padding.height - style.padding.top - style.padding.bottom).max(0.0),
+    }
+}
+
+fn background_layer_size(map: &StyleMap, index: usize) -> Option<BackgroundSize> {
+    get_non_special(map, "background-size").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, index).map(|part| parse_background_size_value(&part))
+        }
+        _ => None,
+    })
+}
+
+fn background_layer_position(map: &StyleMap, index: usize) -> Option<BackgroundPosition> {
+    get_non_special(map, "background-position").and_then(|v| match v {
+        CssValue::Keyword(k) => {
+            nth_layer_value(k, index).and_then(|part| parse_background_position(&part))
+        }
+        _ => None,
+    })
+}
+
+fn resolve_simple_background_tile_size(
+    size: BackgroundSize,
+    reference_width: f32,
+    reference_height: f32,
+) -> Option<(f32, f32)> {
+    let resolve = |value: f32, is_percent: bool, basis: f32| {
+        if is_percent {
+            basis * value / 100.0
+        } else {
+            value
+        }
+    };
+    match size {
+        BackgroundSize::Auto => Some((reference_width, reference_height)),
+        BackgroundSize::Explicit {
+            width,
+            height,
+            width_is_percent,
+            height_is_percent,
+        } => Some((
+            resolve(width, width_is_percent, reference_width),
+            height
+                .map(|value| resolve(value, height_is_percent, reference_height))
+                .unwrap_or(reference_height),
+        )),
+        BackgroundSize::ExplicitAuto {
+            width: Some(width),
+            height,
+            width_is_percent,
+            height_is_percent,
+        } => Some((
+            resolve(width, width_is_percent, reference_width),
+            height
+                .map(|value| resolve(value, height_is_percent, reference_height))
+                .unwrap_or(reference_height),
+        )),
+        BackgroundSize::ExplicitAuto {
+            width: None,
+            height: Some(height),
+            height_is_percent,
+            ..
+        } => Some((
+            reference_width,
+            resolve(height, height_is_percent, reference_height),
+        )),
+        BackgroundSize::ExplicitAuto { .. } => Some((reference_width, reference_height)),
+        BackgroundSize::Cover | BackgroundSize::Contain => None,
+    }
+}
+
+fn background_url_href(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let inner = trimmed
+        .strip_prefix("url(")?
+        .strip_suffix(')')?
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
+    (!inner.is_empty()).then(|| inner.to_string())
+}
+
+fn solid_data_png_color(href: &str) -> Option<Color> {
+    let href = href.trim();
+    let comma = href.find(',')?;
+    let (header, data) = href.split_at(comma);
+    if !header.to_ascii_lowercase().starts_with("data:image/png")
+        || !header.to_ascii_lowercase().contains("base64")
+    {
+        return None;
+    }
+    let bytes = crate::util::decode_base64(&data[1..])?;
+    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let mut pixels = image.pixels();
+    let first = pixels.next()?;
+    if pixels.any(|pixel| pixel.0 != first.0) {
+        return None;
+    }
+    Some(Color {
+        r: first[0],
+        g: first[1],
+        b: first[2],
+        a: first[3],
+    })
+}
+
+fn multiply_colors(source: Color, backdrop: Color) -> Color {
+    if source.a < 255 || backdrop.a < 255 {
+        return source;
+    }
+    Color {
+        r: ((source.r as u16 * backdrop.r as u16) / 255) as u8,
+        g: ((source.g as u16 * backdrop.g as u16) / 255) as u8,
+        b: ((source.b as u16 * backdrop.b as u16) / 255) as u8,
+        a: 255,
+    }
+}
+
+fn linear_gradient_svg_line(
+    angle: f32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> (f32, f32, f32, f32) {
+    let angle = angle.to_radians();
+    let dx = angle.sin();
+    let dy = -angle.cos();
+    let half = (width * dx.abs() + height * dy.abs()) / 2.0;
+    let cx = x + width / 2.0;
+    let cy = y + height / 2.0;
+    (
+        cx - dx * half,
+        cy - dy * half,
+        cx + dx * half,
+        cy + dy * half,
+    )
+}
+
+fn color_to_svg_hex(color: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+}
+
+fn xml_escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn fmt_svg_num(value: f32) -> String {
+    let mut out = format!("{value:.4}");
+    while out.contains('.') && out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+    if out == "-0" {
+        out = "0".to_string();
+    }
+    out
+}
+
 fn parse_background_size_explicit(val: &str) -> Option<BackgroundSize> {
     let parts: Vec<&str> = val.split_whitespace().collect();
     let parse_dimension = |s: &str| -> Option<(f32, bool)> {
@@ -2703,6 +8407,24 @@ fn parse_background_size_explicit(val: &str) -> Option<BackgroundSize> {
         }
     };
     match parts.len() {
+        2 if parts[0] == "auto" => {
+            let (height, height_is_percent) = parse_dimension(parts[1])?;
+            Some(BackgroundSize::ExplicitAuto {
+                width: None,
+                height: Some(height),
+                width_is_percent: false,
+                height_is_percent,
+            })
+        }
+        2 if parts[1] == "auto" => {
+            let (width, width_is_percent) = parse_dimension(parts[0])?;
+            Some(BackgroundSize::ExplicitAuto {
+                width: Some(width),
+                height: None,
+                width_is_percent,
+                height_is_percent: false,
+            })
+        }
         1 => {
             let (width, width_is_percent) = parse_dimension(parts[0])?;
             Some(BackgroundSize::Explicit {
@@ -2810,12 +8532,97 @@ fn parse_background_position(val: &str) -> Option<BackgroundPosition> {
                 y_is_percent: yp,
             })
         }
+        [h_edge, h_offset, v_edge, v_offset]
+            if matches!(*h_edge, "left" | "right") && matches!(*v_edge, "top" | "bottom") =>
+        {
+            let (mut x, xp) = pc(h_offset)?;
+            let (mut y, yp) = pc(v_offset)?;
+            if *h_edge == "right" && !xp {
+                x = -x;
+            } else if *h_edge == "right" {
+                x = 1.0 - x;
+            }
+            if *v_edge == "bottom" && !yp {
+                y = -y;
+            } else if *v_edge == "bottom" {
+                y = 1.0 - y;
+            }
+            Some(BackgroundPosition {
+                x,
+                y,
+                x_is_percent: xp,
+                y_is_percent: yp,
+            })
+        }
+        [v_edge, v_offset, h_edge, h_offset]
+            if matches!(*h_edge, "left" | "right") && matches!(*v_edge, "top" | "bottom") =>
+        {
+            let (mut x, xp) = pc(h_offset)?;
+            let (mut y, yp) = pc(v_offset)?;
+            if *h_edge == "right" && !xp {
+                x = -x;
+            } else if *h_edge == "right" {
+                x = 1.0 - x;
+            }
+            if *v_edge == "bottom" && !yp {
+                y = -y;
+            } else if *v_edge == "bottom" {
+                y = 1.0 - y;
+            }
+            Some(BackgroundPosition {
+                x,
+                y,
+                x_is_percent: xp,
+                y_is_percent: yp,
+            })
+        }
         _ => None,
     }
 }
 
 fn is_background_position_keyword(token: &str) -> bool {
     matches!(token, "left" | "right" | "top" | "bottom" | "center")
+}
+
+fn extract_image_set_url(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let _ = lower
+        .strip_prefix("image-set(")
+        .or_else(|| lower.strip_prefix("-webkit-image-set("))?;
+    if !trimmed.ends_with(')') {
+        return None;
+    }
+    let inner = &trimmed[trimmed.find('(')? + 1..trimmed.len() - 1];
+    let inner = inner.trim();
+    let lower_inner = inner.to_ascii_lowercase();
+    if let Some(start) = lower_inner.find("url(") {
+        let tail = &inner[start..];
+        let end = tail.find(')')?;
+        return Some(tail[..=end].to_string());
+    }
+    let mut chars = inner.char_indices();
+    let (_, first) = chars.next()?;
+    if first == '"' || first == '\'' {
+        let rest = &inner[first.len_utf8()..];
+        let end = rest.find(first)?;
+        let source = &rest[..end];
+        return (!source.is_empty()).then(|| source.to_string());
+    }
+    let end = inner
+        .find(|ch: char| ch == ',' || ch.is_whitespace())
+        .unwrap_or(inner.len());
+    let source = inner[..end].trim();
+    (!source.is_empty()).then(|| source.to_string())
+}
+
+fn parse_border_image_gradient(value: &str) -> Option<LinearGradient> {
+    let trimmed = value.trim();
+    let end = trimmed.find(')')?;
+    let gradient_value = &trimmed[..=end];
+    let mut gradient = parse_linear_gradient(gradient_value)?;
+    gradient.layer_box.border_image = true;
+    Some(gradient)
 }
 
 /// Parse a `box-shadow` shorthand value.
@@ -2825,20 +8632,26 @@ fn is_background_position_keyword(token: &str) -> bool {
 /// - `inset 0 2px 8px rgba(0,0,0,0.3)`
 /// - `4px 4px 8px 2px #ccc`  (with spread)
 /// - Multiple shadows separated by commas — only the first is retained.
-fn parse_box_shadow(val: &str) -> Option<BoxShadow> {
+fn parse_box_shadow(val: &str) -> Vec<BoxShadow> {
     let val = val.trim();
     if val == "none" {
-        return None;
+        return Vec::new();
     }
 
-    // If the input has top-level commas (outside parens), split and take
-    // the first shadow. Chromium layers multiple shadows, but ironpress
-    // currently renders one; first is the most visible in common cases.
-    let first = split_top_level_comma(val)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| val.to_string());
-    let val = first.trim();
+    // A `box-shadow` may list several shadows separated by top-level commas
+    // (outside parens). They paint back-to-front, the first listed on top.
+    split_top_level_comma(val)
+        .iter()
+        .filter_map(|s| parse_single_box_shadow(s))
+        .collect()
+}
+
+/// Parse one shadow from a `box-shadow` list entry.
+fn parse_single_box_shadow(val: &str) -> Option<BoxShadow> {
+    let val = val.trim();
+    if val.is_empty() {
+        return None;
+    }
 
     // Tokenize: spaces delimit tokens, but rgba(...) / rgb(...) / hsl(...)
     // and keyword `inset` are each a single token.
@@ -2902,10 +8715,13 @@ fn parse_box_shadow(val: &str) -> Option<BoxShadow> {
         }
     }
 
+    // An omitted (or `currentColor`) shadow color defaults to the element's
+    // `color`, resolved later via the CURRENT_COLOR_SENTINEL in
+    // resolve_current_color (CSS Backgrounds & Borders L3 §7.2).
     let color = if idx < tokens.len() {
-        parse_border_color(&tokens[idx]).unwrap_or(Color::BLACK)
+        parse_border_color(&tokens[idx]).unwrap_or(CURRENT_COLOR_SENTINEL)
     } else {
-        Color::BLACK
+        CURRENT_COLOR_SENTINEL
     };
 
     Some(BoxShadow {
@@ -2915,6 +8731,77 @@ fn parse_box_shadow(val: &str) -> Option<BoxShadow> {
         spread,
         color,
         inset,
+    })
+}
+
+/// Parse a `text-shadow` value into a list of shadows (css-text-decor-3 §3).
+/// Syntax: `none | [ <color>? && <length>{2,3} ]#`. Unlike `box-shadow` there
+/// is no spread or `inset`, and the optional color may precede or follow the
+/// offsets. Reuses `BoxShadow` storage with `spread = 0` and `inset = false`.
+fn parse_text_shadow(val: &str) -> Vec<BoxShadow> {
+    let val = val.trim();
+    if val.is_empty() || val == "none" {
+        return Vec::new();
+    }
+    split_top_level_comma(val)
+        .iter()
+        .filter_map(|s| parse_single_text_shadow(s))
+        .collect()
+}
+
+/// Parse one `text-shadow` list entry: 2 or 3 lengths plus an optional color
+/// that may appear before or after the lengths.
+fn parse_single_text_shadow(val: &str) -> Option<BoxShadow> {
+    let val = val.trim();
+    if val.is_empty() {
+        return None;
+    }
+
+    // Tokenize: spaces delimit tokens, but rgba(...) / rgb(...) / hsl(...) are
+    // each a single token (same rule as box-shadow).
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for ch in val.chars() {
+        if ch == ' ' && !current.contains('(') {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else if ch == ')' {
+            current.push(ch);
+            tokens.push(std::mem::take(&mut current));
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    // Separate the (at most one) color token from the length tokens. The color
+    // may be at either end; lengths parse numerically, colors do not.
+    let mut lengths: Vec<f32> = Vec::new();
+    let mut color: Option<Color> = None;
+    for t in &tokens {
+        if let Some(len) = parse_shadow_length(t) {
+            lengths.push(len);
+        } else if color.is_none() {
+            color = parse_border_color(t);
+        }
+    }
+
+    if lengths.len() < 2 {
+        return None;
+    }
+
+    Some(BoxShadow {
+        offset_x: lengths[0],
+        offset_y: lengths[1],
+        blur: lengths.get(2).copied().unwrap_or(0.0),
+        spread: 0.0,
+        // An omitted color defaults to the element's `color`, resolved later via
+        // the CURRENT_COLOR_SENTINEL in resolve_current_color.
+        color: color.unwrap_or(CURRENT_COLOR_SENTINEL),
+        inset: false,
     })
 }
 
@@ -2960,21 +8847,79 @@ fn parse_shadow_length(val: &str) -> Option<f32> {
 
 /// Parse a single CSS transform function (e.g. `rotate(45deg)`).
 ///
-/// Returns the parsed transform and `None` when the function is unknown.
-fn parse_single_transform(val: &str) -> Option<Transform> {
+/// Returns the parsed transform and `None` when the function is unknown or
+/// malformed. `font_size`/`root_font_size` (pt) resolve em/rem length args.
+fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Option<Transform> {
     let val = val.trim();
+    let len = |s: &str| parse_transform_length(s, font_size, root_font_size);
+    let mk_translate = |x: Option<(f32, bool)>, y: Option<(f32, bool)>| {
+        let (tx, tx_pct) = x.unwrap_or((0.0, false));
+        let (ty, ty_pct) = y.unwrap_or((0.0, false));
+        Transform::Translate {
+            tx,
+            ty,
+            tx_pct,
+            ty_pct,
+        }
+    };
 
     if let Some(inner) = val
         .strip_prefix("rotate(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let inner = inner.trim();
-        let degrees = if let Some(n) = inner.strip_suffix("deg") {
-            n.trim().parse::<f32>().ok()?
-        } else {
-            inner.parse::<f32>().ok()?
-        };
-        return Some(Transform::Rotate(degrees));
+        return Some(Transform::Rotate(parse_angle_deg(inner)?));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("perspective(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let (d, is_pct) = len(inner.trim())?;
+        if is_pct || d <= 0.0 {
+            return None;
+        }
+        let mut m = matrix3d_identity();
+        m[11] = -1.0 / d;
+        return Some(Transform::Matrix3d(m));
+    }
+
+    // rotateZ() is the 2D z-axis rotation (== rotate()).
+    if let Some(inner) = val
+        .strip_prefix("rotateZ(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return Some(Transform::Rotate(parse_angle_deg(inner)?));
+    }
+    if let Some(inner) = val
+        .strip_prefix("rotateY(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return Some(Transform::Matrix3d(matrix3d_rotate_y(parse_angle_deg(
+            inner,
+        )?)));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("rotateX(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return Some(Transform::Matrix3d(matrix3d_rotate_x(parse_angle_deg(
+            inner,
+        )?)));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("rotate3d(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() == 4 {
+            let x = parts[0].parse::<f32>().ok()?;
+            let y = parts[1].parse::<f32>().ok()?;
+            let z = parts[2].parse::<f32>().ok()?;
+            let deg = parse_angle_deg(parts[3])?;
+            return Some(Transform::Matrix3d(matrix3d_rotate_axis(x, y, z, deg)?));
+        }
     }
 
     if let Some(inner) = val
@@ -3000,8 +8945,27 @@ fn parse_single_transform(val: &str) -> Option<Transform> {
             return Some(Transform::Scale(s, s));
         } else if parts.len() == 2 {
             let sx = parts[0].trim().parse::<f32>().ok()?;
-            let sy = parts[1].trim().parse::<f32>().ok()?;
+            // CSS: an omitted/empty second arg defaults to the first.
+            let sy_tok = parts[1].trim();
+            let sy = if sy_tok.is_empty() {
+                sx
+            } else {
+                sy_tok.parse::<f32>().ok()?
+            };
             return Some(Transform::Scale(sx, sy));
+        }
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("scale3d(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() == 3 {
+            let sx = parts[0].parse::<f32>().ok()?;
+            let sy = parts[1].parse::<f32>().ok()?;
+            let sz = parts[2].parse::<f32>().ok()?;
+            return Some(Transform::Matrix3d(matrix3d_scale(sx, sy, sz)));
         }
     }
 
@@ -3009,16 +8973,16 @@ fn parse_single_transform(val: &str) -> Option<Transform> {
         .strip_prefix("translateX(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let tx = parse_transform_length(inner.trim())?;
-        return Some(Transform::Translate(tx, 0.0));
+        let x = len(inner.trim())?;
+        return Some(mk_translate(Some(x), None));
     }
 
     if let Some(inner) = val
         .strip_prefix("translateY(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let ty = parse_transform_length(inner.trim())?;
-        return Some(Transform::Translate(0.0, ty));
+        let y = len(inner.trim())?;
+        return Some(mk_translate(None, Some(y)));
     }
 
     if let Some(inner) = val
@@ -3027,28 +8991,47 @@ fn parse_single_transform(val: &str) -> Option<Transform> {
     {
         let parts: Vec<&str> = inner.split(',').collect();
         if parts.len() == 2 {
-            let tx = parse_transform_length(parts[0].trim())?;
-            let ty = parse_transform_length(parts[1].trim())?;
-            return Some(Transform::Translate(tx, ty));
+            let x = len(parts[0].trim())?;
+            let y = len(parts[1].trim())?;
+            return Some(mk_translate(Some(x), Some(y)));
         } else if parts.len() == 1 {
-            let tx = parse_transform_length(parts[0].trim())?;
-            return Some(Transform::Translate(tx, 0.0));
+            let x = len(parts[0].trim())?;
+            return Some(mk_translate(Some(x), None));
+        }
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("translateZ(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let (z, z_pct) = len(inner.trim())?;
+        if z_pct {
+            return None;
+        }
+        return Some(Transform::Matrix3d(matrix3d_translate(0.0, 0.0, z)));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("translate3d(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() == 3 {
+            let (x, x_pct) = len(parts[0])?;
+            let (y, y_pct) = len(parts[1])?;
+            let (z, z_pct) = len(parts[2])?;
+            if x_pct || y_pct || z_pct {
+                return None;
+            }
+            return Some(Transform::Matrix3d(matrix3d_translate(x, y, z)));
         }
     }
 
     if let Some(inner) = val.strip_prefix("skew(").and_then(|s| s.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').collect();
-        let ax = parts
-            .first()?
-            .trim()
-            .strip_suffix("deg")
-            .and_then(|n| n.parse::<f32>().ok())?;
+        let ax = parse_angle_deg(parts.first()?.trim())?;
         let ay = if parts.len() >= 2 {
-            parts[1]
-                .trim()
-                .strip_suffix("deg")
-                .and_then(|n| n.parse::<f32>().ok())
-                .unwrap_or(0.0)
+            parse_angle_deg(parts[1].trim()).unwrap_or(0.0)
         } else {
             0.0
         };
@@ -3058,50 +9041,225 @@ fn parse_single_transform(val: &str) -> Option<Transform> {
     }
 
     if let Some(inner) = val.strip_prefix("skewX(").and_then(|s| s.strip_suffix(')')) {
-        let deg = inner
-            .trim()
-            .strip_suffix("deg")
-            .and_then(|n| n.parse::<f32>().ok())?;
-        let tan_x = (deg * std::f32::consts::PI / 180.0).tan();
+        let tan_x = (parse_angle_deg(inner)? * std::f32::consts::PI / 180.0).tan();
         return Some(Transform::Matrix(1.0, 0.0, tan_x, 1.0, 0.0, 0.0));
     }
 
     if let Some(inner) = val.strip_prefix("skewY(").and_then(|s| s.strip_suffix(')')) {
-        let deg = inner
-            .trim()
-            .strip_suffix("deg")
-            .and_then(|n| n.parse::<f32>().ok())?;
-        let tan_y = (deg * std::f32::consts::PI / 180.0).tan();
+        let tan_y = (parse_angle_deg(inner)? * std::f32::consts::PI / 180.0).tan();
         return Some(Transform::Matrix(1.0, tan_y, 0.0, 1.0, 0.0, 0.0));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("matrix(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        // Per spec an unparseable argument makes the whole function invalid; map
+        // each token through parse (no filtering) so a bad token => None rather
+        // than silently shifting arity.
+        let toks: Vec<&str> = inner.split(',').collect();
+        if toks.len() != 6 {
+            return None;
+        }
+        let mut nums = [0.0_f32; 6];
+        for (i, tok) in toks.iter().enumerate() {
+            nums[i] = tok.trim().parse::<f32>().ok()?;
+        }
+        // a, b, c, d are unitless; e, f are pixel translations -> points.
+        return Some(Transform::Matrix(
+            nums[0],
+            nums[1],
+            nums[2],
+            nums[3],
+            nums[4] * 0.75,
+            nums[5] * 0.75,
+        ));
+    }
+
+    if let Some(inner) = val
+        .strip_prefix("matrix3d(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        let toks: Vec<&str> = inner.split(',').collect();
+        if toks.len() != 16 {
+            return None;
+        }
+        let mut nums = [0.0_f32; 16];
+        for (i, tok) in toks.iter().enumerate() {
+            nums[i] = tok.trim().parse::<f32>().ok()?;
+        }
+        nums[12] *= 0.75;
+        nums[13] *= 0.75;
+        nums[14] *= 0.75;
+        return Some(Transform::Matrix3d(nums));
     }
 
     None
 }
 
-/// Convert a Transform into its affine matrix (a, b, c, d, e, f).
-fn transform_to_matrix(t: &Transform) -> [f32; 6] {
-    match t {
-        Transform::Rotate(deg) => {
-            let rad = deg * std::f32::consts::PI / 180.0;
-            let c = rad.cos();
-            let s = rad.sin();
-            [c, s, -s, c, 0.0, 0.0]
+fn matrix3d_identity() -> [f32; 16] {
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn matrix3d_translate(tx: f32, ty: f32, tz: f32) -> [f32; 16] {
+    let mut m = matrix3d_identity();
+    m[12] = tx;
+    m[13] = ty;
+    m[14] = tz;
+    m
+}
+
+fn matrix3d_scale(sx: f32, sy: f32, sz: f32) -> [f32; 16] {
+    [
+        sx, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, sz, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn matrix3d_rotate_x(deg: f32) -> [f32; 16] {
+    let rad = deg * std::f32::consts::PI / 180.0;
+    let (c, s) = (rad.cos(), rad.sin());
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, c, s, 0.0, 0.0, -s, c, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn matrix3d_rotate_y(deg: f32) -> [f32; 16] {
+    let rad = deg * std::f32::consts::PI / 180.0;
+    let (c, s) = (rad.cos(), rad.sin());
+    [
+        c, 0.0, -s, 0.0, 0.0, 1.0, 0.0, 0.0, s, 0.0, c, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn matrix3d_rotate_axis(x: f32, y: f32, z: f32, deg: f32) -> Option<[f32; 16]> {
+    let len = (x * x + y * y + z * z).sqrt();
+    if len == 0.0 {
+        return None;
+    }
+    let (x, y, z) = (x / len, y / len, z / len);
+    let rad = deg * std::f32::consts::PI / 180.0;
+    let (c, s) = (rad.cos(), rad.sin());
+    let t = 1.0 - c;
+    Some([
+        t * x * x + c,
+        t * x * y + s * z,
+        t * x * z - s * y,
+        0.0,
+        t * x * y - s * z,
+        t * y * y + c,
+        t * y * z + s * x,
+        0.0,
+        t * x * z + s * y,
+        t * y * z - s * x,
+        t * z * z + c,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ])
+}
+
+fn matrix3d_multiply(lhs: &[f32; 16], rhs: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col * 4 + row] = lhs[row] * rhs[col * 4]
+                + lhs[4 + row] * rhs[col * 4 + 1]
+                + lhs[8 + row] * rhs[col * 4 + 2]
+                + lhs[12 + row] * rhs[col * 4 + 3];
         }
-        Transform::Scale(sx, sy) => [*sx, 0.0, 0.0, *sy, 0.0, 0.0],
-        Transform::Translate(tx, ty) => [1.0, 0.0, 0.0, 1.0, *tx, *ty],
-        Transform::Matrix(a, b, c, d, e, f) => [*a, *b, *c, *d, *e, *f],
+    }
+    out
+}
+
+fn transform_to_matrix3d(t: &Transform) -> [f32; 16] {
+    match *t {
+        Transform::Matrix3d(m) | Transform::Project3d { matrix: m, .. } => m,
+        Transform::Rotate(_)
+        | Transform::Scale(_, _)
+        | Transform::Translate { .. }
+        | Transform::Matrix(_, _, _, _, _, _)
+        | Transform::MatrixPct { .. } => {
+            let [a, b, c, d, e, f] = t.to_css_matrix(0.0, 0.0);
+            [
+                a, b, 0.0, 0.0, c, d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, e, f, 0.0, 1.0,
+            ]
+        }
     }
 }
 
-/// Multiply two 2D affine matrices: result = lhs × rhs.
-fn multiply_matrices(lhs: &[f32; 6], rhs: &[f32; 6]) -> [f32; 6] {
+/// Extended affine matrix carrying percentage-translate coefficients:
+/// `[a, b, c, d, e, f, e_w, e_h, f_w, f_h]`, where the effective translation for
+/// a box of size `w`×`h` is `e + e_w*w + e_h*h` / `f + f_w*w + f_h*h`. This lets
+/// `%` translate components survive composition without knowing the box size.
+type ExtMatrix = [f32; 10];
+
+/// Convert a single Transform into its extended affine matrix.
+fn transform_to_ext(t: &Transform) -> ExtMatrix {
+    match *t {
+        Transform::Rotate(deg) => {
+            let rad = deg * std::f32::consts::PI / 180.0;
+            let (c, s) = (rad.cos(), rad.sin());
+            [c, s, -s, c, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        }
+        Transform::Scale(sx, sy) => [sx, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        Transform::Translate {
+            tx,
+            ty,
+            tx_pct,
+            ty_pct,
+        } => {
+            let (e, e_w) = if tx_pct { (0.0, tx / 100.0) } else { (tx, 0.0) };
+            let (f, f_h) = if ty_pct { (0.0, ty / 100.0) } else { (ty, 0.0) };
+            [1.0, 0.0, 0.0, 1.0, e, f, e_w, 0.0, 0.0, f_h]
+        }
+        Transform::Matrix(a, b, c, d, e, f) => [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0],
+        Transform::Matrix3d(m) => {
+            let [a, b, c, d, e, f] = matrix3d_affine_projection(&m);
+            [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0]
+        }
+        Transform::Project3d { matrix, .. } => {
+            let [a, b, c, d, e, f] = matrix3d_affine_projection(&matrix);
+            [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0]
+        }
+        Transform::MatrixPct {
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+            e_w,
+            e_h,
+            f_w,
+            f_h,
+        } => [a, b, c, d, e, f, e_w, e_h, f_w, f_h],
+    }
+}
+
+/// Multiply two extended affine matrices: `result = lhs × rhs`. The linear part
+/// (a..d) multiplies normally; the translation columns (constant + per-dim
+/// coefficients) each transform through `lhs`'s linear part, keeping the result
+/// affine in `(w, h)`.
+fn multiply_ext(lhs: &ExtMatrix, rhs: &ExtMatrix) -> ExtMatrix {
+    let lin = |x: f32, y: f32| (lhs[0] * x + lhs[2] * y, lhs[1] * x + lhs[3] * y);
+    let (e, f) = lin(rhs[4], rhs[5]);
+    let (ew, fw) = lin(rhs[6], rhs[8]);
+    let (eh, fh) = lin(rhs[7], rhs[9]);
     [
         lhs[0] * rhs[0] + lhs[2] * rhs[1],
         lhs[1] * rhs[0] + lhs[3] * rhs[1],
         lhs[0] * rhs[2] + lhs[2] * rhs[3],
         lhs[1] * rhs[2] + lhs[3] * rhs[3],
-        lhs[0] * rhs[4] + lhs[2] * rhs[5] + lhs[4],
-        lhs[1] * rhs[4] + lhs[3] * rhs[5] + lhs[5],
+        e + lhs[4],
+        f + lhs[5],
+        ew + lhs[6],
+        eh + lhs[7],
+        fw + lhs[8],
+        fh + lhs[9],
     ]
 }
 
@@ -3109,7 +9267,182 @@ fn multiply_matrices(lhs: &[f32; 6], rhs: &[f32; 6]) -> [f32; 6] {
 ///
 /// Supports: rotate, scale, scaleX, scaleY, translate, translateX, translateY,
 /// skew, skewX, skewY, and chained transforms like `rotate(10deg) scale(1.1)`.
-fn parse_transform(val: &str) -> Option<Transform> {
+/// Parse a single `transform-origin` axis component into
+/// `(fraction, length_px)`. `horizontal` selects which keywords are valid for
+/// disambiguating a bare `left`/`right`/`top`/`bottom`/`center`.
+/// Parse a single `transform-origin` axis component into `(fraction, length_pt)`.
+/// Keywords/percentages set the fraction; absolute/font-relative lengths resolve
+/// to pt. `font_size`/`root_font_size` are in pt.
+fn parse_origin_component(token: &str, font_size: f32, root_font_size: f32) -> Option<(f32, f32)> {
+    let lowered = token.trim().to_ascii_lowercase();
+    let t = lowered.as_str();
+    match t {
+        "left" | "top" => Some((0.0, 0.0)),
+        "center" => Some((0.5, 0.0)),
+        "right" | "bottom" => Some((1.0, 0.0)),
+        _ => {
+            if let Some(pct) = t.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|p| (p / 100.0, 0.0))
+            } else {
+                parse_abs_length_pt(t, font_size, root_font_size).map(|pt| (0.0, pt))
+            }
+        }
+    }
+}
+
+fn parse_transform_origin(
+    val: &str,
+    font_size: f32,
+    root_font_size: f32,
+) -> Option<TransformOrigin> {
+    let val = val.trim();
+    if val.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&str> = val.split_whitespace().collect();
+    // Vertical-only keywords that, when first, indicate the value order is
+    // swapped (e.g. `top left`). Otherwise the first token is the x axis.
+    let is_vertical = |s: &str| s.eq_ignore_ascii_case("top") || s.eq_ignore_ascii_case("bottom");
+    let is_horizontal = |s: &str| s.eq_ignore_ascii_case("left") || s.eq_ignore_ascii_case("right");
+    let (x_tok, y_tok, z_tok) = match tokens.as_slice() {
+        [a] => (*a, "center", None),
+        [a, b] => {
+            if is_vertical(a) || is_horizontal(b) {
+                (*b, *a, None) // swapped: vertical keyword came first
+            } else {
+                (*a, *b, None)
+            }
+        }
+        [a, b, z] => {
+            if is_vertical(a) || is_horizontal(b) {
+                (*b, *a, Some(*z))
+            } else {
+                (*a, *b, Some(*z))
+            }
+        }
+        _ => return None,
+    };
+    let (x_fraction, x_length) = parse_origin_component(x_tok, font_size, root_font_size)?;
+    let (y_fraction, y_length) = parse_origin_component(y_tok, font_size, root_font_size)?;
+    let z_length = z_tok
+        .and_then(|z| parse_abs_length_pt(z, font_size, root_font_size))
+        .unwrap_or(0.0);
+    Some(TransformOrigin {
+        x_fraction,
+        x_length,
+        y_fraction,
+        y_length,
+        z_length,
+    })
+}
+
+fn compose_transforms(transforms: &[Transform]) -> Option<Transform> {
+    if transforms.is_empty() {
+        return None;
+    }
+    if transforms
+        .iter()
+        .any(|t| matches!(t, Transform::Matrix3d(_) | Transform::Project3d { .. }))
+    {
+        let mut result = matrix3d_identity();
+        for t in transforms {
+            result = matrix3d_multiply(&result, &transform_to_matrix3d(t));
+        }
+        Some(Transform::Matrix3d(result))
+    } else {
+        let mut result: ExtMatrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        for t in transforms {
+            result = multiply_ext(&result, &transform_to_ext(t));
+        }
+        if result[6] == 0.0 && result[7] == 0.0 && result[8] == 0.0 && result[9] == 0.0 {
+            Some(Transform::Matrix(
+                result[0], result[1], result[2], result[3], result[4], result[5],
+            ))
+        } else {
+            Some(Transform::MatrixPct {
+                a: result[0],
+                b: result[1],
+                c: result[2],
+                d: result[3],
+                e: result[4],
+                f: result[5],
+                e_w: result[6],
+                e_h: result[7],
+                f_w: result[8],
+                f_h: result[9],
+            })
+        }
+    }
+}
+
+fn parse_individual_translate(val: &str, font_size: f32, root_font_size: f32) -> Option<Transform> {
+    let parts: Vec<&str> = val.split_whitespace().collect();
+    let len = |s: &str| parse_transform_length(s, font_size, root_font_size);
+    match parts.as_slice() {
+        [x] => {
+            let (tx, tx_pct) = len(x)?;
+            Some(Transform::Translate {
+                tx,
+                ty: 0.0,
+                tx_pct,
+                ty_pct: false,
+            })
+        }
+        [x, y] => {
+            let (tx, tx_pct) = len(x)?;
+            let (ty, ty_pct) = len(y)?;
+            Some(Transform::Translate {
+                tx,
+                ty,
+                tx_pct,
+                ty_pct,
+            })
+        }
+        [x, y, z] => {
+            let (tx, tx_pct) = len(x)?;
+            let (ty, ty_pct) = len(y)?;
+            let (tz, tz_pct) = len(z)?;
+            if tx_pct || ty_pct || tz_pct {
+                return None;
+            }
+            Some(Transform::Matrix3d(matrix3d_translate(tx, ty, tz)))
+        }
+        _ => None,
+    }
+}
+
+fn parse_individual_rotate(val: &str) -> Option<Transform> {
+    let parts: Vec<&str> = val.split_whitespace().collect();
+    match parts.as_slice() {
+        [angle] => Some(Transform::Rotate(parse_angle_deg(angle)?)),
+        [x, y, z, angle] => Some(Transform::Matrix3d(matrix3d_rotate_axis(
+            x.parse().ok()?,
+            y.parse().ok()?,
+            z.parse().ok()?,
+            parse_angle_deg(angle)?,
+        )?)),
+        _ => None,
+    }
+}
+
+fn parse_individual_scale(val: &str) -> Option<Transform> {
+    let parts: Vec<&str> = val.split_whitespace().collect();
+    match parts.as_slice() {
+        [s] => {
+            let s = s.parse().ok()?;
+            Some(Transform::Scale(s, s))
+        }
+        [sx, sy] => Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+        [sx, sy, sz] => Some(Transform::Matrix3d(matrix3d_scale(
+            sx.parse().ok()?,
+            sy.parse().ok()?,
+            sz.parse().ok()?,
+        ))),
+        _ => None,
+    }
+}
+
+fn parse_transform(val: &str, font_size: f32, root_font_size: f32) -> Option<Transform> {
     let val = val.trim();
     if val == "none" {
         return None;
@@ -3136,34 +9469,1614 @@ fn parse_transform(val: &str) -> Option<Transform> {
     }
 
     if functions.len() == 1 {
-        return parse_single_transform(functions[0]);
+        return parse_single_transform(functions[0], font_size, root_font_size);
+    }
+
+    let parsed: Vec<Transform> = functions
+        .iter()
+        .map(|func| parse_single_transform(func, font_size, root_font_size))
+        .collect::<Option<Vec<_>>>()?;
+
+    if parsed
+        .iter()
+        .any(|t| matches!(t, Transform::Matrix3d(_) | Transform::Project3d { .. }))
+    {
+        let mut result = matrix3d_identity();
+        for t in &parsed {
+            result = matrix3d_multiply(&result, &transform_to_matrix3d(t));
+        }
+        return Some(Transform::Matrix3d(result));
     }
 
     // Multiple transforms — compose into a single matrix.
     // CSS: transforms are applied right-to-left, but the `cm` operator
     // in PDF also post-multiplies, so we compose left-to-right here and
     // the renderer will apply the resulting matrix around the centre.
-    let mut result = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0]; // identity
-    for func in &functions {
-        let t = parse_single_transform(func)?;
-        let m = transform_to_matrix(&t);
-        result = multiply_matrices(&result, &m);
+    // Percentage `translate()` components are carried as box-size coefficients
+    // (see `ExtMatrix`) so they survive composition without the box size.
+    let mut result: ExtMatrix = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    for t in &parsed {
+        result = multiply_ext(&result, &transform_to_ext(t));
     }
 
-    Some(Transform::Matrix(
-        result[0], result[1], result[2], result[3], result[4], result[5],
-    ))
+    // Collapse to the cheaper `Matrix` form when no percentage translate is
+    // present; otherwise keep the coefficients for render-time resolution.
+    if result[6] == 0.0 && result[7] == 0.0 && result[8] == 0.0 && result[9] == 0.0 {
+        Some(Transform::Matrix(
+            result[0], result[1], result[2], result[3], result[4], result[5],
+        ))
+    } else {
+        Some(Transform::MatrixPct {
+            a: result[0],
+            b: result[1],
+            c: result[2],
+            d: result[3],
+            e: result[4],
+            f: result[5],
+            e_w: result[6],
+            e_h: result[7],
+            f_w: result[8],
+            f_h: result[9],
+        })
+    }
 }
 
-/// Parse a length value for transform translate (px or pt or bare number).
-fn parse_transform_length(val: &str) -> Option<f32> {
+/// Parse a length/percentage argument to `translate()` into `(value, is_percent)`.
+///
+/// Absolute units (px/pt/in/cm/mm/pc) and font-relative units (em/rem) resolve
+/// to pt; a `%` token returns the raw percentage with `is_percent = true` (it is
+/// resolved against the element's own border box at render time). A bare number
+/// is treated as pixels (lenient, matching the legacy fallback). `font_size` and
+/// `root_font_size` are in pt.
+fn parse_transform_length(val: &str, font_size: f32, root_font_size: f32) -> Option<(f32, bool)> {
+    let val = val.trim();
+    if let Some(n) = val.strip_suffix('%') {
+        return n.trim().parse::<f32>().ok().map(|v| (v, true));
+    }
+    parse_abs_length_pt(val, font_size, root_font_size).map(|v| (v, false))
+}
+
+/// Resolve a CSS absolute/font-relative length token to pt. Returns `None` for
+/// percentages or unknown units. A bare number is treated as pixels.
+fn parse_abs_length_pt(val: &str, font_size: f32, root_font_size: f32) -> Option<f32> {
     let val = val.trim();
     if let Some(n) = val.strip_suffix("px") {
-        n.parse::<f32>().ok().map(|v| v * 0.75)
+        n.trim().parse::<f32>().ok().map(|v| v * 0.75)
     } else if let Some(n) = val.strip_suffix("pt") {
-        n.parse::<f32>().ok()
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = val.strip_suffix("rem") {
+        n.trim().parse::<f32>().ok().map(|v| v * root_font_size)
+    } else if let Some(n) = val.strip_suffix("em") {
+        n.trim().parse::<f32>().ok().map(|v| v * font_size)
+    } else if let Some(n) = val.strip_suffix("in") {
+        n.trim().parse::<f32>().ok().map(|v| v * 72.0)
+    } else if let Some(n) = val.strip_suffix("cm") {
+        n.trim().parse::<f32>().ok().map(|v| v * 72.0 / 2.54)
+    } else if let Some(n) = val.strip_suffix("mm") {
+        n.trim().parse::<f32>().ok().map(|v| v * 72.0 / 25.4)
+    } else if let Some(n) = val.strip_suffix("pc") {
+        n.trim().parse::<f32>().ok().map(|v| v * 12.0)
     } else {
+        // Bare number: lenient fallback (treated as pt), matching legacy
+        // behaviour for `translate()`/`transform-origin` fixtures.
         val.parse::<f32>().ok()
+    }
+}
+
+/// Parse a CSS angle token (deg/rad/grad/turn, or bare number = degrees) to
+/// degrees. Reused by `rotate()` and `skew*()`.
+fn parse_angle_deg(val: &str) -> Option<f32> {
+    let val = val.trim();
+    if let Some(n) = val.strip_suffix("deg") {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = val.strip_suffix("grad") {
+        n.trim().parse::<f32>().ok().map(|g| g * 0.9)
+    } else if let Some(n) = val.strip_suffix("turn") {
+        n.trim().parse::<f32>().ok().map(|t| t * 360.0)
+    } else if let Some(n) = val.strip_suffix("rad") {
+        n.trim()
+            .parse::<f32>()
+            .ok()
+            .map(|r| r * 180.0 / std::f32::consts::PI)
+    } else {
+        // Bare number: CSS treats a unitless angle as invalid, but ironpress is
+        // lenient elsewhere and existing fixtures rely on bare degrees.
+        val.parse::<f32>().ok()
+    }
+}
+
+/// Parse a clip-path length/percentage token into (points-or-percent, is_percent).
+fn parse_clip_len(token: &str) -> Option<(f32, bool)> {
+    let t = token.trim();
+    if let Some(n) = t.strip_suffix('%') {
+        n.parse::<f32>().ok().map(|v| (v, true))
+    } else if let Some(n) = t.strip_suffix("px") {
+        n.parse::<f32>().ok().map(|v| (v * 0.75, false))
+    } else if let Some(n) = t.strip_suffix("pt") {
+        n.parse::<f32>().ok().map(|v| (v, false))
+    } else {
+        t.parse::<f32>().ok().map(|v| (v * 0.75, false))
+    }
+}
+
+fn parse_clip_len_lp(token: &str) -> Option<LengthPercent> {
+    parse_clip_len(token).map(LengthPercent::from)
+}
+
+fn parse_shape_box(token: &str) -> Option<ShapeBox> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "border-box" => Some(ShapeBox::Border),
+        "padding-box" => Some(ShapeBox::Padding),
+        "content-box" => Some(ShapeBox::Content),
+        _ => None,
+    }
+}
+
+fn parse_shape_extent(token: &str) -> Option<ShapeExtent> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "closest-side" => Some(ShapeExtent::ClosestSide),
+        "farthest-side" => Some(ShapeExtent::FarthestSide),
+        "closest-corner" => Some(ShapeExtent::ClosestCorner),
+        "farthest-corner" => Some(ShapeExtent::FarthestCorner),
+        _ => None,
+    }
+}
+
+fn parse_clip_radius(token: &str, default: ShapeExtent) -> Option<ClipRadius> {
+    let t = token.trim();
+    if t.is_empty() {
+        return Some(ClipRadius::Extent(default));
+    }
+    if let Some(extent) = parse_shape_extent(t) {
+        Some(ClipRadius::Extent(extent))
+    } else {
+        parse_clip_len_lp(t).map(ClipRadius::Length)
+    }
+}
+
+fn split_clip_geometry_box(raw: &str) -> (&str, ShapeBox) {
+    let mut s = raw.trim();
+    for suffix in ["border-box", "padding-box", "content-box"] {
+        if let Some(rest) = s.strip_suffix(suffix) {
+            s = rest.trim();
+            if s.is_empty() {
+                return (suffix, ShapeBox::Border);
+            }
+            return (s, parse_shape_box(suffix).unwrap_or_default());
+        }
+    }
+    (s, ShapeBox::Border)
+}
+
+fn split_function_args<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
+    raw.trim()
+        .strip_prefix(name)?
+        .trim_start()
+        .strip_prefix('(')?
+        .strip_suffix(')')
+        .map(str::trim)
+}
+
+fn split_css_words(raw: &str) -> Vec<String> {
+    split_css_components(raw)
+        .into_iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn parse_clip_position(raw: &str) -> (LengthPercent, LengthPercent) {
+    let center = LengthPercent {
+        value: 50.0,
+        is_percent: true,
+    };
+    let tokens = split_css_words(raw);
+    if tokens.is_empty() {
+        return (center, center);
+    }
+    let edge_value = |edge: &str, offset: Option<&str>| -> Option<LengthPercent> {
+        match edge {
+            "left" | "top" => offset.and_then(parse_clip_len_lp).or(Some(LengthPercent {
+                value: 0.0,
+                is_percent: true,
+            })),
+            "right" | "bottom" => {
+                if let Some(lp) = offset.and_then(parse_clip_len_lp) {
+                    if lp.is_percent {
+                        Some(LengthPercent {
+                            value: 100.0 - lp.value,
+                            is_percent: true,
+                        })
+                    } else {
+                        Some(LengthPercent {
+                            value: -lp.value,
+                            is_percent: true,
+                        })
+                    }
+                } else {
+                    Some(LengthPercent {
+                        value: 100.0,
+                        is_percent: true,
+                    })
+                }
+            }
+            "center" => Some(center),
+            _ => None,
+        }
+    };
+    if tokens.len() == 4 {
+        let mut x = None;
+        let mut y = None;
+        let mut i = 0usize;
+        while i + 1 < tokens.len() {
+            match tokens[i].as_str() {
+                "left" | "right" => x = edge_value(&tokens[i], Some(&tokens[i + 1])),
+                "top" | "bottom" => y = edge_value(&tokens[i], Some(&tokens[i + 1])),
+                _ => {}
+            }
+            i += 2;
+        }
+        return (x.unwrap_or(center), y.unwrap_or(center));
+    }
+    if tokens.len() == 2 {
+        let a = tokens[0].as_str();
+        let b = tokens[1].as_str();
+        if matches!(a, "top" | "bottom") || matches!(b, "left" | "right") {
+            return (
+                edge_value(b, None).unwrap_or_else(|| parse_clip_len_lp(b).unwrap_or(center)),
+                edge_value(a, None).unwrap_or_else(|| parse_clip_len_lp(a).unwrap_or(center)),
+            );
+        }
+        return (
+            edge_value(a, None).unwrap_or_else(|| parse_clip_len_lp(a).unwrap_or(center)),
+            edge_value(b, None).unwrap_or_else(|| parse_clip_len_lp(b).unwrap_or(center)),
+        );
+    }
+    let first = tokens[0].as_str();
+    if matches!(first, "top" | "bottom") {
+        (center, edge_value(first, None).unwrap_or(center))
+    } else {
+        (
+            edge_value(first, None).unwrap_or_else(|| parse_clip_len_lp(first).unwrap_or(center)),
+            center,
+        )
+    }
+}
+
+fn parse_border_radius_list(raw: &str) -> ([f32; 4], [f32; 4]) {
+    let expand = |vals: Vec<f32>| -> [f32; 4] {
+        match vals.as_slice() {
+            [a] => [*a; 4],
+            [a, b] => [*a, *b, *a, *b],
+            [a, b, c] => [*a, *b, *c, *b],
+            [a, b, c, d, ..] => [*a, *b, *c, *d],
+            _ => [0.0; 4],
+        }
+    };
+    let (x_part, y_part) = raw.split_once('/').unwrap_or((raw, raw));
+    let xs = x_part
+        .split_whitespace()
+        .filter_map(|t| parse_clip_len(t).map(|(v, _)| v.max(0.0)))
+        .collect();
+    let ys = y_part
+        .split_whitespace()
+        .filter_map(|t| parse_clip_len(t).map(|(v, _)| v.max(0.0)))
+        .collect();
+    let rx = expand(xs);
+    let ry = if y_part == raw { rx } else { expand(ys) };
+    (rx, ry)
+}
+
+fn parse_rect_like_radii(raw: &str) -> ([f32; 4], [f32; 4]) {
+    raw.split_once(" round ")
+        .map(|(_, r)| parse_border_radius_list(r))
+        .unwrap_or(([0.0; 4], [0.0; 4]))
+}
+
+/// Parse a CSS `clip-path` basic shape (circle/ellipse/inset/polygon). Returns
+/// None for `none` and unsupported forms (url(), path(), etc.).
+fn parse_clip_path(val: &str) -> Option<ClipPath> {
+    let (raw, geometry_box) = split_clip_geometry_box(val);
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    if let Some(inner) = split_function_args(raw, "circle") {
+        let (shape, pos) = inner.split_once(" at ").unwrap_or((inner, ""));
+        let r = parse_clip_radius(shape.trim(), ShapeExtent::ClosestSide)?;
+        let (cx, cy) = parse_clip_position(pos);
+        return Some(ClipPath::Circle {
+            r,
+            cx,
+            cy,
+            geometry_box,
+        });
+    }
+    if let Some(inner) = split_function_args(raw, "ellipse") {
+        let (shape, pos) = inner.split_once(" at ").unwrap_or((inner, ""));
+        let radii: Vec<String> = split_css_words(shape);
+        let rx = radii
+            .first()
+            .and_then(|s| parse_clip_radius(s, ShapeExtent::FarthestSide))
+            .unwrap_or(ClipRadius::Extent(ShapeExtent::FarthestSide));
+        let ry = radii
+            .get(1)
+            .and_then(|s| parse_clip_radius(s, ShapeExtent::FarthestSide))
+            .unwrap_or(rx);
+        let (cx, cy) = parse_clip_position(pos);
+        return Some(ClipPath::Ellipse {
+            rx,
+            ry,
+            cx,
+            cy,
+            geometry_box,
+        });
+    }
+    if let Some(inner) = split_function_args(raw, "inset") {
+        let (insets_part, radius) = match inner.split_once(" round ") {
+            Some((a, r)) => (a, parse_border_radius_list(r)),
+            None => (inner, ([0.0; 4], [0.0; 4])),
+        };
+        let vals: Vec<LengthPercent> = insets_part
+            .split_whitespace()
+            .filter_map(parse_clip_len_lp)
+            .collect();
+        // CSS 1-4 value shorthand (top, right, bottom, left).
+        let (top, right, bottom, left) = match vals.len() {
+            1 => (vals[0], vals[0], vals[0], vals[0]),
+            2 => (vals[0], vals[1], vals[0], vals[1]),
+            3 => (vals[0], vals[1], vals[2], vals[1]),
+            n if n >= 4 => (vals[0], vals[1], vals[2], vals[3]),
+            _ => return None,
+        };
+        return Some(ClipPath::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            radii_x: radius.0,
+            radii_y: radius.1,
+            geometry_box,
+        });
+    }
+    if let Some(inner) = split_function_args(raw, "polygon") {
+        let mut parts = split_top_level_comma(inner);
+        let even_odd = parts
+            .first()
+            .is_some_and(|p| p.trim().eq_ignore_ascii_case("evenodd"));
+        if even_odd {
+            parts.remove(0);
+        }
+        let points: Vec<(LengthPercent, LengthPercent)> = parts
+            .iter()
+            .filter_map(|pair| {
+                let mut it = pair.split_whitespace();
+                let x = parse_clip_len_lp(it.next()?)?;
+                let y = parse_clip_len_lp(it.next()?)?;
+                Some((x, y))
+            })
+            .collect();
+        if points.len() >= 3 {
+            return Some(ClipPath::Polygon {
+                points,
+                even_odd,
+                geometry_box,
+            });
+        }
+    }
+    if let Some(inner) = split_function_args(raw, "path") {
+        let d = inner.trim().trim_matches(|c: char| c == '"' || c == '\'');
+        let commands = crate::parser::svg::parse_path_data(d);
+        if !commands.is_empty() {
+            return Some(ClipPath::Path {
+                commands,
+                geometry_box,
+            });
+        }
+    }
+    if let Some(inner) = split_function_args(raw, "rect") {
+        let (coords, radii) = inner.split_once(" round ").unwrap_or((inner, ""));
+        let vals: Vec<LengthPercent> = coords
+            .split_whitespace()
+            .filter_map(parse_clip_len_lp)
+            .collect();
+        if vals.len() >= 4 {
+            let top = vals[0];
+            let right = vals[1];
+            let bottom = vals[2];
+            let left = vals[3];
+            let (radii_x, radii_y) = if radii.is_empty() {
+                ([0.0; 4], [0.0; 4])
+            } else {
+                parse_border_radius_list(radii)
+            };
+            return Some(ClipPath::Rect {
+                x: left,
+                y: top,
+                width: LengthPercent {
+                    value: right.value - left.value,
+                    is_percent: right.is_percent && left.is_percent,
+                },
+                height: LengthPercent {
+                    value: bottom.value - top.value,
+                    is_percent: bottom.is_percent && top.is_percent,
+                },
+                radii_x,
+                radii_y,
+                geometry_box,
+            });
+        }
+    }
+    if let Some(inner) = split_function_args(raw, "xywh") {
+        let (coords, _) = inner.split_once(" round ").unwrap_or((inner, ""));
+        let vals: Vec<LengthPercent> = coords
+            .split_whitespace()
+            .filter_map(parse_clip_len_lp)
+            .collect();
+        if vals.len() >= 4 {
+            let (radii_x, radii_y) = parse_rect_like_radii(inner);
+            return Some(ClipPath::Rect {
+                x: vals[0],
+                y: vals[1],
+                width: vals[2],
+                height: vals[3],
+                radii_x,
+                radii_y,
+                geometry_box,
+            });
+        }
+    }
+    if let Some(id) = parse_fragment_url(raw) {
+        return Some(ClipPath::Url(id));
+    }
+    parse_shape_box(raw).map(|box_kind| ClipPath::Inset {
+        top: LengthPercent {
+            value: 0.0,
+            is_percent: false,
+        },
+        right: LengthPercent {
+            value: 0.0,
+            is_percent: false,
+        },
+        bottom: LengthPercent {
+            value: 0.0,
+            is_percent: false,
+        },
+        left: LengthPercent {
+            value: 0.0,
+            is_percent: false,
+        },
+        radii_x: [0.0; 4],
+        radii_y: [0.0; 4],
+        geometry_box: box_kind,
+    })
+}
+
+fn parse_legacy_clip_rect(val: &str) -> Option<ClipPath> {
+    let raw = val.trim();
+    let inner = split_function_args(raw, "rect")?;
+    let vals: Vec<LengthPercent> = inner
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.trim().is_empty())
+        .filter_map(parse_clip_len_lp)
+        .collect();
+    if vals.len() < 4 {
+        return None;
+    }
+    Some(ClipPath::Rect {
+        x: vals[3],
+        y: vals[0],
+        width: LengthPercent {
+            value: vals[1].value - vals[3].value,
+            is_percent: vals[1].is_percent && vals[3].is_percent,
+        },
+        height: LengthPercent {
+            value: vals[2].value - vals[0].value,
+            is_percent: vals[2].is_percent && vals[0].is_percent,
+        },
+        radii_x: [0.0; 4],
+        radii_y: [0.0; 4],
+        geometry_box: ShapeBox::Border,
+    })
+}
+
+fn parse_mask_mode(raw: &str) -> MaskMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "alpha" => MaskMode::Alpha,
+        "luminance" => MaskMode::Luminance,
+        _ => MaskMode::MatchSource,
+    }
+}
+
+fn parse_mask_composite(raw: &str) -> MaskComposite {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "subtract" => MaskComposite::Subtract,
+        "intersect" => MaskComposite::Intersect,
+        "exclude" | "xor" => MaskComposite::Exclude,
+        "source-out" => MaskComposite::Exclude,
+        "source-in" => MaskComposite::Destination,
+        _ => MaskComposite::Add,
+    }
+}
+
+fn parse_fragment_url(raw: &str) -> Option<String> {
+    let inner = raw
+        .trim()
+        .strip_prefix("url(")?
+        .strip_suffix(')')?
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
+    inner.strip_prefix('#').map(str::to_string)
+}
+
+fn parse_mask_layer_source(raw: &str) -> Option<MaskLayerSource> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower.starts_with("linear-gradient(") || lower.starts_with("repeating-linear-gradient(") {
+        return parse_linear_gradient(raw).map(MaskLayerSource::Linear);
+    }
+    if lower.starts_with("radial-gradient(") || lower.starts_with("repeating-radial-gradient(") {
+        return parse_radial_gradient(raw).map(MaskLayerSource::Radial);
+    }
+    if lower.starts_with("conic-gradient(") || lower.starts_with("repeating-conic-gradient(") {
+        return parse_conic_gradient(raw).map(MaskLayerSource::Conic);
+    }
+    if lower.starts_with("url(") {
+        if let Some(id) = parse_fragment_url(raw) {
+            return Some(MaskLayerSource::Ref(id));
+        }
+    }
+    if lower.starts_with("url(") {
+        return parse_mask_url_svg(raw).map(MaskLayerSource::Svg);
+    }
+    None
+}
+
+fn mask_layer_from_source(source: MaskLayerSource, mode: MaskMode) -> MaskLayer {
+    MaskLayer {
+        source,
+        mode,
+        layer_box: GradientLayerBox::default(),
+        origin: ShapeBox::Border,
+        clip: ShapeBox::Border,
+        composite: MaskComposite::Add,
+    }
+}
+
+fn mask_source_from_layers(layers: Vec<MaskLayer>) -> Option<Option<MaskSource>> {
+    match layers.len() {
+        0 => None,
+        1 => {
+            let layer = layers.into_iter().next()?;
+            if layer.layer_box.size.is_none()
+                && layer.layer_box.position.is_none()
+                && layer.layer_box.repeat.is_none()
+                && layer.origin == ShapeBox::Border
+                && layer.clip == ShapeBox::Border
+                && layer.composite == MaskComposite::Add
+            {
+                match layer.source {
+                    MaskLayerSource::Linear(g) => Some(Some(MaskSource::Linear(g))),
+                    MaskLayerSource::Radial(g) => Some(Some(MaskSource::Radial(g))),
+                    MaskLayerSource::Conic(g) => Some(Some(MaskSource::Conic(g))),
+                    MaskLayerSource::Svg(bytes) => Some(Some(MaskSource::Svg(bytes))),
+                    MaskLayerSource::Ref(id) => Some(Some(MaskSource::Ref(id))),
+                }
+            } else {
+                Some(Some(MaskSource::Layers(vec![layer])))
+            }
+        }
+        _ => Some(Some(MaskSource::Layers(layers))),
+    }
+}
+
+fn parse_mask_image(val: &str, mode: MaskMode) -> Option<Option<MaskSource>> {
+    let raw = val.trim();
+    if raw.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let layers: Vec<MaskLayer> = split_top_level_commas_value(raw)
+        .into_iter()
+        .filter_map(|part| {
+            parse_mask_layer_source(&part).map(|src| mask_layer_from_source(src, mode))
+        })
+        .collect();
+    mask_source_from_layers(layers)
+}
+
+fn extract_first_function(raw: &str) -> Option<(&str, &str)> {
+    let raw = raw.trim();
+    let open = raw.find('(')?;
+    let mut depth = 0i32;
+    let mut quote = None;
+    for (idx, ch) in raw.char_indices().skip(open) {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&raw[..=idx], raw[idx + 1..].trim()));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_mask_shorthand(val: &str, inherited_mode: MaskMode) -> Option<Option<MaskSource>> {
+    let raw = val.trim();
+    if raw.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let (image, rest) = extract_first_function(raw)?;
+    let mut layer = mask_layer_from_source(parse_mask_layer_source(image)?, inherited_mode);
+    let mut rest = rest.trim();
+    for token in split_css_words(rest) {
+        match token.as_str() {
+            "alpha" | "luminance" | "match-source" => layer.mode = parse_mask_mode(&token),
+            "repeat" | "no-repeat" | "repeat-x" | "repeat-y" => {
+                layer.layer_box.repeat = Some(parse_background_repeat_value(&token));
+            }
+            "border-box" | "padding-box" | "content-box" => {
+                if let Some(box_kind) = parse_shape_box(&token) {
+                    layer.origin = box_kind;
+                    layer.clip = box_kind;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some((pos, tail)) = rest.split_once('/') {
+        layer.layer_box.position = parse_background_position(pos.trim());
+        let size_tokens: Vec<String> = split_css_components(tail)
+            .into_iter()
+            .take_while(|t| {
+                !matches!(
+                    t.as_str(),
+                    "repeat" | "no-repeat" | "repeat-x" | "repeat-y" | "alpha" | "luminance"
+                )
+            })
+            .collect();
+        if !size_tokens.is_empty() {
+            layer.layer_box.size = Some(parse_background_size_value(&size_tokens.join(" ")));
+        }
+    } else {
+        let tokens = split_css_components(rest);
+        let mut pos_tokens = Vec::new();
+        for token in &tokens {
+            if matches!(
+                token.as_str(),
+                "repeat" | "no-repeat" | "repeat-x" | "repeat-y" | "alpha" | "luminance"
+            ) || parse_shape_box(token).is_some()
+            {
+                break;
+            }
+            pos_tokens.push(token.clone());
+        }
+        if !pos_tokens.is_empty() {
+            layer.layer_box.position = parse_background_position(&pos_tokens.join(" "));
+        }
+    }
+    rest = "";
+    let _ = rest;
+    Some(Some(MaskSource::Layers(vec![layer])))
+}
+
+fn apply_mask_longhands(map: &StyleMap, style: &mut ComputedStyle) {
+    let Some(source) = style.mask_image.take() else {
+        if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-border-source")
+            && parse_mask_layer_source(k).is_some()
+        {
+            let width = get_non_special(map, "mask-border-width")
+                .and_then(|v| match v {
+                    CssValue::Length(w) => Some(*w),
+                    CssValue::Keyword(k) => parse_clip_len(k).map(|(v, _)| v),
+                    _ => None,
+                })
+                .unwrap_or(0.0);
+            style.mask_image = Some(MaskSource::BorderRing { width });
+        }
+        return;
+    };
+    let mut layers = match source {
+        MaskSource::Layers(layers) => layers,
+        MaskSource::Linear(g) => vec![mask_layer_from_source(
+            MaskLayerSource::Linear(g),
+            style.mask_mode,
+        )],
+        MaskSource::Radial(g) => vec![mask_layer_from_source(
+            MaskLayerSource::Radial(g),
+            style.mask_mode,
+        )],
+        MaskSource::Conic(g) => vec![mask_layer_from_source(
+            MaskLayerSource::Conic(g),
+            style.mask_mode,
+        )],
+        MaskSource::Svg(bytes) => vec![mask_layer_from_source(
+            MaskLayerSource::Svg(bytes),
+            style.mask_mode,
+        )],
+        MaskSource::Ref(id) => vec![mask_layer_from_source(
+            MaskLayerSource::Ref(id),
+            style.mask_mode,
+        )],
+        MaskSource::BorderRing { width } => {
+            style.mask_image = Some(MaskSource::BorderRing { width });
+            return;
+        }
+    };
+    if layers.is_empty() {
+        return;
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-size") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx) {
+                layer.layer_box.size = Some(parse_background_size_value(&part));
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-position") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx) {
+                layer.layer_box.position = parse_background_position(&part);
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-repeat") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx) {
+                layer.layer_box.repeat = Some(parse_background_repeat_value(&part));
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-origin") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx).and_then(|p| parse_shape_box(&p)) {
+                layer.origin = part;
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-clip") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx).and_then(|p| parse_shape_box(&p)) {
+                layer.clip = part;
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-mode") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx) {
+                layer.mode = parse_mask_mode(&part);
+            }
+        }
+    }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-composite") {
+        for (idx, layer) in layers.iter_mut().enumerate() {
+            if let Some(part) = nth_layer_value(k, idx) {
+                layer.composite = parse_mask_composite(&part);
+            }
+        }
+    }
+    style.mask_image = Some(MaskSource::Layers(layers));
+}
+
+/// Resolve a `url(...)` mask reference to raw SVG bytes (css-masking-1 §3.1).
+///
+/// Returns `Some(bytes)` only when the reference loads and looks like SVG;
+/// otherwise `None` so the caller leaves the existing mask value untouched.
+fn parse_mask_url_svg(val: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+    let inner = val.strip_prefix("url(")?.strip_suffix(')')?.trim();
+    // Strip optional surrounding quotes.
+    let url = inner
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(inner)
+        .trim();
+    if url.is_empty() {
+        return None;
+    }
+    let (bytes, _mime) = crate::layout::images::load_src_bytes(url)?;
+    // Accept only sources whose bytes actually sniff as SVG, since the mask
+    // rasteriser only understands SVG image sources. The MIME alone is not
+    // trusted (it can mislabel non-SVG payloads).
+    if !crate::layout::images::looks_like_svg(&bytes) {
+        return None;
+    }
+    Some(std::sync::Arc::new(bytes))
+}
+
+/// Parse a CSS Grid box-alignment keyword (`start`/`end`/`center`/`stretch`).
+/// Also accepts the flex aliases `flex-start`/`flex-end` for robustness.
+fn parse_display_value(k: &str) -> Option<Display> {
+    let lower = k.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "none" => return Some(Display::None),
+        "inline" => return Some(Display::Inline),
+        "inline-block" => return Some(Display::InlineBlock),
+        "inline-flex" => return Some(Display::InlineFlex),
+        "block" | "-webkit-box" => return Some(Display::Block),
+        "list-item" => return Some(Display::ListItem),
+        "flex" => return Some(Display::Flex),
+        "grid" => return Some(Display::Grid),
+        "inline-grid" => return Some(Display::InlineGrid),
+        "table" => return Some(Display::Table),
+        "inline-table" => return Some(Display::InlineTable),
+        "table-row-group" => return Some(Display::TableRowGroup),
+        "table-header-group" => return Some(Display::TableHeaderGroup),
+        "table-footer-group" => return Some(Display::TableFooterGroup),
+        "table-row" => return Some(Display::TableRow),
+        "table-cell" => return Some(Display::TableCell),
+        "table-column-group" => return Some(Display::TableColumnGroup),
+        "table-column" => return Some(Display::TableColumn),
+        "table-caption" => return Some(Display::TableCaption),
+        _ => {}
+    }
+
+    let parts: Vec<&str> = lower.split_whitespace().collect();
+    if parts.contains(&"none") {
+        Some(Display::None)
+    } else if parts.contains(&"inline") && parts.contains(&"flex") {
+        Some(Display::InlineFlex)
+    } else if parts.contains(&"flex") {
+        Some(Display::Flex)
+    } else if parts.contains(&"grid") {
+        if parts.contains(&"inline") {
+            Some(Display::InlineGrid)
+        } else {
+            Some(Display::Grid)
+        }
+    } else if parts.contains(&"table") {
+        if parts.contains(&"caption") {
+            Some(Display::TableCaption)
+        } else if parts.contains(&"cell") {
+            Some(Display::TableCell)
+        } else if parts.contains(&"row") {
+            Some(Display::TableRow)
+        } else if parts.contains(&"column") {
+            Some(Display::TableColumn)
+        } else if parts.contains(&"inline") {
+            Some(Display::InlineTable)
+        } else {
+            Some(Display::Table)
+        }
+    } else if parts.contains(&"inline")
+        && (parts.contains(&"block") || parts.contains(&"flow-root"))
+    {
+        Some(Display::InlineBlock)
+    } else if parts.contains(&"inline") {
+        Some(Display::Inline)
+    } else if parts.contains(&"list-item") {
+        Some(Display::ListItem)
+    } else if parts.contains(&"block") || parts.contains(&"flow") {
+        Some(Display::Block)
+    } else {
+        None
+    }
+}
+
+fn strip_overflow_position(k: &str) -> (&str, bool) {
+    let raw = k.trim();
+    if let Some(rest) = raw.strip_prefix("safe ") {
+        (rest.trim(), true)
+    } else if let Some(rest) = raw.strip_prefix("unsafe ") {
+        (rest.trim(), false)
+    } else {
+        (raw, false)
+    }
+}
+
+fn split_alignment_components(k: &str) -> Vec<String> {
+    let tokens: Vec<&str> = k.split_whitespace().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if matches!(tokens[i], "safe" | "unsafe") && i + 1 < tokens.len() {
+            out.push(format!("{} {}", tokens[i], tokens[i + 1]));
+            i += 2;
+        } else {
+            out.push(tokens[i].to_string());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn parse_justify_content(k: &str, is_row: bool) -> JustifyContent {
+    let (kw, safe) = strip_overflow_position(k);
+    match kw {
+        "flex-end" | "end" => JustifyContent::FlexEnd,
+        "right" if is_row => JustifyContent::FlexEnd,
+        "left" | "right" => JustifyContent::FlexStart,
+        "center" if safe => JustifyContent::SafeCenter,
+        "center" => JustifyContent::Center,
+        "space-between" => JustifyContent::SpaceBetween,
+        "space-around" => JustifyContent::SpaceAround,
+        "space-evenly" => JustifyContent::SpaceEvenly,
+        _ => JustifyContent::FlexStart,
+    }
+}
+
+fn parse_align_items(k: &str) -> AlignItems {
+    match strip_overflow_position(k).0 {
+        "flex-start" | "start" | "self-start" => AlignItems::FlexStart,
+        "flex-end" | "end" | "self-end" => AlignItems::FlexEnd,
+        "center" => AlignItems::Center,
+        "baseline" | "first baseline" | "last baseline" => AlignItems::Baseline,
+        _ => AlignItems::Stretch,
+    }
+}
+
+fn parse_align_self(k: &str) -> AlignSelf {
+    match strip_overflow_position(k).0 {
+        "auto" => AlignSelf::Auto,
+        "flex-start" | "start" | "self-start" => AlignSelf::FlexStart,
+        "flex-end" | "end" | "self-end" => AlignSelf::FlexEnd,
+        "center" => AlignSelf::Center,
+        "baseline" | "first baseline" | "last baseline" => AlignSelf::Baseline,
+        "stretch" => AlignSelf::Stretch,
+        _ => AlignSelf::Auto,
+    }
+}
+
+fn parse_align_content(k: &str) -> AlignContent {
+    match strip_overflow_position(k).0 {
+        "flex-start" | "start" => AlignContent::FlexStart,
+        "flex-end" | "end" => AlignContent::FlexEnd,
+        "center" => AlignContent::Center,
+        "space-between" => AlignContent::SpaceBetween,
+        "space-around" => AlignContent::SpaceAround,
+        "space-evenly" => AlignContent::SpaceEvenly,
+        _ => AlignContent::Stretch,
+    }
+}
+
+fn parse_grid_align(k: &str) -> GridAlign {
+    match strip_overflow_position(k).0 {
+        "start" | "flex-start" | "left" | "self-start" => GridAlign::Start,
+        "end" | "flex-end" | "right" | "self-end" => GridAlign::End,
+        "center" => GridAlign::Center,
+        _ => GridAlign::Stretch,
+    }
+}
+
+fn split_css_components(val: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut quote: Option<char> = None;
+
+    for ch in val.chars() {
+        if let Some(q) = quote {
+            current.push(ch);
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            c if c.is_whitespace() && paren_depth == 0 && bracket_depth == 0 => {
+                if !current.trim().is_empty() {
+                    parts.push(current.trim().to_string());
+                    current.clear();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
+fn set_flex_basis_auto(style: &mut ComputedStyle, content_sized: bool) {
+    style.flex_basis = None;
+    style.flex_basis_pct = None;
+    style.flex_basis_content = content_sized;
+    style.flex_basis_keyword = if content_sized {
+        Some(IntrinsicWidthKeyword::MaxContent)
+    } else {
+        None
+    };
+}
+
+fn set_flex_basis_length(style: &mut ComputedStyle, value: f32) {
+    style.flex_basis = Some(value.max(0.0));
+    style.flex_basis_pct = None;
+    style.flex_basis_content = false;
+    style.flex_basis_keyword = None;
+}
+
+fn set_flex_basis_percentage(style: &mut ComputedStyle, pct: f32) {
+    style.flex_basis_pct = Some((pct / 100.0).max(0.0));
+    style.flex_basis = None;
+    style.flex_basis_content = false;
+    style.flex_basis_keyword = None;
+}
+
+fn apply_flex_basis_value(
+    style: &mut ComputedStyle,
+    value: &CssValue,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) -> bool {
+    match value {
+        CssValue::Length(v) => {
+            set_flex_basis_length(style, *v);
+            true
+        }
+        CssValue::Percentage(p) => {
+            set_flex_basis_percentage(style, *p);
+            true
+        }
+        CssValue::Keyword(k) => apply_flex_basis_token(style, k, length_context),
+        CssValue::Calc(_)
+        | CssValue::Clamp(_, _, _)
+        | CssValue::Var(_, _)
+        | CssValue::Rem(_)
+        | CssValue::Vw(_)
+        | CssValue::Vh(_)
+        | CssValue::Vmin(_)
+        | CssValue::Vmax(_)
+        | CssValue::Ex(_)
+        | CssValue::Ch(_)
+        | CssValue::Number(_) => {
+            if let Some(v) = resolve_css_length_for_style(value, style, length_context) {
+                set_flex_basis_length(style, v);
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn apply_flex_basis_token(
+    style: &mut ComputedStyle,
+    token: &str,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) -> bool {
+    let lower = token.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "auto" => {
+            set_flex_basis_auto(style, false);
+            true
+        }
+        "content" | "max-content" => {
+            set_flex_basis_auto(style, true);
+            true
+        }
+        "fit-content" | "min-content" => {
+            set_flex_basis_auto(style, true);
+            style.flex_basis_keyword = Some(if lower == "min-content" {
+                IntrinsicWidthKeyword::MinContent
+            } else {
+                IntrinsicWidthKeyword::FitContent
+            });
+            true
+        }
+        _ => match parse_length(&lower) {
+            Some(CssValue::Percentage(p)) => {
+                set_flex_basis_percentage(style, p);
+                true
+            }
+            Some(parsed) => apply_flex_basis_value(style, &parsed, length_context),
+            None => false,
+        },
+    }
+}
+
+fn set_flex_basis_zero(style: &mut ComputedStyle) {
+    style.flex_basis = Some(0.0);
+    style.flex_basis_pct = None;
+    style.flex_basis_content = false;
+    style.flex_basis_keyword = None;
+}
+
+fn apply_flex_shorthand(
+    style: &mut ComputedStyle,
+    value: &str,
+    length_context: crate::style::resolve::LengthResolutionContext,
+) {
+    let lower = value.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "none" => {
+            style.flex_grow = 0.0;
+            style.flex_shrink = 0.0;
+            set_flex_basis_auto(style, false);
+            return;
+        }
+        "auto" => {
+            style.flex_grow = 1.0;
+            style.flex_shrink = 1.0;
+            set_flex_basis_auto(style, false);
+            return;
+        }
+        "initial" => {
+            style.flex_grow = 0.0;
+            style.flex_shrink = 1.0;
+            set_flex_basis_auto(style, false);
+            return;
+        }
+        _ => {}
+    }
+
+    let parts = split_css_components(&lower);
+    let Some(first) = parts.first() else {
+        return;
+    };
+
+    if let Ok(grow) = first.parse::<f32>() {
+        style.flex_grow = grow.max(0.0);
+        style.flex_shrink = 1.0;
+        set_flex_basis_zero(style);
+
+        if let Some(second) = parts.get(1) {
+            if let Ok(shrink) = second.parse::<f32>() {
+                style.flex_shrink = shrink.max(0.0);
+                if let Some(third) = parts.get(2) {
+                    apply_flex_basis_token(style, third, length_context);
+                }
+            } else {
+                apply_flex_basis_token(style, second, length_context);
+            }
+        }
+        return;
+    }
+
+    if parts.len() == 1 && apply_flex_basis_token(style, first, length_context) {
+        style.flex_grow = 1.0;
+        style.flex_shrink = 1.0;
+    }
+}
+
+/// Parse a single `flex-direction` keyword. Returns `None` for unrecognized
+/// tokens so the `flex-flow` shorthand can try them as a `flex-wrap` value.
+fn parse_flex_direction(k: &str) -> Option<FlexDirection> {
+    match k.trim() {
+        "row" => Some(FlexDirection::Row),
+        "row-reverse" => Some(FlexDirection::RowReverse),
+        "column" => Some(FlexDirection::Column),
+        "column-reverse" => Some(FlexDirection::ColumnReverse),
+        _ => None,
+    }
+}
+
+/// Parse a single `flex-wrap` keyword. Returns `None` for unrecognized tokens
+/// so the `flex-flow` shorthand can try them as a `flex-direction` value.
+fn parse_flex_wrap(k: &str) -> Option<FlexWrap> {
+    match k.trim() {
+        "nowrap" => Some(FlexWrap::NoWrap),
+        "wrap" => Some(FlexWrap::Wrap),
+        "wrap-reverse" => Some(FlexWrap::WrapReverse),
+        _ => None,
+    }
+}
+
+/// Parse a `grid-column` / `grid-row` value into a span count. Supports
+/// `span N` and bare integer line ranges (`start / end` → end-start). Returns
+/// `None` when no explicit span is expressed (defaults to 1 elsewhere).
+fn parse_grid_span(val: &str) -> Option<usize> {
+    let val = val.trim();
+    // `a / b` line syntax: span = |b - a| when both are integers.
+    if let Some((a, b)) = val.split_once('/') {
+        let a = a.trim();
+        let b = b.trim();
+        if let Some(rest) = b.strip_prefix("span") {
+            return rest.trim().parse::<usize>().ok().filter(|n| *n >= 1);
+        }
+        if let (Ok(ai), Ok(bi)) = (a.parse::<i32>(), b.parse::<i32>()) {
+            let n = (bi - ai).unsigned_abs() as usize;
+            return if n >= 1 { Some(n) } else { None };
+        }
+        return None;
+    }
+    if let Some(rest) = val.strip_prefix("span") {
+        return rest.trim().parse::<usize>().ok().filter(|n| *n >= 1);
+    }
+    None
+}
+
+/// Parse a single grid-placement endpoint (one side of `grid-column` /
+/// `grid-row` / a quarter of `grid-area`). CSS Grid §8.3 grammar (subset):
+///   `auto | <integer> | span <integer> | <custom-ident> | span <custom-ident>`
+fn parse_grid_line(token: &str) -> GridLine {
+    let token = token.trim();
+    if token.is_empty() || token == "auto" {
+        return GridLine::Auto;
+    }
+    if let Some(rest) = token.strip_prefix("span") {
+        let rest = rest.trim();
+        if let Ok(n) = rest.parse::<usize>() {
+            return GridLine::Span(n.max(1));
+        }
+        let parts = split_css_components(rest);
+        if parts.len() == 2 {
+            if let Ok(n) = parts[0].parse::<usize>() {
+                return GridLine::Span(n.max(1));
+            }
+            if let Ok(n) = parts[1].parse::<usize>() {
+                return GridLine::Span(n.max(1));
+            }
+        }
+        if !rest.is_empty() {
+            return GridLine::SpanNamed(rest.to_string());
+        }
+        return GridLine::Span(1);
+    }
+    if let Ok(n) = token.parse::<i32>() {
+        // A line number of 0 is invalid per spec; treat as auto.
+        if n != 0 {
+            return GridLine::Line(n);
+        }
+        return GridLine::Auto;
+    }
+    GridLine::Named(token.to_string())
+}
+
+/// Parse a `grid-column` / `grid-row` shorthand into (start, end) endpoints.
+/// The two sides are separated by `/`; an omitted second side defaults to
+/// `auto` (which §8.3 then resolves to a 1-track span / matching named line).
+fn parse_grid_placement_shorthand(val: &str) -> (GridLine, GridLine) {
+    let val = val.trim();
+    if let Some((a, b)) = val.split_once('/') {
+        (parse_grid_line(a), parse_grid_line(b))
+    } else {
+        (parse_grid_line(val), GridLine::Auto)
+    }
+}
+
+/// Apply a `grid-area` value to a style. Either a single `<custom-ident>`
+/// naming an area, or the 4-value line form
+/// `row-start / col-start / row-end / col-end` (§8.1, omitted parts = auto).
+fn apply_grid_area(style: &mut ComputedStyle, val: &str) {
+    let val = val.trim();
+    if val.contains('/') {
+        let parts: Vec<&str> = val.split('/').collect();
+        let get = |i: usize| parts.get(i).map(|s| parse_grid_line(s)).unwrap_or_default();
+        style.grid_row_start = get(0);
+        style.grid_column_start = get(1);
+        style.grid_row_end = get(2);
+        style.grid_column_end = get(3);
+    } else if !val.is_empty() && val != "auto" {
+        style.grid_area_name = Some(val.to_string());
+    }
+}
+
+/// Parse `grid-template-areas` row strings into a row-major grid of optional
+/// area names (§7.3). Each quoted string is a row; whitespace-separated tokens
+/// are cells; a token of all dots (`.`/`...`) is a null (empty) cell → `None`.
+/// CSS requires equal row lengths and rectangular named areas; invalid
+/// declarations are ignored by returning an empty area matrix.
+fn parse_grid_template_areas(val: &str) -> Vec<Vec<Option<String>>> {
+    let val = val.trim();
+    if val == "none" || val.is_empty() {
+        return Vec::new();
+    }
+    let mut row_strings: Vec<String> = Vec::new();
+    // Each row is delimited by a quoted string. Split on the quote characters
+    // and keep the segments between matched quotes.
+    let mut in_quote = false;
+    let mut current = String::new();
+    for ch in val.chars() {
+        match ch {
+            '"' | '\'' => {
+                if in_quote {
+                    // End of a row string.
+                    if !current.trim().is_empty() {
+                        row_strings.push(current.clone());
+                    }
+                    current.clear();
+                    in_quote = false;
+                } else {
+                    in_quote = true;
+                }
+            }
+            _ if in_quote => current.push(ch),
+            _ => {}
+        }
+    }
+    parse_grid_template_area_rows(&row_strings).unwrap_or_default()
+}
+
+fn parse_grid_template_area_rows(row_strings: &[String]) -> Option<Vec<Vec<Option<String>>>> {
+    let mut rows = Vec::new();
+    for row in row_strings {
+        let cells: Vec<Option<String>> = row
+            .split_whitespace()
+            .map(|tok| {
+                if tok.chars().all(|c| c == '.') {
+                    None
+                } else {
+                    Some(tok.to_string())
+                }
+            })
+            .collect();
+        if cells.is_empty() {
+            return None;
+        }
+        rows.push(cells);
+    }
+
+    if rows.is_empty() || !grid_template_areas_are_valid(&rows) {
+        None
+    } else {
+        Some(rows)
+    }
+}
+
+fn grid_template_areas_are_valid(rows: &[Vec<Option<String>>]) -> bool {
+    let Some(width) = rows.first().map(Vec::len) else {
+        return false;
+    };
+    if width == 0 || rows.iter().any(|row| row.len() != width) {
+        return false;
+    }
+
+    let mut bounds: HashMap<&str, (usize, usize, usize, usize)> = HashMap::new();
+    for (r, row) in rows.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if let Some(name) = cell {
+                let entry = bounds.entry(name.as_str()).or_insert((r, r, c, c));
+                entry.0 = entry.0.min(r);
+                entry.1 = entry.1.max(r);
+                entry.2 = entry.2.min(c);
+                entry.3 = entry.3.max(c);
+            }
+        }
+    }
+
+    for (name, (r0, r1, c0, c1)) in bounds {
+        for row in rows.iter().take(r1 + 1).skip(r0) {
+            for cell in row.iter().take(c1 + 1).skip(c0) {
+                if cell.as_deref() != Some(name) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
+fn apply_grid_template_areas(style: &mut ComputedStyle, areas: Vec<Vec<Option<String>>>) {
+    style.grid_template_areas = areas;
+    synthesize_grid_area_tracks(style);
+}
+
+fn synthesize_grid_area_tracks(style: &mut ComputedStyle) {
+    if style.grid_template_areas.is_empty() {
+        return;
+    }
+    let rows = style.grid_template_areas.len();
+    let cols = style
+        .grid_template_areas
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
+
+    if cols > 0 && style.grid_template_columns.is_empty() {
+        style.grid_template_columns = vec![GridTrack::Auto; cols];
+        style.grid_template_column_line_names = vec![Vec::new(); cols + 1];
+    }
+    if rows > 0 && style.grid_template_rows.is_empty() {
+        style.grid_template_rows = vec![GridTrack::Auto; rows];
+        style.grid_template_row_line_names = vec![Vec::new(); rows + 1];
+    }
+}
+
+fn split_top_level_once(value: &str, delimiter: char) -> Option<(&str, &str)> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut quote: Option<char> = None;
+
+    for (idx, ch) in value.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            c if c == delimiter && paren_depth == 0 && bracket_depth == 0 => {
+                let after = idx + ch.len_utf8();
+                return Some((&value[..idx], &value[after..]));
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn reset_grid_template(style: &mut ComputedStyle) {
+    style.grid_template_columns.clear();
+    style.grid_template_rows.clear();
+    style.grid_template_areas.clear();
+    style.grid_template_column_line_names.clear();
+    style.grid_template_row_line_names.clear();
+}
+
+fn apply_grid_track_list_to_rows(style: &mut ComputedStyle, value: &str) {
+    let (tracks, names) = parse_grid_track_list(value);
+    style.grid_template_rows = tracks;
+    style.grid_template_row_line_names = names;
+}
+
+fn apply_grid_track_list_to_columns(style: &mut ComputedStyle, value: &str) {
+    let (tracks, names) = parse_grid_track_list(value);
+    style.grid_template_columns = tracks;
+    style.grid_template_column_line_names = names;
+}
+
+type GridTemplateAreaRows = (Vec<Vec<Option<String>>>, Vec<GridTrack>, Vec<Vec<String>>);
+
+fn parse_grid_template_rows_with_areas(value: &str) -> Option<GridTemplateAreaRows> {
+    let mut row_strings = Vec::new();
+    let mut row_tracks = Vec::new();
+    let mut row_line_names: Vec<Vec<String>> = vec![Vec::new()];
+    let mut pos = 0usize;
+
+    while pos < value.len() {
+        let remaining = &value[pos..];
+        let Some(open_rel) = remaining.find(['"', '\'']) else {
+            break;
+        };
+        let open = pos + open_rel;
+        let quote = value[open..].chars().next()?;
+        let content_start = open + quote.len_utf8();
+        let close_rel = value[content_start..].find(quote)?;
+        let close = content_start + close_rel;
+        row_strings.push(value[content_start..close].to_string());
+
+        let after_quote = close + quote.len_utf8();
+        let next_quote = value[after_quote..]
+            .find(['"', '\''])
+            .map(|idx| after_quote + idx)
+            .unwrap_or(value.len());
+        let track_segment = value[after_quote..next_quote].trim();
+        if !track_segment.is_empty() {
+            let (tracks, names) = parse_grid_track_list(track_segment);
+            if let Some(first) = tracks.first() {
+                if let (Some(slot), Some(src)) = (row_line_names.last_mut(), names.first()) {
+                    slot.extend(src.iter().cloned());
+                }
+                row_tracks.push(first.clone());
+                row_line_names.push(names.get(1).cloned().unwrap_or_default());
+            }
+        } else {
+            row_tracks.push(GridTrack::Auto);
+            row_line_names.push(Vec::new());
+        }
+        pos = next_quote;
+    }
+
+    let areas = parse_grid_template_area_rows(&row_strings)?;
+    while row_tracks.len() < areas.len() {
+        row_tracks.push(GridTrack::Auto);
+        row_line_names.push(Vec::new());
+    }
+    Some((areas, row_tracks, row_line_names))
+}
+
+fn apply_grid_template_shorthand(style: &mut ComputedStyle, value: &str) {
+    let value = value.trim();
+    if value == "none" {
+        reset_grid_template(style);
+        return;
+    }
+
+    let (rows_part, cols_part) = split_top_level_once(value, '/').unwrap_or((value, ""));
+    if rows_part.contains('"') || rows_part.contains('\'') {
+        if let Some((areas, rows, row_names)) = parse_grid_template_rows_with_areas(rows_part) {
+            style.grid_template_areas = areas;
+            style.grid_template_rows = rows;
+            style.grid_template_row_line_names = row_names;
+        }
+    } else if !rows_part.trim().is_empty() && rows_part.trim() != "none" {
+        apply_grid_track_list_to_rows(style, rows_part);
+    }
+
+    if !cols_part.trim().is_empty() && cols_part.trim() != "none" {
+        apply_grid_track_list_to_columns(style, cols_part);
+    }
+    synthesize_grid_area_tracks(style);
+}
+
+fn apply_grid_shorthand(style: &mut ComputedStyle, value: &str) {
+    reset_grid_template(style);
+    style.grid_auto_rows = None;
+    style.grid_auto_rows_pattern.clear();
+    style.grid_auto_flow_column = false;
+    style.grid_auto_flow_dense = false;
+
+    let value = value.trim();
+    if value == "none" {
+        return;
+    }
+
+    let (before_slash, after_slash) = split_top_level_once(value, '/').unwrap_or((value, ""));
+    let before_tokens = split_css_components(before_slash);
+    let after_tokens = split_css_components(after_slash);
+    let before_auto_flow = before_tokens.iter().any(|t| t == "auto-flow");
+    let after_auto_flow = after_tokens.iter().any(|t| t == "auto-flow");
+
+    if before_auto_flow {
+        style.grid_auto_flow_column = false;
+        style.grid_auto_flow_dense = before_tokens.iter().any(|t| t == "dense");
+        let row_tokens: Vec<&str> = before_tokens
+            .iter()
+            .map(String::as_str)
+            .filter(|t| *t != "auto-flow" && *t != "dense")
+            .collect();
+        if let Some(track) = row_tokens.first().and_then(|t| parse_single_track(t)) {
+            if let Some(v) = fixed_grid_track_size(&track) {
+                style.grid_auto_rows = Some(v);
+                style.grid_auto_rows_pattern = vec![v];
+            }
+        }
+        if !after_slash.trim().is_empty() {
+            apply_grid_track_list_to_columns(style, after_slash);
+        }
+        return;
+    }
+
+    if after_auto_flow {
+        style.grid_auto_flow_column = true;
+        style.grid_auto_flow_dense = after_tokens.iter().any(|t| t == "dense");
+        if !before_slash.trim().is_empty() {
+            apply_grid_track_list_to_rows(style, before_slash);
+        }
+        return;
+    }
+
+    apply_grid_template_shorthand(style, value);
+}
+
+fn fixed_grid_track_size(track: &GridTrack) -> Option<f32> {
+    match track {
+        GridTrack::Fixed(v) => Some(*v),
+        GridTrack::Minmax(min, _) => Some(*min),
+        _ => None,
     }
 }
 
@@ -3172,6 +11085,8 @@ fn parse_single_track(token: &str) -> Option<GridTrack> {
     let token = token.trim();
     if let Some(n) = token.strip_suffix("fr") {
         n.parse::<f32>().ok().map(GridTrack::Fr)
+    } else if let Some(n) = token.strip_suffix('%') {
+        n.parse::<f32>().ok().map(|v| GridTrack::Percent(v / 100.0))
     } else if token == "auto" || token == "auto-fill" || token == "auto-fit" {
         Some(GridTrack::Auto)
     } else if let Some(n) = token.strip_suffix("pt") {
@@ -3214,18 +11129,51 @@ fn parse_minmax(val: &str) -> Option<GridTrack> {
     Some(GridTrack::Minmax(min_val, max_val))
 }
 
-/// Parse a `grid-template-columns` value string into a list of `GridTrack` values.
+/// Parse a `grid-template-columns`/`-rows` value into a list of `GridTrack`s.
 ///
 /// Supports tokens like `1fr`, `200pt`, `100px`, `auto`, `repeat(3, 1fr)`,
-/// `minmax(100px, 1fr)`, `auto-fill`, and `auto-fit`.
+/// `minmax(100px, 1fr)`, `auto-fill`, and `auto-fit`. Bracketed `[name]` line
+/// names are tolerated (and dropped). For the line-name vocabulary use
+/// `parse_grid_track_list`.
+#[cfg(test)]
 fn parse_grid_template_columns(val: &str) -> Vec<GridTrack> {
-    let mut result = Vec::new();
+    parse_grid_track_list(val).0
+}
+
+/// Parse a track list into both the `GridTrack`s and the names of each grid
+/// *line* (CSS Grid §7.1). The returned name list has `tracks.len() + 1`
+/// entries (line index 0 = the line before the first track); entry `i` holds
+/// the names declared for line `i` via bracketed `[a b]` tokens.
+fn parse_grid_track_list(val: &str) -> (Vec<GridTrack>, Vec<Vec<String>>) {
+    let mut result: Vec<GridTrack> = Vec::new();
+    // Names accumulate at the "current" line (index == result.len()).
+    let mut line_names: Vec<Vec<String>> = vec![Vec::new()];
     let mut remaining = val.trim();
+
+    let push_track =
+        |result: &mut Vec<GridTrack>, line_names: &mut Vec<Vec<String>>, track: GridTrack| {
+            result.push(track);
+            line_names.push(Vec::new());
+        };
 
     while !remaining.is_empty() {
         remaining = remaining.trim_start();
         if remaining.is_empty() {
             break;
+        }
+
+        // Bracketed line-name set: `[name1 name2]` names the current line.
+        if remaining.starts_with('[') {
+            if let Some(close) = remaining.find(']') {
+                let names = &remaining[1..close];
+                if let Some(slot) = line_names.last_mut() {
+                    for n in names.split_whitespace() {
+                        slot.push(n.to_string());
+                    }
+                }
+                remaining = &remaining[close + 1..];
+                continue;
+            }
         }
 
         // Handle repeat(...)
@@ -3246,9 +11194,20 @@ fn parse_grid_template_columns(val: &str) -> Vec<GridTrack> {
                         count_str.parse().unwrap_or(1)
                     };
 
-                    let track_list = parse_grid_template_columns(pattern);
+                    let (track_list, sub_names) = parse_grid_track_list(pattern);
                     for _ in 0..count {
-                        result.extend(track_list.clone());
+                        // Merge the pattern's interior line names at each repeat.
+                        for (i, t) in track_list.iter().enumerate() {
+                            if let (Some(slot), Some(src)) =
+                                (line_names.last_mut(), sub_names.get(i))
+                            {
+                                slot.extend(src.iter().cloned());
+                            }
+                            push_track(&mut result, &mut line_names, t.clone());
+                        }
+                        if let (Some(slot), Some(src)) = (line_names.last_mut(), sub_names.last()) {
+                            slot.extend(src.iter().cloned());
+                        }
                     }
                 }
                 remaining = rest;
@@ -3261,25 +11220,55 @@ fn parse_grid_template_columns(val: &str) -> Vec<GridTrack> {
             if let Some(close) = find_matching_paren(remaining, 7) {
                 let expr = &remaining[..close + 1];
                 if let Some(track) = parse_minmax(expr) {
-                    result.push(track);
+                    push_track(&mut result, &mut line_names, track);
                 }
                 remaining = &remaining[close + 1..];
                 continue;
             }
         }
 
-        // Regular token — read until next whitespace or function start
+        // fit-content(...) → approximate as an auto track (sized to content,
+        // capped at the argument, which we don't yet enforce).
+        if remaining.starts_with("fit-content(") {
+            if let Some(close) = find_matching_paren(remaining, 12) {
+                push_track(&mut result, &mut line_names, GridTrack::Auto);
+                remaining = &remaining[close + 1..];
+                continue;
+            }
+        }
+
+        // Regular token — read until next whitespace or bracket.
         let end = remaining
-            .find(|c: char| c.is_whitespace())
+            .find(|c: char| c.is_whitespace() || c == '[')
             .unwrap_or(remaining.len());
         let token = &remaining[..end];
-        if let Some(track) = parse_single_track(token) {
-            result.push(track);
+        // `min-content` / `max-content` keywords → approximate as Auto.
+        if token == "min-content" || token == "max-content" {
+            push_track(&mut result, &mut line_names, GridTrack::Auto);
+        } else if let Some(track) = parse_single_track(token) {
+            push_track(&mut result, &mut line_names, track);
         }
         remaining = &remaining[end..];
     }
 
-    result
+    add_nth_line_name_aliases(&mut line_names);
+    (result, line_names)
+}
+
+fn add_nth_line_name_aliases(line_names: &mut [Vec<String>]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for names in line_names.iter_mut() {
+        let originals = names.clone();
+        for name in originals {
+            if name.contains(char::is_whitespace) {
+                continue;
+            }
+            let count = counts.entry(name.clone()).or_insert(0);
+            *count += 1;
+            names.push(format!("{} {}", *count, name));
+            names.push(format!("{} {}", name, *count));
+        }
+    }
 }
 
 /// Find the closing `)` matching an opening `(` at `start` in `s`.
@@ -3301,37 +11290,481 @@ fn find_matching_paren(s: &str, start: usize) -> Option<usize> {
 }
 
 /// Parse a border shorthand string like "1px solid black" into (width_pt, Option<Color>, BorderStyle).
-fn parse_border_shorthand(k: &str) -> (f32, Option<Color>, BorderStyle) {
-    let parts: Vec<&str> = k.split_whitespace().collect();
+/// Substitute every `var(--name[, fallback])` occurrence inside a raw value
+/// string with its resolved custom-property value, so var() works inside
+/// shorthands (e.g. `border: 4px solid var(--c)`, `background: var(--bg)`),
+/// not just standalone properties.
+fn resolve_embedded_vars(raw: &str, cp: &HashMap<String, String>) -> String {
+    if !raw.contains("var(") {
+        return raw.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(pos) = rest.find("var(") {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + 4..];
+        // Find the paren that closes THIS var(), accounting for nested var()
+        // inside the fallback (e.g. `var(--a, var(--b, 12px))`). A naive
+        // `find(')')` would stop at the inner var()'s `)`, truncating the
+        // fallback and dropping the whole substitution.
+        let Some(close) = matching_close_paren(after) else {
+            out.push_str(rest);
+            return out;
+        };
+        let inner = after[..close].trim();
+        let (name, fb) = match inner.split_once(',') {
+            Some((n, f)) => (n.trim(), Some(f.trim())),
+            None => (inner, None),
+        };
+        if let Some(v) = crate::style::resolve::resolve_var_to_string(name, fb, cp) {
+            out.push_str(&v);
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Byte offset of the `)` that closes the parenthesis group `s` is inside of,
+/// where `s` is the text immediately AFTER an opening `(`. Returns `None` if the
+/// group is unterminated. Nested `(...)` (e.g. a fallback containing another
+/// `var(...)`) are skipped so the offset is the OUTER group's close.
+fn matching_close_paren(s: &str) -> Option<usize> {
+    let mut depth = 0u32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A single border-radius token resolved to either an absolute length (points)
+/// or a percentage to be resolved against the box dimensions in layout.
+#[derive(Debug, Clone, Copy)]
+enum RadiusToken {
+    Len(f32),
+    Pct(f32),
+}
+
+/// Parse one border-radius token (`12px`, `40px`, `25%`, `0`) into a
+/// `RadiusToken`. Lengths convert px→pt; percentages are preserved for
+/// layout-time resolution. Returns `None` for unrecognised tokens.
+fn parse_radius_token(tok: &str) -> Option<RadiusToken> {
+    let tok = tok.trim();
+    if let Some(p) = tok.strip_suffix('%') {
+        return p.parse::<f32>().ok().map(RadiusToken::Pct);
+    }
+    if let Some(p) = tok.strip_suffix("px") {
+        return p.parse::<f32>().ok().map(|v| RadiusToken::Len(v * 0.75));
+    }
+    if let Some(p) = tok.strip_suffix("pt") {
+        return p.parse::<f32>().ok().map(RadiusToken::Len);
+    }
+    // Bare `0` (and other unitless numbers, treated as px-equivalent zero-ish
+    // lengths only when exactly zero per CSS; non-zero unitless is invalid but
+    // we accept it as points to be forgiving).
+    tok.parse::<f32>().ok().map(|v| {
+        if v == 0.0 {
+            RadiusToken::Len(0.0)
+        } else {
+            RadiusToken::Len(v * 0.75)
+        }
+    })
+}
+
+/// Expand the CSS `border-radius` shorthand (the horizontal-radii group, before
+/// any `/`) of 1-4 space-separated tokens into the four corners in
+/// [top-left, top-right, bottom-right, bottom-left] order, following the CSS
+/// edge-list expansion rules.
+fn expand_radius_group(tokens: &[RadiusToken]) -> [RadiusToken; 4] {
+    match tokens.len() {
+        1 => [tokens[0]; 4],
+        2 => [tokens[0], tokens[1], tokens[0], tokens[1]],
+        3 => [tokens[0], tokens[1], tokens[2], tokens[1]],
+        _ => [tokens[0], tokens[1], tokens[2], tokens[3]],
+    }
+}
+
+/// Parse a full `border-radius` value into per-corner horizontal and vertical
+/// radii. The grammar is `<h1> [h2 h3 h4] [ / <v1> [v2 v3 v4] ]`: the optional
+/// part after `/` gives the VERTICAL radii (elliptical corners). When no `/`
+/// group is present the vertical radii equal the horizontal ones (circular
+/// corners). Returns `(radii_x_pt, radii_x_pct, radii_y_pt, radii_y_pct)` in
+/// [top-left, top-right, bottom-right, bottom-left] corner order.
+#[allow(clippy::type_complexity)]
+fn parse_border_radius_shorthand(
+    value: &str,
+) -> ([f32; 4], [Option<f32>; 4], [f32; 4], [Option<f32>; 4]) {
+    let mut parts = value.split('/');
+    let horiz_part = parts.next().unwrap_or("").trim();
+    let vert_part = parts.next().map(str::trim);
+    let parse_group = |s: &str| -> Option<[RadiusToken; 4]> {
+        let tokens: Vec<RadiusToken> = s
+            .split_whitespace()
+            .filter_map(parse_radius_token)
+            .collect();
+        if tokens.is_empty() {
+            None
+        } else {
+            Some(expand_radius_group(&tokens))
+        }
+    };
+    let Some(h_corners) = parse_group(horiz_part) else {
+        return ([0.0; 4], [None; 4], [0.0; 4], [None; 4]);
+    };
+    // Vertical group defaults to the horizontal one (circular corners).
+    let v_corners = vert_part.and_then(parse_group).unwrap_or(h_corners);
+    let to_arrays = |corners: [RadiusToken; 4]| -> ([f32; 4], [Option<f32>; 4]) {
+        let mut radii = [0.0f32; 4];
+        let mut radii_pct = [None; 4];
+        for (i, c) in corners.iter().enumerate() {
+            match c {
+                RadiusToken::Len(v) => radii[i] = *v,
+                RadiusToken::Pct(p) => radii_pct[i] = Some(*p),
+            }
+        }
+        (radii, radii_pct)
+    };
+    let (rx, rx_pct) = to_arrays(h_corners);
+    let (ry, ry_pct) = to_arrays(v_corners);
+    (rx, rx_pct, ry, ry_pct)
+}
+
+/// Map a CSS `border-style` keyword to a `BorderStyle`. Unknown keywords keep
+/// the CSS-wide default (`solid`); `none`/`hidden` suppress the edge.
+fn parse_border_style_keyword(keyword: &str) -> BorderStyle {
+    parse_border_style_keyword_with_bevel(keyword).0
+}
+
+fn parse_border_style_keyword_with_bevel(keyword: &str) -> (BorderStyle, Option<BorderBevelKind>) {
+    match keyword.trim().to_ascii_lowercase().as_str() {
+        "solid" => (BorderStyle::Solid, None),
+        "dashed" => (BorderStyle::Dashed, None),
+        "dotted" => (BorderStyle::Dotted, None),
+        "double" => (BorderStyle::Double, None),
+        "groove" => (BorderStyle::Solid, Some(BorderBevelKind::Groove)),
+        "ridge" => (BorderStyle::Solid, Some(BorderBevelKind::Ridge)),
+        "inset" => (BorderStyle::Solid, Some(BorderBevelKind::Inset)),
+        "outset" => (BorderStyle::Solid, Some(BorderBevelKind::Outset)),
+        "none" | "hidden" => (BorderStyle::None, None),
+        _ => (BorderStyle::Solid, None),
+    }
+}
+
+/// Parse a `column-rule` shorthand (`<width> || <style> || <color>`) into a
+/// `BorderSide`, reusing the border-shorthand tokenizer. Per CSS Multicol §6 the
+/// initial `column-rule-width` is `medium`, so a shorthand that names a visible
+/// style without a width (e.g. `column-rule: dotted blue`) still paints at the
+/// medium width rather than the 0 the border tokenizer leaves it at.
+fn parse_column_rule_shorthand(k: &str, font_size: f32) -> BorderSide {
+    let (mut width, color, style, _) = parse_border_shorthand(k, font_size);
+    if width <= 0.0 && style != BorderStyle::None {
+        width = MEDIUM_RULE_WIDTH_PT;
+    }
+    BorderSide {
+        width,
+        color,
+        style,
+    }
+}
+
+/// CSS `medium` line width in points (~3px). Shared by the column-rule
+/// shorthand and longhand defaults.
+const MEDIUM_RULE_WIDTH_PT: f32 = 2.25;
+
+/// Resolve a `border-*-width` CssValue (uniform or per-side) to points using the
+/// element's `font_size` as the em basis. Absolute lengths (`CssValue::Length`,
+/// already in pt) apply directly; a font-relative width (`em`/`ex`/`ch`, which
+/// `parse_length` emits as `CssValue::Number` — an em factor) multiplies by the
+/// font-size, mirroring the margin/width paths. `rem` resolves against the same
+/// font-size (the consumers run before the root-font-size context is built, and a
+/// `rem` border width is exceedingly rare). Returns `None` for anything that
+/// isn't a usable length so the caller leaves the existing width untouched.
+fn resolve_border_width(val: Option<&CssValue>, font_size: f32) -> Option<f32> {
+    match val? {
+        CssValue::Length(v) => Some(*v),
+        CssValue::Number(v) => Some(*v * font_size),
+        CssValue::Rem(v) => Some(*v * font_size),
+        _ => None,
+    }
+}
+
+fn sync_line_height_from_absolute(style: &mut ComputedStyle) {
+    if let Some(absolute) = style.line_height_absolute
+        && style.font_size > 0.0
+    {
+        style.line_height = absolute / style.font_size;
+    }
+}
+
+fn style_length_context(
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+) -> crate::style::resolve::LengthResolutionContext {
+    crate::style::resolve::LengthResolutionContext::new(
+        base.parent_width,
+        style.font_size,
+        style.root_font_size,
+        style.viewport_width,
+        style.viewport_height,
+    )
+}
+
+fn resolve_css_length_for_style(
+    val: &CssValue,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+) -> Option<f32> {
+    match val {
+        CssValue::Length(v) => Some(*v),
+        CssValue::Number(v) => Some(*v * style.font_size),
+        CssValue::Percentage(v) => Some(base.parent_width * *v / 100.0),
+        CssValue::Ex(v) => Some(*v * style.font_size * style_ex_length_ratio(style)),
+        CssValue::Ch(v) => Some(
+            *v * style.font_size * crate::style::font_ctx::style_ch_ratio(style).unwrap_or(0.5),
+        ),
+        CssValue::Rem(v) => Some(*v * style.root_font_size),
+        CssValue::Vw(v) => Some(style.viewport_width * *v / 100.0),
+        CssValue::Vh(v) => Some(style.viewport_height * *v / 100.0),
+        CssValue::Vmin(v) => Some(style.viewport_width.min(style.viewport_height) * *v / 100.0),
+        CssValue::Vmax(v) => Some(style.viewport_width.max(style.viewport_height) * *v / 100.0),
+        CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _) => {
+            crate::style::resolve::try_resolve_to_length_in_context(
+                val,
+                &style.custom_properties,
+                style_length_context(style, base),
+            )
+        }
+        CssValue::Keyword(k) => resolve_raw_length_for_style(k, style, base),
+        _ => None,
+    }
+}
+
+fn resolve_raw_length_for_style(
+    raw: &str,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+) -> Option<f32> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if let Some(number) = lower.strip_suffix("cap") {
+        return number
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * style.font_size * style_cap_height_ratio(style));
+    }
+    if let Some(number) = lower.strip_suffix("lh") {
+        return number
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * resolved_line_height_length(style));
+    }
+    parse_length(&lower).and_then(|parsed| match parsed {
+        CssValue::Keyword(_) => None,
+        _ => resolve_css_length_for_style(&parsed, style, base),
+    })
+}
+
+fn style_cap_height_ratio(_style: &ComputedStyle) -> f32 {
+    0.75
+}
+
+fn style_ex_length_ratio(style: &ComputedStyle) -> f32 {
+    crate::style::font_ctx::style_x_height_ratio(style)
+        .unwrap_or(0.5)
+        .max(0.5625)
+}
+
+fn resolved_line_height_length(style: &ComputedStyle) -> f32 {
+    if let Some(absolute) = style.line_height_absolute {
+        absolute
+    } else if style.line_height.is_nan() {
+        style.font_size * 1.2
+    } else {
+        style.font_size * style.line_height
+    }
+}
+
+fn split_css_whitespace(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => {
+                if start < index {
+                    parts.push(value[start..index].trim());
+                }
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < value.len() {
+        parts.push(value[start..].trim());
+    }
+    parts.into_iter().filter(|part| !part.is_empty()).collect()
+}
+
+fn expand_box_values<T: Copy>(values: &[T]) -> Option<[T; 4]> {
+    match values.len() {
+        1 => Some([values[0], values[0], values[0], values[0]]),
+        2 => Some([values[0], values[1], values[0], values[1]]),
+        3 => Some([values[0], values[1], values[2], values[1]]),
+        4 => Some([values[0], values[1], values[2], values[3]]),
+        _ => None,
+    }
+}
+
+fn parse_border_width_shorthand_values(
+    raw: &str,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+) -> Option<[f32; 4]> {
+    let values: Vec<f32> = split_css_whitespace(raw)
+        .into_iter()
+        .map(|part| parse_border_width_token(part, style, base))
+        .collect::<Option<Vec<_>>>()?;
+    expand_box_values(&values)
+}
+
+fn parse_border_width_token(
+    token: &str,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+) -> Option<f32> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "thin" => Some(0.75),
+        "medium" => Some(MEDIUM_RULE_WIDTH_PT),
+        "thick" => Some(3.75),
+        other => resolve_raw_length_for_style(other, style, base),
+    }
+}
+
+fn parse_border_color_shorthand_values(raw: &str) -> Option<[Color; 4]> {
+    let values: Vec<Color> = split_css_whitespace(raw)
+        .into_iter()
+        .map(parse_border_color)
+        .collect::<Option<Vec<_>>>()?;
+    expand_box_values(&values)
+}
+
+fn parse_border_style_shorthand_values(
+    raw: &str,
+) -> Option<[(BorderStyle, Option<BorderBevelKind>); 4]> {
+    let parts = split_css_whitespace(raw);
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let values: Vec<(BorderStyle, Option<BorderBevelKind>)> = parts
+        .into_iter()
+        .map(parse_border_style_keyword_with_bevel)
+        .collect();
+    expand_box_values(&values)
+}
+
+fn parse_border_shorthand(
+    k: &str,
+    font_size: f32,
+) -> (f32, Option<Color>, BorderStyle, Option<BorderBevelKind>) {
+    // A function color such as `rgba(38, 50, 56, 0.35)` contains internal spaces,
+    // so pull it out (and remove it from the string) before tokenizing on
+    // whitespace. Otherwise the rgba(...) would shatter into several "words" and
+    // the color (alpha included) would be lost, painting the border opaque black.
+    let (rest, func_color) = extract_border_function_color(k);
+    let parts: Vec<&str> = rest.split_whitespace().collect();
     let mut width = 0.0f32;
     let mut border_style = BorderStyle::Solid;
+    let mut border_bevel = None;
     for part in &parts {
-        if let Some(n) = part.strip_suffix("px") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v * 0.75; // px to pt
+        match *part {
+            "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset" | "none"
+            | "hidden" | "solid" => {
+                let (style, bevel) = parse_border_style_keyword_with_bevel(part);
+                border_style = style;
+                border_bevel = bevel;
             }
-        } else if let Some(n) = part.strip_suffix("pt") {
-            if let Ok(v) = n.parse::<f32>() {
-                width = v;
-            }
-        } else {
-            match *part {
-                "dashed" => border_style = BorderStyle::Dashed,
-                "dotted" => border_style = BorderStyle::Dotted,
-                "none" => border_style = BorderStyle::None,
-                "solid" => border_style = BorderStyle::Solid,
-                _ => {}
+            // CSS keyword border widths.
+            "thin" => width = 0.75,
+            "medium" => width = 2.25,
+            "thick" => width = 3.75,
+            // Any length token (px/pt/em/ex/ch/cm/mm/Q/in/pc/rem). `parse_length`
+            // returns pt for absolute units and an em factor (Number) for
+            // font-relative units; resolve_border_width applies the font-size
+            // basis. Previously only px/pt were handled, so an em/cm/etc. width
+            // was silently dropped (width = 0) — e.g. `border: 0.2em solid`.
+            other => {
+                if let Some(w) = resolve_border_width(parse_length(other).as_ref(), font_size) {
+                    width = w;
+                }
             }
         }
     }
-    let color = parts.last().and_then(|last| parse_border_color(last));
-    (width, color, border_style)
+    let color = func_color.or_else(|| parts.last().and_then(|last| parse_border_color(last)));
+    (width, color, border_style, border_bevel)
+}
+
+/// Parse a single border color token using the shared CSS color parser, which
+/// handles named colors, `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex (lightningcss
+/// serialises `rgba(...)` to 8-digit hex with the alpha byte), and
+/// `rgb()`/`rgba()` functions — preserving alpha for translucent borders.
+fn parse_border_color_token(val: &str) -> Option<Color> {
+    match crate::parser::css::parse_color(val) {
+        Some(CssValue::Color(c)) => Some(c),
+        _ => None,
+    }
+}
+
+/// Pull a function color (`rgb(...)` / `rgba(...)`) out of a border shorthand,
+/// returning the string with that token removed plus the parsed color. The
+/// remaining tokens (width / style keyword) are space-separated as usual. If no
+/// function color is present the input is returned unchanged with `None`.
+fn extract_border_function_color(k: &str) -> (String, Option<Color>) {
+    let lower = k.to_ascii_lowercase();
+    for prefix in ["rgba(", "rgb("] {
+        if let Some(start) = lower.find(prefix) {
+            if let Some(close_rel) = k[start..].find(')') {
+                let end = start + close_rel + 1;
+                let func = &k[start..end];
+                let color = match crate::parser::css::parse_color(func) {
+                    Some(CssValue::Color(c)) => Some(c),
+                    _ => None,
+                };
+                let mut rest = String::with_capacity(k.len());
+                rest.push_str(&k[..start]);
+                rest.push(' ');
+                rest.push_str(&k[end..]);
+                return (rest, color);
+            }
+        }
+    }
+    (k.to_string(), None)
 }
 
 /// Parse a color name or hex value for border shorthand.
 fn parse_border_color(val: &str) -> Option<Color> {
-    let val = val.to_ascii_lowercase();
-    match val.as_str() {
+    let lower = val.to_ascii_lowercase();
+    // `currentColor` can't be resolved here (the element's final `color` isn't
+    // known yet). Mark it with a sentinel; a post-pass in
+    // `compute_style_with_context` swaps it for the computed `color`.
+    if lower == "currentcolor" {
+        return Some(CURRENT_COLOR_SENTINEL);
+    }
+    // Delegate everything else (named colors, #rgb/#rgba/#rrggbb/#rrggbbaa hex,
+    // rgb()/rgba() functions) to the shared CSS color parser so translucent
+    // borders keep their alpha channel.
+    parse_border_color_token(val).or_else(|| match lower.as_str() {
         "black" => Some(Color::rgb(0, 0, 0)),
         "white" => Some(Color::rgb(255, 255, 255)),
         "red" => Some(Color::rgb(255, 0, 0)),
@@ -3341,17 +11774,14 @@ fn parse_border_color(val: &str) -> Option<Color> {
         "orange" => Some(Color::rgb(255, 165, 0)),
         "purple" => Some(Color::rgb(128, 0, 128)),
         "gray" | "grey" => Some(Color::rgb(128, 128, 128)),
-        _ => {
-            if let Some(hex) = val.strip_prefix('#') {
-                parse_hex_to_color(hex)
-            } else {
-                None
-            }
-        }
-    }
+        _ => lower.strip_prefix('#').and_then(parse_hex_to_color),
+    })
 }
 
 fn parse_hex_to_color(hex: &str) -> Option<Color> {
+    // Per CSS Color 4 §5.2: each single hex digit expands by duplication
+    // (`#rgb`/`#rgba`); `#rgba` and `#rrggbbaa` carry an alpha byte where
+    // `00` = fully transparent and `ff` = fully opaque. Missing alpha is opaque.
     match hex.len() {
         3 => {
             let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
@@ -3359,27 +11789,52 @@ fn parse_hex_to_color(hex: &str) -> Option<Color> {
             let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
             Some(Color::rgb(r, g, b))
         }
+        4 => {
+            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+            let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
+            Some(Color { r, g, b, a })
+        }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
             Some(Color::rgb(r, g, b))
         }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            Some(Color { r, g, b, a })
+        }
         _ => None,
     }
 }
 
-/// Parse a CSS `linear-gradient(...)` function value into a `LinearGradient`.
+/// Parse a CSS `linear-gradient(...)` / `repeating-linear-gradient(...)` function
+/// value into a `LinearGradient`.
 ///
 /// Supports:
 /// - `linear-gradient(to right, red, blue)`
 /// - `linear-gradient(45deg, #ff0000, #0000ff)`
 /// - `linear-gradient(to bottom, red 0%, white 50%, blue 100%)`
+/// - `repeating-linear-gradient(45deg, red 0 10px, blue 10px 20px)`
 pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
     let val = val.trim();
-    let inner = val
-        .strip_prefix("linear-gradient(")
-        .and_then(|s| s.strip_suffix(')'))?;
+    let (inner, repeating) = if let Some(i) = val
+        .strip_prefix("repeating-linear-gradient(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        (i, true)
+    } else {
+        (
+            val.strip_prefix("linear-gradient(")
+                .and_then(|s| s.strip_suffix(')'))?,
+            false,
+        )
+    };
 
     // Split on commas, but be careful of commas inside rgb() or rgba()
     let parts = split_gradient_args(inner);
@@ -3388,6 +11843,7 @@ pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
     }
 
     let first = parts[0].trim();
+    let first = strip_gradient_interpolation_method(first);
 
     // Determine if the first arg is a direction/angle or a color stop
     let (angle, color_start) = if first.starts_with("to ") {
@@ -3403,12 +11859,8 @@ pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
             _ => 180.0,
         };
         (angle, 1)
-    } else if let Some(deg_str) = first.strip_suffix("deg") {
-        if let Ok(deg) = deg_str.trim().parse::<f32>() {
-            (deg, 1)
-        } else {
-            (180.0, 0)
-        }
+    } else if let Some(deg) = parse_css_angle_deg(first) {
+        (deg, 1)
     } else {
         // No direction specified, default is "to bottom" = 180deg
         (180.0, 0)
@@ -3421,17 +11873,68 @@ pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
 
     let stops = parse_gradient_stops(color_parts)?;
 
-    Some(LinearGradient { angle, stops })
+    Some(LinearGradient {
+        angle,
+        stops,
+        repeating,
+        layer_box: GradientLayerBox::default(),
+    })
 }
 
-/// Parse a CSS `radial-gradient(...)` function value into a `RadialGradient`.
+fn strip_gradient_interpolation_method(first: &str) -> &str {
+    let lower = first.to_ascii_lowercase();
+    if let Some(idx) = lower.find(" in oklab") {
+        return first[..idx].trim();
+    }
+    first
+}
+
+/// Parse a CSS `<angle>` token into degrees. Supports `deg`, `grad`, `rad`,
+/// `turn`, and a bare `0`. Returns `None` for non-angle tokens.
+fn parse_css_angle_deg(tok: &str) -> Option<f32> {
+    let tok = tok.trim();
+    if let Some(n) = tok.strip_suffix("deg") {
+        return n.trim().parse::<f32>().ok();
+    }
+    if let Some(n) = tok.strip_suffix("grad") {
+        return n.trim().parse::<f32>().ok().map(|g| g * 0.9);
+    }
+    if let Some(n) = tok.strip_suffix("turn") {
+        return n.trim().parse::<f32>().ok().map(|t| t * 360.0);
+    }
+    if let Some(n) = tok.strip_suffix("rad") {
+        return n
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|r| r * 180.0 / std::f32::consts::PI);
+    }
+    if tok == "0" {
+        return Some(0.0);
+    }
+    None
+}
+
+/// Parse a CSS `radial-gradient(...)` / `repeating-radial-gradient(...)` function
+/// value into a `RadialGradient`.
 ///
-/// Simplified: always centered circular gradient. Ignores shape/size keywords.
+/// Honors the shape (`circle`/`ellipse`), the extent keyword
+/// (`closest-side`/`closest-corner`/`farthest-side`/`farthest-corner`), an
+/// explicit circle radius or ellipse radii, and the `at <position>` clause.
 pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
     let val = val.trim();
-    let inner = val
-        .strip_prefix("radial-gradient(")
-        .and_then(|s| s.strip_suffix(')'))?;
+    let (inner, repeating) = if let Some(i) = val
+        .strip_prefix("repeating-radial-gradient(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        (i, true)
+    } else {
+        (
+            val.strip_prefix("radial-gradient(")
+                .and_then(|s| s.strip_suffix(')'))?,
+            false,
+        )
+    };
 
     let parts = split_gradient_args(inner);
     if parts.len() < 2 {
@@ -3440,18 +11943,87 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
 
     let first = parts[0].trim().to_ascii_lowercase();
 
-    // Skip shape/size keywords like "circle", "ellipse", "closest-side", etc.
-    let color_start = if first.starts_with("circle")
+    // A first arg is a shape/size/position prefix (not a color stop) when it
+    // names a shape keyword, an extent keyword, an `at <pos>` clause, or is a
+    // bare length/percentage size (e.g. lightningcss re-serializes
+    // `circle 60px at center` to `60px`). We detect the bare-length case by it
+    // not parsing as a color while parsing as a length token, so a real first
+    // color stop is never dropped.
+    let is_shape_or_size = first.starts_with("circle")
         || first.starts_with("ellipse")
         || first.contains("at ")
-        || first == "closest-side"
-        || first == "farthest-side"
-        || first == "closest-corner"
-        || first == "farthest-corner"
-    {
-        1
+        || first.contains("closest-side")
+        || first.contains("farthest-side")
+        || first.contains("closest-corner")
+        || first.contains("farthest-corner")
+        || (parse_gradient_color(&first).is_none() && first_token_is_length(&first));
+    let color_start = usize::from(is_shape_or_size);
+
+    // Honor the `at <position>` clause, the extent keyword, and explicit
+    // radius/radii, else default to a box-centered farthest-corner ellipse.
+    let (center, shape, extent, radius, radii) = if color_start == 1 {
+        let center = parse_radial_center(&first);
+        // The shape/size keywords precede any `at` clause.
+        let size_part = first.split("at").next().unwrap_or("").trim();
+
+        let extent = if size_part.contains("closest-side") {
+            RadialExtent::ClosestSide
+        } else if size_part.contains("closest-corner") {
+            RadialExtent::ClosestCorner
+        } else if size_part.contains("farthest-side") {
+            RadialExtent::FarthestSide
+        } else {
+            RadialExtent::FarthestCorner
+        };
+
+        let size_tokens: Vec<&str> = size_part
+            .split_whitespace()
+            .filter(|t| {
+                !t.is_empty() && *t != "circle" && *t != "ellipse" && parse_radial_pos(t).is_some()
+            })
+            .collect();
+
+        let shape = if first.starts_with("circle") {
+            RadialShape::Circle
+        } else if first.starts_with("ellipse") {
+            RadialShape::Ellipse
+        } else if size_tokens.len() == 1 {
+            // A lone length size denotes a circle of that radius.
+            RadialShape::Circle
+        } else {
+            RadialShape::Ellipse
+        };
+
+        // Explicit sizes: a circle takes one length radius; an ellipse takes two
+        // length/percentage radii (rx, ry).
+        let (radius, radii) = match shape {
+            RadialShape::Circle => (
+                size_tokens.first().and_then(|t| parse_radial_length_pt(t)),
+                None,
+            ),
+            RadialShape::Ellipse => {
+                if size_tokens.len() == 2 {
+                    let rx = parse_radial_pos(size_tokens[0]);
+                    let ry = parse_radial_pos(size_tokens[1]);
+                    match (rx, ry) {
+                        (Some(rx), Some(ry)) => (None, Some((rx, ry))),
+                        _ => (None, None),
+                    }
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        (center, shape, extent, radius, radii)
     } else {
-        0
+        (
+            (RadialPos::Fraction(0.5), RadialPos::Fraction(0.5)),
+            RadialShape::Ellipse,
+            RadialExtent::FarthestCorner,
+            None,
+            None,
+        )
     };
 
     let color_parts = &parts[color_start..];
@@ -3459,9 +12031,362 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
         return None;
     }
 
+    let length_stop_extent = max_gradient_length_stop(color_parts);
     let stops = parse_gradient_stops(color_parts)?;
+    let radius = if repeating && radius.is_none() {
+        length_stop_extent
+    } else {
+        radius
+    };
 
-    Some(RadialGradient { stops })
+    Some(RadialGradient {
+        stops,
+        center,
+        shape,
+        extent,
+        radius,
+        radii,
+        repeating,
+        layer_box: GradientLayerBox::default(),
+    })
+}
+
+/// Parse a CSS `conic-gradient(...)` / `repeating-conic-gradient(...)` function
+/// value into a `ConicGradient`.
+///
+/// Honors `from <angle>`, `at <position>`, and angular color stops in `deg`,
+/// `grad`, `rad`, `turn`, or `%` (100% = one turn). Stop positions are
+/// normalized to a fraction of a full turn.
+pub fn parse_conic_gradient(val: &str) -> Option<ConicGradient> {
+    let val = val.trim();
+    let (inner, repeating) = if let Some(i) = val
+        .strip_prefix("repeating-conic-gradient(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        (i, true)
+    } else {
+        (
+            val.strip_prefix("conic-gradient(")
+                .and_then(|s| s.strip_suffix(')'))?,
+            false,
+        )
+    };
+
+    let parts = split_gradient_args(inner);
+    if parts.is_empty() {
+        return None;
+    }
+
+    let first = parts[0].trim();
+    let first_lower = first.to_ascii_lowercase();
+
+    // The first argument is a `[from <angle>] [at <position>]` prefix when it
+    // mentions either keyword; otherwise it is the first color stop.
+    let has_prefix = first_lower.starts_with("from ") || first_lower.contains("at ");
+    let color_start = usize::from(has_prefix);
+
+    let (from_angle, center) = if has_prefix {
+        let from_angle = first_lower
+            .strip_prefix("from ")
+            .map(|rest| rest.split("at").next().unwrap_or("").trim().to_string())
+            .and_then(|tok| parse_css_angle_deg(&tok))
+            .unwrap_or(0.0);
+        let center = parse_radial_center(&first_lower);
+        (from_angle, center)
+    } else {
+        (0.0, (RadialPos::Fraction(0.5), RadialPos::Fraction(0.5)))
+    };
+
+    let color_parts = &parts[color_start..];
+    let stops = parse_conic_stops(color_parts)?;
+    if stops.len() < 2 {
+        return None;
+    }
+
+    Some(ConicGradient {
+        from_angle,
+        center,
+        stops,
+        repeating,
+        layer_box: GradientLayerBox::default(),
+    })
+}
+
+/// Parse angular color stops for a conic gradient. Each part is `color`,
+/// `color <angle>`, or `color <angle> <angle>` (a hard/range stop expands into
+/// two stops at the two angles). Positions are normalized to fractions of one
+/// turn. Stops without an explicit angle are distributed/clamped per CSS:
+/// the first defaults to 0, the last to 1, and interior gaps are interpolated.
+fn parse_conic_stops(parts: &[String]) -> Option<Vec<GradientStop>> {
+    // Raw stops: (color, optional fraction position).
+    let mut raw: Vec<(Color, Option<f32>)> = Vec::new();
+    let mut hints: Vec<(usize, f32)> = Vec::new();
+
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        // Split into whitespace tokens; the leading run that parses as a color
+        // is the color, trailing tokens are angle positions. Colors like
+        // `rgb(...)` have no spaces after lightningcss normalization.
+        let tokens: Vec<&str> = part.split_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if tokens.len() == 1
+            && let Some(position) = parse_conic_angle_fraction(tokens[0])
+        {
+            if let Some(prev) = raw.len().checked_sub(1) {
+                hints.push((prev, position));
+            }
+            continue;
+        }
+        // Find how many leading tokens form the color (1 normally).
+        let color = parse_gradient_color(tokens[0])?;
+        let angle_tokens = &tokens[1..];
+        let positions: Vec<f32> = angle_tokens
+            .iter()
+            .filter_map(|t| parse_conic_angle_fraction(t))
+            .collect();
+        match positions.len() {
+            0 => raw.push((color, None)),
+            1 => raw.push((color, Some(positions[0]))),
+            _ => {
+                // A range stop `color a b` expands to two coincident-color stops.
+                for p in positions {
+                    raw.push((color, Some(p)));
+                }
+            }
+        }
+    }
+
+    if raw.len() < 2 {
+        return None;
+    }
+
+    // Fill missing positions: clamp ends, then linearly distribute interior runs.
+    let n = raw.len();
+    if raw[0].1.is_none() {
+        raw[0].1 = Some(0.0);
+    }
+    if raw[n - 1].1.is_none() {
+        raw[n - 1].1 = Some(1.0);
+    }
+    let mut i = 0;
+    while i < n {
+        if raw[i].1.is_some() {
+            i += 1;
+            continue;
+        }
+        // Find the next anchored stop.
+        let start = i - 1;
+        let mut j = i;
+        while j < n && raw[j].1.is_none() {
+            j += 1;
+        }
+        let p0 = raw[start].1.unwrap_or(0.0);
+        let p1 = raw[j].1.unwrap_or(1.0);
+        let span = (j - start) as f32;
+        for (k, idx) in (i..j).enumerate() {
+            let frac = (k as f32 + 1.0) / span;
+            raw[idx].1 = Some(p0 + (p1 - p0) * frac);
+        }
+        i = j;
+    }
+
+    // Enforce non-decreasing positions (later smaller positions clamp up).
+    let mut last = 0.0_f32;
+    let mut stops: Vec<GradientStop> = raw
+        .into_iter()
+        .map(|(color, pos)| {
+            let mut p = pos.unwrap_or(0.0).clamp(0.0, 1.0);
+            if p < last {
+                p = last;
+            }
+            last = p;
+            GradientStop {
+                color,
+                position: p,
+                position_length: 0.0,
+            }
+        })
+        .collect();
+
+    for (prev, hint_pos) in hints.into_iter().rev() {
+        if prev + 1 >= stops.len() {
+            continue;
+        }
+        let left = stops[prev].position;
+        let right = stops[prev + 1].position;
+        let span = right - left;
+        if span <= 1e-6 {
+            continue;
+        }
+        let hint_t = ((hint_pos - left) / span).clamp(0.0, 1.0);
+        if hint_t <= 1e-6 || hint_t >= 1.0 - 1e-6 {
+            continue;
+        }
+        let exponent = 0.5_f32.ln() / hint_t.ln();
+        let mut hinted = Vec::new();
+        const HINT_STEPS: usize = 256;
+        for step in 1..HINT_STEPS {
+            let t = step as f32 / HINT_STEPS as f32;
+            hinted.push(GradientStop {
+                color: lerp_color(
+                    stops[prev].color,
+                    stops[prev + 1].color,
+                    color_hint_progress(t, hint_t, exponent),
+                ),
+                position: left + span * t,
+                position_length: 0.0,
+            });
+        }
+        stops.splice(prev + 1..prev + 1, hinted);
+    }
+
+    Some(stops)
+}
+
+/// Parse a single conic angular position into a fraction of one turn (0..1).
+/// Accepts `deg`, `grad`, `rad`, `turn`, and `%` (100% = one turn).
+fn parse_conic_angle_fraction(tok: &str) -> Option<f32> {
+    let tok = tok.trim();
+    if let Some(n) = tok.strip_suffix('%') {
+        return n.trim().parse::<f32>().ok().map(|p| p / 100.0);
+    }
+    if let Some(n) = tok.strip_suffix("turn") {
+        return n.trim().parse::<f32>().ok();
+    }
+    parse_css_angle_deg(tok).map(|deg| deg / 360.0)
+}
+
+/// True when the first whitespace-delimited token looks like a CSS length or
+/// percentage (a number with a known unit, or a bare `%`). Used to recognize a
+/// size-only first argument of `radial-gradient()`.
+fn first_token_is_length(s: &str) -> bool {
+    let tok = s.split_whitespace().next().unwrap_or("");
+    parse_radial_pos(tok).is_some()
+}
+
+/// Parse a length token to points (px→pt = 0.75). Only absolute pixel/point
+/// units are honored; relative units return `None`. A bare `0` is treated as
+/// `0pt`.
+fn parse_radial_length_pt(tok: &str) -> Option<f32> {
+    if let Some(n) = tok.strip_suffix("px") {
+        return n.parse::<f32>().ok().map(|v| v * 0.75);
+    }
+    if let Some(n) = tok.strip_suffix("pt") {
+        return n.parse::<f32>().ok();
+    }
+    // Bare numeric (typically `0`).
+    tok.parse::<f32>().ok()
+}
+
+/// Parse a single position component into a `RadialPos`: a percentage becomes a
+/// fraction, a length becomes an absolute point offset.
+fn parse_radial_pos(tok: &str) -> Option<RadialPos> {
+    if let Some(n) = tok.strip_suffix('%') {
+        return n
+            .parse::<f32>()
+            .ok()
+            .map(|p| RadialPos::Fraction(p / 100.0));
+    }
+    parse_radial_length_pt(tok).map(RadialPos::Points)
+}
+
+/// Parse the `at <position>` clause of a radial-gradient first argument into a
+/// center `(x, y)` measured from the box's left/top edges (CSS top-down).
+/// Supports keyword positions (`center`, `top`, `left`, corners), percentages,
+/// and lengths. Falls back to box center when absent or unparseable.
+fn parse_radial_center(first: &str) -> (RadialPos, RadialPos) {
+    let half = RadialPos::Fraction(0.5);
+    let lower = first.to_ascii_lowercase();
+    let Some(at_pos) = lower.find("at ") else {
+        return (half, half);
+    };
+    let pos = lower[at_pos + 3..].trim();
+    if pos.is_empty() {
+        return (half, half);
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum AxisEdge {
+        Left,
+        Right,
+        Top,
+        Bottom,
+        Center,
+    }
+
+    fn edge(token: &str) -> Option<AxisEdge> {
+        match token {
+            "left" => Some(AxisEdge::Left),
+            "right" => Some(AxisEdge::Right),
+            "top" => Some(AxisEdge::Top),
+            "bottom" => Some(AxisEdge::Bottom),
+            "center" => Some(AxisEdge::Center),
+            _ => None,
+        }
+    }
+
+    fn edge_pos(edge: AxisEdge, offset: Option<RadialPos>) -> RadialPos {
+        match (edge, offset) {
+            (AxisEdge::Left | AxisEdge::Top, Some(pos)) => pos,
+            (AxisEdge::Right | AxisEdge::Bottom, Some(RadialPos::Fraction(f))) => {
+                RadialPos::Fraction(1.0 - f)
+            }
+            (AxisEdge::Right | AxisEdge::Bottom, Some(RadialPos::Points(p))) => {
+                RadialPos::EndOffset(p)
+            }
+            (AxisEdge::Right | AxisEdge::Bottom, Some(RadialPos::EndOffset(p))) => {
+                RadialPos::Points(p)
+            }
+            (AxisEdge::Left | AxisEdge::Top, None) => RadialPos::Fraction(0.0),
+            (AxisEdge::Right | AxisEdge::Bottom, None) => RadialPos::Fraction(1.0),
+            (AxisEdge::Center, _) => RadialPos::Fraction(0.5),
+        }
+    }
+
+    let tokens: Vec<&str> = pos.split_whitespace().collect();
+    let mut x: Option<RadialPos> = None;
+    let mut y: Option<RadialPos> = None;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if let Some(e) = edge(tokens[i]) {
+            let next = tokens.get(i + 1).and_then(|t| {
+                if edge(t).is_some() {
+                    None
+                } else {
+                    parse_radial_pos(t)
+                }
+            });
+            match e {
+                AxisEdge::Left | AxisEdge::Right => x = Some(edge_pos(e, next)),
+                AxisEdge::Top | AxisEdge::Bottom => y = Some(edge_pos(e, next)),
+                AxisEdge::Center => {
+                    if x.is_none() {
+                        x = Some(half);
+                    } else if y.is_none() {
+                        y = Some(half);
+                    }
+                }
+            }
+            i += usize::from(next.is_some()) + 1;
+            continue;
+        }
+        if let Some(p) = parse_radial_pos(tokens[i]) {
+            if x.is_none() {
+                x = Some(p);
+            } else if y.is_none() {
+                y = Some(p);
+            }
+        }
+        i += 1;
+    }
+
+    (x.unwrap_or(half), y.unwrap_or(half))
 }
 
 /// Split gradient arguments on commas, respecting parentheses (e.g., rgb(...)).
@@ -3496,46 +12421,301 @@ fn split_gradient_args(s: &str) -> Vec<String> {
     parts
 }
 
-/// Parse gradient color stops from a list of string tokens.
-/// Each token is like "red", "#ff0000 50%", "rgb(255,0,0) 30%", etc.
-fn parse_gradient_stops(parts: &[String]) -> Option<Vec<GradientStop>> {
-    let count = parts.len();
-    let mut stops = Vec::with_capacity(count);
+#[derive(Debug, Clone, Copy)]
+struct GradientStopPosition {
+    fraction: f32,
+    length: f32,
+}
 
-    for (i, part) in parts.iter().enumerate() {
-        let part = part.trim();
-        // Try to split off a trailing percentage
-        let (color_str, position) = if let Some(pct_pos) = part.rfind('%') {
-            // Find the space before the percentage
-            let before_pct = &part[..pct_pos];
-            if let Some(space_pos) = before_pct.rfind(' ') {
-                let color_part = part[..space_pos].trim();
-                let pct_str = part[space_pos + 1..pct_pos].trim();
-                if let Ok(pct) = pct_str.parse::<f32>() {
-                    (color_part, Some(pct / 100.0))
-                } else {
-                    (part, None)
+impl GradientStopPosition {
+    fn zero() -> Self {
+        Self {
+            fraction: 0.0,
+            length: 0.0,
+        }
+    }
+
+    fn one() -> Self {
+        Self {
+            fraction: 1.0,
+            length: 0.0,
+        }
+    }
+}
+
+enum RawGradientItem {
+    Stop(Color, Vec<GradientStopPosition>),
+    Hint(GradientStopPosition),
+}
+
+fn parse_gradient_stop_position(token: &str) -> Option<GradientStopPosition> {
+    match parse_length(token)? {
+        CssValue::Percentage(p) => Some(GradientStopPosition {
+            fraction: p / 100.0,
+            length: 0.0,
+        }),
+        CssValue::Length(length) => Some(GradientStopPosition {
+            fraction: 0.0,
+            length,
+        }),
+        CssValue::Calc(tokens) => {
+            let mut total = GradientStopPosition::zero();
+            let mut op = CalcOp::Add;
+            for token in tokens {
+                match token {
+                    crate::parser::css::CalcToken::Op(next) => op = next,
+                    crate::parser::css::CalcToken::Percent(p) => {
+                        let value = GradientStopPosition {
+                            fraction: p / 100.0,
+                            length: 0.0,
+                        };
+                        apply_gradient_calc_component(&mut total, op, value)?;
+                    }
+                    crate::parser::css::CalcToken::Length(length) => {
+                        let value = GradientStopPosition {
+                            fraction: 0.0,
+                            length,
+                        };
+                        apply_gradient_calc_component(&mut total, op, value)?;
+                    }
+                    _ => return None,
                 }
-            } else {
-                (part, None)
             }
-        } else {
-            (part, None)
+            Some(total)
+        }
+        _ => None,
+    }
+}
+
+fn apply_gradient_calc_component(
+    total: &mut GradientStopPosition,
+    op: CalcOp,
+    value: GradientStopPosition,
+) -> Option<()> {
+    match op {
+        CalcOp::Add => {
+            total.fraction += value.fraction;
+            total.length += value.length;
+            Some(())
+        }
+        CalcOp::Sub => {
+            total.fraction -= value.fraction;
+            total.length -= value.length;
+            Some(())
+        }
+        CalcOp::Mul | CalcOp::Div => None,
+    }
+}
+
+fn make_gradient_stop(color: Color, position: GradientStopPosition) -> GradientStop {
+    GradientStop {
+        color,
+        position: position.fraction,
+        position_length: position.length,
+    }
+}
+
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    Color {
+        r: (f32::from(a.r) + (f32::from(b.r) - f32::from(a.r)) * t).round() as u8,
+        g: (f32::from(a.g) + (f32::from(b.g) - f32::from(a.g)) * t).round() as u8,
+        b: (f32::from(a.b) + (f32::from(b.b) - f32::from(a.b)) * t).round() as u8,
+        a: (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8,
+    }
+}
+
+fn interpolate_stop_position(
+    a: GradientStopPosition,
+    b: GradientStopPosition,
+    t: f32,
+) -> GradientStopPosition {
+    GradientStopPosition {
+        fraction: a.fraction + (b.fraction - a.fraction) * t,
+        length: a.length + (b.length - a.length) * t,
+    }
+}
+
+fn hint_relative_position(
+    a: GradientStopPosition,
+    b: GradientStopPosition,
+    hint: GradientStopPosition,
+) -> Option<f32> {
+    if (a.length - b.length).abs() > 1e-6 || hint.length.abs() > 1e-6 {
+        return None;
+    }
+    let span = b.fraction - a.fraction;
+    if span.abs() <= 1e-6 {
+        return None;
+    }
+    Some(((hint.fraction - a.fraction) / span).clamp(0.0, 1.0))
+}
+
+fn color_hint_progress(t: f32, hint_t: f32, exponent: f32) -> f32 {
+    let spec = t.powf(exponent);
+    if hint_t < 0.5 && t < hint_t {
+        let piece = 0.5 * t / hint_t;
+        let weight = (3.0 * t / hint_t).clamp(0.0, 1.0);
+        piece + (spec - piece) * weight
+    } else {
+        spec
+    }
+}
+
+/// Parse gradient color stops from a list of comma-separated stop tokens.
+///
+/// Each token is `color`, `color <pos>`, `color <pos> <pos>`, or a standalone
+/// `<linear-color-hint>` between two color stops. Length and calc() positions
+/// are preserved until paint time because their percentage basis is the actual
+/// gradient line/radius.
+fn parse_gradient_stops(parts: &[String]) -> Option<Vec<GradientStop>> {
+    let mut items = Vec::new();
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let tokens = split_css_components(part);
+        if tokens.is_empty() {
+            continue;
+        }
+        if tokens.len() == 1
+            && let Some(position) = parse_gradient_stop_position(&tokens[0])
+        {
+            items.push(RawGradientItem::Hint(position));
+            continue;
+        }
+
+        let mut split_at = tokens.len();
+        while split_at > 1 && parse_gradient_stop_position(&tokens[split_at - 1]).is_some() {
+            split_at -= 1;
+        }
+        let color_str = tokens[..split_at].join(" ");
+        let color = parse_gradient_color(&color_str)?;
+        let positions: Vec<GradientStopPosition> = tokens[split_at..]
+            .iter()
+            .filter_map(|t| parse_gradient_stop_position(t))
+            .collect();
+        items.push(RawGradientItem::Stop(color, positions));
+    }
+
+    let mut flat: Vec<(Color, Option<GradientStopPosition>)> = Vec::new();
+    let mut hints: Vec<(usize, GradientStopPosition)> = Vec::new();
+    for item in items {
+        match item {
+            RawGradientItem::Hint(position) => {
+                if let Some(prev) = flat.len().checked_sub(1) {
+                    hints.push((prev, position));
+                }
+            }
+            RawGradientItem::Stop(color, positions) => match positions.len() {
+                0 => flat.push((color, None)),
+                1 => flat.push((color, Some(positions[0]))),
+                _ => {
+                    for position in positions {
+                        flat.push((color, Some(position)));
+                    }
+                }
+            },
+        }
+    }
+
+    let n = flat.len();
+    if n < 2 {
+        return None;
+    }
+    if flat[0].1.is_none() {
+        flat[0].1 = Some(GradientStopPosition::zero());
+    }
+    if flat[n - 1].1.is_none() {
+        flat[n - 1].1 = Some(GradientStopPosition::one());
+    }
+    let mut i = 0;
+    while i < n {
+        if flat[i].1.is_some() {
+            i += 1;
+            continue;
+        }
+        let start = i - 1;
+        let mut j = i;
+        while j < n && flat[j].1.is_none() {
+            j += 1;
+        }
+        let p0 = flat[start].1.unwrap_or(GradientStopPosition::zero());
+        let p1 = flat[j].1.unwrap_or(GradientStopPosition::one());
+        let span = (j - start) as f32;
+        for (k, idx) in (i..j).enumerate() {
+            let f = (k as f32 + 1.0) / span;
+            flat[idx].1 = Some(GradientStopPosition {
+                fraction: p0.fraction + (p1.fraction - p0.fraction) * f,
+                length: p0.length + (p1.length - p0.length) * f,
+            });
+        }
+        i = j;
+    }
+
+    let mut stops: Vec<GradientStop> = flat
+        .into_iter()
+        .map(|(color, pos)| make_gradient_stop(color, pos.unwrap_or(GradientStopPosition::zero())))
+        .collect();
+
+    for (prev, hint_pos) in hints.into_iter().rev() {
+        if prev + 1 >= stops.len() {
+            continue;
+        }
+        let left = GradientStopPosition {
+            fraction: stops[prev].position,
+            length: stops[prev].position_length,
         };
-
-        let color = parse_gradient_color(color_str)?;
-        let position = position.unwrap_or_else(|| {
-            if count <= 1 {
-                0.0
-            } else {
-                i as f32 / (count - 1) as f32
-            }
-        });
-
-        stops.push(GradientStop { color, position });
+        let right = GradientStopPosition {
+            fraction: stops[prev + 1].position,
+            length: stops[prev + 1].position_length,
+        };
+        let Some(hint_t) = hint_relative_position(left, right, hint_pos) else {
+            stops.insert(
+                prev + 1,
+                make_gradient_stop(
+                    lerp_color(stops[prev].color, stops[prev + 1].color, 0.5),
+                    hint_pos,
+                ),
+            );
+            continue;
+        };
+        if !(0.0..=1.0).contains(&hint_t) || hint_t <= 1e-6 || hint_t >= 1.0 - 1e-6 {
+            continue;
+        }
+        let exponent = 0.5_f32.ln() / hint_t.ln();
+        let mut hinted = Vec::new();
+        const HINT_STEPS: usize = 256;
+        for step in 1..HINT_STEPS {
+            let t = step as f32 / HINT_STEPS as f32;
+            hinted.push(make_gradient_stop(
+                lerp_color(
+                    stops[prev].color,
+                    stops[prev + 1].color,
+                    color_hint_progress(t, hint_t, exponent),
+                ),
+                interpolate_stop_position(left, right, t),
+            ));
+        }
+        stops.splice(prev + 1..prev + 1, hinted);
     }
 
     if stops.len() >= 2 { Some(stops) } else { None }
+}
+
+fn max_gradient_length_stop(parts: &[String]) -> Option<f32> {
+    let mut max_len = 0.0_f32;
+    for part in parts {
+        for token in split_css_components(part) {
+            if let Some(pos) = parse_gradient_stop_position(&token)
+                && pos.length > 0.0
+            {
+                max_len = max_len.max(pos.length);
+            }
+        }
+    }
+    (max_len > 0.0).then_some(max_len)
 }
 
 /// Parse a color string for gradient stops.
@@ -3558,7 +12738,13 @@ fn parse_gradient_color(val: &str) -> Option<Color> {
         "aqua" | "cyan" => Some(Color::rgb(0, 255, 255)),
         "fuchsia" | "magenta" => Some(Color::rgb(255, 0, 255)),
         "lime" => Some(Color::rgb(0, 255, 0)),
-        "transparent" => Some(Color::rgb(255, 255, 255)),
+        // CSS Color 4 §6.1: `transparent` is `rgb(0 0 0 / 0)`, not white.
+        "transparent" => Some(Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        }),
         _ => {
             if let Some(hex) = val.strip_prefix('#') {
                 parse_hex_to_color(hex)
@@ -3584,15 +12770,100 @@ fn parse_gradient_color(val: &str) -> Option<Color> {
                     None
                 }
             } else {
-                None
+                match crate::parser::css::parse_color(&val) {
+                    Some(CssValue::Color(c)) => Some(c),
+                    _ => None,
+                }
             }
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_position_keywords_and_default() {
+        use ObjectPositionComponent::Fraction;
+        assert_eq!(
+            parse_object_position("center"),
+            Some(ObjectPosition::default())
+        );
+        assert_eq!(
+            parse_object_position("bottom"),
+            Some(ObjectPosition {
+                x: Fraction(0.5),
+                y: Fraction(1.0)
+            })
+        );
+        assert_eq!(
+            parse_object_position("right"),
+            Some(ObjectPosition {
+                x: Fraction(1.0),
+                y: Fraction(0.5)
+            })
+        );
+        // Keyword order may be swapped (top right == right top).
+        assert_eq!(
+            parse_object_position("top right"),
+            Some(ObjectPosition {
+                x: Fraction(1.0),
+                y: Fraction(0.0)
+            })
+        );
+    }
+
+    #[test]
+    fn object_position_percentages_resolve_to_fractions() {
+        use ObjectPositionComponent::Fraction;
+        let pos = parse_object_position("25% 75%").unwrap();
+        assert_eq!(pos.x, Fraction(0.25));
+        assert_eq!(pos.y, Fraction(0.75));
+        // A single percentage applies to x; y defaults to center.
+        assert_eq!(
+            parse_object_position("10%"),
+            Some(ObjectPosition {
+                x: Fraction(0.10),
+                y: Fraction(0.5)
+            })
+        );
+    }
+
+    #[test]
+    fn object_position_lengths_are_absolute_offsets() {
+        // 10px -> 7.5pt, 20px -> 15pt (1px = 0.75pt).
+        let pos = parse_object_position("10px 20px").unwrap();
+        assert_eq!(pos.x, ObjectPositionComponent::Length(7.5));
+        assert_eq!(pos.y, ObjectPositionComponent::Length(15.0));
+        // A length component is an absolute start-edge offset, independent of the
+        // free space; a fraction scales the free space.
+        assert_eq!(pos.x.resolve(100.0), 7.5);
+        assert_eq!(ObjectPositionComponent::Fraction(0.25).resolve(80.0), 20.0);
+    }
+
+    #[test]
+    fn object_position_edge_offset_three_value() {
+        use ObjectPositionComponent::{FarEdgeLength, Fraction, Length};
+        // `right 10px bottom 20%`: x = right edge + 10px (far edge length, rare),
+        // y = bottom edge minus 20% == 80% from the top.
+        let pos = parse_object_position("right 10px bottom 20%").unwrap();
+        // Near-edge length is exact; here right is a far edge so x anchors to end.
+        assert_eq!(pos.x, FarEdgeLength(7.5));
+        assert_eq!(pos.y, Fraction(0.80));
+        // `left 10px top 20px`: both near-edge length offsets stay absolute.
+        let pos2 = parse_object_position("left 10px top 20px").unwrap();
+        assert_eq!(pos2.x, Length(7.5));
+        assert_eq!(pos2.y, Length(15.0));
+    }
+
+    #[test]
+    fn object_position_rejects_invalid() {
+        assert!(parse_object_position("").is_none());
+        assert!(parse_object_position("frobnicate").is_none());
+        assert!(parse_object_position("left top right bottom center").is_none());
+    }
 
     #[test]
     fn h1_defaults() {
@@ -3626,6 +12897,109 @@ mod tests {
     }
 
     #[test]
+    fn column_rule_shorthand_style_only_uses_medium_width() {
+        // `column-rule: solid blue` — no width given; per CSS Multicol §6 the
+        // initial column-rule-width is `medium` (~2.25pt), so the rule paints.
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("column-rule: solid blue"), &parent);
+        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+        assert_eq!(style.column_rule.style, BorderStyle::Solid);
+        assert!(style.column_rule.color.is_some());
+    }
+
+    #[test]
+    fn writing_mode_vertical_rl_parses_and_inherits() {
+        let parent = ComputedStyle::default();
+        assert_eq!(parent.writing_mode, WritingMode::HorizontalTb);
+
+        let vrl = compute_style(HtmlTag::Div, Some("writing-mode: vertical-rl"), &parent);
+        assert_eq!(vrl.writing_mode, WritingMode::VerticalRl);
+
+        // Inherited: a child with no writing-mode of its own keeps the parent's.
+        let child = compute_style(HtmlTag::Span, None, &vrl);
+        assert_eq!(child.writing_mode, WritingMode::VerticalRl);
+
+        // `vertical-lr` shares the vertical layout mode and carries a side flag.
+        let lr = compute_style(HtmlTag::Div, Some("writing-mode: vertical-lr"), &parent);
+        assert_eq!(lr.writing_mode, WritingMode::VerticalRl);
+        assert!(lr.writing_mode_vertical_lr);
+        let htb = compute_style(HtmlTag::Div, Some("writing-mode: horizontal-tb"), &vrl);
+        assert_eq!(htb.writing_mode, WritingMode::HorizontalTb);
+        assert!(!htb.writing_mode_vertical_lr);
+    }
+
+    #[test]
+    fn column_rule_shorthand_dotted_paints_at_medium() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("column-rule: dotted"), &parent);
+        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+        assert_eq!(style.column_rule.style, BorderStyle::Dotted);
+    }
+
+    #[test]
+    fn column_rule_width_keyword_thin_medium_thick() {
+        let parent = ComputedStyle::default();
+        let thin = compute_style(HtmlTag::Div, Some("column-rule-width: thin"), &parent);
+        assert!((thin.column_rule.width - 0.75).abs() < 0.01);
+        let medium = compute_style(HtmlTag::Div, Some("column-rule-width: medium"), &parent);
+        assert!((medium.column_rule.width - 2.25).abs() < 0.01);
+        let thick = compute_style(HtmlTag::Div, Some("column-rule-width: thick"), &parent);
+        assert!((thick.column_rule.width - 3.75).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_rule_style_longhand_only_uses_medium_width() {
+        // `column-rule-style: dashed` alone should default the width to medium.
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("column-rule-style: dashed"), &parent);
+        assert_eq!(style.column_rule.style, BorderStyle::Dashed);
+        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_rule_explicit_width_with_style_longhands() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("column-rule-width: 4px; column-rule-style: double"),
+            &parent,
+        );
+        assert_eq!(style.column_rule.style, BorderStyle::Double);
+        assert!((style.column_rule.width - 3.0).abs() < 0.01); // 4px -> 3pt
+    }
+
+    #[test]
+    fn columns_shorthand_width_only_vs_count_only() {
+        let parent = ComputedStyle::default();
+        // `columns: 140px` is a column-WIDTH, not a count of 140 columns.
+        let w = compute_style(HtmlTag::Div, Some("columns: 140px"), &parent);
+        assert_eq!(w.column_count, None);
+        assert!((w.column_width.unwrap() - 105.0).abs() < 0.01); // 140px -> 105pt
+        // `columns: 4` is a column-COUNT.
+        let c = compute_style(HtmlTag::Div, Some("columns: 4"), &parent);
+        assert_eq!(c.column_count, Some(4));
+        assert_eq!(c.column_width, None);
+        // Both together.
+        let b = compute_style(HtmlTag::Div, Some("columns: 120px 3"), &parent);
+        assert_eq!(b.column_count, Some(3));
+        assert!((b.column_width.unwrap() - 90.0).abs() < 0.01); // 120px -> 90pt
+        // `columns: auto` sets neither.
+        let a = compute_style(HtmlTag::Div, Some("columns: auto"), &parent);
+        assert_eq!(a.column_count, None);
+        assert_eq!(a.column_width, None);
+    }
+
+    #[test]
+    fn column_fill_auto_vs_balance() {
+        let parent = ComputedStyle::default();
+        assert!(!compute_style(HtmlTag::Div, None, &parent).column_fill_auto);
+        assert!(
+            !compute_style(HtmlTag::Div, Some("column-fill: balance"), &parent).column_fill_auto
+        );
+        assert!(compute_style(HtmlTag::Div, Some("column-fill: auto"), &parent).column_fill_auto);
+    }
+
+    #[test]
     fn italic_tag() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Em, None, &parent);
@@ -3638,6 +13012,74 @@ mod tests {
         let style = compute_style(HtmlTag::Span, Some("font-size: 2em"), &parent);
         // em gets parsed as Number, then multiplied by parent font_size
         assert!((style.font_size - 24.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn calc_mixed_percent_width_uses_parent_width() {
+        // calc(50% - 40px) against a 300pt-wide parent: 50% of 300 = 150,
+        // minus 40px (30pt) = 120pt.
+        let mut parent = ComputedStyle::default();
+        parent.width = Some(300.0);
+        parent.height = Some(120.0);
+        let style = compute_style(HtmlTag::Div, Some("width: calc(50% - 40px)"), &parent);
+        assert!(
+            matches!(style.width, Some(w) if (w - 120.0).abs() < 0.01),
+            "got {:?}",
+            style.width
+        );
+    }
+
+    #[test]
+    fn calc_mixed_percent_height_uses_parent_height() {
+        // calc(100% - 60px) on height must resolve the percent against the
+        // parent height (120pt), not its width: 120 - 45 = 75pt.
+        let mut parent = ComputedStyle::default();
+        parent.width = Some(300.0);
+        parent.height = Some(120.0);
+        let style = compute_style(HtmlTag::Div, Some("height: calc(100% - 60px)"), &parent);
+        assert!(
+            matches!(style.height, Some(h) if (h - 75.0).abs() < 0.01),
+            "got {:?}",
+            style.height
+        );
+    }
+
+    #[test]
+    fn clamp_width_resolves_against_parent_width() {
+        // clamp(120px, 50%, 240px): 50% of 600pt = 300, clamped to 180pt (240px).
+        let mut parent = ComputedStyle::default();
+        parent.width = Some(600.0);
+        parent.height = Some(120.0);
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("width: clamp(120px, 50%, 240px)"),
+            &parent,
+        );
+        assert!(
+            matches!(style.width, Some(w) if (w - 180.0).abs() < 0.01),
+            "got {:?}",
+            style.width
+        );
+    }
+
+    #[test]
+    fn clamp_height_resolves_against_parent_height() {
+        // clamp(80px, 50%, 200px): 50% of 160pt parent height = 80, min 80px(60pt)
+        // -> clamps to 60pt.
+        let mut parent = ComputedStyle::default();
+        parent.width = Some(600.0);
+        parent.height = Some(160.0);
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("height: clamp(80px, 50%, 200px)"),
+            &parent,
+        );
+        // 50% of 160 = 80pt, within [60, 150] -> 80pt.
+        assert!(
+            matches!(style.height, Some(h) if (h - 80.0).abs() < 0.01),
+            "got {:?}",
+            style.height
+        );
     }
 
     #[test]
@@ -3661,6 +13103,181 @@ mod tests {
         assert!(style.background_color.is_some());
         let bg = style.background_color.unwrap();
         assert_eq!(bg.r, 255);
+    }
+
+    // --- CSS Color 4 spec coverage (full inline-style pipeline) -------------
+    // Each case asserts the RGBA the library computes for a `background-color`.
+    // The inline pipeline runs lightningcss, which normalizes every modern
+    // color form (percentage rgb, slash-alpha, hsl/hwb, named, hex-alpha) to a
+    // canonical hex/keyword the engine then parses. These tests pin the spec
+    // conversions so a regression in either layer is caught.
+    fn bg_rgba(decl: &str) -> (u8, u8, u8, u8) {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some(decl), &parent);
+        let c = style
+            .background_color
+            .expect("background-color should parse");
+        (c.r, c.g, c.b, c.a)
+    }
+
+    #[test]
+    fn color_hex_4_digit_alpha() {
+        // #rgba: each digit duplicated; alpha 0x8 -> 0x88. (css-color-4 §5.2)
+        assert_eq!(bg_rgba("background-color: #0a68"), (0, 170, 102, 136));
+    }
+
+    #[test]
+    fn color_hex_8_digit_alpha() {
+        // #rrggbbaa: last pair is alpha. (css-color-4 §5.2)
+        assert_eq!(bg_rgba("background-color: #c2185b80"), (194, 24, 91, 128));
+    }
+
+    #[test]
+    fn color_rgb_percentage_components() {
+        // rgb(80% 20% 10%): 80%*255=204, 20%*255=51, 10%*255=26. (css-color-4 §11)
+        assert_eq!(
+            bg_rgba("background-color: rgb(80% 20% 10%)"),
+            (204, 51, 26, 255)
+        );
+    }
+
+    #[test]
+    fn color_rgb_modern_slash_alpha() {
+        // rgb(r g b / a) modern space syntax with decimal alpha. (css-color-4 §11)
+        assert_eq!(
+            bg_rgba("background-color: rgb(255 0 0 / 0.5)"),
+            (255, 0, 0, 128)
+        );
+    }
+
+    #[test]
+    fn color_rgb_percentage_alpha() {
+        // Percentage alpha: 50% -> 128. (css-color-4 §15 <alpha-value>)
+        assert_eq!(
+            bg_rgba("background-color: rgb(0 0 0 / 50%)"),
+            (0, 0, 0, 128)
+        );
+    }
+
+    #[test]
+    fn color_rgb_none_keyword() {
+        // `none` resolves to 0 in legacy contexts. (css-color-4 §4.3)
+        assert_eq!(
+            bg_rgba("background-color: rgb(none 128 none)"),
+            (0, 128, 0, 255)
+        );
+    }
+
+    #[test]
+    fn color_rgb_out_of_range_clamped() {
+        // Out-of-range components clamp to [0,255]. (css-color-4 §11)
+        assert_eq!(
+            bg_rgba("background-color: rgb(300 -20 999)"),
+            (255, 0, 255, 255)
+        );
+    }
+
+    #[test]
+    fn color_hsl_modern_slash_alpha() {
+        // hsl(h s l / a) modern slash-alpha; hsl(280 60% 45%) -> #8a2eb8.
+        // (css-color-4 §7)
+        assert_eq!(
+            bg_rgba("background-color: hsl(280 60% 45% / 0.5)"),
+            (138, 46, 184, 128)
+        );
+    }
+
+    #[test]
+    fn color_hsl_hue_angle_units_normalized() {
+        // 0.5turn = 180deg = cyan at full sat/half light. (css-color-4 §7, §<angle>)
+        assert_eq!(
+            bg_rgba("background-color: hsl(0.5turn 100% 50%)"),
+            (0, 255, 255, 255)
+        );
+        // Hue > 360 normalizes: 400deg -> 40deg. (css-color-4 §7)
+        assert_eq!(
+            bg_rgba("background-color: hsl(400 100% 50%)"),
+            (255, 170, 0, 255)
+        );
+    }
+
+    #[test]
+    fn color_hsl_powerless_hue_when_zero_sat() {
+        // Saturation 0% -> gray regardless of hue. (css-color-4 §7)
+        assert_eq!(
+            bg_rgba("background-color: hsl(120 0% 50%)"),
+            (128, 128, 128, 255)
+        );
+    }
+
+    #[test]
+    fn color_hwb_function() {
+        // hwb(194 0% 0%) is fully saturated == hsl(194 100% 50%). (css-color-4 §8)
+        assert_eq!(
+            bg_rgba("background-color: hwb(194 0% 0%)"),
+            (0, 196, 255, 255)
+        );
+        // hwb(120 50% 50%): w+b==1 -> gray = w/(w+b) = 0.5 -> 128. (css-color-4 §8)
+        assert_eq!(
+            bg_rgba("background-color: hwb(120 50% 50%)"),
+            (128, 128, 128, 255)
+        );
+    }
+
+    #[test]
+    fn color_rebeccapurple_keyword() {
+        // rebeccapurple == #663399. (css-color-4 §6.1, named color)
+        assert_eq!(
+            bg_rgba("background-color: rebeccapurple"),
+            (102, 51, 153, 255)
+        );
+        // Named colors are ASCII case-insensitive.
+        assert_eq!(
+            bg_rgba("background-color: REBECCAPURPLE"),
+            (102, 51, 153, 255)
+        );
+        assert_eq!(bg_rgba("background-color: NavY"), (0, 0, 128, 255));
+    }
+
+    #[test]
+    fn color_transparent_keyword_is_zero_alpha() {
+        // transparent == rgb(0 0 0 / 0). (css-color-4 §6.1)
+        assert_eq!(bg_rgba("background-color: transparent"), (0, 0, 0, 0));
+    }
+
+    fn rgba_tuple(c: Color) -> (u8, u8, u8, u8) {
+        (c.r, c.g, c.b, c.a)
+    }
+
+    #[test]
+    fn parse_hex_to_color_alpha_forms() {
+        // Direct unit coverage for the gradient/border hex parser's alpha forms.
+        assert_eq!(
+            parse_hex_to_color("0000").map(rgba_tuple),
+            Some((0, 0, 0, 0))
+        );
+        assert_eq!(
+            parse_hex_to_color("ff000080").map(rgba_tuple),
+            Some((255, 0, 0, 128))
+        );
+        assert_eq!(
+            parse_hex_to_color("1234").map(rgba_tuple),
+            Some((17, 34, 51, 68))
+        );
+    }
+
+    #[test]
+    fn parse_gradient_color_transparent_is_zero_alpha() {
+        // `transparent` in a gradient stop must be rgb(0 0 0 / 0), not white.
+        assert_eq!(
+            parse_gradient_color("transparent").map(rgba_tuple),
+            Some((0, 0, 0, 0))
+        );
+        // lightningcss normalizes `transparent` to #0000 before this parser.
+        assert_eq!(
+            parse_gradient_color("#0000").map(rgba_tuple),
+            Some((0, 0, 0, 0))
+        );
     }
 
     #[test]
@@ -3712,6 +13329,49 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("page-break-after: always"), &parent);
         assert!(style.page_break_after);
+        // Legacy `always` maps to the modern `page` break value.
+        assert_eq!(style.break_after, BreakValue::Page);
+    }
+
+    #[test]
+    fn modern_break_before_page_forces_break() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("break-before: page"), &parent);
+        assert_eq!(style.break_before, BreakValue::Page);
+        assert!(style.page_break_before);
+    }
+
+    #[test]
+    fn modern_break_after_sided_keeps_parity() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("break-after: left"), &parent);
+        assert_eq!(style.break_after, BreakValue::Left);
+        // Sided breaks still force a page break.
+        assert!(style.page_break_after);
+        let style = compute_style(HtmlTag::Div, Some("break-before: recto"), &parent);
+        assert_eq!(style.break_before, BreakValue::Recto);
+        assert!(style.page_break_before);
+    }
+
+    #[test]
+    fn break_inside_avoid_parsed() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("break-inside: avoid"), &parent);
+        assert!(style.break_inside_avoid);
+        // Legacy alias.
+        let style = compute_style(HtmlTag::Div, Some("page-break-inside: avoid"), &parent);
+        assert!(style.break_inside_avoid);
+        // `auto` does not set avoid.
+        let style = compute_style(HtmlTag::Div, Some("break-inside: auto"), &parent);
+        assert!(!style.break_inside_avoid);
+    }
+
+    #[test]
+    fn break_before_avoid_does_not_force_break() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("break-before: avoid"), &parent);
+        assert_eq!(style.break_before, BreakValue::Avoid);
+        assert!(!style.page_break_before);
     }
 
     #[test]
@@ -3775,6 +13435,16 @@ mod tests {
     }
 
     #[test]
+    fn border_shorthand_none_style() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("border: 10px none #d50000"), &parent);
+        assert_eq!(style.border.top.style, BorderStyle::None);
+        assert_eq!(style.border.right.style, BorderStyle::None);
+        assert_eq!(style.border.bottom.style, BorderStyle::None);
+        assert_eq!(style.border.left.style, BorderStyle::None);
+    }
+
+    #[test]
     fn border_with_custom_color() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 2px solid red"), &parent);
@@ -3783,6 +13453,68 @@ mod tests {
         assert_eq!(c.r, 255);
         assert_eq!(c.g, 0);
         assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn border_shorthand_em_width_resolves_against_font_size() {
+        // Regression: a font-relative border width in the `border` shorthand
+        // (e.g. `0.2em`) was dropped, leaving width = 0. font-size:20px -> 1em
+        // = 20px, so 0.2em = 4px = 3pt. Width/height in em must also resolve.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 20px; border: 0.2em solid #11305f"),
+            &parent,
+        );
+        // 0.2em * 20px = 4px = 3pt.
+        assert!(
+            (style.border.top.width - 3.0).abs() < 0.05,
+            "em border width should be 3pt, got {}",
+            style.border.top.width
+        );
+        assert!((style.border.bottom.width - 3.0).abs() < 0.05);
+        let c = style.border.top.color.unwrap();
+        assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
+    }
+
+    #[test]
+    fn border_width_longhand_em_resolves_against_font_size() {
+        // The uniform `border-width` and per-side longhands accept em widths too.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 20px; border-style: solid; border-width: 0.5em"),
+            &parent,
+        );
+        // 0.5em * 20px = 10px = 7.5pt.
+        assert!(
+            (style.border.top.width - 7.5).abs() < 0.05,
+            "em uniform border width should be 7.5pt, got {}",
+            style.border.top.width
+        );
+        let per_side = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 20px; border-top-style: solid; border-top-width: 0.25em"),
+            &parent,
+        );
+        // 0.25em * 20px = 5px = 3.75pt.
+        assert!((per_side.border.top.width - 3.75).abs() < 0.05);
+    }
+
+    #[test]
+    fn nested_var_fallback_in_border_shorthand_resolves() {
+        // Regression: `var(--a, var(--b, #11305f))` in a shorthand had its
+        // fallback truncated at the inner `)`, dropping the substitution and
+        // leaving the border the black default. Neither custom property is
+        // defined, so the innermost literal color must win.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border: 4px solid var(--bc, var(--bc2, #11305f))"),
+            &parent,
+        );
+        let c = style.border.top.color.unwrap();
+        assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
     }
 
     #[test]
@@ -3801,9 +13533,65 @@ mod tests {
     }
 
     #[test]
-    fn font_family_default_is_helvetica() {
+    fn border_per_side_width_longhands() {
+        // Mirrors block-box-model/block-border-width-thick: a single
+        // `border-style`/`border-color` plus asymmetric per-side widths. Each
+        // edge must pick up its own width and remain paintable (solid + colored).
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-style: solid; border-color: #11305f; \
+                 border-top-width: 6px; border-right-width: 14px; \
+                 border-bottom-width: 22px; border-left-width: 30px",
+            ),
+            &parent,
+        );
+        // px -> pt is a 0.75 factor.
+        assert!((style.border.top.width - 6.0 * 0.75).abs() < 0.01);
+        assert!((style.border.right.width - 14.0 * 0.75).abs() < 0.01);
+        assert!((style.border.bottom.width - 22.0 * 0.75).abs() < 0.01);
+        assert!((style.border.left.width - 30.0 * 0.75).abs() < 0.01);
+        for side in [
+            &style.border.top,
+            &style.border.right,
+            &style.border.bottom,
+            &style.border.left,
+        ] {
+            assert_eq!(side.style, BorderStyle::Solid);
+            let c = side.color.expect("per-side border color should be set");
+            assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
+            // Paintable: width > 0 && style != None.
+            assert!(side.width > 0.0 && side.style != BorderStyle::None);
+        }
+    }
+
+    #[test]
+    fn border_per_side_style_and_color_longhands() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-width: 4px; border-top-style: dashed; \
+                 border-right-style: dotted; border-bottom-style: none; \
+                 border-left-color: red",
+            ),
+            &parent,
+        );
+        assert_eq!(style.border.top.style, BorderStyle::Dashed);
+        assert_eq!(style.border.right.style, BorderStyle::Dotted);
+        assert_eq!(style.border.bottom.style, BorderStyle::None);
+        let left = style.border.left.color.expect("left color should be set");
+        assert_eq!((left.r, left.g, left.b), (255, 0, 0));
+    }
+
+    #[test]
+    fn font_family_default_is_serif() {
+        // The UA-initial font-family is a serif face (matching Chrome's default
+        // "standard" font), so unstyled text and the `ex`/`ch` units resolve
+        // against serif metrics rather than sans-serif.
         let style = ComputedStyle::default();
-        assert_eq!(style.font_family, FontFamily::Helvetica);
+        assert_eq!(style.font_family, FontFamily::TimesRoman);
     }
 
     #[test]
@@ -3811,6 +13599,75 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Span, Some("font-family: serif"), &parent);
         assert_eq!(style.font_family, FontFamily::TimesRoman);
+    }
+
+    #[test]
+    fn font_variant_small_caps_parsed() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Span, Some("font-variant: small-caps"), &parent);
+        assert_eq!(style.font_variant_caps, FontVariantCaps::SmallCaps);
+        let caps = compute_style(
+            HtmlTag::Span,
+            Some("font-variant-caps: small-caps"),
+            &parent,
+        );
+        assert_eq!(caps.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_normal_resets_small_caps() {
+        let mut parent = ComputedStyle::default();
+        parent.font_variant_caps = FontVariantCaps::SmallCaps;
+        let style = compute_style(HtmlTag::Span, Some("font-variant: normal"), &parent);
+        assert_eq!(style.font_variant_caps, FontVariantCaps::Normal);
+    }
+
+    #[test]
+    fn font_variant_caps_inherits() {
+        let mut parent = ComputedStyle::default();
+        parent.font_variant_caps = FontVariantCaps::SmallCaps;
+        let style = compute_style(HtmlTag::Span, None, &parent);
+        assert_eq!(style.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_feature_settings_liga_off_disables_ligatures() {
+        let parent = ComputedStyle::default();
+        assert!(parent.ligatures_enabled);
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("font-feature-settings: \"liga\" 0"),
+            &parent,
+        );
+        assert!(!style.ligatures_enabled);
+    }
+
+    #[test]
+    fn font_feature_settings_liga_on_keeps_ligatures() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("font-feature-settings: \"liga\" 1"),
+            &parent,
+        );
+        assert!(style.ligatures_enabled);
+    }
+
+    #[test]
+    fn ligatures_disabled_by_feature_settings_parsing() {
+        assert!(ligatures_disabled_by_feature_settings("\"liga\" 0"));
+        assert!(ligatures_disabled_by_feature_settings("'clig' off"));
+        assert!(ligatures_disabled_by_feature_settings(
+            "\"liga\" 0, \"dlig\" 0"
+        ));
+        assert!(!ligatures_disabled_by_feature_settings("\"liga\" 1"));
+        assert!(!ligatures_disabled_by_feature_settings("\"liga\""));
+        // A non-ligature feature does not affect ligatures.
+        assert!(!ligatures_disabled_by_feature_settings("\"kern\" 0"));
+        // A later enable cancels an earlier disable.
+        assert!(!ligatures_disabled_by_feature_settings(
+            "\"liga\" 0, \"liga\" 1"
+        ));
     }
 
     #[test]
@@ -3866,6 +13723,24 @@ mod tests {
     }
 
     #[test]
+    fn border_currentcolor_resolves_to_computed_color() {
+        // `border: ... currentColor` must paint with the element's computed
+        // `color`, not fall back to black.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("color: #6a1b9a; border: 12px solid currentColor"),
+            &parent,
+        );
+        let c = style.border.top.color.expect("border color should be set");
+        assert_eq!(
+            (c.r, c.g, c.b),
+            (style.color.r, style.color.g, style.color.b)
+        );
+        assert_eq!((c.r, c.g, c.b), (0x6a, 0x1b, 0x9a));
+    }
+
+    #[test]
     fn border_color_variants() {
         let parent = ComputedStyle::default();
         for (name, r, g, b) in [
@@ -3904,10 +13779,29 @@ mod tests {
     }
 
     #[test]
-    fn border_color_unknown_returns_none() {
+    fn border_color_unknown_falls_back_to_current_color() {
+        // An unrecognized color token leaves the border without an explicit
+        // color. Per CSS the initial value of `border-color` is `currentColor`,
+        // so a visible border with no resolvable color paints in the element's
+        // computed `color` (here the default, black) rather than staying unset.
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid foobar"), &parent);
-        assert!(style.border.top.color.is_none());
+        let c = style
+            .border
+            .top
+            .color
+            .expect("visible border resolves a color");
+        assert_eq!(
+            (c.r, c.g, c.b),
+            (style.color.r, style.color.g, style.color.b)
+        );
+    }
+
+    #[test]
+    fn parse_border_color_unknown_token_returns_none() {
+        // The low-level parser still reports `None` for an unknown color token;
+        // the currentColor default is applied later, in the cascade post-pass.
+        assert!(parse_border_color("foobar").is_none());
     }
 
     // --- Extended font-family mapping tests ---
@@ -4134,6 +14028,30 @@ mod tests {
     }
 
     #[test]
+    fn blend_modes_from_inline_style() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("mix-blend-mode: multiply"), &parent);
+        assert_eq!(s.mix_blend_mode, BlendMode::Multiply);
+        let s = compute_style(HtmlTag::Div, Some("mix-blend-mode: screen"), &parent);
+        assert_eq!(s.mix_blend_mode, BlendMode::Screen);
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("background-blend-mode: multiply"),
+            &parent,
+        );
+        assert_eq!(s.background_blend_mode, BlendMode::Multiply);
+    }
+
+    #[test]
+    fn blend_mode_default_is_normal() {
+        let s = ComputedStyle::default();
+        assert_eq!(s.mix_blend_mode, BlendMode::Normal);
+        assert_eq!(s.background_blend_mode, BlendMode::Normal);
+        assert_eq!(BlendMode::Normal.pdf_name(), None);
+        assert_eq!(BlendMode::Multiply.pdf_name(), Some("Multiply"));
+    }
+
+    #[test]
     fn opacity_default_is_one() {
         let style = ComputedStyle::default();
         assert!((style.opacity - 1.0).abs() < 0.01);
@@ -4247,6 +14165,14 @@ mod tests {
     }
 
     #[test]
+    fn position_running_records_name_and_stays_static() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("position: running(RunHead)"), &parent);
+        assert_eq!(style.position, Position::Static);
+        assert_eq!(style.running_name.as_deref(), Some("runhead"));
+    }
+
+    #[test]
     fn position_default_is_static() {
         let style = ComputedStyle::default();
         assert_eq!(style.position, Position::Static);
@@ -4274,7 +14200,7 @@ mod tests {
     fn box_shadow_simple_parsed() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: 3px 3px black"), &parent);
-        let shadow = style.box_shadow.unwrap();
+        let shadow = style.box_shadow[0];
         assert!((shadow.offset_x - 2.25).abs() < 0.1); // 3px * 0.75
         assert!((shadow.offset_y - 2.25).abs() < 0.1);
         assert!((shadow.blur - 0.0).abs() < 0.1);
@@ -4287,7 +14213,7 @@ mod tests {
     fn box_shadow_with_blur() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: 2px 2px 4px black"), &parent);
-        let shadow = style.box_shadow.unwrap();
+        let shadow = style.box_shadow[0];
         assert!((shadow.offset_x - 1.5).abs() < 0.1); // 2px * 0.75
         assert!((shadow.offset_y - 1.5).abs() < 0.1);
         assert!((shadow.blur - 3.0).abs() < 0.1); // 4px * 0.75
@@ -4298,7 +14224,7 @@ mod tests {
     fn box_shadow_with_pt_units() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: 3pt 3pt red"), &parent);
-        let shadow = style.box_shadow.unwrap();
+        let shadow = style.box_shadow[0];
         assert!((shadow.offset_x - 3.0).abs() < 0.1);
         assert!((shadow.offset_y - 3.0).abs() < 0.1);
         assert_eq!(shadow.color.r, 255);
@@ -4308,28 +14234,107 @@ mod tests {
     fn box_shadow_none() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: none"), &parent);
-        assert!(style.box_shadow.is_none());
+        assert!(style.box_shadow.is_empty());
     }
 
     #[test]
     fn box_shadow_default_is_none() {
         let style = ComputedStyle::default();
-        assert!(style.box_shadow.is_none());
+        assert!(style.box_shadow.is_empty());
+    }
+
+    #[test]
+    fn box_shadow_multiple_parsed() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("box-shadow: 16px 16px 0 0 #6a1b9a, -16px -16px 0 0 #00838f"),
+            &parent,
+        );
+        assert_eq!(style.box_shadow.len(), 2);
+        // First listed shadow.
+        assert!((style.box_shadow[0].offset_x - 12.0).abs() < 0.1); // 16px * 0.75
+        assert_eq!(style.box_shadow[0].color.r, 0x6a);
+        // Second listed shadow.
+        assert!((style.box_shadow[1].offset_x + 12.0).abs() < 0.1); // -16px * 0.75
+        assert_eq!(style.box_shadow[1].color.g, 0x83);
+    }
+
+    #[test]
+    fn overflow_clip_keyword_clips() {
+        let parent = ComputedStyle::default();
+        // `overflow: clip` clips to the box like hidden in our model.
+        let s = compute_style(HtmlTag::Div, Some("overflow: clip"), &parent);
+        assert_eq!(s.overflow, Overflow::Hidden);
+        assert!(s.overflow.clips());
+    }
+
+    #[test]
+    fn overflow_scroll_keyword_clips() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("overflow: scroll"), &parent);
+        assert_eq!(s.overflow, Overflow::Hidden);
+    }
+
+    #[test]
+    fn overflow_auto_clips_in_print() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("overflow: auto"), &parent);
+        assert_eq!(s.overflow, Overflow::Auto);
+        assert!(
+            s.overflow.clips(),
+            "auto clips overflowing content in print"
+        );
+    }
+
+    #[test]
+    fn overflow_x_hidden_y_visible_coerces_to_clip_both() {
+        // Per CSS Overflow 3: `overflow-x: hidden` is a scrolling value, so the
+        // sibling `overflow-y: visible` is coerced to `auto`, making the box
+        // clip on BOTH axes.
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("overflow-x: hidden; overflow-y: visible"),
+            &parent,
+        );
+        assert_eq!(s.overflow, Overflow::Hidden);
+        assert!(s.overflow.clips());
+    }
+
+    #[test]
+    fn overflow_both_visible_does_not_clip() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("overflow-x: visible; overflow-y: visible"),
+            &parent,
+        );
+        assert_eq!(s.overflow, Overflow::Visible);
+        assert!(!s.overflow.clips());
+    }
+
+    #[test]
+    fn overflow_y_only_hidden_clips() {
+        let parent = ComputedStyle::default();
+        // `overflow-y: hidden` alone: x defaults visible, coerced to auto -> clip.
+        let s = compute_style(HtmlTag::Div, Some("overflow-y: hidden"), &parent);
+        assert_eq!(s.overflow, Overflow::Hidden);
     }
 
     #[test]
     fn box_shadow_not_inherited() {
         let mut parent = ComputedStyle::default();
-        parent.box_shadow = Some(BoxShadow {
+        parent.box_shadow = vec![BoxShadow {
             offset_x: 3.0,
             offset_y: 3.0,
             blur: 0.0,
             spread: 0.0,
             color: Color::BLACK,
             inset: false,
-        });
+        }];
         let style = compute_style(HtmlTag::Div, None, &parent);
-        assert!(style.box_shadow.is_none());
+        assert!(style.box_shadow.is_empty());
     }
 
     #[test]
@@ -4451,7 +14456,15 @@ mod tests {
             Some("transform: translate(10pt, 20pt)"),
             &parent,
         );
-        assert_eq!(style.transform, Some(Transform::Translate(10.0, 20.0)));
+        assert_eq!(
+            style.transform,
+            Some(Transform::Translate {
+                tx: 10.0,
+                ty: 20.0,
+                tx_pct: false,
+                ty_pct: false
+            })
+        );
     }
 
     #[test]
@@ -4463,12 +14476,63 @@ mod tests {
             &parent,
         );
         let t = style.transform.unwrap();
-        if let Transform::Translate(tx, ty) = t {
+        if let Transform::Translate {
+            tx,
+            ty,
+            tx_pct,
+            ty_pct,
+            ..
+        } = t
+        {
             assert!((tx - 7.5).abs() < 0.1); // 10 * 0.75
             assert!((ty - 15.0).abs() < 0.1); // 20 * 0.75
+            assert!(!tx_pct && !ty_pct);
         } else {
             panic!("Expected Translate");
         }
+    }
+
+    #[test]
+    fn transform_translate_percent() {
+        // translate(50%, 25%) keeps the raw percentages with the pct flags set;
+        // they resolve against the element's own border box at render time.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("transform: translate(50%, 25%)"),
+            &parent,
+        );
+        assert_eq!(
+            style.transform,
+            Some(Transform::Translate {
+                tx: 50.0,
+                ty: 25.0,
+                tx_pct: true,
+                ty_pct: true
+            })
+        );
+        // The render-time resolution multiplies the percentage by the box size.
+        let m = style.transform.unwrap().to_css_matrix(200.0, 80.0);
+        assert!((m[4] - 100.0).abs() < 0.01); // 50% of 200pt
+        assert!((m[5] - 20.0).abs() < 0.01); // 25% of 80pt
+    }
+
+    #[test]
+    fn transform_translatex_percent() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("transform: translateX(50%)"), &parent);
+        assert_eq!(
+            style.transform,
+            Some(Transform::Translate {
+                tx: 50.0,
+                ty: 0.0,
+                tx_pct: true,
+                ty_pct: false
+            })
+        );
+        let m = style.transform.unwrap().to_css_matrix(120.0, 60.0);
+        assert!((m[4] - 60.0).abs() < 0.01); // 50% of 120pt width
+        assert!(m[5].abs() < 0.01); // no Y translation
     }
 
     #[test]
@@ -4507,6 +14571,148 @@ mod tests {
         assert_eq!(style.grid_template_columns[0], GridTrack::Fr(1.0));
         assert_eq!(style.grid_template_columns[1], GridTrack::Fr(2.0));
         assert_eq!(style.grid_template_columns[2], GridTrack::Fr(1.0));
+    }
+
+    #[test]
+    fn grid_column_line_numbers_parse() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-column: 2 / 4"), &parent);
+        assert_eq!(style.grid_column_start, GridLine::Line(2));
+        assert_eq!(style.grid_column_end, GridLine::Line(4));
+        // Back-compat span is the delta.
+        assert_eq!(style.grid_column_span, 2);
+    }
+
+    #[test]
+    fn grid_column_start_with_span_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-column: 2 / span 2"), &parent);
+        assert_eq!(style.grid_column_start, GridLine::Line(2));
+        assert_eq!(style.grid_column_end, GridLine::Span(2));
+    }
+
+    #[test]
+    fn grid_column_negative_line_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-column: 1 / -1"), &parent);
+        assert_eq!(style.grid_column_start, GridLine::Line(1));
+        assert_eq!(style.grid_column_end, GridLine::Line(-1));
+    }
+
+    #[test]
+    fn grid_named_line_placement_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-column: mid / end"), &parent);
+        assert_eq!(style.grid_column_start, GridLine::Named("mid".into()));
+        assert_eq!(style.grid_column_end, GridLine::Named("end".into()));
+    }
+
+    #[test]
+    fn grid_template_columns_named_lines_stored() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("display: grid; grid-template-columns: [start] 100px [mid] 100px [end]"),
+            &parent,
+        );
+        assert_eq!(style.grid_template_columns.len(), 2);
+        // line 0 = start, line 1 = mid, line 2 = end
+        assert_eq!(style.grid_template_column_line_names.len(), 3);
+        assert!(
+            style.grid_template_column_line_names[0]
+                .iter()
+                .any(|name| name == "start")
+        );
+        assert!(
+            style.grid_template_column_line_names[1]
+                .iter()
+                .any(|name| name == "mid")
+        );
+        assert!(
+            style.grid_template_column_line_names[2]
+                .iter()
+                .any(|name| name == "end")
+        );
+    }
+
+    #[test]
+    fn grid_area_single_name_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-area: header"), &parent);
+        assert_eq!(style.grid_area_name.as_deref(), Some("header"));
+    }
+
+    #[test]
+    fn grid_area_line_form_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-area: 1 / 2 / 3 / 4"), &parent);
+        assert_eq!(style.grid_row_start, GridLine::Line(1));
+        assert_eq!(style.grid_column_start, GridLine::Line(2));
+        assert_eq!(style.grid_row_end, GridLine::Line(3));
+        assert_eq!(style.grid_column_end, GridLine::Line(4));
+        assert_eq!(style.grid_area_name, None);
+    }
+
+    #[test]
+    fn grid_template_areas_parses_rows_and_dots() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("display: grid; grid-template-areas: \"a a .\" \". b b\""),
+            &parent,
+        );
+        assert_eq!(style.grid_template_areas.len(), 2);
+        assert_eq!(
+            style.grid_template_areas[0],
+            vec![Some("a".to_string()), Some("a".to_string()), None]
+        );
+        assert_eq!(
+            style.grid_template_areas[1],
+            vec![None, Some("b".to_string()), Some("b".to_string())]
+        );
+    }
+
+    #[test]
+    fn grid_auto_flow_dense_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("grid-auto-flow: row dense"), &parent);
+        assert!(style.grid_auto_flow_dense);
+        assert!(!style.grid_auto_flow_column);
+    }
+
+    #[test]
+    fn grid_shorthand_auto_flow_rows_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("display: grid; grid: auto-flow 60px / 70px 70px"),
+            &parent,
+        );
+        assert_eq!(style.display, Display::Grid);
+        assert_eq!(style.grid_template_columns.len(), 2);
+        assert!((style.grid_auto_rows.unwrap() - 45.0).abs() < 0.01);
+        assert!(!style.grid_auto_flow_column);
+    }
+
+    #[test]
+    fn grid_shorthand_auto_flow_rows_from_stylesheet_parses() {
+        let parent = ComputedStyle::default();
+        let rules = crate::parser::css::parse_stylesheet(
+            ".grid { display: grid; grid: auto-flow 60px / 70px 70px }",
+        );
+        let style =
+            compute_style_with_rules(HtmlTag::Div, None, &parent, &rules, "div", &["grid"], None);
+        assert_eq!(style.display, Display::Grid);
+        assert_eq!(style.grid_template_columns.len(), 2);
+        assert!((style.grid_auto_rows.unwrap() - 45.0).abs() < 0.01);
+        assert!(!style.grid_auto_flow_column);
+    }
+
+    #[test]
+    fn grid_justify_self_parses() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("justify-self: end"), &parent);
+        assert_eq!(style.grid_justify_self, Some(GridAlign::End));
     }
 
     #[test]
@@ -4671,6 +14877,117 @@ mod tests {
         assert_eq!(lg.stops[0].color.r, 255);
         assert_eq!(lg.stops[0].color.g, 0);
         assert_eq!(lg.stops[1].color.b, 255);
+        assert!(!lg.repeating);
+    }
+
+    #[test]
+    fn parse_linear_gradient_range_hard_stops() {
+        // lightningcss collapses `red 0%, red 50%, blue 50%, blue 100%` into the
+        // range form. The parser must expand it back into four stops.
+        let lg = parse_linear_gradient("linear-gradient(90deg, #d32f2f 0% 50%, #1565c0 50% 100%)")
+            .unwrap();
+        assert_eq!(lg.stops.len(), 4);
+        assert!((lg.stops[0].position - 0.0).abs() < 0.01);
+        assert!((lg.stops[1].position - 0.5).abs() < 0.01);
+        assert!((lg.stops[2].position - 0.5).abs() < 0.01);
+        assert!((lg.stops[3].position - 1.0).abs() < 0.01);
+        assert_eq!(lg.stops[0].color.r, 211);
+        assert_eq!(lg.stops[3].color.b, 192);
+    }
+
+    #[test]
+    fn parse_repeating_linear_gradient_sets_flag() {
+        let lg =
+            parse_linear_gradient("repeating-linear-gradient(90deg, red 0% 10%, blue 10% 20%)")
+                .unwrap();
+        assert!(lg.repeating);
+        assert_eq!(lg.stops.len(), 4);
+    }
+
+    #[test]
+    fn parse_radial_gradient_extent_keywords() {
+        let cs = parse_radial_gradient("radial-gradient(circle closest-side, red, blue)").unwrap();
+        assert_eq!(cs.extent, RadialExtent::ClosestSide);
+        assert_eq!(cs.shape, RadialShape::Circle);
+
+        let fs = parse_radial_gradient("radial-gradient(circle farthest-side, red, blue)").unwrap();
+        assert_eq!(fs.extent, RadialExtent::FarthestSide);
+
+        let cc = parse_radial_gradient("radial-gradient(closest-corner, red, blue)").unwrap();
+        assert_eq!(cc.extent, RadialExtent::ClosestCorner);
+    }
+
+    #[test]
+    fn parse_radial_gradient_explicit_ellipse_radii() {
+        let rg = parse_radial_gradient("radial-gradient(ellipse 120px 60px at center, red, blue)")
+            .unwrap();
+        assert_eq!(rg.shape, RadialShape::Ellipse);
+        let (rx, ry) = rg.radii.expect("explicit radii");
+        // 120px → 90pt, 60px → 45pt.
+        assert!((rx.resolve(1000.0) - 90.0).abs() < 0.01);
+        assert!((ry.resolve(1000.0) - 45.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_repeating_radial_gradient_sets_flag() {
+        let rg =
+            parse_radial_gradient("repeating-radial-gradient(circle, red 0% 10%, blue 10% 20%)")
+                .unwrap();
+        assert!(rg.repeating);
+        assert_eq!(rg.shape, RadialShape::Circle);
+    }
+
+    #[test]
+    fn parse_conic_gradient_basic_four_quadrants() {
+        let cg = parse_conic_gradient(
+            "conic-gradient(from 0deg at center, #e53935 0deg 90deg, #43a047 90deg 180deg, #1e88e5 180deg 270deg, #fdd835 270deg 360deg)",
+        )
+        .unwrap();
+        assert!(!cg.repeating);
+        assert!((cg.from_angle - 0.0).abs() < 0.01);
+        // 4 quadrant range stops → 8 stops (two per quadrant).
+        assert_eq!(cg.stops.len(), 8);
+        assert!((cg.stops[0].position - 0.0).abs() < 0.01);
+        assert!((cg.stops[1].position - 0.25).abs() < 0.01);
+        assert!((cg.stops.last().unwrap().position - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_conic_gradient_from_angle_and_position() {
+        let cg = parse_conic_gradient("conic-gradient(from 45deg at 30% 30%, red, blue)").unwrap();
+        assert!((cg.from_angle - 45.0).abs() < 0.01);
+        let (x, _y) = cg.center;
+        assert!(matches!(x, RadialPos::Fraction(f) if (f - 0.3).abs() < 0.01));
+        // Two implicit stops distribute to 0 and 1.
+        assert_eq!(cg.stops.len(), 2);
+        assert!((cg.stops[0].position - 0.0).abs() < 0.01);
+        assert!((cg.stops[1].position - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_repeating_conic_gradient_sets_flag() {
+        let cg = parse_conic_gradient("repeating-conic-gradient(red 0deg 30deg, blue 30deg 60deg)")
+            .unwrap();
+        assert!(cg.repeating);
+        assert_eq!(cg.stops.len(), 4);
+        // 30deg → 1/12 turn.
+        assert!((cg.stops[1].position - (30.0 / 360.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_conic_angle_fraction_units() {
+        assert!((parse_conic_angle_fraction("90deg").unwrap() - 0.25).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("0.25turn").unwrap() - 0.25).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("50%").unwrap() - 0.5).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("100grad").unwrap() - 0.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_css_angle_deg_units() {
+        assert!((parse_css_angle_deg("90deg").unwrap() - 90.0).abs() < 0.01);
+        assert!((parse_css_angle_deg("0.5turn").unwrap() - 180.0).abs() < 0.01);
+        assert!((parse_css_angle_deg("100grad").unwrap() - 90.0).abs() < 0.01);
+        assert!(parse_css_angle_deg("red").is_none());
     }
 
     #[test]
@@ -4730,6 +15047,24 @@ mod tests {
     fn parse_radial_gradient_with_circle() {
         let rg = parse_radial_gradient("radial-gradient(circle, red, blue)").unwrap();
         assert_eq!(rg.stops.len(), 2);
+        assert_eq!(rg.shape, RadialShape::Circle);
+    }
+
+    #[test]
+    fn parse_radial_gradient_default_shape_is_ellipse() {
+        // CSS default shape is `ellipse` when no shape keyword is present.
+        let rg = parse_radial_gradient("radial-gradient(red, blue)").unwrap();
+        assert_eq!(rg.shape, RadialShape::Ellipse);
+    }
+
+    #[test]
+    fn parse_radial_gradient_ellipse_at_corner() {
+        let rg = parse_radial_gradient("radial-gradient(ellipse at top left, #00897b, #b71c1c)")
+            .unwrap();
+        assert_eq!(rg.shape, RadialShape::Ellipse);
+        assert_eq!(rg.center.0, RadialPos::Fraction(0.0));
+        assert_eq!(rg.center.1, RadialPos::Fraction(0.0));
+        assert_eq!(rg.radius, None);
     }
 
     #[test]
@@ -4764,6 +15099,134 @@ mod tests {
             &parent,
         );
         assert!(style.background_radial_gradient.is_some());
+    }
+
+    fn single_mask_layer(style: &ComputedStyle) -> &MaskLayer {
+        match &style.mask_image {
+            Some(MaskSource::Layers(layers)) if layers.len() == 1 => &layers[0],
+            other => panic!("expected a single mask layer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mask_image_linear_gradient_from_style() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("mask-image: linear-gradient(to right, #000, rgba(0,0,0,0))"),
+            &parent,
+        );
+        let layer = single_mask_layer(&style);
+        match &layer.source {
+            MaskLayerSource::Linear(lg) => {
+                assert!((lg.angle - 90.0).abs() < 0.01);
+                assert_eq!(lg.stops.len(), 2);
+            }
+            other => panic!("expected a linear mask source, got {other:?}"),
+        }
+        // `match-source` (initial) on a CSS gradient resolves to alpha at paint.
+        assert_eq!(layer.mode, MaskMode::MatchSource);
+        assert_eq!(style.mask_mode, MaskMode::MatchSource);
+    }
+
+    #[test]
+    fn mask_image_radial_gradient_from_style() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("mask-image: radial-gradient(circle at 50% 50%, #000, transparent)"),
+            &parent,
+        );
+        assert!(matches!(
+            single_mask_layer(&style).source,
+            MaskLayerSource::Radial(_)
+        ));
+    }
+
+    #[test]
+    fn webkit_mask_image_alias_is_mask_image() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("-webkit-mask-image: linear-gradient(to bottom, #000, rgba(0,0,0,0))"),
+            &parent,
+        );
+        assert!(
+            matches!(single_mask_layer(&style).source, MaskLayerSource::Linear(_)),
+            "the -webkit-mask-image alias must populate mask_image"
+        );
+    }
+
+    #[test]
+    fn mask_mode_luminance_parsed() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("mask-image: linear-gradient(#fff, #000); mask-mode: luminance"),
+            &parent,
+        );
+        assert_eq!(style.mask_mode, MaskMode::Luminance);
+        assert!(style.mask_image.is_some());
+    }
+
+    #[test]
+    fn mask_image_none_clears_source() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("mask-image: none"), &parent);
+        assert!(style.mask_image.is_none());
+    }
+
+    #[test]
+    fn mask_image_url_non_svg_is_left_unset() {
+        // A url() that doesn't resolve to SVG content (here invalid base64 bytes
+        // that don't sniff as SVG) must not panic and must leave `mask_image` as
+        // None rather than a bogus value — only SVG image masks are modelled.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("mask-image: url(\"data:image/svg+xml;base64,AAAA\")"),
+            &parent,
+        );
+        assert!(style.mask_image.is_none());
+    }
+
+    #[test]
+    fn mask_image_url_svg_data_uri_is_loaded() {
+        // A url() data-URI SVG mask (css-masking-1 §3.1) must populate
+        // `mask_image` with an Svg source carrying the raw bytes.
+        // base64 of: <svg xmlns="http://www.w3.org/2000/svg" width="10"
+        //   height="10"><circle cx="5" cy="5" r="4" fill="#fff"/></svg>
+        let b64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjQiIGZpbGw9IiNmZmYiLz48L3N2Zz4=";
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(&format!(
+                "mask-image: url(\"data:image/svg+xml;base64,{b64}\")"
+            )),
+            &parent,
+        );
+        assert!(
+            matches!(single_mask_layer(&style).source, MaskLayerSource::Svg(_)),
+            "a data-URI SVG url() mask must populate mask_image as Svg"
+        );
+    }
+
+    #[test]
+    fn webkit_mask_image_url_svg_alias_is_loaded() {
+        // The -webkit-mask-image alias of a url() SVG mask must behave the same.
+        let b64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjQiIGZpbGw9IiNmZmYiLz48L3N2Zz4=";
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(&format!(
+                "-webkit-mask-image: url(\"data:image/svg+xml;base64,{b64}\")"
+            )),
+            &parent,
+        );
+        assert!(
+            matches!(single_mask_layer(&style).source, MaskLayerSource::Svg(_)),
+            "the -webkit-mask-image url() SVG alias must populate mask_image"
+        );
     }
 
     #[test]
@@ -5067,7 +15530,7 @@ mod tests {
     fn box_shadow_initial_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: initial"), &parent);
-        assert!(style.box_shadow.is_none());
+        assert!(style.box_shadow.is_empty());
     }
 
     #[test]
@@ -5118,10 +15581,10 @@ mod tests {
     #[test]
     fn font_family_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.font_family = FontFamily::TimesRoman;
-        parent.font_stack = FontStack::from_family(FontFamily::TimesRoman);
+        parent.font_family = FontFamily::Helvetica;
+        parent.font_stack = FontStack::from_family(FontFamily::Helvetica);
         let style = compute_style(HtmlTag::Span, Some("font-family: inherit"), &parent);
-        assert_eq!(style.font_family, FontFamily::TimesRoman);
+        assert_eq!(style.font_family, FontFamily::Helvetica);
     }
 
     #[test]
@@ -5312,6 +15775,117 @@ mod tests {
     }
 
     #[test]
+    fn flex_direction_reverse_keywords_parse() {
+        let p = ComputedStyle::default();
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("flex-direction: row-reverse"), &p).flex_direction,
+            FlexDirection::RowReverse
+        );
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("flex-direction: column-reverse"), &p).flex_direction,
+            FlexDirection::ColumnReverse
+        );
+    }
+
+    #[test]
+    fn flex_wrap_wrap_reverse_parses() {
+        let p = ComputedStyle::default();
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("flex-wrap: wrap-reverse"), &p).flex_wrap,
+            FlexWrap::WrapReverse
+        );
+    }
+
+    #[test]
+    fn flex_flow_shorthand_sets_both_axes() {
+        let p = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("flex-flow: column wrap"), &p);
+        assert_eq!(s.flex_direction, FlexDirection::Column);
+        assert_eq!(s.flex_wrap, FlexWrap::Wrap);
+        // Order-free.
+        let s2 = compute_style(
+            HtmlTag::Div,
+            Some("flex-flow: wrap-reverse row-reverse"),
+            &p,
+        );
+        assert_eq!(s2.flex_direction, FlexDirection::RowReverse);
+        assert_eq!(s2.flex_wrap, FlexWrap::WrapReverse);
+    }
+
+    #[test]
+    fn justify_content_space_evenly_parses() {
+        let p = ComputedStyle::default();
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("justify-content: space-evenly"), &p).justify_content,
+            JustifyContent::SpaceEvenly
+        );
+    }
+
+    #[test]
+    fn align_content_keywords_parse() {
+        let p = ComputedStyle::default();
+        for (kw, exp) in [
+            ("flex-start", AlignContent::FlexStart),
+            ("flex-end", AlignContent::FlexEnd),
+            ("center", AlignContent::Center),
+            ("space-between", AlignContent::SpaceBetween),
+            ("space-around", AlignContent::SpaceAround),
+            ("space-evenly", AlignContent::SpaceEvenly),
+            ("stretch", AlignContent::Stretch),
+        ] {
+            let s = compute_style(HtmlTag::Div, Some(&format!("align-content: {kw}")), &p);
+            assert_eq!(s.align_content, exp, "align-content: {kw}");
+        }
+    }
+
+    #[test]
+    fn align_items_and_self_baseline_parse() {
+        let p = ComputedStyle::default();
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("align-items: baseline"), &p).align_items,
+            AlignItems::Baseline
+        );
+        assert_eq!(
+            compute_style(HtmlTag::Div, Some("align-self: baseline"), &p).align_self,
+            AlignSelf::Baseline
+        );
+    }
+
+    #[test]
+    fn flex_basis_percentage_parses() {
+        let p = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("flex-basis: 25%"), &p);
+        assert!(s.flex_basis.is_none());
+        assert!((s.flex_basis_pct.unwrap() - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn flex_shorthand_keywords_expand() {
+        let p = ComputedStyle::default();
+        let none = compute_style(HtmlTag::Div, Some("flex: none"), &p);
+        assert_eq!((none.flex_grow, none.flex_shrink), (0.0, 0.0));
+        assert!(none.flex_basis.is_none());
+        let auto = compute_style(HtmlTag::Div, Some("flex: auto"), &p);
+        assert_eq!((auto.flex_grow, auto.flex_shrink), (1.0, 1.0));
+        let one = compute_style(HtmlTag::Div, Some("flex: 1"), &p);
+        assert_eq!((one.flex_grow, one.flex_shrink), (1.0, 1.0));
+        assert_eq!(one.flex_basis, Some(0.0));
+    }
+
+    #[test]
+    fn gap_two_value_sets_row_and_column() {
+        let p = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("gap: 30px 10px"), &p);
+        // 30px -> 22.5pt row gap, 10px -> 7.5pt column gap.
+        assert!((s.row_gap - 22.5).abs() < 0.01, "row_gap={}", s.row_gap);
+        assert!(
+            (s.column_gap - 7.5).abs() < 0.01,
+            "column_gap={}",
+            s.column_gap
+        );
+    }
+
+    #[test]
     fn top_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
         parent.top = Some(10.0);
@@ -5346,17 +15920,17 @@ mod tests {
     #[test]
     fn box_shadow_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.box_shadow = Some(BoxShadow {
+        parent.box_shadow = vec![BoxShadow {
             offset_x: 1.0,
             offset_y: 2.0,
             blur: 3.0,
             spread: 0.0,
             color: Color::BLACK,
             inset: false,
-        });
+        }];
         let style = compute_style(HtmlTag::Div, Some("box-shadow: inherit"), &parent);
-        assert!(style.box_shadow.is_some());
-        assert!((style.box_shadow.unwrap().offset_x - 1.0).abs() < 0.1);
+        assert!(!style.box_shadow.is_empty());
+        assert!((style.box_shadow[0].offset_x - 1.0).abs() < 0.1);
     }
 
     #[test]
@@ -5655,6 +16229,15 @@ mod tests {
     }
 
     #[test]
+    fn white_space_break_spaces() {
+        let parent = ComputedStyle::default();
+        let rule = make_keyword_rule("white-space", "break-spaces");
+        let style =
+            compute_style_with_rules(HtmlTag::Div, None, &parent, &[rule], "div", &[], None);
+        assert_eq!(style.white_space, WhiteSpace::BreakSpaces);
+    }
+
+    #[test]
     fn white_space_unknown_fallback() {
         let parent = ComputedStyle::default();
         let rule = make_keyword_rule("white-space", "foobar");
@@ -5741,7 +16324,7 @@ mod tests {
 
     #[test]
     fn parse_box_shadow_with_rgba() {
-        let shadow = parse_box_shadow("2px 2px 4px rgba(0,0,0,0.3)");
+        let shadow = parse_single_box_shadow("2px 2px 4px rgba(0,0,0,0.3)");
         assert!(shadow.is_some());
         let s = shadow.unwrap();
         assert!((s.blur - 3.0).abs() < 0.1); // 4px * 0.75
@@ -5750,7 +16333,7 @@ mod tests {
     #[test]
     fn parse_box_shadow_too_few_tokens() {
         // CSS allows just offset-x + offset-y (no blur/spread/color). Should parse.
-        let shadow = parse_box_shadow("2px 2px");
+        let shadow = parse_single_box_shadow("2px 2px");
         assert!(shadow.is_some());
         let s = shadow.unwrap();
         assert!((s.blur - 0.0).abs() < 0.1);
@@ -5758,12 +16341,12 @@ mod tests {
         assert!(!s.inset);
 
         // Single token is not enough.
-        assert!(parse_box_shadow("2px").is_none());
+        assert!(parse_single_box_shadow("2px").is_none());
     }
 
     #[test]
     fn parse_box_shadow_inset_keyword() {
-        let shadow = parse_box_shadow("inset 2px 2px 4px rgba(0,0,0,0.3)");
+        let shadow = parse_single_box_shadow("inset 2px 2px 4px rgba(0,0,0,0.3)");
         assert!(shadow.is_some());
         let s = shadow.unwrap();
         assert!(s.inset);
@@ -5772,7 +16355,7 @@ mod tests {
 
     #[test]
     fn parse_box_shadow_with_spread() {
-        let shadow = parse_box_shadow("4px 4px 8px 2px #000");
+        let shadow = parse_single_box_shadow("4px 4px 8px 2px #000");
         assert!(shadow.is_some());
         let s = shadow.unwrap();
         assert!((s.blur - 6.0).abs() < 0.1); // 8px * 0.75
@@ -5780,18 +16363,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_box_shadow_multi_takes_first() {
-        let shadow = parse_box_shadow("2px 2px 4px black, 0 0 8px red");
-        assert!(shadow.is_some());
-        let s = shadow.unwrap();
-        assert!((s.blur - 3.0).abs() < 0.1);
-        assert_eq!(s.color.r, 0);
+    fn parse_box_shadow_multi_returns_all() {
+        let shadows = parse_box_shadow("2px 2px 4px black, 0 0 8px red");
+        assert_eq!(shadows.len(), 2);
+        // First listed shadow.
+        assert!((shadows[0].blur - 3.0).abs() < 0.1);
+        assert_eq!(shadows[0].color.r, 0);
+        // Second listed shadow.
+        assert!((shadows[1].blur - 6.0).abs() < 0.1); // 8px * 0.75
+        assert_eq!(shadows[1].color.r, 255);
     }
 
     #[test]
     fn parse_box_shadow_non_parseable_blur_uses_as_color() {
         // "2px 2px notanumber black" — 4 tokens, but third is not a length
-        let shadow = parse_box_shadow("2px 2px notanumber black");
+        let shadow = parse_single_box_shadow("2px 2px notanumber black");
         // blur parse fails, so blur = 0.0, color_start = 2, color = parse "notanumber" which fails
         // Actually color_start=2 means color_str = "notanumber" which is not a valid color -> Color::BLACK fallback
         assert!(shadow.is_some());
@@ -5802,12 +16388,16 @@ mod tests {
     #[test]
     fn parse_box_shadow_no_color_token() {
         // Exactly 3 tokens where third is a valid blur, so color_start=3, no color token
-        let shadow = parse_box_shadow("2px 2px 4px");
+        let shadow = parse_single_box_shadow("2px 2px 4px");
         assert!(shadow.is_some());
         let s = shadow.unwrap();
-        assert_eq!(s.color.r, 0); // defaults to BLACK
-        assert_eq!(s.color.g, 0);
-        assert_eq!(s.color.b, 0);
+        // Per CSS Backgrounds & Borders L3 §7.2 an omitted shadow color defaults to
+        // currentColor: parsed as CURRENT_COLOR_SENTINEL, resolved to the element's
+        // `color` later in resolve_current_color.
+        assert_eq!(s.color.r, CURRENT_COLOR_SENTINEL.r);
+        assert_eq!(s.color.g, CURRENT_COLOR_SENTINEL.g);
+        assert_eq!(s.color.b, CURRENT_COLOR_SENTINEL.b);
+        assert_eq!(s.color.a, CURRENT_COLOR_SENTINEL.a);
     }
 
     #[test]
@@ -5817,29 +16407,79 @@ mod tests {
         assert!((result.unwrap() - 5.0).abs() < 0.1);
     }
 
+    #[test]
+    fn parse_text_shadow_offset_color() {
+        // `text-shadow: 6px 6px 0 #ff6f00` (offset + zero blur + color).
+        let shadows = parse_text_shadow("6px 6px 0 #ff6f00");
+        assert_eq!(shadows.len(), 1);
+        let s = &shadows[0];
+        assert!((s.offset_x - 4.5).abs() < 0.1); // 6px * 0.75
+        assert!((s.offset_y - 4.5).abs() < 0.1);
+        assert!((s.blur - 0.0).abs() < 0.1);
+        assert_eq!(s.spread, 0.0);
+        assert!(!s.inset);
+        assert_eq!(s.color.r, 0xff);
+        assert_eq!(s.color.g, 0x6f);
+        assert_eq!(s.color.b, 0x00);
+    }
+
+    #[test]
+    fn parse_text_shadow_color_first() {
+        // text-shadow allows the color before the offsets.
+        let shadows = parse_text_shadow("red 2px 2px");
+        assert_eq!(shadows.len(), 1);
+        assert_eq!(shadows[0].color.r, 255);
+        assert!((shadows[0].offset_x - 1.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn parse_text_shadow_none_and_list() {
+        assert!(parse_text_shadow("none").is_empty());
+        let shadows = parse_text_shadow("1px 1px black, 2px 2px red");
+        assert_eq!(shadows.len(), 2);
+    }
+
     // --- parse_transform edge cases (lines 1207, 1233-1235, 1239, 1250) ---
+
+    /// Parse a transform with default (12pt) font sizes for em/rem resolution.
+    fn pt(val: &str) -> Option<Transform> {
+        parse_transform(val, 12.0, 12.0)
+    }
 
     #[test]
     fn parse_transform_rotate_bare_number() {
-        let t = parse_transform("rotate(45)");
+        let t = pt("rotate(45)");
         assert_eq!(t, Some(Transform::Rotate(45.0)));
     }
 
     #[test]
     fn parse_transform_translate_single_arg() {
-        let t = parse_transform("translate(10pt)");
-        assert_eq!(t, Some(Transform::Translate(10.0, 0.0)));
+        let t = pt("translate(10pt)");
+        assert_eq!(
+            t,
+            Some(Transform::Translate {
+                tx: 10.0,
+                ty: 0.0,
+                tx_pct: false,
+                ty_pct: false
+            })
+        );
     }
 
     #[test]
     fn parse_transform_unknown_returns_none() {
-        let t = parse_transform("perspective(500px)");
-        assert!(t.is_none());
+        let t = pt("perspective(500px)");
+        match t {
+            Some(Transform::Matrix3d(m)) => {
+                assert!((m[11] + 1.0 / 375.0).abs() < 0.0001);
+            }
+            other => panic!("expected perspective() to produce a 3D matrix, got {other:?}"),
+        }
     }
 
     #[test]
     fn parse_transform_skew() {
-        let t = parse_transform("skew(30deg)");
+        let t = pt("skew(30deg)");
         assert!(t.is_some());
         if let Some(Transform::Matrix(a, _b, c, _d, _e, _f)) = t {
             assert!((a - 1.0).abs() < 0.001);
@@ -5851,40 +16491,86 @@ mod tests {
 
     #[test]
     fn parse_transform_chained() {
-        let t = parse_transform("rotate(10deg) scale(1.1)");
+        let t = pt("rotate(10deg) scale(1.1)");
         assert!(t.is_some());
         assert!(matches!(t, Some(Transform::Matrix(..))));
     }
 
     #[test]
     fn parse_transform_scale_x_y() {
-        assert_eq!(
-            parse_transform("scaleX(1.5)"),
-            Some(Transform::Scale(1.5, 1.0))
-        );
-        assert_eq!(
-            parse_transform("scaleY(0.5)"),
-            Some(Transform::Scale(1.0, 0.5))
-        );
+        assert_eq!(pt("scaleX(1.5)"), Some(Transform::Scale(1.5, 1.0)));
+        assert_eq!(pt("scaleY(0.5)"), Some(Transform::Scale(1.0, 0.5)));
     }
 
     #[test]
     fn parse_transform_translate_x_y() {
         assert!(matches!(
-            parse_transform("translateX(40px)"),
-            Some(Transform::Translate(_, 0.0))
+            pt("translateX(40px)"),
+            Some(Transform::Translate { ty: y, .. }) if y == 0.0
         ));
         assert!(matches!(
-            parse_transform("translateY(20px)"),
-            Some(Transform::Translate(0.0, _))
+            pt("translateY(20px)"),
+            Some(Transform::Translate { tx: x, .. }) if x == 0.0
         ));
     }
 
     #[test]
     fn parse_transform_length_bare_number() {
-        let result = parse_transform_length("42");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 42.0).abs() < 0.1);
+        let result = parse_transform_length("42", 12.0, 12.0);
+        assert_eq!(result, Some((42.0, false)));
+    }
+
+    #[test]
+    fn parse_transform_angle_units() {
+        // 0.25turn == 90deg, 1.5708rad ~= 90deg, 100grad == 90deg.
+        assert_eq!(pt("rotate(0.25turn)"), Some(Transform::Rotate(90.0)));
+        assert_eq!(pt("rotate(100grad)"), Some(Transform::Rotate(90.0)));
+        if let Some(Transform::Rotate(deg)) = pt("rotate(1.5708rad)") {
+            assert!((deg - 90.0).abs() < 0.05);
+        } else {
+            panic!("expected Rotate from rad");
+        }
+        assert_eq!(pt("rotate(-90deg)"), Some(Transform::Rotate(-90.0)));
+    }
+
+    #[test]
+    fn parse_transform_scale_negative_and_omitted() {
+        assert_eq!(pt("scale(-1, 1)"), Some(Transform::Scale(-1.0, 1.0)));
+        // A single arg mirrors to both axes.
+        assert_eq!(pt("scale(2)"), Some(Transform::Scale(2.0, 2.0)));
+    }
+
+    #[test]
+    fn parse_transform_translate_em_rem() {
+        // 2em at 12pt font => 24pt; 1rem at 12pt root => 12pt.
+        assert_eq!(
+            pt("translate(2em, 1rem)"),
+            Some(Transform::Translate {
+                tx: 24.0,
+                ty: 12.0,
+                tx_pct: false,
+                ty_pct: false
+            })
+        );
+    }
+
+    #[test]
+    fn parse_transform_matrix_malformed_rejected() {
+        // A non-numeric token makes the whole function invalid (None), rather
+        // than silently dropping it and shifting the arity.
+        assert!(pt("matrix(1,2,3,bad,5,6)").is_none());
+        assert!(pt("matrix(1,0,0,1,10,20)").is_some());
+    }
+
+    #[test]
+    fn parse_transform_compound_percent() {
+        // scale(2) translate(50%) — the % resolves against own box THEN scales.
+        let t = pt("scale(2) translate(50%, 0%)").expect("compound");
+        assert!(matches!(t, Transform::MatrixPct { .. }));
+        let m = t.to_css_matrix(100.0, 40.0);
+        // a == 2 (scale x), e == 2 * (50% of 100) == 100.
+        assert!((m[0] - 2.0).abs() < 0.01);
+        assert!((m[4] - 100.0).abs() < 0.01);
     }
 
     // --- grid-template-columns bare number (line 1270) ---
@@ -6050,8 +16736,15 @@ mod tests {
 
     #[test]
     fn parse_hex_to_color_invalid_length() {
-        let result = parse_hex_to_color("abcd");
-        assert!(result.is_none());
+        // 4-digit (#rgba) and 8-digit (#rrggbbaa) are now VALID alpha forms;
+        // only lengths outside {3,4,6,8} are rejected.
+        assert!(parse_hex_to_color("abcde").is_none());
+        assert!(parse_hex_to_color("abcdef0").is_none());
+        // `abcd` is a valid 4-digit #rgba (a->0xaa, b->0xbb, c->0xcc, d->0xdd).
+        assert_eq!(
+            parse_hex_to_color("abcd").map(rgba_tuple),
+            Some((0xaa, 0xbb, 0xcc, 0xdd))
+        );
     }
 
     #[test]
@@ -6452,6 +17145,37 @@ mod tests {
     }
 
     #[test]
+    fn word_break_break_all_enables_per_char_wrapping() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("word-break: break-all"), &parent);
+        assert_eq!(s.overflow_wrap, OverflowWrap::Anywhere);
+    }
+
+    #[test]
+    fn word_break_keep_all_parsed_and_inherited() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("word-break: keep-all"),
+            &ComputedStyle::default(),
+        );
+        assert!(parent.word_break_keep_all);
+
+        let child = compute_style(HtmlTag::Span, None, &parent);
+        assert!(child.word_break_keep_all);
+    }
+
+    #[test]
+    fn word_break_does_not_override_explicit_overflow_wrap() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("overflow-wrap: break-word; word-break: break-all"),
+            &parent,
+        );
+        assert_eq!(s.overflow_wrap, OverflowWrap::BreakWord);
+    }
+
+    #[test]
     fn border_collapse_default_is_separate() {
         let s = ComputedStyle::default();
         assert_eq!(s.border_collapse, BorderCollapse::Separate);
@@ -6507,6 +17231,58 @@ mod tests {
     }
 
     #[test]
+    fn border_spacing_single_value_sets_both_axes() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Table, Some("border-spacing: 8px"), &parent);
+        assert!((s.border_spacing - 6.0).abs() < 0.001); // 8px = 6pt
+        assert!((s.border_spacing_vertical - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn border_spacing_two_value_distinct_axes() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Table, Some("border-spacing: 24px 6px"), &parent);
+        assert!((s.border_spacing - 18.0).abs() < 0.001); // 24px = 18pt
+        assert!((s.border_spacing_vertical - 4.5).abs() < 0.001); // 6px = 4.5pt
+    }
+
+    #[test]
+    fn border_spacing_vertical_inherits() {
+        let parent = compute_style(
+            HtmlTag::Table,
+            Some("border-spacing: 24px 6px"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(HtmlTag::Td, None, &parent);
+        assert!((child.border_spacing - 18.0).abs() < 0.001);
+        assert!((child.border_spacing_vertical - 4.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn caption_side_defaults_to_top() {
+        let s = ComputedStyle::default();
+        assert_eq!(s.caption_side, CaptionSide::Top);
+    }
+
+    #[test]
+    fn caption_side_bottom_parsed() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Table, Some("caption-side: bottom"), &parent);
+        assert_eq!(s.caption_side, CaptionSide::Bottom);
+    }
+
+    #[test]
+    fn caption_side_inherits() {
+        let parent = compute_style(
+            HtmlTag::Table,
+            Some("caption-side: bottom"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(HtmlTag::Caption, None, &parent);
+        assert_eq!(child.caption_side, CaptionSide::Bottom);
+    }
+
+    #[test]
     fn border_spacing_default_is_zero() {
         let s = ComputedStyle::default();
         assert!((s.border_spacing - 0.0).abs() < 0.001);
@@ -6548,6 +17324,56 @@ mod tests {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("background-size: contain"), &parent);
         assert_eq!(s.background_size, BackgroundSize::Contain);
+    }
+
+    #[test]
+    fn background_clip_default_is_border_box() {
+        let s = ComputedStyle::default();
+        assert_eq!(s.background_clip, BackgroundClip::Border);
+    }
+
+    #[test]
+    fn background_clip_padding_box_parsed() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("background-clip: padding-box"), &parent);
+        assert_eq!(s.background_clip, BackgroundClip::Padding);
+    }
+
+    #[test]
+    fn background_clip_content_box_parsed() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("background-clip: content-box"), &parent);
+        assert_eq!(s.background_clip, BackgroundClip::Content);
+    }
+
+    #[test]
+    fn background_clip_border_box_parsed() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("background-clip: border-box"), &parent);
+        assert_eq!(s.background_clip, BackgroundClip::Border);
+    }
+
+    #[test]
+    fn background_shorthand_single_box_sets_origin_and_clip() {
+        // A lone box keyword in the `background` shorthand sets BOTH
+        // background-origin and background-clip (css-backgrounds-3 §3.10).
+        let parent = ComputedStyle::default();
+        let s = compute_style(HtmlTag::Div, Some("background: red content-box"), &parent);
+        assert_eq!(s.background_origin, BackgroundOrigin::Content);
+        assert_eq!(s.background_clip, BackgroundClip::Content);
+    }
+
+    #[test]
+    fn background_shorthand_two_boxes_set_origin_then_clip() {
+        // First box = origin, second box = clip.
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("background: red padding-box content-box"),
+            &parent,
+        );
+        assert_eq!(s.background_origin, BackgroundOrigin::Padding);
+        assert_eq!(s.background_clip, BackgroundClip::Content);
     }
 
     #[test]
@@ -6810,7 +17636,30 @@ mod tests {
     fn content_counter() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("content: counter(section)"), &parent);
-        assert_eq!(s.content, vec![ContentItem::Counter("section".to_string())]);
+        assert_eq!(
+            s.content,
+            vec![ContentItem::Counter(
+                "section".to_string(),
+                ListStyleType::Decimal
+            )]
+        );
+    }
+
+    #[test]
+    fn content_counter_with_style_argument() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("content: counter(chap, upper-roman)"),
+            &parent,
+        );
+        assert_eq!(
+            s.content,
+            vec![ContentItem::Counter(
+                "chap".to_string(),
+                ListStyleType::UpperRoman
+            )]
+        );
     }
 
     #[test]
@@ -6825,7 +17674,26 @@ mod tests {
             s.content,
             vec![ContentItem::Counters(
                 "section".to_string(),
-                ".".to_string()
+                ".".to_string(),
+                ListStyleType::Decimal
+            )]
+        );
+    }
+
+    #[test]
+    fn content_counters_with_style_argument() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("content: counters(section, \".\", lower-alpha)"),
+            &parent,
+        );
+        assert_eq!(
+            s.content,
+            vec![ContentItem::Counters(
+                "section".to_string(),
+                ".".to_string(),
+                ListStyleType::LowerAlpha
             )]
         );
     }
@@ -7161,6 +18029,35 @@ mod tests {
     }
 
     #[test]
+    fn multiple_backgrounds_raster_and_gradient_coexist() {
+        // `background-image: url(<png>), linear-gradient(...)` splits (in
+        // parser::css::inline) into a raster `background-image` key AND a
+        // `background-gradient` key. Both layers must survive the cascade so the
+        // renderer can paint a PNG layer over a gradient layer over the color.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                r#"background-color: #37474f; background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAIElEQVR42mO4rK8PRJJll4CIAYWjV2sERF/rxYEIhQMABxYT6ZMR6l4AAAAASUVORK5CYII="), linear-gradient(to bottom, #ffd600, #00bcd4)"#,
+            ),
+            &parent,
+        );
+        assert!(
+            style.background_image.is_some(),
+            "raster layer should be present"
+        );
+        assert!(
+            style.background_gradient.is_some(),
+            "gradient layer should coexist with raster"
+        );
+        assert_eq!(
+            style.background_color.map(|c| (c.r, c.g, c.b)),
+            Some((0x37, 0x47, 0x4f)),
+            "base color should also survive"
+        );
+    }
+
+    #[test]
     fn background_none_clears_existing_svg_background() {
         let parent = ComputedStyle::default();
         let style = compute_style(
@@ -7456,7 +18353,13 @@ mod tests {
     fn border_radius_from_percentage() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("border-radius: 50%"), &parent);
-        assert!(s.border_radius > 0.0);
+        // A percentage border-radius is kept as a layout-time hint (it resolves
+        // per-axis against the element's OWN box: horizontal radii against width,
+        // vertical against height), not eagerly against the parent width. The
+        // block/flex layout turns the hint into absolute radii.
+        assert_eq!(s.border_radius_pct, Some(50.0));
+        assert_eq!(s.border_radii_pct, [Some(50.0); 4]);
+        assert_eq!(s.border_radii_y_pct, [Some(50.0); 4]);
     }
 
     #[test]
@@ -7581,11 +18484,25 @@ mod tests {
     }
 
     #[test]
-    fn position_from_var_static_fallback() {
+    fn position_from_var_fixed_maps_to_absolute() {
+        // For a single-page, non-scrolling PDF the viewport == the page box, so
+        // `position: fixed` is treated as an absolute box anchored to the page
+        // content box (the absolute-at-root path handles the anchoring).
         let parent = ComputedStyle::default();
         let s = compute_style(
             HtmlTag::Div,
             Some("--p: fixed; position: var(--p)"),
+            &parent,
+        );
+        assert_eq!(s.position, Position::Absolute);
+    }
+
+    #[test]
+    fn position_from_var_unknown_static_fallback() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("--p: bogus; position: var(--p)"),
             &parent,
         );
         assert_eq!(s.position, Position::Static);
@@ -7649,10 +18566,10 @@ mod tests {
     // --- Coverage: parse_list_style_type unknown default (line 1479) ---
 
     #[test]
-    fn list_style_type_unknown_defaults_to_disc() {
+    fn list_style_type_unknown_defaults_to_decimal() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("list-style-type: foobar"), &parent);
-        assert_eq!(s.list_style_type, ListStyleType::Disc);
+        assert_eq!(s.list_style_type, ListStyleType::Custom("foobar".into()));
     }
 
     // --- Coverage: parse_content_value branches (lines 1497-1546) ---
@@ -7675,7 +18592,13 @@ mod tests {
     #[test]
     fn content_counter_function() {
         let items = parse_content_value_pub("counter(section)");
-        assert_eq!(items, vec![ContentItem::Counter("section".to_string())]);
+        assert_eq!(
+            items,
+            vec![ContentItem::Counter(
+                "section".to_string(),
+                ListStyleType::Decimal
+            )]
+        );
     }
 
     #[test]
@@ -7692,7 +18615,8 @@ mod tests {
             items,
             vec![ContentItem::Counters(
                 "section".to_string(),
-                ".".to_string()
+                ".".to_string(),
+                ListStyleType::Decimal
             )]
         );
     }
@@ -7705,7 +18629,8 @@ mod tests {
             items,
             vec![ContentItem::Counters(
                 "section".to_string(),
-                ".".to_string()
+                ".".to_string(),
+                ListStyleType::Decimal
             )]
         );
     }
@@ -7736,6 +18661,57 @@ mod tests {
         // Unknown token at the end with no whitespace -> break (line 1546)
         let items = parse_content_value_pub("unknown");
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn content_url_double_quoted() {
+        let items = parse_content_value_pub("url(\"data:image/png;base64,AAA=\")");
+        assert_eq!(
+            items,
+            vec![ContentItem::Url("data:image/png;base64,AAA=".to_string())]
+        );
+    }
+
+    #[test]
+    fn content_url_unquoted() {
+        let items = parse_content_value_pub("url(icon.png)");
+        assert_eq!(items, vec![ContentItem::Url("icon.png".to_string())]);
+    }
+
+    #[test]
+    fn content_no_open_close_quote_keywords() {
+        assert_eq!(
+            parse_content_value_pub("no-open-quote"),
+            vec![ContentItem::NoOpenQuote]
+        );
+        assert_eq!(
+            parse_content_value_pub("no-close-quote"),
+            vec![ContentItem::NoCloseQuote]
+        );
+        // `no-open-quote` must be matched before `open-quote`.
+        assert_eq!(
+            parse_content_value_pub("open-quote close-quote"),
+            vec![ContentItem::OpenQuote, ContentItem::CloseQuote]
+        );
+    }
+
+    #[test]
+    fn quotes_value_none_and_pairs() {
+        assert_eq!(parse_quotes_value("none"), Some(Vec::new()));
+        assert_eq!(parse_quotes_value("auto"), None);
+        assert_eq!(
+            parse_quotes_value("\"\\\"\" \"\\\"\""),
+            Some(vec![("\"".to_string(), "\"".to_string())])
+        );
+        assert_eq!(
+            parse_quotes_value("\"\u{201C}\" \"\u{201D}\" \"\u{2039}\" \"\u{203A}\""),
+            Some(vec![
+                ("\u{201C}".to_string(), "\u{201D}".to_string()),
+                ("\u{2039}".to_string(), "\u{203A}".to_string()),
+            ])
+        );
+        // An odd/short list is invalid -> use UA default.
+        assert_eq!(parse_quotes_value("\"a\""), None);
     }
 
     // --- Coverage: parse_background_size_explicit (lines 1577-1595) ---
@@ -7879,6 +18855,117 @@ mod tests {
     }
 
     #[test]
+    fn parse_clip_path_shapes() {
+        assert_eq!(
+            parse_clip_path("circle(80px at 100px 100px)"),
+            Some(ClipPath::Circle {
+                r: ClipRadius::Length((60.0, false).into()),
+                cx: (75.0, false).into(),
+                cy: (75.0, false).into(),
+                geometry_box: ShapeBox::Border,
+            })
+        );
+        assert!(matches!(
+            parse_clip_path("ellipse(100px 60px at 50% 50%)"),
+            Some(ClipPath::Ellipse { .. })
+        ));
+        assert!(matches!(
+            parse_clip_path("inset(40px 60px 40px 60px)"),
+            Some(ClipPath::Inset { .. })
+        ));
+        match parse_clip_path("polygon(50% 0%, 100% 50%, 0% 50%)") {
+            Some(ClipPath::Polygon { points, .. }) => assert_eq!(points.len(), 3),
+            other => panic!("expected polygon, got {other:?}"),
+        }
+        assert_eq!(parse_clip_path("none"), None);
+        assert_eq!(parse_clip_path("url(#m)"), Some(ClipPath::Url("m".into())));
+    }
+
+    #[test]
+    fn parse_filter_color_functions() {
+        assert_eq!(
+            parse_filter("grayscale(100%)").1,
+            vec![ColorFilterOp::Grayscale(1.0)]
+        );
+        assert_eq!(
+            parse_filter("grayscale(0.5)").1,
+            vec![ColorFilterOp::Grayscale(0.5)]
+        );
+        assert_eq!(
+            parse_filter("invert(1)").1,
+            vec![ColorFilterOp::Invert(1.0)]
+        );
+        assert_eq!(
+            parse_filter("brightness(150%)").1,
+            vec![ColorFilterOp::Brightness(1.5)]
+        );
+        assert_eq!(
+            parse_filter("hue-rotate(90deg)").1,
+            vec![ColorFilterOp::HueRotate(90.0)]
+        );
+        // bare function defaults to amount 1.0
+        assert_eq!(parse_filter("sepia()").1, vec![ColorFilterOp::Sepia(1.0)]);
+        // chained: blur goes to the blur slot and the ordered filter op stream
+        // so grouped/raster filter rendering can preserve function order.
+        let (blur, ops, _opacity, _ds, _url) = parse_filter("grayscale(1) blur(2px) contrast(2)");
+        assert!(blur.is_some_and(|r| r > 0.0));
+        assert_eq!(
+            ops,
+            vec![
+                ColorFilterOp::Grayscale(1.0),
+                ColorFilterOp::Blur(1.5),
+                ColorFilterOp::Contrast(2.0)
+            ]
+        );
+        // none clears everything
+        assert_eq!(parse_filter("none"), (Some(0.0), vec![], 1.0, None, None));
+    }
+
+    #[test]
+    fn filter_url_captures_reference_id() {
+        // `filter: url(#id)` records the fragment id for later DOM resolution
+        // (css-filter-effects-1 §3); it produces no inline color ops/blur.
+        let (blur, ops, opacity, ds, url) = parse_filter("url(#sat)");
+        assert_eq!(url.as_deref(), Some("sat"));
+        assert!(ops.is_empty());
+        assert!(blur.is_none());
+        assert_eq!(opacity, 1.0);
+        assert!(ds.is_none());
+        // Quoted form and a trailing color function still capture the id.
+        let (_, ops2, _, _, url2) = parse_filter("url('#q') grayscale(1)");
+        assert_eq!(url2.as_deref(), Some("q"));
+        assert_eq!(ops2, vec![ColorFilterOp::Grayscale(1.0)]);
+        // A computed style with `filter: url(#id)` exposes the id.
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("filter: url(#sat)"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.filter_url_id.as_deref(), Some("sat"));
+    }
+
+    #[test]
+    fn filter_opacity_fn_reduces_opacity() {
+        let parent = ComputedStyle::default();
+        // bare number argument
+        let style = compute_style(HtmlTag::Div, Some("filter: opacity(0.5)"), &parent);
+        assert!((style.opacity - 0.5).abs() < 0.01);
+        // percentage argument
+        let style = compute_style(HtmlTag::Div, Some("filter: opacity(50%)"), &parent);
+        assert!((style.opacity - 0.5).abs() < 0.01);
+        // combines multiplicatively with the opacity property
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("opacity: 0.5; filter: opacity(0.5)"),
+            &parent,
+        );
+        assert!((style.opacity - 0.25).abs() < 0.01);
+        // other filter functions leave opacity untouched
+        let style = compute_style(HtmlTag::Div, Some("filter: blur(2px)"), &parent);
+        assert!((style.opacity - 1.0).abs() < 0.01);
+    }
+
+    #[test]
     fn parse_filter_blur_valid_pt() {
         let parsed = parse_filter_blur("blur(10pt)");
         assert!(parsed.is_some_and(|radius| (radius - 10.0).abs() < 0.01));
@@ -7980,7 +19067,7 @@ mod tests {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("box-shadow: 2pt 2pt 0pt"), &parent);
         // When there are only 3 tokens and all parse as lengths, color defaults to BLACK
-        if let Some(shadow) = s.box_shadow {
+        if let Some(shadow) = s.box_shadow.first() {
             assert_eq!(shadow.color.r, 0);
             assert_eq!(shadow.color.g, 0);
             assert_eq!(shadow.color.b, 0);
@@ -8490,6 +19577,8 @@ mod tests {
         parent.background_gradient = Some(LinearGradient {
             angle: 90.0,
             stops: vec![],
+            repeating: false,
+            layer_box: GradientLayerBox::default(),
         });
         let rules = parse_stylesheet(".box::after { content: ''; background-image: inherit; }");
         let ctx = SelectorContext::default();

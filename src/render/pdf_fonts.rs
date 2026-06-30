@@ -99,8 +99,36 @@ fn collect_non_winansi_chars(
         for (_, element) in &page.elements {
             collect_non_winansi_from_element(element, custom_fonts, &mut chars);
         }
+        for element in page.running_elements.values() {
+            collect_non_winansi_from_element(element, custom_fonts, &mut chars);
+        }
+        for footnote in &page.footnotes {
+            for run in footnote.text_runs() {
+                collect_non_winansi_from_run(&run, custom_fonts, &mut chars);
+            }
+        }
     }
     chars
+}
+
+fn collect_non_winansi_from_run(
+    run: &TextRun,
+    custom_fonts: &HashMap<String, TtfFont>,
+    chars: &mut BTreeSet<char>,
+) {
+    for ch in run.text.chars() {
+        if !crate::render::pdf::is_winansi_char(ch) {
+            chars.insert(ch);
+        } else if let FontFamily::Custom(name) = &run.font_family
+            && let Some((_, font)) =
+                crate::system_fonts::find_font(custom_fonts, name, false, false)
+        {
+            let cp = ch as u32;
+            if !font.cmap.contains_key(&cp) {
+                chars.insert(ch);
+            }
+        }
+    }
 }
 
 fn collect_non_winansi_from_element(
@@ -112,21 +140,7 @@ fn collect_non_winansi_from_element(
         LayoutElement::TextBlock { lines, .. } => {
             for line in lines {
                 for run in &line.runs {
-                    for ch in run.text.chars() {
-                        if !crate::render::pdf::is_winansi_char(ch) {
-                            chars.insert(ch);
-                        } else if let FontFamily::Custom(name) = &run.font_family {
-                            // Check if the primary custom font covers this char
-                            if let Some((_, font)) =
-                                crate::system_fonts::find_font(custom_fonts, name, false, false)
-                            {
-                                let cp = ch as u32;
-                                if !font.cmap.contains_key(&cp) {
-                                    chars.insert(ch);
-                                }
-                            }
-                        }
-                    }
+                    collect_non_winansi_from_run(run, custom_fonts, chars);
                 }
             }
         }
@@ -148,6 +162,9 @@ fn collect_non_winansi_from_element(
                 collect_non_winansi_from_element(child, custom_fonts, chars);
             }
         }
+        LayoutElement::RunningElement { element, .. } => {
+            collect_non_winansi_from_element(element, custom_fonts, chars);
+        }
         _ => {}
     }
 }
@@ -160,6 +177,14 @@ fn collect_font_usage(
     for page in pages {
         for (_, element) in &page.elements {
             collect_font_usage_from_element(element, custom_fonts, &mut usage);
+        }
+        for element in page.running_elements.values() {
+            collect_font_usage_from_element(element, custom_fonts, &mut usage);
+        }
+        for footnote in &page.footnotes {
+            for run in footnote.text_runs() {
+                collect_font_usage_from_run(&run, custom_fonts, &mut usage);
+            }
         }
     }
     usage
@@ -195,6 +220,112 @@ fn collect_font_usage_from_element(
                 collect_font_usage_from_element(child, custom_fonts, usage);
             }
         }
+        LayoutElement::Svg { tree, .. } => {
+            collect_font_usage_from_svg(tree, custom_fonts, usage);
+        }
+        LayoutElement::RunningElement { element, .. } => {
+            collect_font_usage_from_element(element, custom_fonts, usage);
+        }
+        _ => {}
+    }
+}
+
+/// Collect glyph usage for SVG `<text>` rendered with a registered custom font.
+///
+/// The SVG text renderer shapes such text and emits embedded CID glyphs against
+/// the same subsetted font resource the body text uses. Those glyphs must be
+/// registered here so they survive subsetting (otherwise SVG-only glyphs would
+/// be dropped and render as `.notdef`).
+fn collect_font_usage_from_svg(
+    tree: &crate::parser::svg::SvgTree,
+    custom_fonts: &HashMap<String, TtfFont>,
+    usage: &mut BTreeMap<String, FontUsage>,
+) {
+    for node in &tree.children {
+        collect_font_usage_from_svg_node(
+            node,
+            &tree.text_ctx,
+            None,
+            None,
+            None,
+            custom_fonts,
+            usage,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_font_usage_from_svg_node(
+    node: &crate::parser::svg::SvgNode,
+    text_ctx: &crate::parser::svg::SvgTextContext,
+    inherited_family: Option<&str>,
+    inherited_bold: Option<bool>,
+    inherited_italic: Option<bool>,
+    custom_fonts: &HashMap<String, TtfFont>,
+    usage: &mut BTreeMap<String, FontUsage>,
+) {
+    use crate::parser::svg::SvgNode;
+    match node {
+        SvgNode::Group {
+            children, style, ..
+        } => {
+            let family = style.font_family.as_deref().or(inherited_family);
+            let bold = style.font_bold.or(inherited_bold);
+            let italic = style.font_italic.or(inherited_italic);
+            for child in children {
+                collect_font_usage_from_svg_node(
+                    child,
+                    text_ctx,
+                    family,
+                    bold,
+                    italic,
+                    custom_fonts,
+                    usage,
+                );
+            }
+        }
+        SvgNode::Text {
+            font_family,
+            font_bold,
+            font_italic,
+            content,
+            style,
+            ..
+        } => {
+            let family = font_family
+                .as_deref()
+                .or(style.font_family.as_deref())
+                .or(inherited_family)
+                .map(str::to_string)
+                .or_else(|| {
+                    let ctx = text_ctx.font_family.trim();
+                    (!ctx.is_empty()).then(|| ctx.to_string())
+                });
+            let Some(family) = family else {
+                return;
+            };
+            let bold = font_bold
+                .or(style.font_bold)
+                .or(inherited_bold)
+                .unwrap_or(text_ctx.font_bold);
+            let italic = font_italic
+                .or(style.font_italic)
+                .or(inherited_italic)
+                .unwrap_or(text_ctx.font_italic);
+            let Some((resolved_name, font)) =
+                crate::system_fonts::find_font(custom_fonts, &family, bold, italic)
+            else {
+                return;
+            };
+            // Glyph identity is size-independent for our shaping path, so shape
+            // at a nominal size purely to discover the used glyph ids.
+            let font_usage = usage.entry(resolved_name.to_string()).or_default();
+            if let Some(shaped) = crate::text::shape_text_with_explicit_font(content, 16.0, font) {
+                for glyph in shaped.glyphs {
+                    font_usage.record_glyph(glyph.glyph_id, glyph.unicode);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -216,6 +347,14 @@ fn collect_font_usage_from_run(
     custom_fonts: &HashMap<String, TtfFont>,
     usage: &mut BTreeMap<String, FontUsage>,
 ) {
+    // An atomic inline box (display: inline-block) carries its own pre-wrapped
+    // inner text lines. Those glyphs must be registered for subsetting too, or
+    // the box renders with missing glyphs. The run's own `text` is empty.
+    if let Some(inline) = run.inline_box.as_deref() {
+        collect_font_usage_from_lines(&inline.lines, custom_fonts, usage);
+        return;
+    }
+
     // Standard PDF font runs with non-WinAnsi text → collect under fallback font
     if !matches!(&run.font_family, FontFamily::Custom(_)) {
         if let Some((shaped_run, fallback_key, _)) =
@@ -237,6 +376,31 @@ fn collect_font_usage_from_run(
     else {
         return;
     };
+
+    if crate::text::needs_unicode_fallback(run, custom_fonts) {
+        for (segment_text, use_fallback) in
+            crate::text::split_run_by_font_coverage(run, custom_fonts)
+        {
+            let mut sub_run = run.clone();
+            sub_run.text = segment_text;
+            if use_fallback {
+                if let Some((shaped_run, fallback_key, _)) =
+                    crate::text::shape_with_unicode_fallback(&sub_run, custom_fonts)
+                {
+                    let font_usage = usage.entry(fallback_key.to_string()).or_default();
+                    for glyph in shaped_run.glyphs {
+                        font_usage.record_glyph(glyph.glyph_id, glyph.unicode);
+                    }
+                }
+            } else if let Some(shaped_run) = crate::text::shape_text_run(&sub_run, custom_fonts) {
+                let font_usage = usage.entry(resolved_name.to_string()).or_default();
+                for glyph in shaped_run.glyphs {
+                    font_usage.record_glyph(glyph.glyph_id, glyph.unicode);
+                }
+            }
+        }
+        return;
+    }
 
     let font_usage = usage.entry(resolved_name.to_string()).or_default();
     if let Some(shaped_run) = crate::text::shape_text_run(run, custom_fonts) {
@@ -372,8 +536,8 @@ mod tests {
     use crate::layout::engine::{FlexCell, LayoutBorder, TableCell, TextLine, TextRun};
     use crate::parser::ttf::{FontVerticalMetrics, TtfFont};
     use crate::style::computed::{
-        BackgroundOrigin, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
-        Clear, Float, FontFamily, Position, TextAlign, VerticalAlign,
+        BackgroundClip, BackgroundOrigin, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+        BorderCollapse, Clear, Float, FontFamily, Position, TextAlign, VerticalAlign,
     };
 
     // ── Test helpers ─────────────────────────────────────────────────────────
@@ -389,6 +553,10 @@ mod tests {
             glyph_widths: vec![0, 500, 600],
             num_h_metrics: 3,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(Vec::new()), // empty ⟹ subsetting always fails → fallback_font path
         }
     }
@@ -404,6 +572,10 @@ mod tests {
             glyph_widths: widths,
             num_h_metrics: 3,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(Vec::new()),
         }
     }
@@ -412,6 +584,7 @@ mod tests {
         TextLine {
             runs: vec![],
             height: 12.0,
+            x_offset: 0.0,
         }
     }
 
@@ -430,6 +603,13 @@ mod tests {
             border: LayoutBorder::default(),
             text_align: TextAlign::Left,
             vertical_align: VerticalAlign::Middle,
+            min_content_height: 0.0,
+            hide_if_empty: false,
+            grid_inset: None,
+            clips: false,
+            background_gradient: None,
+            background_radial_gradient: None,
+            background_conic_gradient: None,
         }
     }
 
@@ -439,6 +619,10 @@ mod tests {
             x_offset: 0.0,
             width: 100.0,
             natural_height: 0.0,
+            has_explicit_height: false,
+            cross_min: 0.0,
+            cross_max: f32::INFINITY,
+            align_self: crate::style::computed::AlignSelf::Auto,
             text_align: TextAlign::Left,
             background_color: None,
             padding_top: 0.0,
@@ -449,26 +633,35 @@ mod tests {
             border_radius: 0.0,
             background_gradient: None,
             background_radial_gradient: None,
+            background_conic_gradient: None,
             background_svg: None,
             background_blur_radius: 0.0,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::default(),
             background_repeat: BackgroundRepeat::Repeat,
             background_origin: BackgroundOrigin::Padding,
+            background_clip: BackgroundClip::Border,
             transform: None,
-            box_shadow: None,
+            transform_origin: crate::style::computed::TransformOrigin::default(),
+            box_shadow: Vec::new(),
             nested_elements: Vec::new(),
             y_offset: 0.0,
             line_cross_size: 0.0,
+            is_positioned: false,
+            z_index: 0,
         }
     }
 
     fn text_block_element(lines: Vec<TextLine>) -> LayoutElement {
         LayoutElement::TextBlock {
+            box_decoration_break: crate::style::computed::BoxDecorationBreak::Slice,
+            orphans: 2,
+            widows: 2,
             lines,
             margin_top: 0.0,
             margin_bottom: 0.0,
             text_align: TextAlign::Left,
+            writing_mode: crate::style::computed::WritingMode::HorizontalTb,
             background_color: None,
             padding_top: 0.0,
             padding_bottom: 0.0,
@@ -478,6 +671,8 @@ mod tests {
             block_width: None,
             block_height: None,
             opacity: 1.0,
+            mix_blend_mode: crate::style::computed::BlendMode::Normal,
+            background_blend_mode: crate::style::computed::BlendMode::Normal,
             float: Float::None,
             clear: Clear::None,
             position: Position::Static,
@@ -486,11 +681,15 @@ mod tests {
             offset_bottom: 0.0,
             offset_right: 0.0,
             containing_block: None,
-            box_shadow: None,
+            box_shadow: Vec::new(),
             visible: true,
             clip_rect: None,
             transform: None,
+            transform_origin: crate::style::computed::TransformOrigin::default(),
             border_radius: 0.0,
+            border_radii: [0.0; 4],
+            border_radii_y: [0.0; 4],
+            outline_offset: 0.0,
             outline_width: 0.0,
             outline_color: None,
             text_indent: 0.0,
@@ -499,12 +698,14 @@ mod tests {
             vertical_align: VerticalAlign::Baseline,
             background_gradient: None,
             background_radial_gradient: None,
+            background_conic_gradient: None,
             background_svg: None,
             background_blur_radius: 0.0,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::default(),
             background_repeat: BackgroundRepeat::Repeat,
             background_origin: BackgroundOrigin::Padding,
+            background_clip: BackgroundClip::Border,
             z_index: 0,
             repeat_on_each_page: false,
             positioned_depth: 0,
@@ -853,7 +1054,7 @@ mod tests {
 
     #[test]
     fn collect_font_usage_from_element_ignores_image() {
-        let element = LayoutElement::PageBreak;
+        let element = LayoutElement::PageBreak(Default::default(), None);
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let mut usage: BTreeMap<String, FontUsage> = BTreeMap::new();
         collect_font_usage_from_element(&element, &fonts, &mut usage);
@@ -870,6 +1071,9 @@ mod tests {
             border_collapse: BorderCollapse::Separate,
             border_spacing: 0.0,
             is_header: false,
+            is_footer: false,
+            offset_left: 0.0,
+            break_inside_avoid: false,
         };
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let mut usage: BTreeMap<String, FontUsage> = BTreeMap::new();
@@ -891,6 +1095,7 @@ mod tests {
             padding_right: 0.0,
             padding_top: 0.0,
             padding_bottom: 0.0,
+            positioned_depth: 0,
         };
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let mut usage: BTreeMap<String, FontUsage> = BTreeMap::new();
@@ -905,6 +1110,7 @@ mod tests {
             row_height: 20.0,
             margin_top: 0.0,
             margin_bottom: 0.0,
+            offset_left: 0.0,
             background_color: None,
             container_width: 500.0,
             padding_top: 0.0,
@@ -913,16 +1119,19 @@ mod tests {
             padding_right: 0.0,
             border: LayoutBorder::default(),
             border_radius: 0.0,
-            box_shadow: None,
+            box_shadow: Vec::new(),
             background_gradient: None,
             background_radial_gradient: None,
+            background_conic_gradient: None,
             background_svg: None,
             background_blur_radius: 0.0,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::default(),
             background_repeat: BackgroundRepeat::Repeat,
             background_origin: BackgroundOrigin::Padding,
+            background_clip: BackgroundClip::Border,
             align_items: crate::style::computed::AlignItems::Stretch,
+            positioned_depth: 0,
         };
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let mut usage: BTreeMap<String, FontUsage> = BTreeMap::new();
@@ -951,6 +1160,9 @@ mod tests {
             border_collapse: BorderCollapse::Separate,
             border_spacing: 0.0,
             is_header: false,
+            is_footer: false,
+            offset_left: 0.0,
+            break_inside_avoid: false,
         };
         let mut cell = empty_table_cell();
         cell.nested_rows = vec![nested];
@@ -963,6 +1175,9 @@ mod tests {
             border_collapse: BorderCollapse::Separate,
             border_spacing: 0.0,
             is_header: false,
+            is_footer: false,
+            offset_left: 0.0,
+            break_inside_avoid: false,
         };
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let mut usage: BTreeMap<String, FontUsage> = BTreeMap::new();
@@ -983,16 +1198,23 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Helvetica,
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            line_height_factor: f32::NAN,
+            inline_box: None,
+            disable_ligatures: false,
+            vertical_align: VerticalAlign::Baseline,
+            text_shadow: Vec::new(),
         };
         let line = TextLine {
             runs: vec![run],
             height: 12.0,
+            x_offset: 0.0,
         };
         let element = text_block_element(vec![line]);
         let fonts: HashMap<String, TtfFont> = HashMap::new();

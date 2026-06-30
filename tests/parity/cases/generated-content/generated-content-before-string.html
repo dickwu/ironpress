@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>before content string</title>
+<style>
+  @page { size: 445px 106px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 320px;
+    margin: 24px;
+    padding: 10px;
+    border: 2px solid #102a43;
+    background: #f4d35e;
+    font-family: ParitySans;
+    font-size: 28px;
+    line-height: 1.2;
+    color: #102a43;
+  }
+  .label::before {
+    content: "Note: ";
+    color: #b00020;
+  }
+</style>
+</head>
+<body>
+  <div class="box"><span class="label">saved</span></div>
+</body>
+</html>

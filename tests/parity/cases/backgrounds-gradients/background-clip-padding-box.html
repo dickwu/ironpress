@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>background-clip padding-box</title>
+<style>
+  @page { size: 317px 160px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 240px;
+    height: 160px;
+    padding: 20px;
+    border: 16px solid rgba(38, 50, 56, 0.35);
+    background-color: #00695c;
+    background-clip: padding-box;
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

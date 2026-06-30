@@ -1,16 +1,139 @@
-use crate::parser::css::{AncestorInfo, CssRule, SelectorContext};
-use crate::parser::dom::{DomNode, HtmlTag};
+use crate::parser::css::{AncestorInfo, CssRule, CssValue, SelectorContext};
+use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 // Re-export OverflowWrap so callers of TextWrapOptions::new can use it
 // without a separate import.
 pub(crate) use crate::style::computed::OverflowWrap;
 use crate::style::computed::{
-    ComputedStyle, Display, FontFamily, FontStyle, FontWeight, WhiteSpace,
-    compute_style_with_context,
+    BoxSizing, ComputedStyle, Display, FONT_RUN_MARK_SUPPRESSED_SYNTHETIC_WEIGHT,
+    FONT_RUN_MARK_SYNTHETIC_SMALL_CAPS, FONT_RUN_MARK_SYNTHETIC_WEIGHT_700,
+    FONT_RUN_MARK_SYNTHETIC_WEIGHT_900, Float, FontFamily, FontStyle, FontWeight,
+    IntrinsicWidthKeyword, LEADER_PLACEHOLDER_END, LEADER_PLACEHOLDER_START, Position,
+    TARGET_PLACEHOLDER_END, TARGET_PLACEHOLDER_START, TextDecorationStyle, VerticalAlign,
+    WhiteSpace, compute_style_with_context,
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
 
-use super::engine::{TextLine, TextRun};
+use super::engine::{
+    CounterState, FOOTNOTE_CALL_FONT_SCALE, FootnoteLinkData, InlineBox, LayoutBorder, TextLine,
+    TextRun, decode_footnote_link, encode_footnote_link_data,
+};
+
+fn footnote_authored_keyword(
+    el: &ElementNode,
+    rules: &[CssRule],
+    ancestors: &[AncestorInfo],
+    selector_ctx: &SelectorContext,
+    property: &str,
+) -> Option<String> {
+    match super::helpers::authored_property_value(el, rules, ancestors, selector_ctx, property)? {
+        CssValue::Keyword(value) => Some(value.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+fn footnote_pseudo_declaration<'a>(
+    rules: &'a [CssRule],
+    pseudo_name: &str,
+    property: &str,
+) -> Option<&'a CssValue> {
+    let suffix = format!("::{pseudo_name}");
+    rules
+        .iter()
+        .filter(|rule| rule.pseudo_element.is_none())
+        .filter(|rule| rule.selector.trim().ends_with(&suffix))
+        .filter_map(|rule| rule.declarations.get(property))
+        .next_back()
+}
+
+fn resolve_footnote_content_expr(raw: &str, marker: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let rest = &raw[i..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch.is_whitespace() {
+            i += ch.len_utf8();
+        } else if ch == '"' || ch == '\'' {
+            let after = &rest[ch.len_utf8()..];
+            if let Some(end) = after.find(ch) {
+                out.push_str(&after[..end]);
+                i += ch.len_utf8() + end + ch.len_utf8();
+            } else {
+                out.push_str(after);
+                break;
+            }
+        } else if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case("counter(") {
+            if let Some(end) = rest.find(')') {
+                let name = rest[8..end].split(',').next().unwrap_or("").trim();
+                if name.eq_ignore_ascii_case("footnote") {
+                    out.push_str(marker);
+                }
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else {
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn footnote_pseudo_content(rules: &[CssRule], pseudo_name: &str, marker: &str) -> Option<String> {
+    match footnote_pseudo_declaration(rules, pseudo_name, "content")? {
+        CssValue::Keyword(raw) => Some(resolve_footnote_content_expr(raw, marker)),
+        _ => None,
+    }
+}
+
+fn footnote_pseudo_color(rules: &[CssRule], pseudo_name: &str) -> Option<(f32, f32, f32)> {
+    match footnote_pseudo_declaration(rules, pseudo_name, "color")? {
+        CssValue::Color(color) => Some(color.to_f32_rgb()),
+        _ => None,
+    }
+}
+
+fn resolve_target_attrs_in_last_run(runs: &mut [TextRun], el: &ElementNode) {
+    let Some(run) = runs.last_mut() else {
+        return;
+    };
+    if !run.text.contains(TARGET_PLACEHOLDER_START) {
+        return;
+    }
+    let mut text = run.text.clone();
+    let needle = "attr(href)";
+    if text.contains(needle) {
+        let value = el.attributes.get("href").map(String::as_str).unwrap_or("");
+        text = text.replace(needle, value);
+    }
+    run.text = text;
+}
+
+fn apply_inline_parent_background(
+    runs: &mut [TextRun],
+    start: usize,
+    parent_style: &ComputedStyle,
+) {
+    if parent_style.white_space == WhiteSpace::Pre {
+        return;
+    }
+    let Some(bg) = parent_style.background_color.map(|c| c.to_f32_rgba()) else {
+        return;
+    };
+    let padding = decoration_padding(parent_style, Some(bg));
+    let radius = decoration_radius(parent_style, Some(bg));
+    for run in &mut runs[start..] {
+        if run.inline_box.is_none() && run.background_color.is_none() {
+            run.background_color = Some(bg);
+            run.padding = padding;
+            run.border_radius = radius;
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // resolve_style_font_family / resolved_line_height_factor
@@ -23,7 +146,7 @@ pub(crate) fn resolve_style_font_family(
     crate::system_fonts::resolve_font_family(
         &style.font_stack,
         fonts,
-        style.font_weight == FontWeight::Bold,
+        style.font_weight.is_bold(),
         style.font_style == FontStyle::Italic,
     )
 }
@@ -32,17 +155,357 @@ pub(crate) fn resolved_line_height_factor(
     style: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
 ) -> f32 {
-    if style.line_height.is_nan() {
+    let factor = if style.line_height.is_nan() {
         let font_family = resolve_style_font_family(style, fonts);
         crate::fonts::normal_line_height_factor(
             &font_family,
-            style.font_weight == FontWeight::Bold,
+            style.font_weight.is_bold(),
             style.font_style == FontStyle::Italic,
             fonts,
         )
+    } else if style.line_height_absolute.is_some() {
+        style.line_height.max(0.0)
     } else {
-        style.line_height
+        // The renderer uses factors below 0.9 as an internal marker for floated
+        // `::first-letter` drop caps. Preserve absolute line-height values above
+        // (they are inherited as fixed lengths), but keep unitless collected text
+        // out of the sentinel range; the drop-cap helper writes its reduced
+        // factor explicitly after collection.
+        style.line_height.max(0.9)
+    };
+    encode_text_decoration_metadata(style, factor).unwrap_or(factor)
+}
+
+const TEXT_DECORATION_NAN_MARKER: u32 = 0b101;
+
+fn encode_text_decoration_metadata(style: &ComputedStyle, factor: f32) -> Option<f32> {
+    if style.text_decoration_style != TextDecorationStyle::Wavy
+        && style.text_decoration_thickness.is_none()
+        && style.text_underline_offset.is_none()
+        && !style.text_emphasis_mark
+    {
+        return None;
     }
+
+    let factor_q = (factor.clamp(0.0, 3.96875) * 32.0).round() as u32;
+    let thickness_q = (style
+        .text_decoration_thickness
+        .unwrap_or(0.0)
+        .clamp(0.0, 7.75)
+        * 4.0)
+        .round() as u32;
+    let offset_q =
+        (style.text_underline_offset.unwrap_or(0.0).clamp(0.0, 7.75) * 4.0).round() as u32;
+    let wavy = u32::from(style.text_decoration_style == TextDecorationStyle::Wavy);
+    let emphasis = u32::from(style.text_emphasis_mark);
+    let payload = (TEXT_DECORATION_NAN_MARKER << 19)
+        | ((factor_q & 0x7f) << 12)
+        | ((thickness_q & 0x1f) << 7)
+        | ((offset_q & 0x1f) << 2)
+        | (emphasis << 1)
+        | wavy;
+    Some(f32::from_bits(0x7fc0_0000 | payload))
+}
+
+fn decode_text_decoration_metadata(run: &mut TextRun) {
+    let bits = run.line_height_factor.to_bits();
+    if bits & 0x7fc0_0000 != 0x7fc0_0000 {
+        return;
+    }
+    let payload = bits & 0x003f_ffff;
+    if payload >> 19 != TEXT_DECORATION_NAN_MARKER {
+        return;
+    }
+
+    let factor_q = (payload >> 12) & 0x7f;
+    let thickness_q = (payload >> 7) & 0x1f;
+    let offset_q = (payload >> 2) & 0x1f;
+    let emphasis = payload & 0x2 != 0;
+    let wavy = payload & 0x1 != 0;
+
+    run.line_height_factor = factor_q as f32 / 32.0;
+    if emphasis {
+        run.border_radius = -20_000.0;
+        return;
+    }
+    if run.background_color.is_none() {
+        if thickness_q > 0 {
+            run.padding.1 = thickness_q as f32 / 4.0;
+        }
+        let offset = offset_q as f32 / 4.0;
+        if wavy {
+            run.border_radius = -10_000.0 - offset;
+        } else if offset > 0.0 {
+            run.border_radius = -offset;
+        }
+    }
+}
+
+fn style_run_bold(style: &ComputedStyle, fonts: &HashMap<String, TtfFont>) -> bool {
+    if !style.font_weight.is_bold() {
+        return false;
+    }
+    if style.font_synthesis_weight {
+        return true;
+    }
+    let family = crate::system_fonts::resolve_font_family(
+        &style.font_stack,
+        fonts,
+        true,
+        style.font_style == FontStyle::Italic,
+    );
+    match family {
+        FontFamily::Custom(name) => crate::system_fonts::find_font(
+            fonts,
+            &name,
+            true,
+            style.font_style == FontStyle::Italic,
+        )
+        .is_some_and(|(_, font)| font.is_bold),
+        _ => true,
+    }
+}
+
+fn style_run_italic(style: &ComputedStyle, fonts: &HashMap<String, TtfFont>) -> bool {
+    if style.font_style != FontStyle::Italic {
+        return false;
+    }
+    if style.font_synthesis_style {
+        return true;
+    }
+    let family = crate::system_fonts::resolve_font_family(
+        &style.font_stack,
+        fonts,
+        style.font_weight.is_bold(),
+        true,
+    );
+    match family {
+        FontFamily::Custom(name) => {
+            crate::system_fonts::find_font(fonts, &name, style.font_weight.is_bold(), true)
+                .is_some_and(|(_, font)| font.is_italic)
+        }
+        _ => true,
+    }
+}
+
+fn mark_synthetic_weight_run(
+    run: &mut TextRun,
+    requested_weight: FontWeight,
+    fonts: &HashMap<String, TtfFont>,
+) {
+    if run.background_color.is_some()
+        || run.padding.1 != 0.0
+        || !requested_weight.is_bold()
+        || !matches!(run.font_family, FontFamily::Custom(_))
+    {
+        return;
+    }
+    if run.bold
+        && requested_weight.numeric() >= 900
+        && crate::system_fonts::needs_faux_bold(fonts, run.font_family.name(), run.bold, run.italic)
+    {
+        run.padding.1 = FONT_RUN_MARK_SYNTHETIC_WEIGHT_900;
+    } else if run.bold
+        && requested_weight.numeric() >= 700
+        && run.font_size >= 24.0
+        && run.text_shadow.is_empty()
+        && is_author_font_alias(run, fonts)
+        && crate::system_fonts::needs_faux_bold(fonts, run.font_family.name(), run.bold, run.italic)
+    {
+        run.padding.1 = FONT_RUN_MARK_SYNTHETIC_WEIGHT_700;
+    } else if !run.bold
+        && crate::system_fonts::needs_faux_bold(fonts, run.font_family.name(), true, run.italic)
+    {
+        run.padding.1 = FONT_RUN_MARK_SUPPRESSED_SYNTHETIC_WEIGHT;
+    }
+}
+
+fn is_author_font_alias(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> bool {
+    let FontFamily::Custom(family) = &run.font_family else {
+        return false;
+    };
+    if matches!(
+        family.to_ascii_lowercase().as_str(),
+        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+    ) {
+        return false;
+    }
+    crate::system_fonts::find_font(fonts, family, run.bold, run.italic)
+        .is_some_and(|(_, font)| !font.font_name.eq_ignore_ascii_case(family))
+}
+
+fn decoration_padding(
+    style: &ComputedStyle,
+    background: Option<(f32, f32, f32, f32)>,
+) -> (f32, f32) {
+    if background.is_some() {
+        return (style.padding.left, style.padding.top);
+    }
+    (0.0, style.text_decoration_thickness.unwrap_or(0.0))
+}
+
+fn decoration_radius(style: &ComputedStyle, background: Option<(f32, f32, f32, f32)>) -> f32 {
+    if background.is_some() {
+        return style.border_radius;
+    }
+    if style.text_emphasis_mark {
+        return -20_000.0;
+    }
+    let offset = style.text_underline_offset.unwrap_or(0.0);
+    if style.text_decoration_style == TextDecorationStyle::Wavy {
+        -10_000.0 - offset
+    } else if offset != 0.0 {
+        -offset
+    } else {
+        0.0
+    }
+}
+
+const RUN_LETTER_SPACING_MARKER: f32 = -40_000.0;
+const INITIAL_LETTER_DROP_CAP_MARKER: f32 = -8_500.0;
+
+fn encoded_run_letter_spacing(run: &TextRun) -> f32 {
+    if run.border_radius < -30_000.0 {
+        RUN_LETTER_SPACING_MARKER - run.border_radius
+    } else {
+        0.0
+    }
+}
+
+fn letter_spacing_extra_for_text(run: &TextRun, text: &str) -> f32 {
+    encoded_run_letter_spacing(run) * text.chars().count().saturating_sub(1) as f32
+}
+
+fn drop_cap_ink_width_for_text(
+    text: &str,
+    run: &TextRun,
+    fonts: &HashMap<String, TtfFont>,
+) -> Option<f32> {
+    if !is_drop_cap_marker_run(run) {
+        return None;
+    }
+    if (run.border_radius - INITIAL_LETTER_DROP_CAP_MARKER).abs() >= f32::EPSILON {
+        return None;
+    }
+    let ch = text.chars().find(|ch| !ch.is_whitespace())?;
+    let FontFamily::Custom(family) = &run.font_family else {
+        return None;
+    };
+    let (_, font) = crate::system_fonts::find_font(fonts, family, run.bold, run.italic)?;
+    let face = rustybuzz::ttf_parser::Face::parse(&font.data, 0).ok()?;
+    let glyph = face.glyph_index(ch)?;
+    let bbox = face.glyph_bounding_box(glyph)?;
+    if font.units_per_em == 0 {
+        return None;
+    }
+    let scale = run.font_size / f32::from(font.units_per_em);
+    let ink_width = (f32::from(bbox.x_max) - f32::from(bbox.x_min)).max(0.0) * scale;
+    Some(ink_width + run.font_size * 0.035)
+}
+
+fn estimate_text_width_for_run(text: &str, run: &TextRun, fonts: &HashMap<String, TtfFont>) -> f32 {
+    let measured_text = target_placeholder_measure_text(text);
+    if let Some(width) = drop_cap_ink_width_for_text(&measured_text, run, fonts) {
+        return width + letter_spacing_extra_for_text(run, &measured_text);
+    }
+    estimate_word_width(
+        &measured_text,
+        run.font_size,
+        &run.font_family,
+        run.bold,
+        run.italic,
+        fonts,
+    ) + letter_spacing_extra_for_text(run, &measured_text)
+}
+
+fn target_placeholder_measure_text(text: &str) -> Cow<'_, str> {
+    if !text.contains(TARGET_PLACEHOLDER_START) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(TARGET_PLACEHOLDER_START) {
+        out.push_str(&rest[..start]);
+        let payload_start = start + TARGET_PLACEHOLDER_START.len();
+        let Some(end_rel) = rest[payload_start..].find(TARGET_PLACEHOLDER_END) else {
+            out.push_str(&rest[start..]);
+            return Cow::Owned(out);
+        };
+        let payload = &rest[payload_start..payload_start + end_rel];
+        if payload.starts_with("counter|") {
+            out.push('0');
+        }
+        rest = &rest[payload_start + end_rel + TARGET_PLACEHOLDER_END.len()..];
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+fn ligatures_enabled_for_style(style: &ComputedStyle) -> bool {
+    style.ligatures_enabled && style.font_kerning_enabled
+}
+
+/// The parent (line) font size that a `vertical-align: super`/`sub` baseline
+/// shift is measured against.
+///
+/// css2 §10.8.1 raises/lowers the box "to the position appropriate for
+/// super/subscripts of the *parent's* box" — so the shift is a fraction of the
+/// PARENT element's font size, NOT the shrunk `<sup>`/`<sub>`'s own (usually
+/// `font-size: smaller`) size. Chrome confirms this: a 40%-size and a 100%-size
+/// superscript on the same line are raised by the *same* amount. We take the
+/// parent size as the largest baseline-aligned text run on the line (the
+/// surrounding ordinary text the shifted run sits within); when the line has no
+/// such text we fall back to the largest run present so a lone shifted run keeps
+/// its own size.
+pub(crate) fn line_primary_font_size(runs: &[crate::layout::engine::TextRun]) -> f32 {
+    let baseline_text = runs
+        .iter()
+        .filter(|r| {
+            r.inline_box.is_none()
+                && matches!(r.vertical_align, VerticalAlign::Baseline)
+                && !r.text.trim().is_empty()
+        })
+        .map(|r| r.font_size)
+        .fold(0.0f32, f32::max);
+    if baseline_text > 0.0 {
+        return baseline_text;
+    }
+    runs.iter()
+        .filter(|r| r.inline_box.is_none())
+        .map(|r| r.font_size)
+        .fold(0.0f32, f32::max)
+}
+
+fn run_glyph_box_floor(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> f32 {
+    if let FontFamily::Custom(name) = &run.font_family
+        && let Some((_, ttf)) = crate::system_fonts::find_font(fonts, name, run.bold, run.italic)
+        && let Ok(face) = rustybuzz::ttf_parser::Face::parse(&ttf.data, 0)
+    {
+        let mut y_min = i16::MAX;
+        let mut y_max = i16::MIN;
+        for ch in run.text.chars().filter(|c| !c.is_whitespace()) {
+            if let Some(glyph) = face.glyph_index(ch)
+                && let Some(bbox) = face.glyph_bounding_box(glyph)
+            {
+                y_min = y_min.min(bbox.y_min);
+                y_max = y_max.max(bbox.y_max);
+            }
+        }
+        if y_min <= y_max && ttf.units_per_em > 0 {
+            return (f32::from(y_max) - f32::from(y_min)).max(0.0) / f32::from(ttf.units_per_em)
+                * run.font_size;
+        }
+    }
+    let (asc_r, _) =
+        crate::fonts::font_metrics_ratios(&run.font_family, run.bold, run.italic, fonts);
+    asc_r * run.font_size
+}
+
+fn is_drop_cap_marker_run(run: &TextRun) -> bool {
+    run.inline_box.is_none()
+        && run.line_height_factor.is_finite()
+        && run.line_height_factor < 0.9
+        && run.text.chars().filter(|c| !c.is_whitespace()).count() <= 1
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +529,153 @@ pub(crate) fn collapse_whitespace(text: &str) -> String {
     result.trim_end().to_string()
 }
 
+/// Collapse whitespace for `white-space: pre-line` (css-text-3 §4.1.1).
+///
+/// Like `normal`, runs of spaces and tabs collapse to a single space and
+/// collapsible spaces around a segment break are removed — BUT forced segment
+/// breaks (newlines, U+000A) are *preserved* as explicit line breaks rather
+/// than collapsed into a space. The newline is emitted verbatim so the line
+/// breaker (which splits on `\n`) creates a forced break there.
+pub(crate) fn collapse_whitespace_pre_line(text: &str) -> String {
+    let mut result = String::new();
+    // Tracks whether the previous emitted char was a collapsible space, so a
+    // run of spaces collapses to one. Starts `true` so a leading space at the
+    // very start of the block is dropped, and is reset to `true` after every
+    // newline so a space leading the next segment is likewise dropped.
+    let mut last_was_space = true;
+    for c in text.chars() {
+        if c == '\n' {
+            // A segment break removes any collapsible space that precedes it
+            // (and likewise will swallow following spaces via `last_was_space`).
+            while result.ends_with(' ') {
+                result.pop();
+            }
+            result.push('\n');
+            last_was_space = true; // suppress a leading space on the next line
+        } else if c.is_whitespace() {
+            // Collapse spaces/tabs to a single space, but never lead a segment
+            // (start of string or just after a newline) with one.
+            if !last_was_space {
+                result.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            result.push(c);
+            last_was_space = false;
+        }
+    }
+    // Trailing collapsible space at the very end is removed.
+    while result.ends_with(' ') {
+        result.pop();
+    }
+    result
+}
+
+fn collect_inline_plain_text(nodes: &[DomNode], out: &mut String) {
+    for node in nodes {
+        match node {
+            DomNode::Text(text) => {
+                out.push_str(text);
+                out.push(' ');
+            }
+            DomNode::Element(el) => collect_inline_plain_text(&el.children, out),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// expand_tabs
+// ---------------------------------------------------------------------------
+
+/// Expand `U+0009` TAB characters in preserved (`white-space: pre`/`pre-wrap`/
+/// `break-spaces`) text to runs of spaces that advance to the next tab stop
+/// (css-text-3 §6.3).
+///
+/// Tab stops are spaced `tab_size` apart, measured from the start of each line
+/// (reset after every `\n`). `tab_size` is the resolved stop distance in points
+/// (e.g. `tab-size: N` × the space advance, or an absolute `<length>`).
+/// `space_advance` is the width of one space glyph; preceding content width is
+/// accumulated from the actual glyph advances so the alignment is correct for
+/// both monospace and proportional fonts. Each tab is replaced by the (>=1)
+/// number of spaces whose total advance lands on (or just past) the next stop —
+/// exact for monospace and a close approximation otherwise. Returns the input
+/// unchanged when it contains no tab.
+fn expand_tabs(
+    text: &str,
+    tab_size: f32,
+    space_advance: f32,
+    char_advance: impl Fn(char) -> f32,
+) -> String {
+    if !text.contains('\t') || tab_size <= 0.0 || space_advance <= 0.0 {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    // Horizontal position since the start of the current line, in points.
+    let mut x = 0.0f32;
+    for ch in text.chars() {
+        match ch {
+            '\n' => {
+                out.push('\n');
+                x = 0.0;
+            }
+            '\t' => {
+                // Distance to the next tab stop (a strictly positive advance:
+                // a tab sitting exactly on a stop still moves to the next one).
+                let next_stop = ((x / tab_size).floor() + 1.0) * tab_size;
+                let needed = (next_stop - x).max(space_advance);
+                // Round to the nearest whole number of spaces (>= 1).
+                let count = (needed / space_advance).round().max(1.0) as usize;
+                for _ in 0..count {
+                    out.push(' ');
+                }
+                x += count as f32 * space_advance;
+            }
+            other => {
+                out.push(other);
+                x += char_advance(other);
+            }
+        }
+    }
+    out
+}
+
+/// Expand TABs in a preserved-whitespace text node using a style's resolved
+/// `tab-size` and the space advance of its font (css-text-3 §6.3). No-op when
+/// the text has no tab. Used by the `pre`/`pre-wrap`/`break-spaces` text paths.
+pub(crate) fn expand_pre_tabs(
+    text: &str,
+    style: &ComputedStyle,
+    fonts: &HashMap<String, TtfFont>,
+) -> String {
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+    let bold = style.font_weight.is_bold();
+    let italic = style.font_style == FontStyle::Italic;
+    let family = resolve_style_font_family(style, fonts);
+    let space_advance = estimate_word_width(" ", style.font_size, &family, bold, italic, fonts);
+    if space_advance <= 0.0 {
+        return text.to_string();
+    }
+    // `tab_size >= 0` is a count of space advances; a negative value encodes an
+    // absolute length in points (see `apply_style_map`).
+    let tab_distance = if style.tab_size >= 0.0 {
+        style.tab_size * space_advance
+    } else {
+        -style.tab_size
+    };
+    expand_tabs(text, tab_distance, space_advance, |c| {
+        estimate_word_width(
+            &c.to_string(),
+            style.font_size,
+            &family,
+            bold,
+            italic,
+            fonts,
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // estimate_word_width
 // ---------------------------------------------------------------------------
@@ -79,14 +689,19 @@ pub(crate) fn estimate_word_width(
     italic: bool,
     fonts: &HashMap<String, TtfFont>,
 ) -> f32 {
+    let cjk_em_width = word
+        .chars()
+        .filter(|ch| is_cjk_char(*ch) || is_cjk_closing_punctuation(*ch))
+        .count() as f32
+        * font_size;
     if let Some(width) =
         crate::text::measure_text_width(word, font_size, font_family, bold, italic, fonts)
     {
-        return width;
+        return width.max(cjk_em_width);
     }
 
     // Use AFM metrics for standard fonts (non-bold for layout estimation)
-    crate::fonts::str_width(word, font_size, font_family, false)
+    crate::fonts::str_width(word, font_size, font_family, false).max(cjk_em_width)
 }
 
 // ---------------------------------------------------------------------------
@@ -99,9 +714,42 @@ pub(crate) struct TextWrapOptions {
     pub(crate) default_font_size: f32,
     pub(crate) line_height_factor: f32,
     pub(crate) overflow_wrap: OverflowWrap,
+    pub(crate) word_break_keep_all: bool,
+    pub(crate) hyphens_manual: bool,
     /// Paragraph base direction for the Unicode Bidi Algorithm. Set to `true`
     /// when the containing block has `direction: rtl` (or `dir="rtl"`).
     pub(crate) paragraph_rtl: bool,
+    /// `unicode-bidi: bidi-override`: lay the inline content out strictly in
+    /// sequence according to `direction`, overriding intrinsic bidi classes
+    /// (css-writing-modes-4 §2.4).
+    pub(crate) bidi_override: bool,
+    /// `unicode-bidi: plaintext`: resolve paragraph direction separately for
+    /// forced-break-delimited text segments instead of using one base direction.
+    pub(crate) bidi_plaintext: bool,
+    /// `white-space: pre-wrap`: preserve spaces/newlines but still allow soft
+    /// wrapping at space boundaries. Distinguishes pre-wrap (wraps) from `pre`
+    /// (which the caller renders with an unbounded width so it never wraps).
+    /// Also set for `break-spaces`, which shares the preserve-and-wrap token
+    /// splitting; `break_spaces` then selects the stricter line-breaking rules.
+    pub(crate) pre_wrap: bool,
+    /// `white-space: break-spaces` (css-text-3 §3): like `pre-wrap` but a soft
+    /// wrap opportunity exists after *every* preserved space (including between
+    /// adjacent spaces) and preserved spaces NEVER hang — they always take up
+    /// space at the line end. The combination makes the breaker roll a following
+    /// word onto the next line whenever that word's own trailing space would
+    /// overflow, since the spaces it would sit after cannot hang.
+    pub(crate) break_spaces: bool,
+    /// CSS `text-indent` applied to the first formatted line: it consumes inline
+    /// space at the start of the first line, so that line has less room before it
+    /// wraps. Subsequent lines are unaffected.
+    pub(crate) text_indent: f32,
+    /// Float-exclusion inset of a `::first-letter { float: left }` drop cap: the
+    /// first `dropcap_lines` formatted lines have `dropcap_width` less room and
+    /// are shifted right by it so they wrap beside the floated initial. Line 0
+    /// already starts after the inline drop-cap glyph, so it keeps `x_offset = 0`
+    /// but its available width is still reduced. Zero when there is no drop cap.
+    pub(crate) dropcap_width: f32,
+    pub(crate) dropcap_lines: usize,
 }
 
 impl TextWrapOptions {
@@ -116,13 +764,263 @@ impl TextWrapOptions {
             default_font_size,
             line_height_factor,
             overflow_wrap,
+            word_break_keep_all: false,
+            hyphens_manual: true,
             paragraph_rtl: false,
+            bidi_override: false,
+            bidi_plaintext: false,
+            pre_wrap: false,
+            break_spaces: false,
+            text_indent: 0.0,
+            dropcap_width: 0.0,
+            dropcap_lines: 0,
         }
+    }
+
+    /// Reserve a left float-exclusion for a `::first-letter` drop cap: the first
+    /// `lines` formatted lines lose `width` of inline room and are inset by it.
+    pub(crate) const fn with_drop_cap(mut self, width: f32, lines: usize) -> Self {
+        self.dropcap_width = width;
+        self.dropcap_lines = lines;
+        self
     }
 
     pub(crate) const fn with_rtl(mut self, rtl: bool) -> Self {
         self.paragraph_rtl = rtl;
         self
+    }
+
+    /// Set `unicode-bidi: bidi-override` for the inline content.
+    pub(crate) const fn with_bidi_override(mut self, bidi_override: bool) -> Self {
+        self.bidi_override = bidi_override;
+        self
+    }
+
+    pub(crate) const fn with_bidi_plaintext(mut self, bidi_plaintext: bool) -> Self {
+        self.bidi_plaintext = bidi_plaintext;
+        self
+    }
+
+    pub(crate) const fn with_word_break_keep_all(mut self, keep_all: bool) -> Self {
+        self.word_break_keep_all = keep_all;
+        self
+    }
+
+    pub(crate) const fn with_hyphens_manual(mut self, manual: bool) -> Self {
+        self.hyphens_manual = manual;
+        self
+    }
+
+    pub(crate) const fn with_pre_wrap(mut self, pre_wrap: bool) -> Self {
+        self.pre_wrap = pre_wrap;
+        self
+    }
+
+    /// Enable `white-space: break-spaces` line breaking. Implies `pre_wrap`
+    /// (preserve spaces and newlines, still soft-wrap) plus the break-spaces
+    /// rules: every preserved space is a wrap opportunity and trailing spaces do
+    /// not hang.
+    pub(crate) const fn with_break_spaces(mut self, break_spaces: bool) -> Self {
+        self.break_spaces = break_spaces;
+        if break_spaces {
+            self.pre_wrap = true;
+        }
+        self
+    }
+
+    pub(crate) const fn with_text_indent(mut self, text_indent: f32) -> Self {
+        self.text_indent = text_indent;
+        self
+    }
+}
+
+/// One wrappable token (a word, a preserved space-run, a `\n`, or an atomic
+/// inline box) together with the style it was split from and two flags that
+/// control inter-word spacing.
+struct StyledWord {
+    text: String,
+    run: TextRun,
+    /// The token preserves its own internal whitespace (pre-wrap space runs,
+    /// atomic boxes): the wrapper never injects an inter-word space before it.
+    preserve_spacing: bool,
+    /// The token is directly adjacent to the previous token in the source with
+    /// no collapsible whitespace at the boundary (e.g. a `::before` pseudo run
+    /// abutting the element's own text). The wrapper must not synthesise an
+    /// inter-word space before it even though it starts a new run.
+    joins_prev: bool,
+}
+
+/// Split a segment of text that preserves its internal whitespace into
+/// alternating word-runs and space-runs. Used for `white-space: pre-wrap`,
+/// where spaces must be preserved verbatim but lines may still wrap at the
+/// boundary between a space-run and the following word. Each emitted token is
+/// flagged `preserve_spacing = true` so the wrapper never injects its own
+/// inter-word space; soft wrapping then happens via the generic
+/// "token overflows the line" break.
+fn split_preserving_spaces(segment: &str, template: &TextRun, out: &mut Vec<StyledWord>) {
+    let mut current = String::new();
+    let mut current_is_space: Option<bool> = None;
+    for ch in segment.chars() {
+        let is_space = ch == ' ' || ch == '\t';
+        if current_is_space != Some(is_space) && !current.is_empty() {
+            out.push(StyledWord {
+                text: std::mem::take(&mut current),
+                run: template.clone(),
+                preserve_spacing: true,
+                joins_prev: false,
+            });
+        }
+        current_is_space = Some(is_space);
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        out.push(StyledWord {
+            text: current,
+            run: template.clone(),
+            preserve_spacing: true,
+            joins_prev: false,
+        });
+    }
+}
+
+/// Push a whitespace-delimited word, splitting it at internal hyphen-minus break
+/// opportunities. UAX #14 allows a line break *after* a U+002D hyphen that sits
+/// between two letters (e.g. "pseudo-element" → "pseudo-", "element"), which is
+/// how Chrome wraps hyphenated words. The hyphen stays with the preceding
+/// segment; later segments `join` the prior one (no inter-word space) so they
+/// render contiguously yet may begin a new line. Restricting to letter-flanked
+/// hyphens avoids breaking number ranges, dates, or signs ("12-34", "-5").
+fn push_word_with_hyphen_breaks(
+    word: &str,
+    template: &TextRun,
+    out: &mut Vec<StyledWord>,
+    keep_all: bool,
+    hyphens_manual: bool,
+) {
+    if should_break_as_char_tokens(word, keep_all) {
+        push_char_break_tokens(word, template, out);
+        return;
+    }
+
+    let chars: Vec<char> = word.chars().collect();
+    let mut seg = String::new();
+    let mut first = true;
+    for (i, &c) in chars.iter().enumerate() {
+        seg.push(c);
+        let can_break = (hyphens_manual && c == '\u{00ad}')
+            || (c == '-'
+                && i > 0
+                && i + 1 < chars.len()
+                && chars[i - 1].is_alphabetic()
+                && chars[i + 1].is_alphabetic());
+        if can_break {
+            out.push(StyledWord {
+                text: std::mem::take(&mut seg),
+                run: template.clone(),
+                preserve_spacing: false,
+                joins_prev: !first,
+            });
+            first = false;
+        }
+    }
+    if !seg.is_empty() {
+        out.push(StyledWord {
+            text: seg,
+            run: template.clone(),
+            preserve_spacing: false,
+            joins_prev: !first,
+        });
+    }
+}
+
+fn strip_soft_hyphens(text: &str) -> String {
+    if !text.contains('\u{00ad}') {
+        return text.to_string();
+    }
+    text.chars().filter(|&c| c != '\u{00ad}').collect()
+}
+
+fn finalize_soft_hyphen_line(runs: &mut [TextRun], broke_line: bool) {
+    let Some(last_idx) = runs.iter().rposition(|run| run.inline_box.is_none()) else {
+        return;
+    };
+    for (idx, run) in runs.iter_mut().enumerate() {
+        if !run.text.contains('\u{00ad}') {
+            continue;
+        }
+        if broke_line && idx == last_idx && run.text.ends_with('\u{00ad}') {
+            while run.text.ends_with('\u{00ad}') {
+                run.text.pop();
+            }
+            run.text.push('-');
+        } else {
+            run.text = strip_soft_hyphens(&run.text);
+        }
+    }
+}
+
+fn push_wrapped_line(lines: &mut Vec<TextLine>, runs: &mut Vec<TextRun>, height: f32) {
+    finalize_soft_hyphen_line(runs, true);
+    lines.push(TextLine {
+        runs: std::mem::take(runs),
+        height,
+        x_offset: 0.0,
+    });
+}
+
+fn is_cjk_char(ch: char) -> bool {
+    let c = ch as u32;
+    (0x3040..=0x30ff).contains(&c)
+        || (0x3400..=0x4dbf).contains(&c)
+        || (0x4e00..=0x9fff).contains(&c)
+        || (0xf900..=0xfaff).contains(&c)
+        || (0xac00..=0xd7af).contains(&c)
+}
+
+fn is_cjk_closing_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '、' | '。' | '，' | '．' | '！' | '？' | '）' | '］' | '｝' | '」' | '』'
+    )
+}
+
+fn should_break_as_char_tokens(word: &str, keep_all: bool) -> bool {
+    if word.chars().count() <= 1 {
+        return false;
+    }
+    let has_cjk = word.chars().any(is_cjk_char);
+    if has_cjk {
+        return !keep_all;
+    }
+    // `line-break:anywhere` is not represented in ComputedStyle yet, but CSS
+    // Text's anywhere behavior is needed for punctuation-heavy unspaced runs.
+    // Restrict arbitrary Latin breaks to runs that carry visible punctuation so
+    // ordinary prose words still keep their normal unbreakable min-content.
+    if word
+        .chars()
+        .any(|ch| matches!(ch, '/' | '+' | '(' | ')' | '[' | ']' | '{' | '}'))
+    {
+        return true;
+    }
+    false
+}
+
+fn push_char_break_tokens(word: &str, template: &TextRun, out: &mut Vec<StyledWord>) {
+    let mut first = true;
+    for ch in word.chars() {
+        if is_cjk_closing_punctuation(ch)
+            && let Some(prev) = out.last_mut()
+        {
+            prev.text.push(ch);
+            continue;
+        }
+        out.push(StyledWord {
+            text: ch.to_string(),
+            run: template.clone(),
+            preserve_spacing: false,
+            joins_prev: !first,
+        });
+        first = false;
     }
 }
 
@@ -164,6 +1062,190 @@ pub(crate) fn split_word_to_fit(
 // wrap_text_runs
 // ---------------------------------------------------------------------------
 
+fn expand_leader_placeholders(
+    runs: Vec<TextRun>,
+    max_width: f32,
+    fonts: &HashMap<String, TtfFont>,
+) -> Vec<TextRun> {
+    let leader_count: usize = runs
+        .iter()
+        .map(|run| run.text.matches(LEADER_PLACEHOLDER_START).count())
+        .sum();
+    if leader_count == 0 {
+        return runs;
+    }
+
+    let base_width: f32 = runs
+        .iter()
+        .map(|run| {
+            if let Some(inline) = run.inline_box.as_deref() {
+                inline.outer_width()
+            } else {
+                let text = remove_leader_placeholders(&run.text);
+                estimate_word_width(
+                    &text,
+                    run.font_size,
+                    &run.font_family,
+                    run.bold,
+                    run.italic,
+                    fonts,
+                )
+            }
+        })
+        .sum();
+    let available = if max_width.is_finite() && max_width < 100_000.0 {
+        (max_width - base_width).max(0.0) / leader_count as f32
+    } else {
+        0.0
+    };
+
+    runs.into_iter()
+        .flat_map(|run| {
+            if run.text.contains(LEADER_PLACEHOLDER_START) && run.inline_box.is_none() {
+                expand_leader_run(run, available, fonts)
+            } else {
+                vec![run]
+            }
+        })
+        .collect()
+}
+
+fn remove_leader_placeholders(text: &str) -> String {
+    replace_leader_placeholders_raw(text, |_| String::new())
+}
+
+fn expand_leader_run(
+    run: TextRun,
+    available: f32,
+    fonts: &HashMap<String, TtfFont>,
+) -> Vec<TextRun> {
+    let mut out = Vec::new();
+    let mut rest = run.text.as_str();
+    while let Some(start) = rest.find(LEADER_PLACEHOLDER_START) {
+        push_leader_text_run(&mut out, &run, &rest[..start]);
+        let payload_start = start + LEADER_PLACEHOLDER_START.len();
+        let Some(end_rel) = rest[payload_start..].find(LEADER_PLACEHOLDER_END) else {
+            push_leader_text_run(&mut out, &run, &rest[start..]);
+            return out;
+        };
+        let pattern = &rest[payload_start..payload_start + end_rel];
+        let (leading_space, leader, trailing_space) =
+            leader_replacement_parts(pattern, available, &run, fonts);
+        if leading_space > 0.0 {
+            out.push(leader_spacer_run(&run, leading_space));
+        }
+        push_leader_text_run(&mut out, &run, &leader);
+        if trailing_space > 0.0 {
+            out.push(leader_spacer_run(&run, trailing_space));
+        }
+        rest = &rest[payload_start + end_rel + LEADER_PLACEHOLDER_END.len()..];
+    }
+    push_leader_text_run(&mut out, &run, rest);
+    out
+}
+
+fn push_leader_text_run(out: &mut Vec<TextRun>, template: &TextRun, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    out.push(TextRun {
+        text: text.to_string(),
+        ..template.clone()
+    });
+}
+
+fn leader_spacer_run(template: &TextRun, width: f32) -> TextRun {
+    TextRun {
+        text: String::new(),
+        background_color: None,
+        padding: (0.0, 0.0),
+        border_radius: 0.0,
+        inline_box: Some(Box::new(InlineBox {
+            width,
+            height: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+            background_color: None,
+            border: LayoutBorder::default(),
+            border_radius: 0.0,
+            padding_top: 0.0,
+            padding_left: 0.0,
+            vertical_align: template.vertical_align,
+            baseline_ascent: Some(0.0),
+            lines: Vec::new(),
+            image: None,
+            rel_offset_x: 0.0,
+            rel_offset_y: 0.0,
+        })),
+        ..template.clone()
+    }
+}
+
+fn leader_replacement_parts(
+    pattern: &str,
+    available: f32,
+    run: &TextRun,
+    fonts: &HashMap<String, TtfFont>,
+) -> (f32, String, f32) {
+    let pattern = if pattern.is_empty() { "." } else { pattern };
+    let pattern_width = estimate_word_width(
+        pattern,
+        run.font_size,
+        &run.font_family,
+        run.bold,
+        run.italic,
+        fonts,
+    );
+    let max_count = if pattern_width > 0.0 && available > 0.0 {
+        (available / pattern_width).floor() as usize
+    } else {
+        0
+    }
+    .min(512);
+    let hidden_count = usize::from(max_count > 0);
+    let mut count = max_count.saturating_sub(hidden_count);
+    while count > 0 {
+        let candidate = pattern.repeat(count);
+        let width = estimate_word_width(
+            &candidate,
+            run.font_size,
+            &run.font_family,
+            run.bold,
+            run.italic,
+            fonts,
+        );
+        if width <= available {
+            let hidden = pattern_width * hidden_count as f32;
+            let leading = (available - width - hidden).max(0.0);
+            return (leading, candidate, hidden.min((available - width).max(0.0)));
+        }
+        count -= 1;
+    }
+    (0.0, String::new(), available.max(0.0))
+}
+
+fn replace_leader_placeholders_raw<F>(text: &str, mut replacement: F) -> String
+where
+    F: FnMut(&str) -> String,
+{
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(LEADER_PLACEHOLDER_START) {
+        out.push_str(&rest[..start]);
+        let payload_start = start + LEADER_PLACEHOLDER_START.len();
+        let Some(end_rel) = rest[payload_start..].find(LEADER_PLACEHOLDER_END) else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let payload = &rest[payload_start..payload_start + end_rel];
+        let replacement = replacement(payload);
+        out.push_str(&replacement);
+        rest = &rest[payload_start + end_rel + LEADER_PLACEHOLDER_END.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Simple text wrapping using character width estimation.
 /// Uses TTF metrics when a custom font is available.
 pub(crate) fn wrap_text_runs(
@@ -171,23 +1253,83 @@ pub(crate) fn wrap_text_runs(
     options: TextWrapOptions,
     fonts: &HashMap<String, TtfFont>,
 ) -> Vec<TextLine> {
+    let runs = expand_leader_placeholders(runs, options.max_width, fonts);
     let line_height_factor = options.line_height_factor.max(0.0);
     let mut lines: Vec<TextLine> = Vec::new();
     let mut current_runs: Vec<TextRun> = Vec::new();
     let mut current_width: f32 = 0.0;
-    // Start with line height based on max font size in this line (typography alignment)
-    let base_font_size = runs
-        .iter()
-        .map(|r| r.font_size)
-        .fold(options.default_font_size, f32::max);
-    let mut line_height = base_font_size * line_height_factor;
+    // The baseline-shift of a `vertical-align: super`/`sub` run is a fraction of
+    // the PARENT font size (css2 §10.8.1), measured here once from the surrounding
+    // ordinary text so the line box grows by the correct amount regardless of the
+    // shifted run's own (shrunk) size.
+    let shift_basis_fs = line_primary_font_size(&runs);
+    // The line box takes its height from the inline content it contains: each
+    // run uses the line-height resolved from its *own* element's style, falling
+    // back to the block-level factor when the run leaves it unspecified (NaN).
+    let authored_run_line_height = |run: &TextRun| {
+        let factor = if run.line_height_factor.is_nan() {
+            line_height_factor
+        } else {
+            run.line_height_factor.max(0.0)
+        };
+        run.font_size * factor
+    };
+    let run_line_height = |run: &TextRun| {
+        let factor = if run.line_height_factor.is_nan() {
+            line_height_factor
+        } else {
+            run.line_height_factor.max(0.0)
+        };
+        let base = authored_run_line_height(run);
+        // A `vertical-align: super`/`sub` run is painted with its half-leading-
+        // padded glyph box shifted off the line baseline (css2 §10.8.1) by
+        // `shift_basis_fs * RATIO` of the PARENT font size. The line box must
+        // contain both that shifted box AND the surrounding parent text's own
+        // box, combined per side of the baseline — so it grows only on the
+        // shifted side (asymmetric), exactly as the renderer places the baseline
+        // (`line_box_metrics`). Other runs contribute only their own line-height.
+        let shift = match run.vertical_align {
+            VerticalAlign::Super => shift_basis_fs * crate::render::pdf::SUPER_SHIFT_RATIO,
+            VerticalAlign::Sub => -shift_basis_fs * crate::render::pdf::SUB_SHIFT_RATIO,
+            VerticalAlign::Length(v) => v,
+            VerticalAlign::Percent(p) => base * p,
+            _ => {
+                if is_drop_cap_marker_run(run) {
+                    return base;
+                }
+                return base.max(run_glyph_box_floor(run, fonts));
+            }
+        };
+        let (asc_r, desc_r) =
+            crate::fonts::font_metrics_ratios(&run.font_family, run.bold, run.italic, fonts);
+        let half = |fs: f32| ((fs * factor - (asc_r + desc_r) * fs) / 2.0).max(0.0);
+        let p = shift_basis_fs;
+        let above_parent = asc_r * p + half(p);
+        let below_parent = desc_r * p + half(p);
+        let above_run = asc_r * run.font_size + half(run.font_size) + shift;
+        let below_run = desc_r * run.font_size + half(run.font_size) - shift;
+        above_parent.max(above_run) + below_parent.max(below_run)
+    };
+    // Start the line box height from the first run's line-height contribution.
+    let mut line_height = runs
+        .first()
+        .map_or(options.default_font_size * line_height_factor, |r| {
+            run_line_height(r)
+        });
 
     // Apply BiDi reordering if the paragraph direction is RTL or the text
     // contains RTL characters. This reorders runs into visual order so
     // RTL/LTR segments display correctly in the left-to-right PDF context.
     let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
-    let runs = if options.paragraph_rtl || crate::bidi::has_rtl_chars(&full_text) {
-        crate::bidi::reorder_runs_bidi(&runs, options.paragraph_rtl)
+    let inferred_rtl = !options.paragraph_rtl
+        && !options.bidi_plaintext
+        && !options.bidi_override
+        && crate::bidi::first_strong_is_rtl(&full_text);
+    let bidi_rtl = options.paragraph_rtl || inferred_rtl;
+    let runs = if !options.bidi_plaintext
+        && (options.bidi_override || bidi_rtl || crate::bidi::has_rtl_chars(&full_text))
+    {
+        crate::bidi::reorder_runs_bidi(&runs, bidi_rtl, options.bidi_override)
     } else {
         runs
     };
@@ -195,41 +1337,148 @@ pub(crate) fn wrap_text_runs(
     // Concatenate all text then re-split by words, preserving run styles.
     // For text containing \n (white-space: pre), split on newlines first,
     // then split each segment by words.
-    let mut styled_words: Vec<(String, TextRun, bool)> = Vec::new();
-    for run in &runs {
-        if run.text == "\n" {
-            styled_words.push(("\n".to_string(), run.clone(), false));
+    //
+    // `prev_run_ends_ws` tracks whether the previously processed run ended in
+    // collapsible whitespace. The first word of a run joins the prior word with
+    // no inter-word space (`joins_prev`) only when the run boundary carried no
+    // whitespace on either side — e.g. a `::before` pseudo run abutting the
+    // element's own text (`<>` + `widget` → `<>widget`, never `<> widget`).
+    let mut styled_words: Vec<StyledWord> = Vec::new();
+    let mut prev_run_ends_ws = true;
+    for (run_idx, run) in runs.iter().enumerate() {
+        let run_starts_ws = run.text.chars().next().is_some_and(char::is_whitespace);
+        // The first emitted word of this run is directly adjacent to the prior
+        // content when neither side of the boundary had whitespace.
+        let first_word_joins = !prev_run_ends_ws && !run_starts_ws;
+        let run_ends_ws = run.text.chars().last().is_some_and(char::is_whitespace);
+
+        if run.inline_box.is_some() {
+            // Atomic inline box (`display: inline-block`): a single, unbreakable
+            // token that takes part in inline spacing like a word. A collapsible
+            // space in the source before the box (the prior run ended in
+            // whitespace) is rendered as an inter-word space, so `joins_prev` is
+            // set only when there was no such space (CSS2 §9.1). `preserve_spacing`
+            // stays false so the wrapper applies the normal leading-space rule.
+            styled_words.push(StyledWord {
+                text: String::new(),
+                run: run.clone(),
+                preserve_spacing: false,
+                joins_prev: !prev_run_ends_ws,
+            });
+            // The box itself is not whitespace; a following run supplies its own
+            // leading space (re-attached during collection) when the source had
+            // collapsible whitespace after the box.
+            prev_run_ends_ws = false;
             continue;
         }
+        if run.text == "\n" {
+            styled_words.push(StyledWord {
+                text: "\n".to_string(),
+                run: run.clone(),
+                preserve_spacing: false,
+                joins_prev: false,
+            });
+            prev_run_ends_ws = true;
+            continue;
+        }
+        // Index of the first non-`\n` word token emitted from this run, used to
+        // apply `first_word_joins` only to that token.
+        let first_word_idx = styled_words.len();
         let has_newlines = run.text.contains('\n');
-        let has_preserved_spacing = run.text.chars().next().is_some_and(char::is_whitespace)
-            || run.text.chars().last().is_some_and(char::is_whitespace)
-            || run.text.contains("  ");
+        let keep_trailing_space_before_rtl = run_ends_ws
+            && !crate::bidi::has_rtl_chars(&run.text)
+            && runs
+                .get(run_idx + 1)
+                .is_some_and(|next| crate::bidi::has_rtl_chars(&next.text));
+        // A run is kept as a single verbatim token (rather than word-split) only
+        // when it carries *internal* significant whitespace that `split_whitespace`
+        // would lose: a leading space (e.g. generated " label") or a collapsed-out
+        // double space (white-space: pre). A trailing-only space is NOT a reason —
+        // it merely records a soft boundary (`prev_run_ends_ws` below) so the next
+        // run is spaced from this one; word-splitting drops the trailing char but
+        // keeps that boundary, which is what we want for `a <b>b</b>` → "a b".
+        let has_preserved_spacing = run_starts_ws || run.text.contains("  ");
         if has_newlines {
             for (seg_idx, segment) in run.text.split('\n').enumerate() {
                 if seg_idx > 0 {
-                    styled_words.push(("\n".to_string(), run.clone(), false));
+                    styled_words.push(StyledWord {
+                        text: "\n".to_string(),
+                        run: run.clone(),
+                        preserve_spacing: false,
+                        joins_prev: false,
+                    });
                 }
                 if segment.is_empty() {
                     continue;
                 }
-                if segment.chars().next().is_some_and(char::is_whitespace)
+                let preserved = segment.chars().next().is_some_and(char::is_whitespace)
                     || segment.chars().last().is_some_and(char::is_whitespace)
-                    || segment.contains("  ")
-                {
-                    styled_words.push((segment.to_string(), run.clone(), true));
+                    || segment.contains("  ");
+                if preserved {
+                    if options.pre_wrap {
+                        // pre-wrap preserves spaces but still wraps at space
+                        // boundaries; split so the generic overflow break can act.
+                        split_preserving_spaces(segment, run, &mut styled_words);
+                    } else {
+                        styled_words.push(StyledWord {
+                            text: segment.to_string(),
+                            run: run.clone(),
+                            preserve_spacing: true,
+                            joins_prev: false,
+                        });
+                    }
                 } else {
                     for word in segment.split_whitespace() {
-                        styled_words.push((word.to_string(), run.clone(), false));
+                        push_word_with_hyphen_breaks(
+                            word,
+                            run,
+                            &mut styled_words,
+                            options.word_break_keep_all,
+                            options.hyphens_manual,
+                        );
                     }
                 }
             }
         } else if has_preserved_spacing {
-            styled_words.push((run.text.clone(), run.clone(), true));
+            if options.pre_wrap {
+                split_preserving_spaces(&run.text, run, &mut styled_words);
+            } else {
+                styled_words.push(StyledWord {
+                    text: run.text.clone(),
+                    run: run.clone(),
+                    preserve_spacing: true,
+                    joins_prev: false,
+                });
+            }
         } else {
             for word in run.text.split_whitespace() {
-                styled_words.push((word.to_string(), run.clone(), false));
+                push_word_with_hyphen_breaks(
+                    word,
+                    run,
+                    &mut styled_words,
+                    options.word_break_keep_all,
+                    options.hyphens_manual,
+                );
             }
+        }
+
+        // Tag the run's first word token so it abuts the prior content when the
+        // boundary carried no whitespace.
+        if first_word_joins
+            && let Some(first) = styled_words.get_mut(first_word_idx)
+            && first.text != "\n"
+        {
+            first.joins_prev = true;
+        }
+        if keep_trailing_space_before_rtl
+            && let Some(last) = styled_words.last_mut()
+            && last.text != "\n"
+            && !last.text.ends_with(char::is_whitespace)
+        {
+            last.text.push(' ');
+            prev_run_ends_ws = false;
+        } else {
+            prev_run_ends_ws = run_ends_ws;
         }
     }
 
@@ -237,58 +1486,354 @@ pub(crate) fn wrap_text_runs(
         return vec![TextLine {
             runs,
             height: line_height,
+            x_offset: 0.0,
         }];
     }
 
     // Use a VecDeque so hyphenation remainders can be re-queued for processing.
-    let mut queue: std::collections::VecDeque<(String, TextRun, bool)> =
-        styled_words.into_iter().collect();
+    let mut queue: std::collections::VecDeque<StyledWord> = styled_words.into_iter().collect();
 
-    while let Some((word, template, preserve_spacing)) = queue.pop_front() {
+    // `white-space: break-spaces` line-break bookkeeping (css-text-3 §3). A soft
+    // wrap opportunity exists only *after* a preserved space, so a word placed
+    // after such spaces cannot itself end a line — if the next space would
+    // overflow (spaces never hang under break-spaces), the line must roll back to
+    // the last opportunity, sending the trailing word to the next line.
+    // `bs_break_run_idx` is the count of runs in `current_runs` at the last such
+    // opportunity (just after a placed space run).
+    let mut bs_break_run_idx: usize = 0;
+
+    // CSS `text-indent` only shortens the FIRST formatted line: the inline
+    // content available before wrapping is `max_width - text_indent` while no
+    // line has been emitted yet, and the full `max_width` afterwards.
+    //
+    // A `::first-letter { float: left }` drop cap reduces inline room on the
+    // lines it overlaps. Line 0 already carries the enlarged glyph as its first
+    // run (its advance is counted in `current_width`), so only lines 1..N lose
+    // `dropcap_width` of room here; they are also shifted right by the same
+    // amount at emission time (`drop_cap_offset`).
+    let drop_cap_offset = |emitted: usize| {
+        if options.dropcap_lines > 0 && emitted >= 1 && emitted < options.dropcap_lines {
+            options.dropcap_width
+        } else {
+            0.0
+        }
+    };
+    let line_max_width = |emitted: usize| {
+        let dc = drop_cap_offset(emitted);
+        if emitted == 0 {
+            (options.max_width - options.text_indent - dc).max(0.0)
+        } else {
+            (options.max_width - dc).max(0.0)
+        }
+    };
+
+    while let Some(StyledWord {
+        text: word,
+        run: template,
+        preserve_spacing,
+        joins_prev,
+    }) = queue.pop_front()
+    {
         if word == "\n" {
             // Line break
-            lines.push(TextLine {
-                runs: std::mem::take(&mut current_runs),
-                height: line_height,
-            });
+            push_wrapped_line(&mut lines, &mut current_runs, line_height);
             current_width = 0.0;
-            line_height = template.font_size * line_height_factor;
+            line_height = run_line_height(&template);
+            bs_break_run_idx = 0;
             continue;
         }
 
-        let word_width = estimate_word_width(
-            &word,
-            template.font_size,
-            &template.font_family,
-            template.bold,
-            template.italic,
-            fonts,
-        );
-        let space_width = estimate_word_width(
-            " ",
-            template.font_size,
-            &template.font_family,
-            template.bold,
-            template.italic,
-            fonts,
-        );
+        // `white-space: break-spaces` preserved-space token (css-text-3 §3).
+        // Differs from pre-wrap in two ways: every preserved space is itself a
+        // soft wrap opportunity (so a long run may break mid-run), and preserved
+        // spaces NEVER hang — they always occupy width at the line end. Because a
+        // line may break only *after* a space, a word placed after a space run
+        // cannot end a line on its own: if a later space would overflow, the line
+        // rolls back to the opportunity after the last fitting space, moving the
+        // trailing word to the next line. We record that opportunity here.
+        if options.break_spaces
+            && preserve_spacing
+            && template.inline_box.is_none()
+            && !word.is_empty()
+            && word.chars().all(|c| c == ' ' || c == '\t')
+        {
+            let max_w = line_max_width(lines.len());
+            let single_sp = estimate_word_width(
+                " ",
+                template.font_size,
+                &template.font_family,
+                template.bold,
+                template.italic,
+                fonts,
+            );
+            // Place spaces one at a time so the run can break between adjacent
+            // spaces (a wrap opportunity exists after each).
+            let mut pending = String::new();
+            for c in word.chars() {
+                if current_width > 0.0 && current_width + single_sp > max_w + 0.01 {
+                    // This space overflows. Spaces do not hang under break-spaces,
+                    // so the line must break. The line may only end after a space,
+                    // so any word placed since the last opportunity
+                    // (`bs_break_run_idx`) cannot stay: roll it back onto the next
+                    // line. Spaces already accumulated in `pending` belong to this
+                    // overflowing run and break here too.
+                    if !pending.is_empty() {
+                        current_runs.push(TextRun {
+                            text: std::mem::take(&mut pending),
+                            ..template.clone()
+                        });
+                    }
+                    // Split off the trailing word (runs after the last opportunity)
+                    // so it begins the next line. Clamp the index in case an
+                    // earlier word-overflow flush shortened `current_runs`.
+                    let split_at = bs_break_run_idx.min(current_runs.len());
+                    let rolled: Vec<TextRun> = current_runs.split_off(split_at);
+                    line_height = line_height.max(run_line_height(&template));
+                    push_wrapped_line(&mut lines, &mut current_runs, line_height);
+                    current_width = 0.0;
+                    line_height = options.default_font_size * line_height_factor;
+                    bs_break_run_idx = 0;
+                    // Re-place the rolled-back word at the start of the new line.
+                    for r in rolled {
+                        current_width += estimate_text_width_for_run(&r.text, &r, fonts);
+                        line_height = line_height.max(run_line_height(&r));
+                        current_runs.push(r);
+                    }
+                }
+                pending.push(c);
+                current_width += single_sp;
+            }
+            if !pending.is_empty() {
+                line_height = line_height.max(run_line_height(&template));
+                current_runs.push(TextRun {
+                    text: pending,
+                    ..template.clone()
+                });
+            }
+            // A soft wrap opportunity now exists after these spaces: a following
+            // word may be rolled back to here if it cannot be followed by its own
+            // trailing space without overflow.
+            bs_break_run_idx = current_runs.len();
+            continue;
+        }
 
-        let needed = if current_width > 0.0 && !preserve_spacing {
-            space_width + word_width
+        // `white-space: pre-wrap` preserved-space token. Under pre-wrap a run of
+        // spaces is preserved verbatim but is also a soft-wrap opportunity
+        // (css-text-3 §4.1.1): when the spaces fall at the end of a line they
+        // "hang" — they sit on the current line and are NOT carried to the start
+        // of the next line. So a space token that would overflow does not move
+        // the box right; instead the line is flushed *after* the spaces and the
+        // following word begins the next line. A space token at the very start of
+        // a line (current_width == 0) is preserved as a genuine leading space
+        // only when it did not arise from a soft wrap — which here means it was
+        // the literal first token of the segment (handled by emitting it).
+        if options.pre_wrap
+            && preserve_spacing
+            && template.inline_box.is_none()
+            && !word.is_empty()
+            && word.chars().all(|c| c == ' ' || c == '\t')
+        {
+            let sp_width = estimate_text_width_for_run(&word, &template, fonts);
+            if current_width > 0.0 && current_width + sp_width > line_max_width(lines.len()) + 0.01
+            {
+                // The spaces hang past the line edge: keep them on the current
+                // line, then break. The next token starts a fresh line with no
+                // carried-over leading space.
+                line_height = line_height.max(run_line_height(&template));
+                current_runs.push(TextRun {
+                    text: word,
+                    ..template
+                });
+                push_wrapped_line(&mut lines, &mut current_runs, line_height);
+                current_width = 0.0;
+                line_height = options.default_font_size * line_height_factor;
+                continue;
+            }
+            // Otherwise the spaces fit on the line: emit them verbatim.
+            current_width += sp_width;
+            line_height = line_height.max(run_line_height(&template));
+            current_runs.push(TextRun {
+                text: word,
+                ..template
+            });
+            continue;
+        }
+
+        // Atomic inline box: advance by its margin-box width and grow the line
+        // box to its height. It wraps to a fresh line if it overflows.
+        if let Some(inline) = template.inline_box.as_deref() {
+            let box_w = inline.outer_width();
+            // A collapsible space in the source before the box (`!joins_prev`)
+            // renders as an inter-word space, exactly like a space before a word —
+            // but only when the preceding run did not already emit a trailing space
+            // (a `preserve_spacing` run, e.g. " text ", keeps its own trailing
+            // space, so adding another here would double the gap).
+            let prev_emitted_ws = current_runs
+                .last()
+                .and_then(|r: &TextRun| r.text.chars().last())
+                .is_some_and(char::is_whitespace);
+            let lead_space = if current_width > 0.0 && !joins_prev && !prev_emitted_ws {
+                estimate_word_width(
+                    " ",
+                    template.font_size,
+                    &template.font_family,
+                    template.bold,
+                    template.italic,
+                    fonts,
+                )
+            } else {
+                0.0
+            };
+            if current_width > 0.0
+                && current_width + lead_space + box_w > line_max_width(lines.len())
+            {
+                push_wrapped_line(&mut lines, &mut current_runs, line_height);
+                current_width = 0.0;
+                line_height = run_line_height(&template);
+            } else if lead_space > 0.0 {
+                // Emit the inter-word space as a run so the box advances past it.
+                current_runs.push(TextRun {
+                    text: " ".to_string(),
+                    inline_box: None,
+                    disable_ligatures: false,
+                    vertical_align: VerticalAlign::Baseline,
+                    ..template.clone()
+                });
+                current_width += lead_space;
+            }
+            current_width += box_w;
+            // CSS2 §10.8: the line box must be tall enough to contain every
+            // inline-level box after vertical alignment. For baseline/sub/super
+            // boxes the height is the sum of the line's total extent ABOVE the
+            // baseline and the total extent BELOW it, each the max over the box
+            // and the surrounding text. A box's own baseline sits `baseline_ascent`
+            // below its top edge (CSS2 §10.8.1); with no content baseline the
+            // whole box rests above the line baseline (its bottom edge on it).
+            // Sub/super then shift the box's baseline down/up relative to the line
+            // baseline, moving its extents to the opposite side.
+            let box_extent = match inline.vertical_align {
+                crate::style::computed::VerticalAlign::Baseline
+                | crate::style::computed::VerticalAlign::Sub
+                | crate::style::computed::VerticalAlign::Super
+                | crate::style::computed::VerticalAlign::Length(_)
+                | crate::style::computed::VerticalAlign::Percent(_) => {
+                    let box_ascent = inline.baseline_ascent.unwrap_or(inline.height);
+                    let box_descent = (inline.height - box_ascent).max(0.0);
+                    let shift = match inline.vertical_align {
+                        crate::style::computed::VerticalAlign::Sub => {
+                            -shift_basis_fs * crate::render::pdf::SUB_SHIFT_RATIO
+                        }
+                        crate::style::computed::VerticalAlign::Super => {
+                            shift_basis_fs * crate::render::pdf::SUPER_SHIFT_RATIO
+                        }
+                        crate::style::computed::VerticalAlign::Length(v) => v,
+                        crate::style::computed::VerticalAlign::Percent(p) => {
+                            authored_run_line_height(&template) * p
+                        }
+                        _ => 0.0,
+                    };
+                    let box_above = (box_ascent + shift).max(0.0);
+                    let box_below = (box_descent - shift).max(0.0);
+                    // The surrounding text's own extents above and below the line
+                    // baseline (CSS2 §10.8.1): font ascent/descent plus SYMMETRIC
+                    // half-leading — NOT a split proportional to ascent:descent.
+                    // The two agree only at zero leading; for a larger line-height
+                    // the proportional form misplaces the baseline, so a baseline-
+                    // aligned box's overhang is measured against the wrong edge.
+                    let (asc_ratio, desc_ratio) = crate::fonts::font_metrics_ratios(
+                        &template.font_family,
+                        template.bold,
+                        template.italic,
+                        fonts,
+                    );
+                    let lh = run_line_height(&template);
+                    let content = (asc_ratio + desc_ratio) * template.font_size;
+                    let half_leading = ((lh - content) / 2.0).max(0.0);
+                    let text_above = asc_ratio * template.font_size + half_leading;
+                    let text_below = desc_ratio * template.font_size + half_leading;
+                    box_above.max(text_above) + box_below.max(text_below)
+                }
+                crate::style::computed::VerticalAlign::Middle => {
+                    // Middle centres the box on the parent's mid-x-height
+                    // (baseline + x-height/2), so it reaches `h/2 + x-height/2`
+                    // above the baseline and `h/2 - x-height/2` below — the line
+                    // box must reserve that, combined with the surrounding text's
+                    // own half-leading extents. (Mirrors render `line_box_metrics`.)
+                    let (asc_ratio, desc_ratio) = crate::fonts::font_metrics_ratios(
+                        &template.font_family,
+                        template.bold,
+                        template.italic,
+                        fonts,
+                    );
+                    let lh = run_line_height(&template);
+                    let content = (asc_ratio + desc_ratio) * template.font_size;
+                    let half_leading = ((lh - content) / 2.0).max(0.0);
+                    let text_above = asc_ratio * template.font_size + half_leading;
+                    let text_below = desc_ratio * template.font_size + half_leading;
+                    let xh_ratio = if let crate::style::computed::FontFamily::Custom(name) =
+                        &template.font_family
+                    {
+                        crate::system_fonts::find_font(fonts, name, template.bold, template.italic)
+                            .map_or(0.5, |(_, f)| f.x_height_ratio())
+                    } else {
+                        0.5
+                    };
+                    let xh = xh_ratio * shift_basis_fs;
+                    let box_above = inline.height / 2.0 + xh / 2.0;
+                    let box_below = (inline.height / 2.0 - xh / 2.0).max(0.0);
+                    box_above.max(text_above) + box_below.max(text_below)
+                }
+                _ => inline.height,
+            };
+            line_height = line_height.max(box_extent);
+            current_runs.push(template);
+            continue;
+        }
+
+        let paint_word = strip_soft_hyphens(&word);
+        let word_width = estimate_text_width_for_run(&paint_word, &template, fonts);
+
+        let needed = if current_width > 0.0 && !preserve_spacing && !joins_prev {
+            let mut spaced = String::with_capacity(paint_word.len() + 1);
+            spaced.push(' ');
+            spaced.push_str(&paint_word);
+            estimate_text_width_for_run(&spaced, &template, fonts)
         } else {
             word_width
         };
 
-        let overflows = current_width + needed > options.max_width;
+        let effective_max_width = line_max_width(lines.len());
+        let overflows = current_width + needed > effective_max_width;
 
-        if overflows && !preserve_spacing && options.overflow_wrap != OverflowWrap::Normal {
-            let available_width = if current_width > 0.0 {
-                options.max_width - current_width - space_width
-            } else {
-                options.max_width
-            };
+        // `overflow-wrap: break-word`/`anywhere` (and the `word-break: break-all`
+        // alias) break inside a word only as a LAST RESORT (css-text-3 §5.2): a
+        // word is broken at an arbitrary point only when it cannot fit on a line
+        // by itself. So if the word still has content beside it on the current
+        // line but would fit alone on the next line, we must first wrap to that
+        // next line (handled below) rather than break it mid-line. The emergency
+        // split only applies when the word overflows a fresh, empty line.
+        let fresh_line_width = if current_width > 0.0 {
+            line_max_width(lines.len() + 1)
+        } else {
+            effective_max_width
+        };
+        let must_break_word = overflows
+            && !preserve_spacing
+            && options.overflow_wrap != OverflowWrap::Normal
+            && word_width > fresh_line_width;
+
+        if must_break_word {
+            // When the line already has content, finish it first so the long
+            // word starts breaking at the left edge of a fresh line — matching
+            // Chrome, which keeps the preceding whole word(s) alone on their line.
+            if current_width > 0.0 {
+                push_wrapped_line(&mut lines, &mut current_runs, line_height);
+                current_width = 0.0;
+                line_height = run_line_height(&template);
+            }
+            let available_width = line_max_width(lines.len());
             if let Some((prefix, remainder)) = split_word_to_fit(
-                &word,
+                &paint_word,
                 available_width,
                 template.font_size,
                 &template.font_family,
@@ -296,60 +1841,64 @@ pub(crate) fn wrap_text_runs(
                 template.italic,
                 fonts,
             ) {
-                let prefix_text = if current_width > 0.0 {
-                    format!(" {prefix}")
-                } else {
-                    prefix
-                };
-                line_height = line_height.max(template.font_size * line_height_factor);
+                // The current line was already flushed above, so the prefix
+                // starts a fresh line with no leading inter-word space.
+                line_height = line_height.max(run_line_height(&template));
                 current_runs.push(TextRun {
-                    text: prefix_text,
+                    text: prefix,
                     ..template.clone()
                 });
 
-                lines.push(TextLine {
-                    runs: std::mem::take(&mut current_runs),
-                    height: line_height,
-                });
+                push_wrapped_line(&mut lines, &mut current_runs, line_height);
                 current_width = 0.0;
-                line_height = template.font_size * line_height_factor;
-                queue.push_front((remainder, template, false));
+                line_height = run_line_height(&template);
+                queue.push_front(StyledWord {
+                    text: remainder,
+                    run: template,
+                    preserve_spacing: false,
+                    joins_prev: false,
+                });
                 continue;
             }
         }
 
         if overflows && current_width > 0.0 {
-            lines.push(TextLine {
-                runs: std::mem::take(&mut current_runs),
-                height: line_height,
-            });
+            push_wrapped_line(&mut lines, &mut current_runs, line_height);
             current_width = 0.0;
-            line_height = template.font_size * line_height_factor;
+            line_height = run_line_height(&template);
+            bs_break_run_idx = 0;
         }
 
         // When transitioning between runs with different backgrounds,
         // emit the inter-word space as a separate unstyled run so the
         // background doesn't bleed from a highlighted span into plain text.
-        let needs_space = current_width > 0.0 && !preserve_spacing;
+        //
+        // Skip the injected inter-word space when the previous run already
+        // ends in whitespace: a generated-content string like "Note: " keeps
+        // its own trailing space (preserved spacing), so adding another would
+        // double the gap. CSS collapses whitespace across inline boundaries.
+        let prev_ends_ws = current_runs
+            .last()
+            .and_then(|r: &TextRun| r.text.chars().last())
+            .is_some_and(char::is_whitespace);
+        let needs_space = current_width > 0.0 && !preserve_spacing && !prev_ends_ws && !joins_prev;
         let prev_bg = current_runs
             .last()
             .and_then(|r: &TextRun| r.background_color);
         let bg_changed = prev_bg != template.background_color;
 
+        let run_word = if word.contains('\u{00ad}') {
+            word.clone()
+        } else {
+            paint_word.clone()
+        };
         let text = if needs_space {
             if bg_changed && template.background_color.is_some() {
                 // Emit space as separate unstyled run using the PREVIOUS
                 // run's font so it matches the surrounding text metrics.
                 let prev_run = current_runs.last().unwrap_or(&template);
                 let space = " ".to_string();
-                let sw = estimate_word_width(
-                    &space,
-                    prev_run.font_size,
-                    &prev_run.font_family,
-                    prev_run.bold,
-                    prev_run.italic,
-                    fonts,
-                );
+                let sw = estimate_text_width_for_run(&space, prev_run, fonts);
                 current_width += sw;
                 current_runs.push(TextRun {
                     text: space,
@@ -361,38 +1910,71 @@ pub(crate) fn wrap_text_runs(
                     underline: false,
                     line_through: false,
                     overline: false,
+                    decoration_color: None,
                     link_url: None,
                     background_color: None,
                     padding: (0.0, 0.0),
                     border_radius: 0.0,
+                    line_height_factor: prev_run.line_height_factor,
+                    inline_box: None,
+                    disable_ligatures: false,
+                    vertical_align: prev_run.vertical_align,
+                    text_shadow: prev_run.text_shadow.clone(),
                 });
-                word
+                run_word
             } else {
-                format!(" {word}")
+                format!(" {run_word}")
             }
         } else {
-            word
+            run_word
         };
+        let measure_text = strip_soft_hyphens(&text);
 
-        let w = estimate_word_width(
-            &text,
-            template.font_size,
-            &template.font_family,
-            template.bold,
-            template.italic,
-            fonts,
-        );
+        let w = estimate_text_width_for_run(&measure_text, &template, fonts);
         current_width += w;
-        line_height = line_height.max(template.font_size * line_height_factor);
+        line_height = line_height.max(run_line_height(&template));
 
         current_runs.push(TextRun { text, ..template });
     }
 
     if !current_runs.is_empty() {
+        finalize_soft_hyphen_line(&mut current_runs, false);
         lines.push(TextLine {
             runs: current_runs,
             height: line_height,
+            x_offset: 0.0,
         });
+    }
+
+    // Apply the drop-cap float exclusion: shift the lines that overlap the
+    // floated `::first-letter` right by `dropcap_width` so they wrap beside it.
+    // Line 0 already starts after the inline glyph, so it keeps `x_offset = 0`.
+    if options.dropcap_lines > 0 && options.dropcap_width > 0.0 {
+        for (i, line) in lines.iter_mut().enumerate() {
+            line.x_offset = drop_cap_offset(i);
+        }
+    }
+
+    if options.bidi_plaintext {
+        for line in &mut lines {
+            let line_text: String = line.runs.iter().map(|r| r.text.as_str()).collect();
+            if line_text.is_empty() {
+                continue;
+            }
+            let line_rtl = crate::bidi::first_strong_is_rtl(&line_text);
+            if line_rtl || crate::bidi::has_rtl_chars(&line_text) {
+                line.runs = crate::bidi::reorder_runs_bidi(&line.runs, line_rtl, false);
+            }
+            if line_rtl && options.max_width.is_finite() {
+                let line_width = crate::layout::helpers::measure_runs_width(&line.runs, fonts);
+                line.x_offset += (options.max_width - line_width).max(0.0);
+            }
+        }
+    } else if inferred_rtl {
+        for line in &mut lines {
+            let line_width = crate::layout::helpers::measure_runs_width(&line.runs, fonts);
+            line.x_offset += (options.max_width - line_width).max(0.0);
+        }
     }
 
     lines
@@ -407,6 +1989,7 @@ pub(crate) fn apply_text_overflow_ellipsis(
     lines: &mut Vec<TextLine>,
     max_width: f32,
     fonts: &HashMap<String, TtfFont>,
+    rtl: bool,
 ) {
     // With nowrap, there should be only one line. Truncate it if it overflows.
     if lines.is_empty() {
@@ -442,9 +2025,15 @@ pub(crate) fn apply_text_overflow_ellipsis(
         return;
     }
 
-    // Truncate character by character until text + ellipsis fits
+    // Truncate character by character until text + ellipsis fits.
     let mut truncated = String::new();
-    for ch in total_text.chars() {
+    let chars: Vec<char> = total_text.chars().collect();
+    let iter: Box<dyn Iterator<Item = char>> = if rtl {
+        Box::new(chars.iter().rev().copied())
+    } else {
+        Box::new(chars.iter().copied())
+    };
+    for ch in iter {
         truncated.push(ch);
         let w = estimate_word_width(
             &truncated,
@@ -459,7 +2048,12 @@ pub(crate) fn apply_text_overflow_ellipsis(
             break;
         }
     }
-    truncated.push_str(ellipsis);
+    if rtl {
+        truncated = truncated.chars().rev().collect();
+        truncated.insert_str(0, ellipsis);
+    } else {
+        truncated.push_str(ellipsis);
+    }
 
     lines[0] = TextLine {
         runs: vec![TextRun {
@@ -467,10 +2061,89 @@ pub(crate) fn apply_text_overflow_ellipsis(
             ..template
         }],
         height: line.height,
+        x_offset: line.x_offset,
     };
 
     // Remove any additional lines (shouldn't exist with nowrap, but just in case)
     lines.truncate(1);
+}
+
+// ---------------------------------------------------------------------------
+// push_styled_run (font-variant / font-feature-settings)
+// ---------------------------------------------------------------------------
+
+/// Synthetic small-caps scale: lowercase letters render as uppercase glyphs at
+/// this fraction of the font size, so their cap-height lands near the normal
+/// x-height — matching how browsers synthesise small-caps for faces without a
+/// real `smcp` feature (css-fonts-4 §6.5). ~0.7 places a synthesised small-cap's
+/// cap-height at roughly the font's x-height for typical serif/sans faces.
+const SMALL_CAPS_SCALE: f32 = 0.706;
+
+/// Push the text for one styled inline fragment, applying `font-variant: small-caps`
+/// synthesis and the `font-feature-settings` ligature flag (css-fonts-3/4) before
+/// the standard fallback-splitting in [`push_text_run_with_fallback`].
+///
+/// `template` carries the run's resolved style (font, color, decorations, …) and
+/// the already text-transformed text. For small-caps, the text is split at
+/// case boundaries: characters that are already uppercase keep the full size,
+/// while lowercase characters are uppercased and emitted at [`SMALL_CAPS_SCALE`].
+fn push_styled_run(
+    template: TextRun,
+    caps: crate::style::computed::FontVariantCaps,
+    synthesize_small_caps: bool,
+    requested_weight: FontWeight,
+    ligatures_enabled: bool,
+    runs: &mut Vec<TextRun>,
+    fonts: &HashMap<String, TtfFont>,
+) {
+    use crate::style::computed::FontVariantCaps;
+
+    let mut template = template;
+    template.disable_ligatures = !ligatures_enabled;
+    mark_synthetic_weight_run(&mut template, requested_weight, fonts);
+
+    if caps != FontVariantCaps::SmallCaps || !synthesize_small_caps {
+        push_text_run_with_fallback(template, runs, fonts);
+        return;
+    }
+
+    // Split into runs of "already uppercase / non-letter" (full size) vs
+    // "lowercase" (uppercased + scaled). Characters that don't change under
+    // uppercasing (digits, punctuation, already-capital letters) stay full size.
+    let base_size = template.font_size;
+    let small_size = base_size * SMALL_CAPS_SCALE;
+    let mut current = String::new();
+    let mut current_small = false;
+
+    let flush = |text: &mut String, small: bool, runs: &mut Vec<TextRun>| {
+        if text.is_empty() {
+            return;
+        }
+        let mut run = template.clone();
+        run.text = std::mem::take(text);
+        run.font_size = if small { small_size } else { base_size };
+        if small && run.background_color.is_none() && run.padding.1 == 0.0 {
+            run.padding.1 = FONT_RUN_MARK_SYNTHETIC_SMALL_CAPS;
+        }
+        push_text_run_with_fallback(run, runs, fonts);
+    };
+
+    for ch in template.text.chars() {
+        // A character is "small-capped" when uppercasing actually changes it
+        // (i.e. it is a lowercase letter).
+        let upper: String = ch.to_uppercase().collect();
+        let is_small = upper != ch.to_string();
+        if !current.is_empty() && is_small != current_small {
+            flush(&mut current, current_small, runs);
+        }
+        current_small = is_small;
+        if is_small {
+            current.push_str(&upper);
+        } else {
+            current.push(ch);
+        }
+    }
+    flush(&mut current, current_small, runs);
 }
 
 // ---------------------------------------------------------------------------
@@ -485,10 +2158,11 @@ pub(crate) fn apply_text_overflow_ellipsis(
 /// placed into separate runs that reference the `__unicode_fallback` custom font,
 /// which is rendered through the CIDFontType2/Identity-H pipeline.
 pub(crate) fn push_text_run_with_fallback(
-    run: TextRun,
+    mut run: TextRun,
     runs: &mut Vec<TextRun>,
     fonts: &HashMap<String, TtfFont>,
 ) {
+    decode_text_decoration_metadata(&mut run);
     let is_standard_font = matches!(
         run.font_family,
         FontFamily::Helvetica | FontFamily::TimesRoman | FontFamily::Courier
@@ -564,10 +2238,192 @@ pub(crate) fn push_text_run_with_fallback(
     }
 }
 
+fn min_content_anywhere_width(runs: &[TextRun], fonts: &HashMap<String, TtfFont>) -> f32 {
+    runs.iter()
+        .filter(|r| r.inline_box.is_none())
+        .flat_map(|r| {
+            r.text.chars().map(|ch| {
+                estimate_word_width(
+                    &ch.to_string(),
+                    r.font_size,
+                    &r.font_family,
+                    r.bold,
+                    r.italic,
+                    fonts,
+                )
+            })
+        })
+        .fold(0.0f32, f32::max)
+}
+
 // ---------------------------------------------------------------------------
 // collect_text_runs / collect_text_runs_inner
 // ---------------------------------------------------------------------------
 
+/// Build the atomic inline box for a `display: inline-block` element that
+/// appears amongst inline text. Resolves the border-box geometry the same way
+/// `layout_inline_block_group` does and pre-wraps the inner text.
+fn build_inline_box(
+    style: &ComputedStyle,
+    el: &ElementNode,
+    rules: &[CssRule],
+    fonts: &HashMap<String, TtfFont>,
+    ancestors: &[AncestorInfo],
+    counter_state: &CounterState,
+) -> Option<InlineBox> {
+    let has_explicit_width = style.width.is_some();
+    let child_w = style.width.unwrap_or(0.0);
+    let child_h = style.height.unwrap_or(0.0);
+
+    // Content width used to wrap the inner text.
+    let inner_width = if has_explicit_width {
+        if style.box_sizing == BoxSizing::BorderBox {
+            child_w - style.padding.left - style.padding.right - style.border.horizontal_width()
+        } else {
+            child_w
+        }
+        .max(0.0)
+    } else {
+        // Shrink-to-fit with no constraint: use a generous width so the
+        // inner text measures at its natural width on one line.
+        f32::MAX
+    };
+
+    let mut runs = Vec::new();
+    collect_text_runs(
+        &el.children,
+        style,
+        &mut runs,
+        None,
+        rules,
+        fonts,
+        ancestors,
+        counter_state,
+    );
+    let wrap_inner_width = if !has_explicit_width
+        && style.width_keyword == Some(IntrinsicWidthKeyword::MinContent)
+        && style.overflow_wrap == OverflowWrap::Anywhere
+    {
+        min_content_anywhere_width(&runs, fonts).max(1.0)
+    } else {
+        inner_width.max(1.0)
+    };
+    let lines = if runs.is_empty() {
+        Vec::new()
+    } else {
+        wrap_text_runs(
+            runs,
+            TextWrapOptions::new(
+                wrap_inner_width,
+                style.font_size,
+                resolved_line_height_factor(style, fonts),
+                style.overflow_wrap,
+            )
+            .with_rtl(style.direction_rtl)
+            .with_bidi_override(style.bidi_override)
+            .with_bidi_plaintext(style.bidi_plaintext)
+            .with_word_break_keep_all(style.word_break_keep_all)
+            .with_hyphens_manual(style.hyphens_manual),
+            fonts,
+        )
+    };
+
+    let content_w = if has_explicit_width {
+        if style.box_sizing == BoxSizing::BorderBox {
+            (child_w - style.padding.left - style.padding.right - style.border.horizontal_width())
+                .max(0.0)
+        } else {
+            child_w
+        }
+    } else if style.width_keyword == Some(IntrinsicWidthKeyword::MinContent)
+        && style.overflow_wrap == OverflowWrap::Anywhere
+    {
+        lines
+            .iter()
+            .map(|l| crate::layout::helpers::measure_runs_width(&l.runs, fonts))
+            .fold(0.0f32, f32::max)
+    } else {
+        // Shrink-to-fit width must use the REAL bundled-font advances per line
+        // (the former str_width is Helvetica AFM and mis-sizes a ParitySans run,
+        // giving the auto-width box the wrong width). measure_runs_width measures
+        // each run with its actual font (and inline-box outer widths).
+        lines
+            .iter()
+            .map(|l| crate::layout::helpers::measure_runs_width(&l.runs, fonts))
+            .fold(0.0f32, f32::max)
+    };
+    let total_w =
+        content_w + style.padding.left + style.padding.right + style.border.horizontal_width();
+
+    let text_height: f32 = lines.iter().map(|l| l.height).sum();
+    let content_h = if child_h > 0.0 {
+        if style.box_sizing == BoxSizing::BorderBox {
+            (child_h - style.padding.top - style.padding.bottom - style.border.vertical_width())
+                .max(0.0)
+        } else {
+            child_h
+        }
+    } else {
+        text_height
+    };
+    let total_h =
+        content_h + style.padding.top + style.padding.bottom + style.border.vertical_width();
+
+    // CSS2 §10.8.1: the baseline of an `inline-block` is the baseline of its
+    // LAST in-flow line box, expressed here as the distance from the box's top
+    // border edge down to that baseline. When the box establishes its own
+    // formatting context with non-visible overflow, or has no in-flow line box,
+    // the baseline is the bottom margin edge (handled at paint time when this is
+    // `None`).
+    let baseline_ascent = if style.overflow.clips() || lines.is_empty() {
+        None
+    } else {
+        // Height of every line above the last, then the last line's ascent above
+        // its own baseline (half-leading + ascender), matching how the renderer
+        // lays the inner lines out from the content-box top downward.
+        let prior_lines_h: f32 = lines[..lines.len() - 1].iter().map(|l| l.height).sum();
+        let last = &lines[lines.len() - 1];
+        let (mut ascender, mut descender) = (0.0f32, 0.0f32);
+        for run in last.runs.iter().filter(|r| r.inline_box.is_none()) {
+            let (asc, desc) =
+                crate::fonts::font_metrics_ratios(&run.font_family, run.bold, run.italic, fonts);
+            ascender = ascender.max(asc * run.font_size);
+            descender = descender.max(desc * run.font_size);
+        }
+        let half_leading = (last.height - (ascender + descender)) / 2.0;
+        Some(style.border.top.width + style.padding.top + prior_lines_h + half_leading + ascender)
+    };
+
+    Some(InlineBox {
+        width: total_w,
+        height: total_h,
+        margin_left: style.margin.left.max(0.0),
+        margin_right: style.margin.right.max(0.0),
+        background_color: style.background_color.map(|c| c.to_f32_rgba()),
+        border: LayoutBorder::from_computed(&style.border),
+        border_radius: style.border_radius,
+        padding_top: style.padding.top,
+        padding_left: style.padding.left,
+        vertical_align: style.vertical_align,
+        baseline_ascent,
+        lines,
+        image: None,
+        // CSS `position: relative` shifts the painted box without changing its
+        // in-flow inline slot. `left`/`top` win over `right`/`bottom`.
+        rel_offset_x: if style.position == Position::Relative {
+            style.left.or(style.right.map(|r| -r)).unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        rel_offset_y: if style.position == Position::Relative {
+            style.top.or(style.bottom.map(|b| -b)).unwrap_or(0.0)
+        } else {
+            0.0
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_text_runs(
     nodes: &[DomNode],
     parent_style: &ComputedStyle,
@@ -576,6 +2432,7 @@ pub(crate) fn collect_text_runs(
     rules: &[CssRule],
     fonts: &HashMap<String, TtfFont>,
     ancestors: &[AncestorInfo],
+    counter_state: &CounterState,
 ) {
     collect_text_runs_inner(
         nodes,
@@ -586,6 +2443,7 @@ pub(crate) fn collect_text_runs(
         fonts,
         false,
         ancestors,
+        counter_state,
     )
 }
 
@@ -599,20 +2457,66 @@ fn collect_text_runs_inner(
     fonts: &HashMap<String, TtfFont>,
     inline_parent: bool,
     ancestors: &[AncestorInfo],
+    counter_state: &CounterState,
 ) {
     let preserve_ws = matches!(
         parent_style.white_space,
-        WhiteSpace::Pre | WhiteSpace::PreWrap
+        WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
     );
+
+    // `pre-line` collapses spaces/tabs like `normal` but keeps forced segment
+    // breaks (newlines) as explicit line breaks (css-text-3 §4.1.1).
+    let pre_line = parent_style.white_space == WhiteSpace::PreLine;
 
     for node in nodes {
         match node {
             DomNode::Text(text) => {
                 let processed = if preserve_ws {
-                    // In pre/pre-wrap: preserve newlines as \n runs for line breaking
-                    text.clone()
+                    // In pre/pre-wrap: preserve newlines as \n runs for line breaking,
+                    // and expand tabs to the next tab stop (css-text-3 §6.3).
+                    expand_pre_tabs(text, parent_style, fonts)
+                } else if pre_line {
+                    collapse_whitespace_pre_line(text)
                 } else {
-                    collapse_whitespace(text)
+                    // CSS whitespace collapsing applies across the *whole* inline
+                    // formatting context, not per text node. `collapse_whitespace`
+                    // trims each node's edges, which would silently drop the space
+                    // in `<span>a</span> <span>b</span>` (a lone-space text node
+                    // between two inline elements). Re-attach a single collapsible
+                    // edge space when the node carried one AND it sits between
+                    // inline content (i.e. not at the block's leading edge), so the
+                    // line breaker — which is whitespace-aware — keeps the inter-
+                    // element space without synthesising spurious spaces elsewhere
+                    // (e.g. between a `::before` run and the element's own text).
+                    let mut collapsed = collapse_whitespace(text);
+                    let starts_ws = text.chars().next().is_some_and(char::is_whitespace);
+                    let ends_ws = text.chars().last().is_some_and(char::is_whitespace);
+                    // An atomic inline box (`display: inline-block`) carries empty
+                    // text but is still inline content: a collapsible space after it
+                    // must be preserved (CSS2 §9.1 / css-text-3 §4.1), e.g.
+                    // `Ag <span class=ib></span> text` keeps the space before
+                    // "text". So treat a preceding inline box as trailing content,
+                    // and (since a box never ends in whitespace) re-attach the space.
+                    let prev_is_inline_box = runs
+                        .last()
+                        .is_some_and(|r: &TextRun| r.inline_box.is_some());
+                    let prev_has_trailing_content = prev_is_inline_box
+                        || runs
+                            .last()
+                            .is_some_and(|r: &TextRun| !r.text.is_empty() && r.text != "\n");
+                    if starts_ws && prev_has_trailing_content {
+                        let prev_ends_ws = runs
+                            .last()
+                            .and_then(|r: &TextRun| r.text.chars().last())
+                            .is_some_and(char::is_whitespace);
+                        if !prev_ends_ws {
+                            collapsed.insert(0, ' ');
+                        }
+                    }
+                    if ends_ws && !collapsed.is_empty() && !collapsed.ends_with(' ') {
+                        collapsed.push(' ');
+                    }
+                    collapsed
                 };
                 // Apply CSS text-transform
                 let processed = match parent_style.text_transform {
@@ -641,31 +2545,50 @@ fn collect_text_runs_inner(
                     // backgrounds are drawn by the TextBlock itself.
                     // In preformatted blocks (<pre>), skip inline backgrounds
                     // to avoid overlapping rects that hide subsequent lines.
-                    let (bg, pad, br) = if inline_parent && !preserve_ws {
-                        (
-                            parent_style.background_color.map(|c| c.to_f32_rgba()),
-                            (parent_style.padding.left, parent_style.padding.top),
-                            parent_style.border_radius,
-                        )
-                    } else {
-                        (None, (0.0, 0.0), 0.0)
-                    };
-                    push_text_run_with_fallback(
+                    let (bg, pad, br) =
+                        if inline_parent && parent_style.white_space != WhiteSpace::Pre {
+                            let bg = parent_style.background_color.map(|c| c.to_f32_rgba());
+                            (
+                                bg,
+                                decoration_padding(parent_style, bg),
+                                decoration_radius(parent_style, bg),
+                            )
+                        } else {
+                            (
+                                None,
+                                decoration_padding(parent_style, None),
+                                decoration_radius(parent_style, None),
+                            )
+                        };
+                    push_styled_run(
                         TextRun {
                             text: processed,
                             font_size: parent_style.font_size,
-                            bold: parent_style.font_weight == FontWeight::Bold,
-                            italic: parent_style.font_style == FontStyle::Italic,
+                            bold: style_run_bold(parent_style, fonts),
+                            italic: style_run_italic(parent_style, fonts),
                             underline: parent_style.text_decoration_underline,
                             line_through: parent_style.text_decoration_line_through,
-                            overline: parent_style.text_decoration_overline,
+                            overline: parent_style.text_decoration_overline
+                                || parent_style.text_emphasis_mark,
+                            decoration_color: parent_style
+                                .text_decoration_color
+                                .map(|c| c.to_f32_rgb()),
                             color: parent_style.color.to_f32_rgb(),
                             link_url: link_url.map(String::from),
                             font_family: resolve_style_font_family(parent_style, fonts),
                             background_color: bg,
                             padding: pad,
                             border_radius: br,
+                            line_height_factor: resolved_line_height_factor(parent_style, fonts),
+                            inline_box: None,
+                            disable_ligatures: false,
+                            vertical_align: parent_style.vertical_align,
+                            text_shadow: parent_style.text_shadow.clone(),
                         },
+                        parent_style.font_variant_caps,
+                        parent_style.font_synthesis_small_caps,
+                        parent_style.font_weight,
+                        ligatures_enabled_for_style(parent_style),
                         runs,
                         fonts,
                     );
@@ -682,12 +2605,18 @@ fn collect_text_runs_inner(
                             underline: false,
                             line_through: false,
                             overline: false,
+                            decoration_color: None,
                             color: (0.0, 0.0, 0.0),
                             link_url: None,
                             font_family: resolve_style_font_family(parent_style, fonts),
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            line_height_factor: resolved_line_height_factor(parent_style, fonts),
+                            inline_box: None,
+                            disable_ligatures: false,
+                            vertical_align: VerticalAlign::Baseline,
+                            text_shadow: Vec::new(),
                         });
                     } else if el.attributes.contains_key("data-math") {
                         // Skip math elements — they are rendered as MathBlock
@@ -699,6 +2628,8 @@ fn collect_text_runs_inner(
                             child_index: 0,
                             sibling_count: nodes.len(),
                             preceding_siblings: Vec::new(),
+                            following_siblings: Vec::new(),
+                            is_empty: false,
                         };
                         let style = compute_style_with_context(
                             el.tag,
@@ -711,6 +2642,90 @@ fn collect_text_runs_inner(
                             &el.attributes,
                             &selector_ctx,
                         );
+                        if style.float == Float::Footnote {
+                            let mut footnote_text = String::new();
+                            collect_inline_plain_text(&el.children, &mut footnote_text);
+                            let footnote_text = collapse_whitespace(&footnote_text);
+                            if !footnote_text.is_empty() {
+                                let marker = (counter_state.get("footnote")
+                                    + runs
+                                        .iter()
+                                        .filter(|run| {
+                                            run.link_url
+                                                .as_deref()
+                                                .and_then(decode_footnote_link)
+                                                .is_some()
+                                        })
+                                        .count() as i32
+                                    + 1)
+                                .to_string();
+                                let authored_call_text =
+                                    footnote_pseudo_content(rules, "footnote-call", &marker);
+                                let marker_prefix =
+                                    footnote_pseudo_content(rules, "footnote-marker", &marker)
+                                        .unwrap_or_else(|| "{marker}. ".to_string());
+                                let marker_color = footnote_pseudo_color(rules, "footnote-marker")
+                                    .unwrap_or_else(|| style.color.to_f32_rgb());
+                                let call_color = footnote_pseudo_color(rules, "footnote-call")
+                                    .unwrap_or_else(|| style.color.to_f32_rgb());
+                                let display_compact = footnote_authored_keyword(
+                                    el,
+                                    rules,
+                                    ancestors,
+                                    &selector_ctx,
+                                    "footnote-display",
+                                )
+                                .is_some_and(|value| value == "inline" || value == "compact");
+                                let call_text = authored_call_text.unwrap_or_else(|| {
+                                    if display_compact {
+                                        marker.clone()
+                                    } else {
+                                        format!("{marker} ")
+                                    }
+                                });
+                                push_styled_run(
+                                    TextRun {
+                                        text: call_text,
+                                        font_size: style.font_size * FOOTNOTE_CALL_FONT_SCALE,
+                                        bold: style_run_bold(&style, fonts),
+                                        italic: style_run_italic(&style, fonts),
+                                        underline: false,
+                                        line_through: false,
+                                        overline: false,
+                                        decoration_color: None,
+                                        color: call_color,
+                                        link_url: Some(encode_footnote_link_data(
+                                            &FootnoteLinkData {
+                                                marker: marker.clone(),
+                                                text: footnote_text,
+                                                marker_prefix,
+                                                body_color: style.color.to_f32_rgb(),
+                                                marker_color,
+                                                display_compact,
+                                            },
+                                        )),
+                                        font_family: resolve_style_font_family(&style, fonts),
+                                        background_color: None,
+                                        padding: (0.0, 0.0),
+                                        border_radius: 0.0,
+                                        line_height_factor: resolved_line_height_factor(
+                                            &style, fonts,
+                                        ),
+                                        inline_box: None,
+                                        disable_ligatures: false,
+                                        vertical_align: VerticalAlign::Super,
+                                        text_shadow: style.text_shadow.clone(),
+                                    },
+                                    style.font_variant_caps,
+                                    style.font_synthesis_small_caps,
+                                    style.font_weight,
+                                    ligatures_enabled_for_style(&style),
+                                    runs,
+                                    fonts,
+                                );
+                            }
+                            continue;
+                        }
                         let url = if el.tag == HtmlTag::A {
                             el.attributes.get("href").map(|s| s.as_str()).or(link_url)
                         } else {
@@ -722,7 +2737,88 @@ fn collect_text_runs_inner(
                             child_index: 0,
                             sibling_count: nodes.len(),
                             preceding_siblings: Vec::new(),
+                            following_siblings: Vec::new(),
+                            is_empty: false,
                         });
+                        // `display: inline-block` is an atomic inline box: it
+                        // takes part in line layout with its own box geometry
+                        // rather than flowing its content as bare text. SVGs are
+                        // excluded (they need their own block layout via cm).
+                        let is_atomic_inline_block = style.display == Display::InlineBlock
+                            && el.tag != HtmlTag::Svg
+                            && !el
+                                .children
+                                .iter()
+                                .any(|c| matches!(c, DomNode::Element(e) if e.tag == HtmlTag::Svg));
+                        if is_atomic_inline_block {
+                            let line_height_factor =
+                                resolved_line_height_factor(parent_style, fonts);
+                            if let Some(boxed) = build_inline_box(
+                                &style,
+                                el,
+                                rules,
+                                fonts,
+                                &child_ancestors,
+                                counter_state,
+                            ) {
+                                runs.push(TextRun {
+                                    text: String::new(),
+                                    font_size: parent_style.font_size,
+                                    bold: false,
+                                    italic: false,
+                                    underline: false,
+                                    line_through: false,
+                                    overline: false,
+                                    decoration_color: None,
+                                    color: parent_style.color.to_f32_rgb(),
+                                    link_url: url.map(String::from),
+                                    font_family: resolve_style_font_family(parent_style, fonts),
+                                    background_color: None,
+                                    padding: (0.0, 0.0),
+                                    border_radius: 0.0,
+                                    line_height_factor,
+                                    inline_box: Some(Box::new(boxed)),
+                                    disable_ligatures: false,
+                                    vertical_align: VerticalAlign::Baseline,
+                                    text_shadow: Vec::new(),
+                                });
+                            }
+                            continue;
+                        }
+                        // Emit ::before / ::after generated content for inline
+                        // elements (e.g. <span class="label">). These flow as
+                        // inline text runs around the element's own children.
+                        let before = crate::style::computed::compute_pseudo_element_style(
+                            &style,
+                            rules,
+                            el.tag_name(),
+                            &classes,
+                            el.id(),
+                            &el.attributes,
+                            &selector_ctx,
+                            crate::parser::css::PseudoElement::Before,
+                        );
+                        let after = crate::style::computed::compute_pseudo_element_style(
+                            &style,
+                            rules,
+                            el.tag_name(),
+                            &classes,
+                            el.id(),
+                            &el.attributes,
+                            &selector_ctx,
+                            crate::parser::css::PseudoElement::After,
+                        );
+                        let before_start = runs.len();
+                        super::helpers::append_pseudo_inline_run(
+                            runs,
+                            before.as_ref(),
+                            el,
+                            fonts,
+                            counter_state,
+                        );
+                        apply_inline_parent_background(runs, before_start, &style);
+                        resolve_target_attrs_in_last_run(runs, el);
+                        let children_start = runs.len();
                         collect_text_runs_inner(
                             &el.children,
                             &style,
@@ -732,7 +2828,19 @@ fn collect_text_runs_inner(
                             fonts,
                             true,
                             &child_ancestors,
+                            counter_state,
                         );
+                        apply_inline_parent_background(runs, children_start, &style);
+                        let after_start = runs.len();
+                        super::helpers::append_pseudo_inline_run(
+                            runs,
+                            after.as_ref(),
+                            el,
+                            fonts,
+                            counter_state,
+                        );
+                        apply_inline_parent_background(runs, after_start, &style);
+                        resolve_target_attrs_in_last_run(runs, el);
                     }
                 }
             }
@@ -761,14 +2869,17 @@ impl<'a> FlexTextRunCollector<'a> {
     ) {
         let preserve_ws = matches!(
             parent_style.white_space,
-            WhiteSpace::Pre | WhiteSpace::PreWrap
+            WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
         );
+        let pre_line = parent_style.white_space == WhiteSpace::PreLine;
 
         for node in nodes {
             match node {
                 DomNode::Text(text) => {
                     let processed = if preserve_ws {
-                        text.clone()
+                        expand_pre_tabs(text, parent_style, self.fonts)
+                    } else if pre_line {
+                        collapse_whitespace_pre_line(text)
                     } else {
                         collapse_whitespace(text)
                     };
@@ -798,24 +2909,43 @@ impl<'a> FlexTextRunCollector<'a> {
                         crate::style::computed::TextTransform::None => processed,
                     };
                     if !processed.is_empty() {
-                        push_text_run_with_fallback(
+                        let bg = parent_style.background_color.map(|c| c.to_f32_rgba());
+                        push_styled_run(
                             TextRun {
                                 text: processed,
                                 font_size: parent_style.font_size,
-                                bold: parent_style.font_weight == FontWeight::Bold,
-                                italic: parent_style.font_style == FontStyle::Italic,
+                                bold: style_run_bold(parent_style, self.fonts),
+                                italic: style_run_italic(parent_style, self.fonts),
                                 underline: parent_style.text_decoration_underline,
                                 line_through: parent_style.text_decoration_line_through,
-                                overline: parent_style.text_decoration_overline,
+                                overline: parent_style.text_decoration_overline
+                                    || parent_style.text_emphasis_mark,
+                                decoration_color: parent_style
+                                    .text_decoration_color
+                                    .map(|c| c.to_f32_rgb()),
                                 color: parent_style.color.to_f32_rgb(),
                                 link_url: link_url.map(String::from),
                                 font_family: resolve_style_font_family(parent_style, self.fonts),
-                                background_color: parent_style
-                                    .background_color
-                                    .map(|c| c.to_f32_rgba()),
-                                padding: text_padding,
-                                border_radius: 0.0,
+                                background_color: bg,
+                                padding: if bg.is_some() {
+                                    text_padding
+                                } else {
+                                    decoration_padding(parent_style, None)
+                                },
+                                border_radius: decoration_radius(parent_style, bg),
+                                line_height_factor: resolved_line_height_factor(
+                                    parent_style,
+                                    self.fonts,
+                                ),
+                                inline_box: None,
+                                disable_ligatures: false,
+                                vertical_align: parent_style.vertical_align,
+                                text_shadow: parent_style.text_shadow.clone(),
                             },
+                            parent_style.font_variant_caps,
+                            parent_style.font_synthesis_small_caps,
+                            parent_style.font_weight,
+                            ligatures_enabled_for_style(parent_style),
                             self.runs,
                             self.fonts,
                         );
@@ -828,6 +2958,8 @@ impl<'a> FlexTextRunCollector<'a> {
                         child_index: 0,
                         sibling_count: nodes.len(),
                         preceding_siblings: Vec::new(),
+                        following_siblings: Vec::new(),
+                        is_empty: false,
                     };
                     let child_style = compute_style_with_context(
                         el.tag,
@@ -869,12 +3001,21 @@ impl<'a> FlexTextRunCollector<'a> {
                             underline: false,
                             line_through: false,
                             overline: false,
+                            decoration_color: None,
                             color: (0.0, 0.0, 0.0),
                             link_url: None,
                             font_family: resolve_style_font_family(parent_style, self.fonts),
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            line_height_factor: resolved_line_height_factor(
+                                parent_style,
+                                self.fonts,
+                            ),
+                            inline_box: None,
+                            disable_ligatures: false,
+                            vertical_align: VerticalAlign::Baseline,
+                            text_shadow: Vec::new(),
                         });
                         continue;
                     }
@@ -885,6 +3026,8 @@ impl<'a> FlexTextRunCollector<'a> {
                         child_index: 0,
                         sibling_count: nodes.len(),
                         preceding_siblings: Vec::new(),
+                        following_siblings: Vec::new(),
+                        is_empty: false,
                     });
                     self.collect(
                         &el.children,
@@ -902,16 +3045,162 @@ impl<'a> FlexTextRunCollector<'a> {
                             underline: false,
                             line_through: false,
                             overline: false,
+                            decoration_color: None,
                             color: child_style.color.to_f32_rgb(),
                             link_url: child_link_url.map(String::from),
                             font_family: resolve_style_font_family(&child_style, self.fonts),
                             background_color: None,
                             padding: (0.0, 0.0),
                             border_radius: 0.0,
+                            line_height_factor: resolved_line_height_factor(
+                                &child_style,
+                                self.fonts,
+                            ),
+                            inline_box: None,
+                            disable_ligatures: false,
+                            vertical_align: VerticalAlign::Baseline,
+                            text_shadow: Vec::new(),
                         });
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod indent_tests {
+    use super::*;
+
+    fn plain_run(text: &str) -> TextRun {
+        TextRun {
+            text: text.to_string(),
+            font_size: 16.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            line_through: false,
+            overline: false,
+            decoration_color: None,
+            color: (0.0, 0.0, 0.0),
+            link_url: None,
+            font_family: FontFamily::Helvetica,
+            background_color: None,
+            padding: (0.0, 0.0),
+            border_radius: 0.0,
+            line_height_factor: f32::NAN,
+            inline_box: None,
+            disable_ligatures: false,
+            vertical_align: VerticalAlign::Baseline,
+            text_shadow: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pre_line_collapses_spaces_but_keeps_newlines() {
+        // css-text-3 §4.1.1: pre-line collapses runs of spaces/tabs to a single
+        // space, removes collapsible spaces around a segment break, but PRESERVES
+        // the forced segment break (newline) so the line breaker forces a break.
+        assert_eq!(
+            collapse_whitespace_pre_line("alpha    beta\ngamma delta"),
+            "alpha beta\ngamma delta"
+        );
+        // Spaces adjacent to the newline are removed; leading/trailing collapse.
+        assert_eq!(collapse_whitespace_pre_line("  a   \n   b  "), "a\nb");
+        // Tabs collapse like spaces; multiple newlines are each preserved.
+        assert_eq!(collapse_whitespace_pre_line("x\t\ty\n\nz"), "x y\n\nz");
+        // Contrast with `normal` collapse, which drops the newline entirely.
+        assert_eq!(collapse_whitespace("alpha\nbeta"), "alpha beta");
+    }
+
+    #[test]
+    fn text_indent_shrinks_only_the_first_line() {
+        let fonts: HashMap<String, TtfFont> = HashMap::new();
+        let runs = vec![plain_run("aaaa bbbb cccc dddd")];
+        // Width chosen so several words fit on the first line with no indent,
+        // but a large indent forces an earlier first-line wrap.
+        let opts = TextWrapOptions::new(140.0, 16.0, 1.2, OverflowWrap::Normal);
+
+        let no_indent = wrap_text_runs(runs.clone(), opts, &fonts);
+        let indented = wrap_text_runs(runs, opts.with_text_indent(60.0), &fonts);
+
+        let count_words = |line: &TextLine| {
+            line.runs
+                .iter()
+                .map(|r| r.text.split_whitespace().count())
+                .sum::<usize>()
+        };
+        // The indent consumes inline space on the FIRST line only, so it holds
+        // fewer words than the un-indented first line.
+        assert!(
+            count_words(&indented[0]) < count_words(&no_indent[0]),
+            "indented first line should hold fewer words: {} vs {}",
+            count_words(&indented[0]),
+            count_words(&no_indent[0])
+        );
+        // A subsequent line is unaffected by the indent and can still hold the
+        // full un-indented width's worth of words.
+        assert!(
+            indented.len() >= 2,
+            "indented paragraph should wrap to at least two lines"
+        );
+    }
+
+    #[test]
+    fn word_break_keep_all_keeps_cjk_punctuation_runs_whole() {
+        assert!(should_break_as_char_tokens("你好/世界", false));
+        assert!(!should_break_as_char_tokens("你好/世界", true));
+    }
+
+    /// Concatenate a line's runs back into its rendered text.
+    fn line_text(line: &TextLine) -> String {
+        line.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn break_spaces_rolls_word_past_non_hanging_spaces() {
+        // css-text-3 §3 break-spaces: preserved spaces never hang and a wrap
+        // opportunity exists after each. With `alpha    beta gamma`, once `alpha`
+        // plus the four preserved spaces fill most of the line, `beta` fits but
+        // its own trailing space would overflow — and since that space cannot
+        // hang, the line must roll back to after the four spaces, sending `beta`
+        // to the next line. Contrast with pre-wrap, where the trailing space
+        // hangs so `alpha    beta` stays together.
+        let fonts: HashMap<String, TtfFont> = HashMap::new();
+        let runs = vec![plain_run("alpha    beta gamma")];
+        // Helvetica metrics: pick a width that fits "alpha" + 4 spaces + "beta"
+        // but not the following space, mirroring the parity fixtures.
+        let alpha =
+            estimate_word_width("alpha", 16.0, &FontFamily::Helvetica, false, false, &fonts);
+        let beta = estimate_word_width("beta", 16.0, &FontFamily::Helvetica, false, false, &fonts);
+        let sp = estimate_word_width(" ", 16.0, &FontFamily::Helvetica, false, false, &fonts);
+        // Room for alpha + 4 spaces + beta, but not a 5th space after beta.
+        let width = alpha + 4.0 * sp + beta + sp * 0.5;
+        let opts = TextWrapOptions::new(width, 16.0, 1.2, OverflowWrap::Normal);
+
+        let pre_wrap = wrap_text_runs(runs.clone(), opts.with_pre_wrap(true), &fonts);
+        let break_spaces = wrap_text_runs(runs, opts.with_break_spaces(true), &fonts);
+
+        // pre-wrap keeps the trailing space hanging, so beta stays on line 1.
+        assert!(
+            line_text(&pre_wrap[0]).contains("beta"),
+            "pre-wrap line 1 should keep beta: {:?}",
+            line_text(&pre_wrap[0])
+        );
+        // break-spaces rolls beta onto the next line; line 1 ends after the
+        // preserved spaces.
+        assert!(
+            !line_text(&break_spaces[0]).contains("beta"),
+            "break-spaces line 1 should not contain beta: {:?}",
+            line_text(&break_spaces[0])
+        );
+        assert!(
+            line_text(&break_spaces[1]).trim_start().starts_with("beta"),
+            "break-spaces line 2 should start with beta: {:?}",
+            line_text(&break_spaces[1])
+        );
+        // The four preserved spaces are retained (non-hanging) at the end of
+        // line 1: "alpha" + four spaces.
+        assert_eq!(line_text(&break_spaces[0]), "alpha    ");
     }
 }

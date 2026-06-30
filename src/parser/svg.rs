@@ -93,6 +93,47 @@ impl SvgTree {
     }
 }
 
+static SVG_DEFS_REGISTRY: std::sync::OnceLock<std::sync::Mutex<SvgDefs>> =
+    std::sync::OnceLock::new();
+
+fn remember_svg_defs(defs: &SvgDefs) {
+    if defs.gradients.is_empty()
+        && defs.radial_gradients.is_empty()
+        && defs.clip_paths.is_empty()
+        && defs.masks.is_empty()
+    {
+        return;
+    }
+    let registry = SVG_DEFS_REGISTRY.get_or_init(|| std::sync::Mutex::new(SvgDefs::default()));
+    if let Ok(mut stored) = registry.lock() {
+        stored.gradients.extend(
+            defs.gradients
+                .iter()
+                .map(|(id, val)| (id.clone(), val.clone())),
+        );
+        stored.radial_gradients.extend(
+            defs.radial_gradients
+                .iter()
+                .map(|(id, val)| (id.clone(), val.clone())),
+        );
+        stored.clip_paths.extend(
+            defs.clip_paths
+                .iter()
+                .map(|(id, val)| (id.clone(), val.clone())),
+        );
+        stored
+            .masks
+            .extend(defs.masks.iter().map(|(id, val)| (id.clone(), val.clone())));
+    }
+}
+
+pub(crate) fn collected_svg_defs_snapshot() -> SvgDefs {
+    SVG_DEFS_REGISTRY
+        .get()
+        .and_then(|registry| registry.lock().ok().map(|defs| defs.clone()))
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ViewBox {
     pub min_x: f32,
@@ -106,6 +147,7 @@ pub struct SvgDefs {
     pub gradients: std::collections::HashMap<String, SvgLinearGradient>,
     pub radial_gradients: std::collections::HashMap<String, SvgRadialGradient>,
     pub clip_paths: std::collections::HashMap<String, SvgClipPath>,
+    pub masks: std::collections::HashMap<String, SvgMask>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +192,23 @@ pub struct SvgClipPath {
     pub clip_path_units: SvgClipPathUnits,
     pub transform: Option<SvgTransform>,
     pub children: Vec<SvgNode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SvgMask {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub mask_type: SvgMaskType,
+    pub children: Vec<SvgNode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgMaskType {
+    Alpha,
+    #[default]
+    Luminance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -267,6 +326,7 @@ pub struct SvgStyle {
     pub fill: SvgPaint,
     pub stroke: SvgPaint,
     pub clip_path: Option<String>,
+    pub clip_rule: SvgClipRule,
     /// `stroke-width` is inherited in SVG.
     pub stroke_width: Option<f32>,
     /// Inherited SVG font-family, resolved to a PDF base family name.
@@ -286,6 +346,7 @@ impl Default for SvgStyle {
             fill: SvgPaint::Unspecified,
             stroke: SvgPaint::Unspecified,
             clip_path: None,
+            clip_rule: SvgClipRule::NonZero,
             stroke_width: None,
             font_family: None,
             font_bold: None,
@@ -302,6 +363,13 @@ pub enum SvgPreserveAspectRatio {
         align: SvgAlign,
         meet_or_slice: SvgMeetOrSlice,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgClipRule {
+    #[default]
+    NonZero,
+    EvenOdd,
 }
 
 impl Default for SvgPreserveAspectRatio {
@@ -405,6 +473,7 @@ pub fn parse_svg_from_element_with_ctx_and_viewport(
 
     let defs_raw = collect_svg_defs(&el.children);
     let defs = parse_svg_defs(&defs_raw);
+    remember_svg_defs(&defs);
 
     let root_style = parse_svg_style(el);
     let root_transform = el
@@ -526,6 +595,13 @@ fn parse_svg_defs(defs_raw: &HashMap<String, ElementNode>) -> SvgDefs {
                     && let Some(clip_path) = parse_svg_clip_path(el, defs_raw)
                 {
                     defs.clip_paths.insert(id, clip_path);
+                }
+            }
+            "mask" => {
+                if let Some(id) = el.attributes.get("id").cloned()
+                    && let Some(mask) = parse_svg_mask(el, defs_raw)
+                {
+                    defs.masks.insert(id, mask);
                 }
             }
             _ => {}
@@ -919,6 +995,47 @@ fn parse_svg_clip_path(
     })
 }
 
+fn parse_svg_mask(el: &ElementNode, defs_raw: &HashMap<String, ElementNode>) -> Option<SvgMask> {
+    let mask_type = el
+        .attributes
+        .get("mask-type")
+        .map(String::as_str)
+        .or_else(|| style_property_value(el, "mask-type"))
+        .map(|v| {
+            if v.trim().eq_ignore_ascii_case("alpha") {
+                SvgMaskType::Alpha
+            } else {
+                SvgMaskType::Luminance
+            }
+        })
+        .unwrap_or_default();
+    let x = attr_f32(el, "x");
+    let y = attr_f32(el, "y");
+    let width = el
+        .attributes
+        .get("width")
+        .and_then(|v| parse_absolute_length(v))
+        .unwrap_or(0.0);
+    let height = el
+        .attributes
+        .get("height")
+        .and_then(|v| parse_absolute_length(v))
+        .unwrap_or(0.0);
+    let mut ctx = SvgParseContext::new(defs_raw);
+    let children = parse_svg_children(&el.children, Some((width, height)), &mut ctx);
+    if children.is_empty() {
+        return None;
+    }
+    Some(SvgMask {
+        x,
+        y,
+        width,
+        height,
+        mask_type,
+        children,
+    })
+}
+
 fn parse_svg_gradient_coordinate(attr: Option<&String>, fallback: f32) -> f32 {
     let Some(value) = attr.map(String::as_str) else {
         return fallback;
@@ -958,6 +1075,394 @@ fn parse_svg_reference_id(raw: &str) -> Option<String> {
         return Some(id.to_string());
     }
     parse_svg_paint_server_reference(trimmed)
+}
+
+fn parse_svg_clip_rule(raw: &str) -> SvgClipRule {
+    if raw.trim().eq_ignore_ascii_case("evenodd") {
+        SvgClipRule::EvenOdd
+    } else {
+        SvgClipRule::NonZero
+    }
+}
+
+/// Resolve a CSS `filter: url(#id)` reference (css-filter-effects-1 §3) against
+/// an SVG `<filter>` `ElementNode`, reading its `feColorMatrix` primitives and
+/// mapping each to the equivalent [`ColorFilterOp`] so the existing color-math
+/// (src/layout/images.rs `apply_one_filter`) can apply it.
+///
+/// Supported primitives (SVG filter-effects §15.9 feColorMatrix):
+/// - `type="saturate"`  → `Saturate(values)`   (default amount 1)
+/// - `type="matrix"`    → decoded to the closest [`ColorFilterOp`] when the
+///   20-value matrix is a recognizable luminance/identity form; otherwise the
+///   raw matrix is applied verbatim via [`ColorFilterOp`] is not possible, so it
+///   is skipped.
+/// - `type="luminanceToAlpha"` is skipped (alpha-only; no RGB color change).
+///
+/// Returns `(ordered color ops, use_linear_rgb)`. `use_linear_rgb` reflects the
+/// `color-interpolation-filters` property (SVG filter-effects §13.5), whose
+/// initial value is `linearRGB` — so SVG `<filter>` color math runs in linear
+/// light by default (unlike CSS `filter` *functions*, which operate in sRGB).
+/// An explicit `color-interpolation-filters="sRGB"` on the `<filter>` (or a
+/// primitive) switches it off. The ops list is empty when the element is not a
+/// `<filter>` or contains no understood primitive.
+pub fn filter_element_color_ops(
+    filter_el: &ElementNode,
+) -> (Vec<crate::style::computed::ColorFilterOp>, bool) {
+    use crate::style::computed::ColorFilterOp;
+    let mut ops = Vec::new();
+    if !filter_el.raw_tag_name.eq_ignore_ascii_case("filter") {
+        return (ops, true);
+    }
+    // Default linearRGB; honor `color-interpolation-filters` on the <filter>
+    // (presentation attribute or inline style). A per-primitive override is read
+    // below too; the most specific wins for the primitive that supplies the op.
+    let filter_space_srgb = color_interpolation_filters_is_srgb(filter_el);
+    let mut use_linear_rgb = !filter_space_srgb;
+    let mut flood_color: Option<(f32, f32, f32, f32)> = None;
+    let element_children: Vec<&ElementNode> = filter_el
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            DomNode::Element(el) => Some(el),
+            _ => None,
+        })
+        .collect();
+    for (idx, el) in element_children.iter().enumerate() {
+        // A primitive may override the filter's color space; an explicit sRGB on
+        // any contributing primitive disables linearRGB for the whole recolor
+        // (we apply ops as a single composite, so the box uses one space).
+        if color_interpolation_filters_is_srgb(el) {
+            use_linear_rgb = false;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feFlood") {
+            flood_color = Some(svg_flood_color(el));
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feGaussianBlur") {
+            let std_dev = attr_f32(el, "stdDeviation");
+            if std_dev > 0.0 {
+                ops.push(ColorFilterOp::Blur(std_dev * 0.75));
+            }
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feDropShadow") {
+            let mut color = svg_flood_color(el);
+            if let Some(opacity) = el
+                .attributes
+                .get("flood-opacity")
+                .and_then(|v| v.trim().parse::<f32>().ok())
+            {
+                color.3 *= opacity.clamp(0.0, 1.0);
+            }
+            ops.push(ColorFilterOp::DropShadow(
+                crate::style::computed::DropShadow {
+                    dx: attr_f32(el, "dx") * 0.75,
+                    dy: attr_f32(el, "dy") * 0.75,
+                    blur: attr_f32(el, "stdDeviation") * 0.75,
+                    color,
+                },
+            ));
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feOffset") {
+            let keep_source = element_children
+                .get(idx + 1)
+                .is_some_and(|next| next.raw_tag_name.eq_ignore_ascii_case("feMerge"));
+            ops.push(ColorFilterOp::Offset {
+                dx: attr_f32(el, "dx") * 0.75,
+                dy: attr_f32(el, "dy") * 0.75,
+                keep_source,
+                region_x: filter_region_attr(filter_el, "x", -0.10),
+                region_y: filter_region_attr(filter_el, "y", -0.10),
+                region_width: filter_region_attr(filter_el, "width", 1.20),
+                region_height: filter_region_attr(filter_el, "height", 1.20),
+            });
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feMorphology")
+            && el
+                .attributes
+                .get("operator")
+                .is_none_or(|v| v.eq_ignore_ascii_case("dilate"))
+        {
+            let radius = el
+                .attributes
+                .get("radius")
+                .and_then(|v| v.split_whitespace().next())
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0);
+            if radius > 0.0 {
+                ops.push(ColorFilterOp::MorphologyDilate(radius * 0.75));
+            }
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feBlend")
+            && el
+                .attributes
+                .get("mode")
+                .is_some_and(|v| v.eq_ignore_ascii_case("multiply"))
+            && let Some((r, g, b, a)) = flood_color
+        {
+            ops.push(ColorFilterOp::Flood {
+                color: (r, g, b, a),
+                region_x: filter_region_attr(filter_el, "x", -0.10),
+                region_y: filter_region_attr(filter_el, "y", -0.10),
+                region_width: filter_region_attr(filter_el, "width", 1.20),
+                region_height: filter_region_attr(filter_el, "height", 1.20),
+            });
+            let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
+            ops.push(ColorFilterOp::Matrix([
+                r, 0.0, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 0.0,
+                1.0, 0.0,
+            ]));
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feComposite")
+            && el
+                .attributes
+                .get("operator")
+                .is_some_and(|v| v.eq_ignore_ascii_case("in"))
+            && let Some((r, g, b, a)) = flood_color
+        {
+            let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
+            ops.push(ColorFilterOp::Matrix([
+                0.0, 0.0, 0.0, 0.0, r, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0,
+                a, 0.0,
+            ]));
+            continue;
+        }
+        if el.raw_tag_name.eq_ignore_ascii_case("feComponentTransfer") {
+            if let Some(matrix) = component_transfer_matrix(el) {
+                ops.push(ColorFilterOp::Matrix(matrix));
+            }
+            continue;
+        }
+        if !el.raw_tag_name.eq_ignore_ascii_case("feColorMatrix") {
+            continue;
+        }
+        let kind = el
+            .attributes
+            .get("type")
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "matrix".to_string());
+        let values = el.attributes.get("values").map(|s| s.as_str());
+        match kind.as_str() {
+            // saturate: a single value (default 1). saturate(0) == grayscale(1).
+            "saturate" => {
+                let amount = values
+                    .and_then(|v| v.split_whitespace().next())
+                    .and_then(|t| t.parse::<f32>().ok())
+                    .unwrap_or(1.0)
+                    .max(0.0);
+                ops.push(ColorFilterOp::Saturate(amount));
+            }
+            // hueRotate: a single value in degrees (default 0).
+            "huerotate" => {
+                let deg = values
+                    .and_then(|v| v.split_whitespace().next())
+                    .and_then(|t| t.parse::<f32>().ok())
+                    .unwrap_or(0.0);
+                ops.push(ColorFilterOp::HueRotate(deg));
+            }
+            // matrix: 20 values. Recognize the common saturate/grayscale form
+            // so we can route it through the existing ColorFilterOp math.
+            "matrix" => {
+                if let Some(v) = values
+                    && let Some(op) = color_matrix_to_op(v)
+                {
+                    ops.push(op);
+                }
+            }
+            "luminancetoalpha" => {
+                ops.push(ColorFilterOp::Matrix([
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.2125, 0.7154, 0.0721, 0.0, 0.0,
+                ]));
+            }
+            _ => {}
+        }
+    }
+    (ops, use_linear_rgb)
+}
+
+/// True when `color-interpolation-filters` resolves to `sRGB` on this element
+/// (presentation attribute or inline `style`). Absent/`auto`/`linearRGB` →
+/// `false` (linearRGB is the initial value, SVG filter-effects §13.5).
+fn color_interpolation_filters_is_srgb(el: &ElementNode) -> bool {
+    if let Some(v) = el.attributes.get("color-interpolation-filters")
+        && v.trim().eq_ignore_ascii_case("srgb")
+    {
+        return true;
+    }
+    if let Some(style) = el.attributes.get("style") {
+        for decl in split_style_declarations(style) {
+            if let Some((prop, val)) = decl.split_once(':')
+                && prop
+                    .trim()
+                    .eq_ignore_ascii_case("color-interpolation-filters")
+                && val.trim().eq_ignore_ascii_case("srgb")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Decode a 20-value SVG `feColorMatrix type="matrix"` (filter-effects §15.9)
+/// into a [`ColorFilterOp`] when it matches a recognizable luminance-blend form
+/// (identity, grayscale, or saturate). Returns `None` for matrices that cannot
+/// be expressed as one of the existing ops (e.g. arbitrary channel mixes).
+fn color_matrix_to_op(values: &str) -> Option<crate::style::computed::ColorFilterOp> {
+    use crate::style::computed::ColorFilterOp;
+    let m: Vec<f32> = values
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|t| t.parse::<f32>().ok())
+        .collect();
+    if m.len() != 20 {
+        return None;
+    }
+    let matrix: [f32; 20] = m.clone().try_into().ok()?;
+    // The saturate(s) matrix (filter-effects §15.9) has the form:
+    //   row R: 0.213+0.787s  0.715-0.715s  0.072-0.072s  0 0
+    //   row G: 0.213-0.213s  0.715+0.285s  0.072-0.072s  0 0
+    //   row B: 0.213-0.213s  0.715-0.715s  0.072+0.928s  0 0
+    // Recover s from m[0] = 0.213 + 0.787 s and verify the rest is consistent.
+    let s = (m[0] - 0.213) / 0.787;
+    let approx = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    let saturate_ok = approx(m[0], 0.213 + 0.787 * s)
+        && approx(m[1], 0.715 - 0.715 * s)
+        && approx(m[2], 0.072 - 0.072 * s)
+        && approx(m[5], 0.213 - 0.213 * s)
+        && approx(m[6], 0.715 + 0.285 * s)
+        && approx(m[7], 0.072 - 0.072 * s)
+        && approx(m[10], 0.213 - 0.213 * s)
+        && approx(m[11], 0.715 - 0.715 * s)
+        && approx(m[12], 0.072 + 0.928 * s)
+        // alpha row is pass-through and offsets are zero
+        && approx(m[18], 1.0)
+        && approx(m[4], 0.0)
+        && approx(m[9], 0.0)
+        && approx(m[14], 0.0)
+        && approx(m[19], 0.0);
+    if saturate_ok {
+        return Some(ColorFilterOp::Saturate(s.max(0.0)));
+    }
+    Some(ColorFilterOp::Matrix(matrix))
+}
+
+fn svg_flood_color(el: &ElementNode) -> (f32, f32, f32, f32) {
+    let mut color = el
+        .attributes
+        .get("flood-color")
+        .and_then(|v| crate::parser::css::parse_color(v))
+        .and_then(|v| match v {
+            crate::parser::css::CssValue::Color(c) => Some(c.to_f32_rgba()),
+            _ => None,
+        })
+        .unwrap_or((0.0, 0.0, 0.0, 1.0));
+    if let Some(opacity) = el
+        .attributes
+        .get("flood-opacity")
+        .and_then(|v| v.trim().parse::<f32>().ok())
+    {
+        color.3 *= opacity.clamp(0.0, 1.0);
+    }
+    color
+}
+
+fn filter_rgb_constants(r: f32, g: f32, b: f32, linear_rgb: bool) -> (f32, f32, f32) {
+    if linear_rgb {
+        (
+            svg_srgb_to_linear(r),
+            svg_srgb_to_linear(g),
+            svg_srgb_to_linear(b),
+        )
+    } else {
+        (r, g, b)
+    }
+}
+
+fn svg_srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn component_transfer_matrix(el: &ElementNode) -> Option<[f32; 20]> {
+    let mut slopes = [1.0_f32; 4];
+    let mut intercepts = [0.0_f32; 4];
+    for child in &el.children {
+        let DomNode::Element(func) = child else {
+            continue;
+        };
+        let channel = match func.raw_tag_name.to_ascii_lowercase().as_str() {
+            "fefuncr" => 0,
+            "fefuncg" => 1,
+            "fefuncb" => 2,
+            "fefunca" => 3,
+            _ => continue,
+        };
+        let kind = func
+            .attributes
+            .get("type")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| "identity".to_string());
+        match kind.as_str() {
+            "identity" => {}
+            "table" => {
+                let values: Vec<f32> = func
+                    .attributes
+                    .get("tableValues")?
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|v| v.parse::<f32>().ok())
+                    .collect();
+                if values.len() >= 2 {
+                    intercepts[channel] = values[0];
+                    slopes[channel] = values[values.len() - 1] - values[0];
+                }
+            }
+            "linear" => {
+                slopes[channel] = func
+                    .attributes
+                    .get("slope")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .unwrap_or(1.0);
+                intercepts[channel] = func
+                    .attributes
+                    .get("intercept")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .unwrap_or(0.0);
+            }
+            _ => return None,
+        }
+    }
+    Some([
+        slopes[0],
+        0.0,
+        0.0,
+        0.0,
+        intercepts[0],
+        0.0,
+        slopes[1],
+        0.0,
+        0.0,
+        intercepts[1],
+        0.0,
+        0.0,
+        slopes[2],
+        0.0,
+        intercepts[2],
+        0.0,
+        0.0,
+        0.0,
+        slopes[3],
+        intercepts[3],
+    ])
 }
 
 fn svg_translate_from_use(el: &ElementNode) -> Option<SvgTransform> {
@@ -1077,6 +1582,20 @@ fn attr_f32(el: &ElementNode, name: &str) -> f32 {
         .unwrap_or(0.0)
 }
 
+fn filter_region_attr(el: &ElementNode, name: &str, default: f32) -> f32 {
+    el.attributes.get(name).map_or(default, |raw| {
+        let value = raw.trim();
+        if let Some(pct) = value.strip_suffix('%') {
+            pct.trim()
+                .parse::<f32>()
+                .map(|v| v / 100.0)
+                .unwrap_or(default)
+        } else {
+            value.parse::<f32>().unwrap_or(default)
+        }
+    })
+}
+
 fn resolve_text_position(el: &ElementNode, viewport: Option<(f32, f32)>) -> (f32, f32) {
     let x = resolve_svg_text_coordinate(
         el.attributes.get("x").map(String::as_str),
@@ -1140,7 +1659,7 @@ pub(crate) fn parse_viewbox(val: &str) -> Option<ViewBox> {
 fn parse_svg_style(el: &ElementNode) -> SvgStyle {
     fn parse_svg_paint(val: &str) -> Option<SvgPaint> {
         let val = val.trim();
-        if val.eq_ignore_ascii_case("none") {
+        if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("transparent") {
             return Some(SvgPaint::None);
         }
         if val.eq_ignore_ascii_case("inherit") {
@@ -1196,6 +1715,14 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
     if let Some(path) = style_property_value(el, "clip-path").and_then(parse_svg_reference_id) {
         clip_path = Some(path);
     }
+    let mut clip_rule = el
+        .attributes
+        .get("clip-rule")
+        .map(|v| parse_svg_clip_rule(v))
+        .unwrap_or_default();
+    if let Some(rule) = style_property_value(el, "clip-rule").map(parse_svg_clip_rule) {
+        clip_rule = rule;
+    }
     let mut stroke_width = el
         .attributes
         .get("stroke-width")
@@ -1222,6 +1749,7 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
         fill,
         stroke,
         clip_path,
+        clip_rule,
         stroke_width,
         font_family,
         font_bold,
@@ -1376,9 +1904,21 @@ fn resolve_svg_font_family(css_family: &str) -> String {
         "Times-Roman".to_string()
     } else if lower.contains("courier") || lower == "monospace" {
         "Courier".to_string()
-    } else {
-        // Default to Helvetica for sans-serif / Arial / Helvetica / anything else
+    } else if lower == "sans-serif"
+        || lower == "arial"
+        || lower == "helvetica"
+        || lower == "helvetica neue"
+        || lower == "system-ui"
+    {
+        // Known sans-serif generics / standard families map to the base-14
+        // Helvetica face.
         "Helvetica".to_string()
+    } else {
+        // Preserve any other (custom) family name verbatim so the renderer can
+        // match it against a registered bundled font via `find_font`. When no
+        // custom font is registered, the standard-font path maps unknown names
+        // to Helvetica anyway (see `crate::fonts::pdf_font_name`).
+        css_family.trim().to_string()
     }
 }
 
@@ -2162,6 +2702,7 @@ fn parse_num_list(s: &str) -> Vec<f32> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -2374,6 +2915,58 @@ mod tests {
             attributes,
             children: children.into_iter().map(DomNode::Element).collect(),
         }
+    }
+
+    // ── filter: url(#id) -> feColorMatrix -> ColorFilterOp ─────────────
+
+    fn filter_with(child: ElementNode) -> ElementNode {
+        let mut f = make_el("filter", vec![("id", "f")]);
+        f.children = vec![DomNode::Element(child)];
+        f
+    }
+
+    #[test]
+    fn fecolormatrix_saturate_maps_to_op_and_defaults_to_linear_rgb() {
+        use crate::style::computed::ColorFilterOp;
+        let f = filter_with(make_el(
+            "feColorMatrix",
+            vec![("type", "saturate"), ("values", "0")],
+        ));
+        let (ops, linear) = filter_element_color_ops(&f);
+        assert_eq!(ops, vec![ColorFilterOp::Saturate(0.0)]);
+        // SVG <filter> default color space is linearRGB.
+        assert!(linear);
+    }
+
+    #[test]
+    fn fecolormatrix_srgb_color_space_override() {
+        let mut prim = make_el("feColorMatrix", vec![("type", "saturate"), ("values", "0")]);
+        prim.attributes
+            .insert("color-interpolation-filters".into(), "sRGB".into());
+        let (_, linear) = filter_element_color_ops(&filter_with(prim));
+        assert!(!linear);
+    }
+
+    #[test]
+    fn fecolormatrix_matrix_form_decodes_to_saturate() {
+        use crate::style::computed::ColorFilterOp;
+        // The 20-value saturate(0) matrix == grayscale luminance blend.
+        let m = "0.213 0.715 0.072 0 0 \
+                 0.213 0.715 0.072 0 0 \
+                 0.213 0.715 0.072 0 0 \
+                 0 0 0 1 0";
+        let f = filter_with(make_el(
+            "feColorMatrix",
+            vec![("type", "matrix"), ("values", m)],
+        ));
+        let (ops, _) = filter_element_color_ops(&f);
+        assert!(matches!(ops.as_slice(), [ColorFilterOp::Saturate(s)] if s.abs() < 1e-3));
+    }
+
+    #[test]
+    fn non_filter_element_yields_no_ops() {
+        let (ops, _) = filter_element_color_ops(&make_el("g", vec![]));
+        assert!(ops.is_empty());
     }
 
     // ── parse_length edge cases ────────────────────────────────────────

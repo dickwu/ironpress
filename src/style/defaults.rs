@@ -82,6 +82,24 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("margin-top", CssValue::Number(1.0));
             style.set("margin-bottom", CssValue::Number(1.0));
             style.set("padding-left", CssValue::Length(30.0));
+            // Chrome UA stylesheet: `ul { list-style-type: disc }`, `ol {
+            // list-style-type: decimal }`. `list-style-type` is inherited, so the
+            // marker is resolved from the <li>'s computed value; without these
+            // explicit defaults an <ol> would fall back to the global initial
+            // (`disc`) and render bullets instead of `1.`/`2.`. Setting both also
+            // ensures a <ul> nested inside an <ol> resets to `disc` rather than
+            // inheriting the enclosing `decimal`.
+            style.set(
+                "list-style-type",
+                CssValue::Keyword(
+                    if matches!(tag, HtmlTag::Ol) {
+                        "decimal"
+                    } else {
+                        "disc"
+                    }
+                    .into(),
+                ),
+            );
         }
         HtmlTag::Dl => {
             style.set("margin-top", CssValue::Length(4.0));
@@ -100,6 +118,13 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-right", CssValue::Length(0.75));
             style.set("padding-bottom", CssValue::Length(0.75));
             style.set("padding-left", CssValue::Length(0.75));
+            // Chrome UA stylesheet: row groups/rows set `vertical-align: middle`
+            // and `td,th { vertical-align: inherit }`, so a cell with no author
+            // `vertical-align` resolves to `middle` (NOT the `baseline` initial
+            // value). A single line of content in an over-tall cell is therefore
+            // vertically centered, matching Chrome. An explicit author
+            // `vertical-align` (e.g. `baseline`/`top`) still wins (UA precedence).
+            style.set("vertical-align", CssValue::Keyword("middle".into()));
         }
         HtmlTag::Th => {
             style.set("padding-top", CssValue::Length(0.75));
@@ -107,6 +132,13 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-bottom", CssValue::Length(0.75));
             style.set("padding-left", CssValue::Length(0.75));
             style.set("font-weight", CssValue::Keyword("bold".into()));
+            // Chrome UA stylesheet: th { text-align: center }. text-align is an
+            // inherited property and is not reset in compute_style_with_context,
+            // so without this default a th would inherit the row/body alignment
+            // (typically left) rather than centering its content like Chrome.
+            style.set("text-align", CssValue::Keyword("center".into()));
+            // Same `vertical-align: middle` UA default as <td> (see above).
+            style.set("vertical-align", CssValue::Keyword("middle".into()));
         }
         HtmlTag::Blockquote => {
             style.set("margin-top", CssValue::Length(8.0));
@@ -140,6 +172,18 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
         HtmlTag::Small => {
             style.set("font-size", CssValue::Length(10.0));
         }
+        // Chrome UA stylesheet: `sub`/`sup` shift the baseline and shrink the
+        // font. `font-size: smaller` resolves to ~0.83em within the medium
+        // range; expressed here as a `Number` em-multiplier (resolved against
+        // the inherited size, like the heading defaults above).
+        HtmlTag::Sub => {
+            style.set("vertical-align", CssValue::Keyword("sub".into()));
+            style.set("font-size", CssValue::Number(0.83));
+        }
+        HtmlTag::Sup => {
+            style.set("vertical-align", CssValue::Keyword("super".into()));
+            style.set("font-size", CssValue::Number(0.83));
+        }
         HtmlTag::Mark => {
             style.set("background-color", CssValue::Color(Color::rgb(255, 255, 0)));
         }
@@ -158,8 +202,11 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("font-style", CssValue::Keyword("italic".into()));
         }
         HtmlTag::Caption => {
-            style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-bottom", CssValue::Length(4.0));
+            // Chrome UA stylesheet: caption { display: table-caption;
+            // text-align: center }. It does NOT bold the caption, so do not set
+            // font-weight here (that previously made captions render heavier
+            // than Chrome).
+            style.set("text-align", CssValue::Keyword("center".into()));
         }
         HtmlTag::Summary => {
             style.set("font-weight", CssValue::Keyword("bold".into()));
@@ -278,7 +325,17 @@ mod tests {
     fn table_defaults() {
         assert!(default_style(HtmlTag::Td).get("padding-top").is_some());
         assert!(default_style(HtmlTag::Th).get("font-weight").is_some());
-        assert!(default_style(HtmlTag::Caption).get("font-weight").is_some());
+        // th defaults center its content like Chrome's UA stylesheet.
+        assert!(matches!(
+            default_style(HtmlTag::Th).get("text-align"),
+            Some(CssValue::Keyword(k)) if k == "center"
+        ));
+        // caption is centered but NOT bold (matching Chrome's UA stylesheet).
+        assert!(matches!(
+            default_style(HtmlTag::Caption).get("text-align"),
+            Some(CssValue::Keyword(k)) if k == "center"
+        ));
+        assert!(default_style(HtmlTag::Caption).get("font-weight").is_none());
     }
 
     #[test]

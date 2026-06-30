@@ -1,6 +1,7 @@
 use super::{
     CalcOp, CalcToken, CssValue, parse_border_spacing_component, parse_calc_expression,
-    parse_color, parse_length, parse_property_value, parse_var_function, tokenize_calc,
+    parse_clamp_expression, parse_color, parse_length, parse_property_value, parse_var_function,
+    tokenize_calc,
 };
 
 #[test]
@@ -52,6 +53,15 @@ fn parse_length_units() {
         parse_length("1.5em"),
         Some(CssValue::Number(v)) if (v - 1.5).abs() < 0.01
     ));
+    // ex/ch preserve the raw coefficient for font-metric resolution downstream.
+    assert!(matches!(
+        parse_length("4ex"),
+        Some(CssValue::Ex(v)) if (v - 4.0).abs() < 0.01
+    ));
+    assert!(matches!(
+        parse_length("5ch"),
+        Some(CssValue::Ch(v)) if (v - 5.0).abs() < 0.01
+    ));
 }
 
 #[test]
@@ -86,6 +96,45 @@ fn parse_calc_expression_basic() {
 #[test]
 fn parse_calc_expression_empty_is_none() {
     assert!(parse_calc_expression("calc()").is_none());
+}
+
+#[test]
+fn parse_clamp_expression_basic() {
+    let Some(CssValue::Clamp(min, preferred, max)) =
+        parse_clamp_expression("clamp(120px, 50%, 240px)")
+    else {
+        panic!("expected clamp value");
+    };
+    // 120px -> 90pt, 240px -> 180pt (px*0.75); preferred stays a percentage.
+    assert!(matches!(*min, CssValue::Length(v) if (v - 90.0).abs() < 0.01));
+    assert!(matches!(*preferred, CssValue::Percentage(v) if (v - 50.0).abs() < 0.01));
+    assert!(matches!(*max, CssValue::Length(v) if (v - 180.0).abs() < 0.01));
+}
+
+#[test]
+fn parse_clamp_expression_with_calc_arg() {
+    // A clamp arg may itself be a calc(); top-level comma splitting must not
+    // break on the comma-free calc, and nested parens must be respected.
+    let Some(CssValue::Clamp(_, preferred, _)) =
+        parse_clamp_expression("clamp(10pt, calc(50% - 4pt), 200pt)")
+    else {
+        panic!("expected clamp with calc preferred");
+    };
+    assert!(matches!(*preferred, CssValue::Calc(_)));
+}
+
+#[test]
+fn parse_clamp_expression_wrong_arity_is_none() {
+    assert!(parse_clamp_expression("clamp(10px, 20px)").is_none());
+    assert!(parse_clamp_expression("clamp(10px)").is_none());
+}
+
+#[test]
+fn parse_property_value_recognizes_clamp() {
+    assert!(matches!(
+        parse_property_value("width", "clamp(120px, 50%, 240px)"),
+        Some(CssValue::Clamp(_, _, _))
+    ));
 }
 
 #[test]
@@ -240,9 +289,10 @@ fn line_height_bare_number_is_not_length() {
     let val = parse_property_value("line-height", "24px");
     assert!(matches!(val, Some(CssValue::Length(v)) if (v - 18.0).abs() < 0.001)); // 24 * 0.75
 
-    // em values should be Number (the em-to-number conversion)
+    // Relative units are preserved for computed-style resolution against the
+    // element/root metrics.
     let val = parse_property_value("line-height", "1.5em");
-    assert!(matches!(val, Some(CssValue::Number(v)) if (v - 1.5).abs() < 0.001));
+    assert!(matches!(val, Some(CssValue::Keyword(ref k)) if k == "1.5em"));
 
     // "normal" should be Keyword
     let val = parse_property_value("line-height", "normal");

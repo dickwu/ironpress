@@ -128,9 +128,23 @@ fn remove_dangerous_urls(css: &str) -> String {
     while let Some(pos) = remaining.to_ascii_lowercase().find("url(") {
         result.push_str(&remaining[..pos]);
         let after = &remaining[pos + 4..];
-        // Check if it's a data: URI (safe) or external (remove)
+        // Decide whether this `url()` is safe to KEEP. Safe references:
+        //   * `data:` URIs (inline, no network),
+        //   * same-document fragment references `url(#id)` (e.g. an SVG
+        //     `<filter>` for `filter: url(#id)`, css-filter-effects-1 §3), and
+        //   * LOCAL relative resource paths (e.g. an `@font-face`
+        //     `src: url('../fonts/F.ttf')`). These resolve against the
+        //     caller-controlled base directory and cannot fetch from the network
+        //     or exfiltrate data, so removing them would silently break
+        //     legitimate local fonts/assets.
+        // Removed (dangerous) references are external/network resources —
+        // `http:`/`https:`, protocol-relative `//host/...`, and `file:`/other
+        // explicit schemes — which a tracking pixel could use to phone home.
         let trimmed = after.trim_start().trim_start_matches(['\'', '"']);
-        if trimmed.starts_with("data:") {
+        if trimmed.starts_with("data:")
+            || trimmed.starts_with('#')
+            || is_local_relative_url(trimmed)
+        {
             result.push_str("url(");
             remaining = after;
         } else {
@@ -146,10 +160,53 @@ fn remove_dangerous_urls(css: &str) -> String {
     result
 }
 
+/// Returns `true` when a `url(...)` body (already stripped of leading quotes and
+/// whitespace) is a LOCAL, RELATIVE resource path that is safe to keep through
+/// sanitization — i.e. it cannot trigger a network fetch.
+///
+/// Rejects (as non-local): any explicit URL scheme such as `http:`/`https:`/
+/// `file:`/`ftp:` (a `scheme:` prefix before any `/`), protocol-relative
+/// `//host/...`, and OS-absolute paths (`/etc/...`). Everything else — a bare
+/// relative path like `../fonts/F.ttf` or `fonts/F.ttf` — is treated as local.
+fn is_local_relative_url(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    // Protocol-relative `//host/...` is a network reference.
+    if s.starts_with("//") {
+        return false;
+    }
+    // OS-absolute path.
+    if s.starts_with('/') {
+        return false;
+    }
+    // Explicit scheme `name:` appearing before the first path separator
+    // (e.g. `http:`, `https:`, `file:`, `data:` is handled by the caller).
+    if let Some(colon) = s.find(':') {
+        let before = &s[..colon];
+        let is_scheme = !before.is_empty()
+            && before
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+            && !before.contains('/');
+        if is_scheme {
+            return false;
+        }
+    }
+    true
+}
+
 fn remove_event_handlers(html: &str) -> String {
     // Only remove onXXX attributes inside HTML tags
     let mut result = String::with_capacity(html.len());
     let mut in_tag = false;
+    // Quote char of the attribute value currently being scanned (0 = none).
+    // The onXXX heuristic must NOT fire inside a quoted value, or an ordinary
+    // attribute value token that happens to start with "on" (e.g. the class
+    // name `one` in `class="chip one"`) would be mistaken for an event handler
+    // and deleted, breaking the quote and corrupting the rest of the tag.
+    let mut in_quote: u8 = 0;
 
     let bytes = html.as_bytes();
     let mut i = 0;
@@ -176,6 +233,24 @@ fn remove_event_handlers(html: &str) -> String {
         }
 
         let c = bytes[i] as char;
+
+        // Track quoted attribute values so tag-structure characters and the
+        // onXXX heuristic below are only interpreted outside of quotes.
+        if in_tag && in_quote != 0 {
+            if bytes[i] == in_quote {
+                in_quote = 0;
+            }
+            result.push(c);
+            i += 1;
+            continue;
+        }
+
+        if in_tag && (c == '"' || c == '\'') {
+            in_quote = bytes[i];
+            result.push(c);
+            i += 1;
+            continue;
+        }
 
         if c == '<' {
             in_tag = true;
@@ -303,6 +378,34 @@ mod tests {
     }
 
     #[test]
+    fn preserves_attribute_value_token_starting_with_on() {
+        // Regression: the onXXX stripper must not treat a class token that
+        // happens to start with "on" (e.g. `one`, preceded by a space inside a
+        // quoted value) as an event handler. Doing so deleted the token and its
+        // closing quote, corrupting every following tag.
+        let result =
+            sanitize_html(r#"<span class="chip one"></span><span class="chip two"></span>"#)
+                .unwrap();
+        assert!(result.contains(r#"class="chip one""#), "got: {result}");
+        assert!(result.contains(r#"class="chip two""#), "got: {result}");
+    }
+
+    #[test]
+    fn preserves_single_quoted_on_token() {
+        let result = sanitize_html(r#"<span class='chip one'>x</span>"#).unwrap();
+        assert!(result.contains("class='chip one'"), "got: {result}");
+    }
+
+    #[test]
+    fn still_removes_event_handler_among_other_attributes() {
+        let result = sanitize_html(r#"<div class="one" onclick="bad()" id="x">Hi</div>"#).unwrap();
+        assert!(!result.contains("onclick"));
+        assert!(!result.contains("bad()"));
+        assert!(result.contains(r#"class="one""#), "got: {result}");
+        assert!(result.contains(r#"id="x""#), "got: {result}");
+    }
+
+    #[test]
     fn removes_javascript_urls() {
         let result = sanitize_html(r#"<a href="javascript:alert('xss')">Click</a>"#).unwrap();
         assert!(!result.contains("javascript:"));
@@ -417,6 +520,55 @@ mod tests {
         let css = r#"<style>body { background: url(data:image/png;base64,abc) }</style>"#;
         let result = sanitize_html(css).unwrap();
         assert!(result.contains("url(data:"));
+    }
+
+    #[test]
+    fn fragment_url_reference_preserved() {
+        // Same-document fragment references `url(#id)` are safe and preserved so
+        // `filter: url(#id)` (css-filter-effects-1 §3) can resolve to an inline
+        // SVG <filter>. Quoted and external forms still behave as before.
+        let css = r#"<style>.b { filter: url(#sat); }</style>"#;
+        assert!(sanitize_html(css).unwrap().contains("url(#sat)"));
+        let quoted = r##"<style>.b { filter: url("#sat"); }</style>"##;
+        assert!(sanitize_html(quoted).unwrap().contains("url(\"#sat\")"));
+        let external = r#"<style>.b { background: url(http://evil.com/x.png); }</style>"#;
+        assert!(!sanitize_html(external).unwrap().contains("url(http"));
+    }
+
+    #[test]
+    fn local_relative_font_face_url_preserved() {
+        // A relative `@font-face` `src: url('../fonts/F.ttf')` is a LOCAL resource
+        // (resolved against the caller-controlled base dir) and must survive
+        // sanitization so the font can load — while remote/absolute references
+        // are still stripped.
+        let css = r#"<style>@font-face { font-family: F; src: url('../fonts/F.ttf'); }</style>"#;
+        assert!(
+            sanitize_html(css)
+                .unwrap()
+                .contains("url('../fonts/F.ttf')")
+        );
+
+        let bare = r#"<style>@font-face { font-family: F; src: url(fonts/F.ttf); }</style>"#;
+        assert!(sanitize_html(bare).unwrap().contains("url(fonts/F.ttf)"));
+
+        // Remote, protocol-relative, and absolute paths remain dangerous.
+        let remote = r#"<style>@font-face { src: url(https://evil.com/F.ttf); }</style>"#;
+        assert!(!sanitize_html(remote).unwrap().contains("url(http"));
+        let proto_rel = r#"<style>@font-face { src: url(//evil.com/F.ttf); }</style>"#;
+        assert!(!sanitize_html(proto_rel).unwrap().contains("url(//"));
+    }
+
+    #[test]
+    fn is_local_relative_url_classification() {
+        assert!(is_local_relative_url("../fonts/F.ttf"));
+        assert!(is_local_relative_url("fonts/F.ttf"));
+        assert!(is_local_relative_url("F.ttf"));
+        assert!(!is_local_relative_url("http://x/F.ttf"));
+        assert!(!is_local_relative_url("https://x/F.ttf"));
+        assert!(!is_local_relative_url("//x/F.ttf"));
+        assert!(!is_local_relative_url("/etc/passwd"));
+        assert!(!is_local_relative_url("file:///etc/passwd"));
+        assert!(!is_local_relative_url(""));
     }
 
     #[test]

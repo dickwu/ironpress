@@ -1,0 +1,660 @@
+[
+  {
+    "id": "img-data-uri-intrinsic",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "data-uri-png-sized",
+    "description": "A data: URI PNG placed in an img with explicit 120x120 size, scaled up from its 4x4 intrinsic pixels.",
+    "file": "cases/images-replaced/img-data-uri-intrinsic.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-width-scaled",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "width-auto-height-aspect",
+    "description": "A 2:1 intrinsic PNG with width:180px and height:auto, preserving aspect ratio at 180x90.",
+    "file": "cases/images-replaced/img-width-scaled.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-width-height-stretch",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "explicit-width-height-stretch",
+    "description": "A 1:1 intrinsic PNG given explicit width:200px and height:100px, stretching it non-uniformly.",
+    "file": "cases/images-replaced/img-width-height-stretch.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-border",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "border-on-image",
+    "description": "A replaced image with a 6px solid border framing it under border-box sizing.",
+    "file": "cases/images-replaced/img-border.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "img-object-fit-contain",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "contain",
+    "description": "object-fit:contain letterboxes a 2:1 image inside a 160x160 box, leaving grey bands top and bottom.",
+    "file": "cases/images-replaced/img-object-fit-contain.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-cover",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "cover",
+    "description": "object-fit:cover fills a 160x160 box with a 2:1 image, cropping its left and right edges.",
+    "file": "cases/images-replaced/img-object-fit-cover.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-fill",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "fill",
+    "description": "object-fit:fill stretches a 2:1 image to completely fill a 160x160 box, distorting its aspect.",
+    "file": "cases/images-replaced/img-object-fit-fill.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-none",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "none",
+    "description": "object-fit:none draws the image at its intrinsic pixel size centred within the 160x160 box.",
+    "file": "cases/images-replaced/img-object-fit-none.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-position",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "bottom-with-contain",
+    "description": "object-position:bottom anchors a contained 2:1 image to the bottom edge of a 160x160 box.",
+    "file": "cases/images-replaced/img-object-position.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-aspect-ratio-box",
+    "category": "images-replaced",
+    "feature": "aspect-ratio",
+    "subfeature": "fixed-width-derived-height",
+    "description": "A box with width:200px and aspect-ratio:2/1, expected to derive a 100px height.",
+    "file": "cases/images-replaced/img-aspect-ratio-box.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "svg-inline-shapes",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "rect-circle-path-viewbox",
+    "description": "Inline SVG with a rect, circle and triangle path under a 0 0 100 100 viewBox scaled to 200x200.",
+    "file": "cases/images-replaced/svg-inline-shapes.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "svg-inline-linear-gradient",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "linear-gradient-fill",
+    "description": "Inline SVG rect filled with a horizontal linearGradient from blue to red.",
+    "file": "cases/images-replaced/svg-inline-linear-gradient.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "svg-inline-text",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "text-element",
+    "description": "Inline SVG text element rendered in ParitySans at 36px over a light fill.",
+    "file": "cases/images-replaced/svg-inline-text.html",
+    "weight": 1,
+    "pass_threshold_pct": 6.0,
+    "partial_threshold_pct": 18.0,
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "svg-inline-clip",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "clip-path-circle",
+    "description": "Inline SVG rect clipped to a circle via a clipPath def, leaving a red disc.",
+    "file": "cases/images-replaced/svg-inline-clip.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "svg-as-img",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "svg-data-uri-source",
+    "description": "An SVG document referenced as the src of an img via a data: URI, drawn at 160x120.",
+    "file": "cases/images-replaced/svg-as-img.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "partial",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-scale-down-shrink",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "scale-down-contain-wins",
+    "description": "object-fit:scale-down on a 240x120 image larger than a 160x160 box behaves like contain, shrinking it to 160x80 centred.",
+    "file": "cases/images-replaced/img-object-fit-scale-down-shrink.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-scale-down-none",
+    "category": "images-replaced",
+    "feature": "object-fit",
+    "subfeature": "scale-down-none-wins",
+    "description": "object-fit:scale-down on an 8x4 image smaller than the box picks none, drawing it at intrinsic size centred.",
+    "file": "cases/images-replaced/img-object-fit-scale-down-none.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-position-percent",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "percentage-values",
+    "description": "object-position:25% 75% positions a contained 2:1 image within the free space of a 160x160 box.",
+    "file": "cases/images-replaced/img-object-position-percent.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-position-length",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "length-values",
+    "description": "object-position:10px 20px offsets a contained 2:1 image by absolute lengths from the box top-left.",
+    "file": "cases/images-replaced/img-object-position-length.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-cover-position",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "cover-left-top-crop",
+    "description": "object-fit:cover with object-position:left top anchors the left edge of an overflowing 2:1 image, cropping its right half.",
+    "file": "cases/images-replaced/img-object-fit-cover-position.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-object-fit-cover-default-center",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "cover-default-50-50",
+    "description": "object-fit:cover with the default object-position 50% 50% splits the overflow evenly, showing the central strip of the image.",
+    "file": "cases/images-replaced/img-object-fit-cover-default-center.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-height-scaled",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "height-auto-width-aspect",
+    "description": "A 2:1 intrinsic image with height:90px and width:auto derives width:180px from the aspect ratio.",
+    "file": "cases/images-replaced/img-height-scaled.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-intrinsic-natural",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "intrinsic-no-sizing",
+    "description": "An img with no width/height attribute and no CSS sizing renders at its intrinsic 8x4 px natural dimensions (default sizing algorithm).",
+    "file": "cases/images-replaced/img-intrinsic-natural.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-percent-width",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "percentage-width",
+    "description": "width:50% on a 2:1 image resolves against the 200px containing block to 100px wide, deriving a 50px height.",
+    "file": "cases/images-replaced/img-percent-width.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-max-width-clamp",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "max-width-aspect-recompute",
+    "description": "max-width:120px clamps a 200px-wide 2:1 image and recomputes its height from the aspect ratio to 60px.",
+    "file": "cases/images-replaced/img-max-width-clamp.html",
+    "weight": 1,
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "img-monolithic-page-push",
+    "category": "images-replaced",
+    "feature": "fragmentation",
+    "subfeature": "monolithic-image-push",
+    "description": "A block image too tall for the remaining space after the filler is pushed WHOLE to page 2 (spec-correct class-A break before a monolithic box), not split or clipped. The multi-page harness asserts both pages.",
+    "file": "cases/images-replaced/img-monolithic-page-push.html",
+    "weight": 1,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-taller-than-page-sliced",
+    "category": "images-replaced",
+    "feature": "fragmentation",
+    "subfeature": "monolithic-image-slice",
+    "description": "A block image taller than a full page content box is SLICED across 3 pages (css-break-3 \u00a74.1: monolithic content taller than the fragmentainer slices at its edge). Each page embeds only its own vertical band of the source raster, not a full copy. The multi-page harness asserts all three pages.",
+    "file": "cases/images-replaced/img-taller-than-page-sliced.html",
+    "weight": 1,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "svg-img-inner-rect",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "svg-no-viewbox-inner-rect",
+    "description": "A no-viewBox SVG referenced as an img src is scaled into its display box; an inner rect at (40,40,200,140) scales with the viewport and stays centered with a blue margin rather than stretching to the image right/bottom edge.",
+    "file": "cases/images-replaced/svg-img-inner-rect.html",
+    "weight": 1,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-object-position-far-edge-length",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "far-edge-length-cover",
+    "description": "object-position:right 20px bottom 10px offsets a cover-fitted image from far edges; catches parsing right 20px as plain right alignment.",
+    "file": "cases/images-replaced/img-object-position-far-edge-length.html",
+    "weight": 1,
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-object-position-far-edge-percent",
+    "category": "images-replaced",
+    "feature": "object-position",
+    "subfeature": "far-edge-percent-cover",
+    "description": "object-position:right 25% bottom 25% offsets a cover-fitted image from far edges; catches treating far-edge percentages as plain 25% 25% or default center.",
+    "file": "cases/images-replaced/img-object-position-far-edge-percent.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-image-orientation-rotate",
+    "category": "images-replaced",
+    "feature": "image-orientation",
+    "subfeature": "rotate-90deg-before-fit",
+    "description": "image-orientation:90deg rotates the raster before object-fit:contain sizing; catches ignoring the orientation property.",
+    "file": "cases/images-replaced/img-image-orientation-rotate.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-image-rendering-pixelated",
+    "category": "images-replaced",
+    "feature": "image-rendering",
+    "subfeature": "pixelated",
+    "description": "image-rendering:pixelated scales a 2x2 raster to a hard-edged 120px image; catches smoothing the scaled pixels.",
+    "file": "cases/images-replaced/img-image-rendering-pixelated.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "images-replaced-img-in-table-cell",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "img-inside-table-cell",
+    "description": "An SVG img replaced element inside a bordered table cell paints at its laid-out size; catches table-cell paint walkers that lay out but drop replaced-image children.",
+    "file": "cases/images-replaced/images-replaced-img-in-table-cell.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "floor_pct": 1.0,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "tables-basic-grid"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "svg-inline-gradient-clip-path",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "gradient-clip-path",
+    "description": "An inline SVG gradient-filled rect clipped by a clipPath paints only inside the circle; catches supporting gradients or clip paths separately but not together.",
+    "file": "cases/images-replaced/svg-inline-gradient-clip-path.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "svg-img-preserve-aspect-ratio-slice",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "svg-preserve-aspect-ratio-slice",
+    "description": "An SVG image with preserveAspectRatio xMidYMid slice crops predictably in a square img slot; catches ignoring slice and fitting the whole SVG viewport.",
+    "file": "cases/images-replaced/svg-img-preserve-aspect-ratio-slice.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-inline-block-descendant",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "inline-block-descendant",
+    "description": "A raster img paints in normal flow and should also paint as a direct child of an inline-block; catches the inline-block text-collection path dropping replaced descendants.",
+    "file": "cases/images-replaced/img-inline-block-descendant.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  },
+  {
+    "id": "img-inline-block-descendant-sizing",
+    "category": "images-replaced",
+    "feature": "img",
+    "subfeature": "inline-block-descendant-sizing",
+    "description": "An inline-block containing an img with explicit width and height:auto must preserve intrinsic aspect-ratio sizing and paint the replaced child.",
+    "file": "cases/images-replaced/img-inline-block-descendant-sizing.html",
+    "weight": 1,
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render"
+    ],
+    "pass_threshold_pct": 2.0,
+    "partial_threshold_pct": 10.0
+  }
+]

@@ -68,6 +68,25 @@ pub struct TtfFont {
     pub num_h_metrics: u16,
     /// Font flags for the PDF FontDescriptor.
     pub flags: u32,
+    /// Whether this face is itself a bold weight (OS/2 `usWeightClass` >= 600,
+    /// or the `head.macStyle` bold bit). Lets the renderer tell a genuine bold
+    /// face from a regular face that a font query merely *substituted* for a
+    /// missing bold, so it can synthesise (faux) bold only when truly needed.
+    pub is_bold: bool,
+    /// Whether this face is itself italic/oblique (OS/2 `fsSelection` ITALIC bit
+    /// or `head.macStyle` italic bit). Lets the renderer synthesise (faux) italic
+    /// — an algorithmic shear — only when an italic request resolves to a face
+    /// that is not genuinely italic (CSS Fonts 4 §2.4 `font-synthesis: style`).
+    pub is_italic: bool,
+    /// The font's x-height in font units (css-values-4 §6.1.1 `ex`). Sourced
+    /// from `OS/2.sxHeight` (version >= 2) when present and positive, otherwise
+    /// measured from the `'x'` glyph's bounding-box top — matching how Chrome
+    /// resolves the `ex` unit when the metric is absent. `0` if undeterminable.
+    pub x_height: u16,
+    /// Advance width of the `'0'` (ZERO) glyph in font units (css-values-4
+    /// §6.1.1 `ch`). `0` if the digit is absent. Chrome resolves `ch` to this
+    /// advance, falling back to 0.5em when the glyph is missing.
+    pub zero_advance: u16,
     /// Raw TTF data for embedding. Wrapped in Arc so cloning a TtfFont
     /// (e.g. from the bundled font cache) is O(1) instead of copying ~400KB.
     pub data: std::sync::Arc<Vec<u8>>,
@@ -98,10 +117,36 @@ impl TtfFont {
         self.glyph_width(glyph_id)
     }
 
-    /// Get the advance width for a glyph in PDF units (1/1000 of text space).
-    #[cfg(test)]
-    pub fn glyph_width_pdf(&self, glyph_id: u16) -> u16 {
-        self.glyph_width_pdf_value(glyph_id).trunc() as u16
+    /// The actual glyph bounding-box top (`yMax`) for `ch`, as a fraction of the
+    /// em. Used to seat a floated `::first-letter` drop cap so its visual cap top
+    /// aligns with the surrounding line's text top (css-pseudo-4 §2.2): the font
+    /// ascender overshoots the glyph (it reserves accent space), so aligning by
+    /// ascender would push the drop cap too low. Returns `None` when the glyph has
+    /// no outline/bounds (e.g. whitespace) so the caller can fall back.
+    pub fn glyph_top_ratio(&self, ch: char) -> Option<f32> {
+        if self.units_per_em == 0 {
+            return None;
+        }
+        let y_max = measure_glyph_y_max(&self.data, ch)?;
+        Some(f32::from(y_max) / f32::from(self.units_per_em))
+    }
+
+    /// x-height as a fraction of the em (css-values-4 §6.1.1 `ex`). Falls back
+    /// to the CSS-recommended 0.5em when the metric could not be determined.
+    pub fn x_height_ratio(&self) -> f32 {
+        if self.units_per_em == 0 || self.x_height == 0 {
+            return 0.5;
+        }
+        f32::from(self.x_height) / f32::from(self.units_per_em)
+    }
+
+    /// `ch` advance (the `'0'` glyph) as a fraction of the em (css-values-4
+    /// §6.1.1). Falls back to the CSS-recommended 0.5em when undeterminable.
+    pub fn ch_ratio(&self) -> f32 {
+        if self.units_per_em == 0 || self.zero_advance == 0 {
+            return 0.5;
+        }
+        f32::from(self.zero_advance) / f32::from(self.units_per_em)
     }
 
     /// Get the advance width for a glyph in PDF units (1/1000 of text space).
@@ -290,6 +335,55 @@ fn parse_ttf_at_offset(data: Vec<u8>, base: usize) -> Result<TtfFont, String> {
     // Compute flags: bit 5 (Nonsymbolic) = 32 for Latin text
     let flags = 32u32;
 
+    // Detect a genuine bold weight: OS/2 usWeightClass (offset +4) >= 600, or
+    // the head.macStyle bold bit (bit 0 of the u16 at head +44).
+    let os2_bold = tables.get(b"OS/2").is_some_and(|os2| {
+        let off = os2.offset as usize;
+        data.len() >= off + 6 && read_u16(&data, off + 4) >= 600
+    });
+    let mac_style_bold = data.len() >= head_off + 46 && (read_u16(&data, head_off + 44) & 0x1) != 0;
+    let is_bold = os2_bold || mac_style_bold;
+
+    // Detect a genuine italic/oblique face: OS/2 fsSelection (offset +62) ITALIC
+    // bit, or the head.macStyle italic bit (bit 1 of the u16 at head +44).
+    let os2_italic = tables.get(b"OS/2").is_some_and(|os2| {
+        let off = os2.offset as usize;
+        data.len() >= off + 64 && (read_u16(&data, off + 62) & 0x1) != 0
+    });
+    let mac_style_italic =
+        data.len() >= head_off + 46 && (read_u16(&data, head_off + 44) & 0x2) != 0;
+    let is_italic = os2_italic || mac_style_italic;
+
+    // x-height for the CSS `ex` unit. Prefer OS/2.sxHeight (version >= 2,
+    // offset +86 as a signed FWORD); when absent or non-positive, measure the
+    // 'x' glyph's bounding-box top — this mirrors Chrome's `ex` resolution for
+    // fonts (such as the bundled DejaVu-derived faces) whose OS/2 table predates
+    // version 2 and therefore carries no sxHeight field.
+    let os2_x_height = tables.get(b"OS/2").and_then(|os2| {
+        let off = os2.offset as usize;
+        let version = read_u16(&data, off);
+        if version >= 2 && data.len() >= off + 88 {
+            let sx = read_i16(&data, off + 86);
+            (sx > 0).then_some(sx as u16)
+        } else {
+            None
+        }
+    });
+    let x_height = os2_x_height
+        .or_else(|| measure_glyph_y_max(&data, 'x'))
+        .unwrap_or(0);
+    // ch unit: advance of the '0' (ZERO) glyph.
+    let zero_advance = cmap
+        .get(&u32::from('0'))
+        .map(|&gid| {
+            if (gid as usize) < glyph_widths.len() {
+                glyph_widths[gid as usize]
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0);
+
     Ok(TtfFont {
         font_name,
         units_per_em,
@@ -300,8 +394,23 @@ fn parse_ttf_at_offset(data: Vec<u8>, base: usize) -> Result<TtfFont, String> {
         glyph_widths,
         num_h_metrics,
         flags,
+        is_bold,
+        is_italic,
+        x_height,
+        zero_advance,
         data: std::sync::Arc::new(data),
     })
+}
+
+/// Measure the bounding-box top (`yMax`, in font units) of the glyph for `ch`.
+///
+/// Used to derive the x-height for the CSS `ex` unit when `OS/2.sxHeight` is
+/// absent. Returns `None` when the character has no glyph or no contour bounds.
+fn measure_glyph_y_max(data: &[u8], ch: char) -> Option<u16> {
+    let face = rustybuzz::ttf_parser::Face::parse(data, 0).ok()?;
+    let gid = face.glyph_index(ch)?;
+    let bbox = face.glyph_bounding_box(gid)?;
+    (bbox.y_max > 0).then_some(bbox.y_max as u16)
 }
 
 fn parse_os2_typographic_metrics(
@@ -874,6 +983,10 @@ mod tests {
             glyph_widths: vec![500, 700],
             num_h_metrics: 2,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width(65), 700); // last width
@@ -892,6 +1005,10 @@ mod tests {
             glyph_widths: vec![],
             num_h_metrics: 0,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width(65), 0);
@@ -1252,7 +1369,7 @@ mod tests {
     fn parse_cmap_subtable_record_break() {
         // Line 196: subtable record truncated
         // cmap header says 2 subtables but data only has room for partial second
-        let mut data = vec![0u8; 100];
+        let mut data = [0u8; 100];
         // offset 0: version=0, numSubtables=2
         data[2] = 0;
         data[3] = 2;
@@ -1262,7 +1379,7 @@ mod tests {
         // Should find no suitable subtable (first one at platform 0 would match but
         // second record breaks)
         // Actually platform_id=0 matches, so let's set first to non-matching
-        let mut data2 = vec![0u8; 20];
+        let mut data2 = [0u8; 20];
         data2[3] = 2; // 2 subtables
         // First record: platform 5 (no match)
         data2[4] = 0;
@@ -1275,7 +1392,7 @@ mod tests {
     #[test]
     fn parse_cmap_subtable_too_short() {
         // Line 213: subtable offset valid but data too short to read format
-        let mut data = vec![0u8; 20];
+        let mut data = [0u8; 20];
         data[3] = 1; // 1 subtable
         // platform 3, encoding 1
         data[4] = 0;
@@ -1614,6 +1731,10 @@ mod tests {
             glyph_widths: vec![u16::MAX], // 65535 — would overflow u32 with * 1000
             num_h_metrics: 1,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(vec![]),
         };
         // Should not panic; 65535 * 1000 / 1000 = 65535
@@ -1637,10 +1758,57 @@ mod tests {
             glyph_widths: vec![500],
             num_h_metrics: 1,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width_scaled(65, 12.0), 0.0);
         assert_eq!(font.char_width_pdf(65), 0);
+    }
+
+    fn metrics_font(units_per_em: u16, x_height: u16, zero_advance: u16) -> TtfFont {
+        TtfFont {
+            font_name: String::new(),
+            units_per_em,
+            bbox: [0; 4],
+            pdf_metrics: FontVerticalMetrics::new(0, 0, 0),
+            layout_metrics: FontVerticalMetrics::new(0, 0, 0),
+            cmap: HashMap::new(),
+            glyph_widths: Vec::new(),
+            num_h_metrics: 0,
+            flags: 32,
+            is_bold: false,
+            is_italic: false,
+            x_height,
+            zero_advance,
+            data: std::sync::Arc::new(vec![]),
+        }
+    }
+
+    #[test]
+    fn x_height_ratio_uses_metric_when_present() {
+        let font = metrics_font(2048, 1120, 0);
+        assert!((font.x_height_ratio() - 1120.0 / 2048.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn x_height_ratio_falls_back_to_half_em() {
+        // No x-height metric -> css-values-4 fallback of 0.5em.
+        assert_eq!(metrics_font(2048, 0, 0).x_height_ratio(), 0.5);
+        assert_eq!(metrics_font(0, 1120, 0).x_height_ratio(), 0.5);
+    }
+
+    #[test]
+    fn ch_ratio_uses_zero_advance_when_present() {
+        let font = metrics_font(2048, 0, 1024);
+        assert!((font.ch_ratio() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ch_ratio_falls_back_to_half_em() {
+        assert_eq!(metrics_font(2048, 0, 0).ch_ratio(), 0.5);
     }
 
     #[test]

@@ -39,8 +39,13 @@ pub(crate) fn measure_text_width(
     italic: bool,
     fonts: &HashMap<String, TtfFont>,
 ) -> Option<f32> {
+    if let Some(width) =
+        measure_text_width_by_font_face_ranges(text, font_size, font_family, bold, italic, fonts)
+    {
+        return Some(width);
+    }
     let (_, font) = resolve_custom_font(font_family, bold, italic, fonts)?;
-    shape_text_with_font(text, font_size, font).map(|run| run.width)
+    shape_text_with_font(text, font_size, font, false).map(|run| run.width)
 }
 
 pub(crate) fn custom_font_line_height(
@@ -58,7 +63,19 @@ pub(crate) fn custom_font_line_height(
 
 pub(crate) fn shape_text_run(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> Option<ShapedRun> {
     let (_, font) = resolve_custom_font(&run.font_family, run.bold, run.italic, fonts)?;
-    shape_text_with_font(&run.text, run.font_size, font)
+    shape_text_with_font(&run.text, run.font_size, font, run.disable_ligatures)
+}
+
+/// Shape arbitrary text with an explicit `TtfFont` face.
+///
+/// Used by the SVG `<text>` renderer, which resolves its own face (via
+/// `find_font`) rather than going through a layout `TextRun`.
+pub(crate) fn shape_text_with_explicit_font(
+    text: &str,
+    font_size: f32,
+    font: &TtfFont,
+) -> Option<ShapedRun> {
+    shape_text_with_font(text, font_size, font, false)
 }
 
 /// Try to shape `run` with the Unicode fallback font.
@@ -70,6 +87,10 @@ pub(crate) fn shape_with_unicode_fallback<'a>(
     run: &TextRun,
     fonts: &'a HashMap<String, TtfFont>,
 ) -> Option<(ShapedRun, &'a str, &'a TtfFont)> {
+    if let Some((shaped_run, font_key, font)) = shape_with_font_face_range(run, fonts) {
+        return Some((shaped_run, font_key, font));
+    }
+
     // For standard PDF fonts, fall back when text has non-WinAnsi characters.
     // For custom fonts (including bundled Liberation), fall back when the
     // primary font cannot shape the text (missing glyphs for CJK, Arabic, etc.).
@@ -103,7 +124,9 @@ pub(crate) fn shape_with_unicode_fallback<'a>(
     ];
     for fk in fallback_keys {
         if let Some((key, font)) = fonts.get_key_value(fk) {
-            if let Some(shaped) = shape_text_with_font(&run.text, run.font_size, font) {
+            if let Some(shaped) =
+                shape_text_with_font(&run.text, run.font_size, font, run.disable_ligatures)
+            {
                 // Only use this font if ALL glyphs are resolved (no .notdef)
                 let all_resolved =
                     !shaped.glyphs.is_empty() && shaped.glyphs.iter().all(|g| g.glyph_id != 0);
@@ -114,6 +137,134 @@ pub(crate) fn shape_with_unicode_fallback<'a>(
         }
     }
     None
+}
+
+fn measure_text_width_by_font_face_ranges(
+    text: &str,
+    font_size: f32,
+    font_family: &FontFamily,
+    bold: bool,
+    italic: bool,
+    fonts: &HashMap<String, TtfFont>,
+) -> Option<f32> {
+    let FontFamily::Custom(name) = font_family else {
+        return None;
+    };
+    let (_, primary_font) = crate::system_fonts::find_font(fonts, name, bold, italic)?;
+    if text
+        .chars()
+        .all(|ch| primary_font.cmap.contains_key(&(ch as u32)))
+    {
+        return None;
+    }
+
+    let mut width = 0.0;
+    for segment in split_text_by_font_face_ranges(text, name, bold, italic, fonts)? {
+        let shaped = shape_text_with_font(&segment.text, font_size, segment.font, false)?;
+        width += shaped.width;
+    }
+    Some(width)
+}
+
+fn shape_with_font_face_range<'a>(
+    run: &TextRun,
+    fonts: &'a HashMap<String, TtfFont>,
+) -> Option<(ShapedRun, &'a str, &'a TtfFont)> {
+    let FontFamily::Custom(name) = &run.font_family else {
+        return None;
+    };
+    for (key, font) in font_face_range_fonts(fonts, name, run.bold, run.italic) {
+        if !run
+            .text
+            .chars()
+            .all(|ch| font.cmap.contains_key(&(ch as u32)))
+        {
+            continue;
+        }
+        if let Some(shaped) =
+            shape_text_with_font(&run.text, run.font_size, font, run.disable_ligatures)
+            && !shaped.glyphs.is_empty()
+            && shaped.glyphs.iter().all(|g| g.glyph_id != 0)
+        {
+            return Some((shaped, key, font));
+        }
+    }
+    None
+}
+
+struct FontFaceRangeSegment<'a> {
+    text: String,
+    font: &'a TtfFont,
+}
+
+fn split_text_by_font_face_ranges<'a>(
+    text: &str,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    fonts: &'a HashMap<String, TtfFont>,
+) -> Option<Vec<FontFaceRangeSegment<'a>>> {
+    let (_, primary_font) = crate::system_fonts::find_font(fonts, family, bold, italic)?;
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut current_font: Option<&TtfFont> = None;
+
+    for ch in text.chars() {
+        let font = if primary_font.cmap.contains_key(&(ch as u32)) {
+            primary_font
+        } else {
+            font_face_range_fonts(fonts, family, bold, italic)
+                .into_iter()
+                .map(|(_, font)| font)
+                .find(|font| font.cmap.contains_key(&(ch as u32)))?
+        };
+
+        if let Some(active) = current_font {
+            if std::ptr::eq(active, font) {
+                current.push(ch);
+                continue;
+            }
+            segments.push(FontFaceRangeSegment {
+                text: std::mem::take(&mut current),
+                font: active,
+            });
+        }
+        current_font = Some(font);
+        current.push(ch);
+    }
+
+    if let Some(font) = current_font {
+        segments.push(FontFaceRangeSegment {
+            text: current,
+            font,
+        });
+    }
+    Some(segments)
+}
+
+fn font_face_range_fonts<'a>(
+    fonts: &'a HashMap<String, TtfFont>,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Vec<(&'a str, &'a TtfFont)> {
+    let prefix = format!(
+        "{}__fontface_",
+        crate::system_fonts::font_variant_key(family, bold, italic)
+    );
+    let mut matches: Vec<_> = fonts
+        .iter()
+        .filter_map(|(key, font)| {
+            key.strip_prefix(&prefix)
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+                .map(|index| (index, key.as_str(), font))
+        })
+        .collect();
+    matches.sort_by_key(|(index, _, _)| *index);
+    matches
+        .into_iter()
+        .map(|(_, key, font)| (key, font))
+        .collect()
 }
 
 /// Check if a run needs unicode fallback (has characters the primary font can't cover).
@@ -168,7 +319,12 @@ pub(crate) fn split_run_by_font_coverage(
     segments
 }
 
-fn shape_text_with_font(text: &str, font_size: f32, font: &TtfFont) -> Option<ShapedRun> {
+fn shape_text_with_font(
+    text: &str,
+    font_size: f32,
+    font: &TtfFont,
+    disable_ligatures: bool,
+) -> Option<ShapedRun> {
     if text.is_empty() {
         return Some(ShapedRun {
             glyphs: Vec::new(),
@@ -184,7 +340,20 @@ fn shape_text_with_font(text: &str, font_size: f32, font: &TtfFont) -> Option<Sh
     buffer.push_str(text);
     buffer.guess_segment_properties();
 
-    let shaped = rustybuzz::shape(&face, &[], buffer);
+    // `font-feature-settings: "liga" 0` (css-fonts-3 §6.4): turn off the
+    // standard and contextual ligature features so the shaper keeps the
+    // letters as separate glyphs (e.g. "fi"/"ffi" don't ligate).
+    let features = if disable_ligatures {
+        vec![
+            rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(b"liga"), 0, ..),
+            rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(b"clig"), 0, ..),
+            rustybuzz::Feature::new(rustybuzz::ttf_parser::Tag::from_bytes(b"kern"), 0, ..),
+        ]
+    } else {
+        Vec::new()
+    };
+
+    let shaped = rustybuzz::shape(&face, &features, buffer);
     let infos = shaped.glyph_infos();
     let positions = shaped.glyph_positions();
     if infos.len() != positions.len() {
@@ -247,7 +416,7 @@ mod tests {
         resolve_custom_font, shape_text_run, shape_text_with_font,
     };
     use crate::layout::engine::TextRun;
-    use crate::style::computed::FontFamily;
+    use crate::style::computed::{FontFamily, VerticalAlign};
     use std::collections::HashMap;
 
     #[test]
@@ -279,6 +448,10 @@ mod tests {
             glyph_widths: Vec::new(),
             num_h_metrics: 0,
             flags: 0,
+            is_bold: false,
+            is_italic: false,
+            x_height: 0,
+            zero_advance: 0,
             data: std::sync::Arc::new(Vec::new()),
         }
     }
@@ -286,7 +459,7 @@ mod tests {
     #[test]
     fn shape_text_with_font_empty_string_returns_zero_width() {
         let font = make_stub_font();
-        let run = shape_text_with_font("", 12.0, &font).unwrap();
+        let run = shape_text_with_font("", 12.0, &font, false).unwrap();
         assert_eq!(run.width, 0.0);
         assert!(run.glyphs.is_empty());
     }
@@ -420,12 +593,18 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Custom("Missing".into()),
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            line_height_factor: f32::NAN,
+            inline_box: None,
+            disable_ligatures: false,
+            vertical_align: VerticalAlign::Baseline,
+            text_shadow: Vec::new(),
         };
         assert!(shape_text_run(&run, &fonts).is_none());
     }
@@ -441,12 +620,18 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Helvetica,
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            line_height_factor: f32::NAN,
+            inline_box: None,
+            disable_ligatures: false,
+            vertical_align: VerticalAlign::Baseline,
+            text_shadow: Vec::new(),
         };
         assert!(shape_text_run(&run, &fonts).is_none());
     }
@@ -458,7 +643,7 @@ mod tests {
     #[test]
     fn shape_text_with_font_returns_none_for_invalid_font_data() {
         let font = make_stub_font(); // data is Vec::new(), rustybuzz can't parse it
-        assert!(shape_text_with_font("hello", 12.0, &font).is_none());
+        assert!(shape_text_with_font("hello", 12.0, &font, false).is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -497,7 +682,7 @@ mod tests {
             Some(f) => f,
             None => return, // font not available on this machine, skip
         };
-        let result = shape_text_with_font("Hi", 12.0, &font);
+        let result = shape_text_with_font("Hi", 12.0, &font, false);
         let run = result.expect("shaping should succeed with a real font");
         assert_eq!(run.glyphs.len(), 2, "two glyphs for two-character input");
         assert!(run.width > 0.0, "shaped width must be positive");
@@ -513,7 +698,7 @@ mod tests {
             Some(f) => f,
             None => return,
         };
-        let run = shape_text_with_font("A", 10.0, &font).unwrap();
+        let run = shape_text_with_font("A", 10.0, &font, false).unwrap();
         assert_eq!(run.glyphs.len(), 1);
         let g = &run.glyphs[0];
         // x_advance should be a non-negative scaled value for a normal glyph
@@ -540,6 +725,7 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Custom("Geneva".into()),
@@ -568,6 +754,7 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Custom("Geneva".into()),

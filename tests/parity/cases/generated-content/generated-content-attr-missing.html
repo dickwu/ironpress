@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>content attr missing empty</title>
+<style>
+  @page { size: 465px 104px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 340px;
+    margin: 24px;
+    padding: 10px;
+    border: 2px solid #1a1a2e;
+    background: #e9c46a;
+    font-family: ParitySans;
+    font-size: 26px;
+    line-height: 1.2;
+    color: #1a1a2e;
+  }
+  .tag::before {
+    content: "<" attr(data-missing) ">";
+    color: #9b2226;
+  }
+</style>
+</head>
+<body>
+  <div class="box"><span class="tag">widget</span></div>
+</body>
+</html>

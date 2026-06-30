@@ -4,7 +4,10 @@ use super::{
     is_css_wide_keyword,
     lightning::parse_inline_style_with_lightning,
     parse_length,
-    values::{border_spacing_value_count, parse_border_spacing_shorthand, parse_property_value},
+    values::{
+        border_spacing_value_count, parse_border_spacing_shorthand, parse_property_value,
+        parse_var_function,
+    },
 };
 
 /// Parse an inline CSS style string (e.g. "color: red; font-size: 14px").
@@ -50,13 +53,28 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         return;
     }
 
-    let prop = raw_prop.to_ascii_lowercase();
+    let mut prop = raw_prop.to_ascii_lowercase();
+    // Vendor-prefixed CSS Masking aliases (`-webkit-mask*`) are treated as the
+    // equivalent unprefixed properties (css-masking-1; widely used in the wild).
+    if prop == "-webkit-background-clip" {
+        prop = "background-clip".to_string();
+    } else if prop == "-webkit-text-fill-color" {
+        prop = "color".to_string();
+    } else if let Some(unprefixed) = prop.strip_prefix("-webkit-mask") {
+        prop = format!("mask{unprefixed}");
+    }
+    let prop = prop;
     if (prop == "margin" || prop == "padding") && !prop.contains('-') {
         expand_box_shorthand(map, &prop, val, is_important);
         return;
     }
 
-    if (prop == "margin-left" || prop == "margin-right") && val == "auto" {
+    if (prop == "margin-left"
+        || prop == "margin-right"
+        || prop == "margin-top"
+        || prop == "margin-bottom")
+        && val == "auto"
+    {
         map.set_with_importance(&prop, CssValue::Keyword("auto".to_string()), is_important);
         return;
     }
@@ -67,6 +85,15 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         if is_css_wide_keyword(&lower) {
             clear_background_shorthand_keys(map);
             map.set_with_importance("background", CssValue::Keyword(lower), is_important);
+            return;
+        }
+
+        // A bare `background: var(--x)` can't be classified at parse time
+        // (custom properties resolve in the cascade). Defer it as a
+        // background-color Var so computed-time var resolution handles it.
+        if let Some(var_val) = parse_var_function(trimmed) {
+            clear_background_shorthand_keys(map);
+            map.set_with_importance("background-color", var_val, is_important);
             return;
         }
 
@@ -85,6 +112,11 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         }
     }
 
+    if prop == "background-position-x" || prop == "background-position-y" {
+        apply_background_position_axis(map, &prop, val.trim(), is_important);
+        return;
+    }
+
     if prop == "border-spacing" {
         if let Some((horizontal, vertical)) = parse_border_spacing_shorthand(val) {
             if let Some(count) = border_spacing_value_count(val) {
@@ -101,6 +133,15 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         }
     }
 
+    if prop == "border-image" {
+        map.set_with_importance(
+            "border-image",
+            CssValue::Keyword(val.trim().to_string()),
+            is_important,
+        );
+        return;
+    }
+
     if let Some(css_value) = parse_property_value(&prop, val) {
         map.set_with_importance(&prop, css_value, is_important);
     }
@@ -112,6 +153,8 @@ fn clear_background_image_keys(map: &mut StyleMap) {
         "background-svg",
         "background-gradient",
         "background-radial-gradient",
+        "background-conic-gradient",
+        "background-layer-slots",
     ] {
         map.remove(key);
     }
@@ -126,31 +169,191 @@ fn clear_background_shorthand_keys(map: &mut StyleMap) {
         "background-repeat",
         "background-position",
         "background-origin",
+        "background-clip",
+        "background-attachment",
+        "border-image",
     ] {
         map.remove(key);
     }
 }
 
+/// Split a comma-separated CSS value into its top-level parts, ignoring commas
+/// that appear inside parentheses (e.g. `linear-gradient(a, b)`) or quotes
+/// (e.g. a `url("data:...,...")` data URI). Used to separate comma-separated
+/// `background-image` layers so each layer is parsed independently.
+fn split_top_level_commas(val: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0u32;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for ch in val.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if (in_single_quote || in_double_quote) && ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+
+        match ch {
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+                current.push(ch);
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+                current.push(ch);
+            }
+            '(' if !in_single_quote && !in_double_quote => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' if !in_single_quote && !in_double_quote && paren_depth > 0 => {
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            ',' if paren_depth == 0 && !in_single_quote && !in_double_quote => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    parts.push(current);
+    parts
+}
+
+/// The paint slot a single `background-image` layer maps to. The data model
+/// carries one raster/SVG slot and one gradient slot, so each comma-separated
+/// layer is classified into one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundLayerSlot {
+    /// A raster (`url(...)`) or SVG (`data:image/svg+xml`) image layer.
+    Raster,
+    /// A `linear-gradient(...)` or `radial-gradient(...)` layer.
+    Gradient,
+    /// A `none` layer (occupies a list position but paints nothing).
+    None,
+}
+
+impl BackgroundLayerSlot {
+    fn as_str(self) -> &'static str {
+        match self {
+            BackgroundLayerSlot::Raster => "raster",
+            BackgroundLayerSlot::Gradient => "gradient",
+            BackgroundLayerSlot::None => "none",
+        }
+    }
+}
+
+/// Apply a `background-image` value, supporting multiple comma-separated layers.
+///
+/// Each layer is parsed independently via [`apply_single_background_image_value`].
+/// The data model carries a single raster/SVG layer (`background-image` /
+/// `background-svg`) and a single gradient layer (`background-gradient` /
+/// `background-radial-gradient`) separately, so a `url(...), linear-gradient(...)`
+/// list can populate both keys. Per CSS the first listed layer paints on top,
+/// which matches the renderer's gradient-then-raster paint order.
+///
+/// When more than one layer is present, the slot of each list position is
+/// recorded in the `background-layer-slots` key (a comma-joined keyword list,
+/// e.g. `raster,gradient`). The style cascade uses that mapping to assign the
+/// matching comma-separated `background-size` / `-position` / `-repeat` entry to
+/// each slot.
+///
+/// Returns `true` if at least one layer was recognised and applied.
 fn apply_background_image_value(map: &mut StyleMap, value: &str, is_important: bool) -> bool {
+    let layers = split_top_level_commas(value);
+    if layers.len() <= 1 {
+        return apply_single_background_image_value(map, value, is_important).is_some();
+    }
+
+    let mut applied = false;
+    let mut saw_raster = false;
+    let mut saw_gradient = false;
+    let mut first_none: Option<StyleMap> = None;
+    let mut slots: Vec<&'static str> = Vec::with_capacity(layers.len());
+    for layer in &layers {
+        let mut layer_map = StyleMap::new();
+        match apply_single_background_image_value(&mut layer_map, layer, is_important) {
+            Some(slot) => {
+                slots.push(slot.as_str());
+                applied = true;
+                match slot {
+                    BackgroundLayerSlot::Raster if !saw_raster => {
+                        map.merge(&layer_map);
+                        saw_raster = true;
+                    }
+                    BackgroundLayerSlot::Gradient if !saw_gradient => {
+                        map.merge(&layer_map);
+                        saw_gradient = true;
+                    }
+                    BackgroundLayerSlot::None if first_none.is_none() => {
+                        first_none = Some(layer_map);
+                    }
+                    _ => {}
+                }
+            }
+            None => slots.push(BackgroundLayerSlot::None.as_str()),
+        }
+    }
+    if applied {
+        if !saw_raster
+            && !saw_gradient
+            && let Some(none_map) = first_none
+        {
+            map.merge(&none_map);
+        }
+        map.set_with_importance(
+            "background-layer-slots",
+            CssValue::Keyword(slots.join(",")),
+            is_important,
+        );
+    }
+    applied
+}
+
+/// Apply a single (non-comma-separated) `background-image` layer. Returns the
+/// paint slot it occupies, or `None` if the layer was not recognised.
+fn apply_single_background_image_value(
+    map: &mut StyleMap,
+    value: &str,
+    is_important: bool,
+) -> Option<BackgroundLayerSlot> {
     let trimmed = value.trim();
     let lower = trimmed.to_ascii_lowercase();
 
-    if lower.starts_with("linear-gradient(") {
+    if lower.starts_with("linear-gradient(") || lower.starts_with("repeating-linear-gradient(") {
         map.set_with_importance(
             "background-gradient",
             CssValue::Keyword(trimmed.to_string()),
             is_important,
         );
-        return true;
+        return Some(BackgroundLayerSlot::Gradient);
     }
 
-    if lower.starts_with("radial-gradient(") {
+    if lower.starts_with("radial-gradient(") || lower.starts_with("repeating-radial-gradient(") {
         map.set_with_importance(
             "background-radial-gradient",
             CssValue::Keyword(trimmed.to_string()),
             is_important,
         );
-        return true;
+        return Some(BackgroundLayerSlot::Gradient);
+    }
+
+    if lower.starts_with("conic-gradient(") || lower.starts_with("repeating-conic-gradient(") {
+        map.set_with_importance(
+            "background-conic-gradient",
+            CssValue::Keyword(trimmed.to_string()),
+            is_important,
+        );
+        return Some(BackgroundLayerSlot::Gradient);
     }
 
     if lower == "none" {
@@ -159,15 +362,52 @@ fn apply_background_image_value(map: &mut StyleMap, value: &str, is_important: b
             CssValue::Keyword("none".to_string()),
             is_important,
         );
-        return true;
+        return Some(BackgroundLayerSlot::None);
     }
 
     if let Some(svg_text) = extract_svg_data_uri(trimmed) {
         map.set_with_importance("background-svg", CssValue::Keyword(svg_text), is_important);
-        return true;
+        return Some(BackgroundLayerSlot::Raster);
     }
 
-    false
+    // A non-SVG `url(...)` is a raster image layer. Preserve the full `url(...)`
+    // token (rather than just the path) so the raster builder can resolve it.
+    if let Some(url) = extract_image_set_url(trimmed) {
+        map.set_with_importance("background-image", CssValue::Keyword(url), is_important);
+        return Some(BackgroundLayerSlot::Raster);
+    }
+
+    if lower.starts_with("url(") {
+        map.set_with_importance(
+            "background-image",
+            CssValue::Keyword(trimmed.to_string()),
+            is_important,
+        );
+        return Some(BackgroundLayerSlot::Raster);
+    }
+
+    None
+}
+
+fn extract_image_set_url(value: &str) -> Option<String> {
+    let lower = value.trim().to_ascii_lowercase();
+    let inner = lower
+        .strip_prefix("image-set(")
+        .or_else(|| lower.strip_prefix("-webkit-image-set("))?;
+    if !inner.ends_with(')') {
+        return None;
+    }
+    let raw_inner = &value.trim()[value.trim().find('(')? + 1..value.trim().len() - 1];
+    split_top_level_commas(raw_inner)
+        .into_iter()
+        .find_map(|candidate| {
+            let token = candidate.trim();
+            token.find("url(").and_then(|start| {
+                let tail = &token[start..];
+                let end = tail.find(')')?;
+                Some(tail[..=end].to_string())
+            })
+        })
 }
 
 fn apply_background_shorthand_defaults(map: &mut StyleMap, is_important: bool) {
@@ -201,6 +441,16 @@ fn apply_background_shorthand_defaults(map: &mut StyleMap, is_important: bool) {
         CssValue::Keyword("padding-box".to_string()),
         is_important,
     );
+    map.set_with_importance(
+        "background-clip",
+        CssValue::Keyword("border-box".to_string()),
+        is_important,
+    );
+    map.set_with_importance(
+        "background-attachment",
+        CssValue::Keyword("scroll".to_string()),
+        is_important,
+    );
 }
 
 fn ensure_background_shorthand_defaults(
@@ -214,21 +464,43 @@ fn ensure_background_shorthand_defaults(
     }
 }
 
-fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool) -> bool {
-    let mut defaults_applied = false;
+#[derive(Default)]
+struct BackgroundLayerParts {
+    image: Option<String>,
+    size: Option<String>,
+    repeat: Option<String>,
+    position: Option<String>,
+    origin: Option<String>,
+    clip: Option<String>,
+    attachment: Option<String>,
+    color: Option<CssValue>,
+    recognized: bool,
+}
 
-    if let Some(color_value) = super::values::parse_color(val) {
-        ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
-        map.set_with_importance("background-color", color_value, is_important);
-        return true;
+impl BackgroundLayerParts {
+    fn has_any(&self) -> bool {
+        self.recognized || self.color.is_some()
     }
+}
 
-    let origin_keywords = ["padding-box", "border-box", "content-box"];
-    let repeat_keywords = ["no-repeat", "repeat", "repeat-x", "repeat-y"];
-    let position_keywords = ["center", "top", "bottom", "left", "right"];
+fn parse_background_layer(val: &str, allow_color: bool) -> BackgroundLayerParts {
+    const ORIGIN_KEYWORDS: [&str; 3] = ["padding-box", "border-box", "content-box"];
+    const REPEAT_KEYWORDS: [&str; 6] = [
+        "no-repeat",
+        "repeat",
+        "repeat-x",
+        "repeat-y",
+        "space",
+        "round",
+    ];
+    const ATTACHMENT_KEYWORDS: [&str; 3] = ["scroll", "fixed", "local"];
+    const POSITION_KEYWORDS: [&str; 5] = ["center", "top", "bottom", "left", "right"];
+
+    let mut layer = BackgroundLayerParts::default();
     let mut found_image = false;
     let mut found_repeat = false;
     let mut found_origin = false;
+    let mut found_clip = false;
     let mut found_size = false;
     let mut found_color = false;
     let mut position_parts = Vec::new();
@@ -240,40 +512,64 @@ fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool)
 
         if !found_image
             && (lower.starts_with("linear-gradient(")
+                || lower.starts_with("repeating-linear-gradient(")
                 || lower.starts_with("radial-gradient(")
+                || lower.starts_with("repeating-radial-gradient(")
+                || lower.starts_with("conic-gradient(")
+                || lower.starts_with("repeating-conic-gradient(")
                 || lower.starts_with("url(")
+                || lower.starts_with("image-set(")
+                || lower.starts_with("-webkit-image-set(")
                 || lower == "none")
         {
-            ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
-            if apply_background_image_value(map, token, is_important) {
-                found_image = true;
-                index += 1;
-                continue;
-            }
-            if lower.starts_with("url(") {
-                map.set_with_importance(
-                    "background-image",
-                    CssValue::Keyword(token.trim().to_string()),
-                    is_important,
-                );
-                found_image = true;
-                index += 1;
-                continue;
-            }
-        }
-
-        if !found_origin && origin_keywords.contains(&lower.as_str()) {
-            ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
-            map.set_with_importance("background-origin", CssValue::Keyword(lower), is_important);
-            found_origin = true;
+            layer.image = Some(token.trim().to_string());
+            layer.recognized = true;
+            found_image = true;
             index += 1;
             continue;
         }
 
-        if !found_repeat && repeat_keywords.contains(&lower.as_str()) {
-            ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
-            map.set_with_importance("background-repeat", CssValue::Keyword(lower), is_important);
+        // In the `background` shorthand the box value sets `background-origin`
+        // then `background-clip` (css-backgrounds-3 §3.10). The first box token
+        // is the origin AND the clip; a second box token overrides the clip.
+        if ORIGIN_KEYWORDS.contains(&lower.as_str()) && (!found_origin || !found_clip) {
+            if !found_origin {
+                layer.origin = Some(lower.clone());
+                found_origin = true;
+                // A lone box value also sets the clip; `found_clip` stays false
+                // so a later box token can still override it below.
+                layer.clip = Some(lower);
+            } else {
+                layer.clip = Some(lower);
+                found_clip = true;
+            }
+            layer.recognized = true;
+            index += 1;
+            continue;
+        }
+
+        if !found_repeat && REPEAT_KEYWORDS.contains(&lower.as_str()) {
+            let mut repeat = lower;
+            if matches!(repeat.as_str(), "repeat" | "space" | "round" | "no-repeat")
+                && let Some(next_token) = tokens.get(index + 1)
+            {
+                let next = next_token.trim().to_ascii_lowercase();
+                if matches!(next.as_str(), "repeat" | "space" | "round" | "no-repeat") {
+                    repeat.push(' ');
+                    repeat.push_str(&next);
+                    index += 1;
+                }
+            }
+            layer.repeat = Some(repeat);
+            layer.recognized = true;
             found_repeat = true;
+            index += 1;
+            continue;
+        }
+
+        if ATTACHMENT_KEYWORDS.contains(&lower.as_str()) {
+            layer.attachment = Some(lower);
+            layer.recognized = true;
             index += 1;
             continue;
         }
@@ -282,26 +578,22 @@ fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool)
             index += 1;
             if !found_size {
                 if let Some(size_token) = tokens.get(index) {
-                    ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
                     let mut size = size_token.trim().to_string();
                     if let Some(next_token) = tokens.get(index + 1) {
                         let next = next_token.trim().to_ascii_lowercase();
                         if is_background_size_continuation(
                             &next,
-                            &origin_keywords,
-                            &repeat_keywords,
-                            &position_keywords,
+                            &ORIGIN_KEYWORDS,
+                            &REPEAT_KEYWORDS,
+                            &POSITION_KEYWORDS,
                         ) {
                             size.push(' ');
                             size.push_str(next_token.trim());
                             index += 1;
                         }
                     }
-                    map.set_with_importance(
-                        "background-size",
-                        CssValue::Keyword(size),
-                        is_important,
-                    );
+                    layer.size = Some(size);
+                    layer.recognized = true;
                     found_size = true;
                 }
             }
@@ -309,17 +601,15 @@ fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool)
             continue;
         }
 
-        if position_keywords.contains(&lower.as_str()) || is_background_position_length(token) {
-            ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
+        if POSITION_KEYWORDS.contains(&lower.as_str()) || is_background_position_length(token) {
             position_parts.push(token.trim().to_string());
             index += 1;
             continue;
         }
 
-        if !found_color {
+        if allow_color && !found_color {
             if let Some(color_value) = super::values::parse_color(token) {
-                ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
-                map.set_with_importance("background-color", color_value, is_important);
+                layer.color = Some(color_value);
                 found_color = true;
                 index += 1;
                 continue;
@@ -330,14 +620,108 @@ fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool)
     }
 
     if !position_parts.is_empty() {
-        map.set_with_importance(
-            "background-position",
-            CssValue::Keyword(position_parts.join(" ")),
-            is_important,
-        );
+        layer.position = Some(position_parts.join(" "));
+        layer.recognized = true;
     }
 
-    defaults_applied
+    layer
+}
+
+fn parse_background_shorthand(val: &str, map: &mut StyleMap, is_important: bool) -> bool {
+    let layer_values = split_top_level_commas(val);
+    let mut layers = Vec::with_capacity(layer_values.len());
+    for (index, layer_value) in layer_values.iter().enumerate() {
+        layers.push(parse_background_layer(
+            layer_value,
+            index + 1 == layer_values.len(),
+        ));
+    }
+
+    if layers.iter().all(|layer| !layer.has_any()) {
+        return false;
+    }
+
+    let mut defaults_applied = false;
+    ensure_background_shorthand_defaults(map, &mut defaults_applied, is_important);
+
+    let image_list = layers
+        .iter()
+        .map(|layer| layer.image.as_deref().unwrap_or("none"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = apply_background_image_value(map, &image_list, is_important);
+
+    let size_list = layers
+        .iter()
+        .map(|layer| layer.size.as_deref().unwrap_or("auto"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-size",
+        CssValue::Keyword(size_list),
+        is_important,
+    );
+
+    let repeat_list = layers
+        .iter()
+        .map(|layer| layer.repeat.as_deref().unwrap_or("repeat"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-repeat",
+        CssValue::Keyword(repeat_list),
+        is_important,
+    );
+
+    let position_list = layers
+        .iter()
+        .map(|layer| layer.position.as_deref().unwrap_or("0% 0%"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-position",
+        CssValue::Keyword(position_list),
+        is_important,
+    );
+
+    let origin_list = layers
+        .iter()
+        .map(|layer| layer.origin.as_deref().unwrap_or("padding-box"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-origin",
+        CssValue::Keyword(origin_list),
+        is_important,
+    );
+
+    let clip_list = layers
+        .iter()
+        .map(|layer| layer.clip.as_deref().unwrap_or("border-box"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-clip",
+        CssValue::Keyword(clip_list),
+        is_important,
+    );
+
+    let attachment_list = layers
+        .iter()
+        .map(|layer| layer.attachment.as_deref().unwrap_or("scroll"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    map.set_with_importance(
+        "background-attachment",
+        CssValue::Keyword(attachment_list),
+        is_important,
+    );
+
+    if let Some(color_value) = layers.last().and_then(|layer| layer.color.clone()) {
+        map.set_with_importance("background-color", color_value, is_important);
+    }
+
+    true
 }
 
 fn is_background_size_continuation(
@@ -360,6 +744,84 @@ fn is_background_position_length(token: &str) -> bool {
         parse_length(token),
         Some(CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Calc(_))
     )
+}
+
+fn apply_background_position_axis(map: &mut StyleMap, prop: &str, value: &str, is_important: bool) {
+    let axis_values: Vec<String> = split_top_level_commas(value)
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if axis_values.is_empty() {
+        return;
+    }
+
+    let existing_positions = map
+        .get("background-position")
+        .and_then(|value| match value {
+            CssValue::Keyword(position) => Some(
+                split_top_level_commas(position)
+                    .into_iter()
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .filter(|positions| !positions.is_empty())
+        .unwrap_or_else(|| vec!["0% 0%".to_string()]);
+
+    let layer_count = axis_values.len().max(existing_positions.len());
+    let mut positions = Vec::with_capacity(layer_count);
+    for index in 0..layer_count {
+        let (mut x, mut y) =
+            split_background_position_axes(&existing_positions[index % existing_positions.len()]);
+        let axis = axis_values[index % axis_values.len()].clone();
+        if prop == "background-position-x" {
+            x = axis;
+        } else {
+            y = axis;
+        }
+        positions.push(format!("{x} {y}"));
+    }
+
+    map.set_with_importance(
+        "background-position",
+        CssValue::Keyword(positions.join(", ")),
+        is_important,
+    );
+}
+
+fn split_background_position_axes(position: &str) -> (String, String) {
+    let tokens = tokenize_background_value(position);
+    match tokens.as_slice() {
+        [] => ("0%".to_string(), "0%".to_string()),
+        [token] => {
+            let lower = token.to_ascii_lowercase();
+            if matches!(lower.as_str(), "top" | "bottom") {
+                ("center".to_string(), token.trim().to_string())
+            } else if lower == "center" {
+                ("center".to_string(), "center".to_string())
+            } else {
+                (token.trim().to_string(), "center".to_string())
+            }
+        }
+        [first, second] => {
+            let first_lower = first.to_ascii_lowercase();
+            let second_lower = second.to_ascii_lowercase();
+            if matches!(first_lower.as_str(), "top" | "bottom")
+                || matches!(second_lower.as_str(), "left" | "right")
+            {
+                (second.trim().to_string(), first.trim().to_string())
+            } else {
+                (first.trim().to_string(), second.trim().to_string())
+            }
+        }
+        _ => {
+            let split_at = tokens.len() / 2;
+            (tokens[..split_at].join(" "), tokens[split_at..].join(" "))
+        }
+    }
 }
 
 fn tokenize_background_value(val: &str) -> Vec<String> {
@@ -432,6 +894,7 @@ fn prefer_legacy_value_form(key: &str, parsed: &CssValue, legacy: &CssValue) -> 
             | "border-bottom"
             | "border-left"
             | "outline"
+            | "background-image"
             | "background-size"
             | "background-position"
     ) || prefers_legacy_relative_length(key, parsed, legacy)
@@ -507,20 +970,21 @@ fn expand_box_shorthand(map: &mut StyleMap, prop: &str, val: &str, is_important:
         return;
     }
 
-    if let Some(CssValue::Length(value)) = parse_property_value(prop, val) {
+    // Single-value shorthand: applies to all four sides. Use `parse_length`,
+    // which preserves percentages (`padding: 10%`), calc(), var(), and relative
+    // units — `parse_property_value` only surfaced absolute lengths, silently
+    // dropping percentage padding/margin (CSS 2.1 § 8.4: % resolves against the
+    // containing block WIDTH on every side, including vertical).
+    if let Some(value) = parse_length(val) {
         for side in ["top", "right", "bottom", "left"] {
-            map.set_with_importance(
-                &format!("{prop}-{side}"),
-                CssValue::Length(value),
-                is_important,
-            );
+            map.set_with_importance(&format!("{prop}-{side}"), value.clone(), is_important);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_inline_style;
+    use super::{apply_declaration, parse_inline_style, split_top_level_commas};
     use crate::parser::css::{CssValue, StyleMap};
 
     #[test]
@@ -800,6 +1264,136 @@ mod tests {
         assert!(
             style.get("background-svg").is_some(),
             "expected background-svg from SVG data URI in background shorthand"
+        );
+    }
+
+    #[test]
+    fn split_top_level_commas_respects_parens_and_quotes() {
+        let parts = split_top_level_commas(
+            "url(\"data:image/png;base64,AAA\"), linear-gradient(to bottom, #fff, #000)",
+        );
+        assert_eq!(parts.len(), 2, "got: {parts:?}");
+        assert!(parts[0].contains("url("));
+        assert!(parts[1].trim().starts_with("linear-gradient("));
+    }
+
+    #[test]
+    fn inline_background_image_layers_url_and_gradient() {
+        // A comma-separated `background-image` with a raster url() layer and a
+        // gradient layer should populate BOTH the raster and gradient keys
+        // (one raster + one gradient layer can coexist in the data model).
+        // Use apply_declaration directly so the data-URI `;` is not split by
+        // the legacy declaration tokenizer.
+        let mut style = StyleMap::new();
+        apply_declaration(
+            &mut style,
+            "background-image",
+            "url(\"data:image/png;base64,iVBORw0KGgo=\"), \
+             linear-gradient(to bottom, #ffd600, #00bcd4)",
+            false,
+        );
+        assert!(
+            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v.contains("url(")),
+            "expected raster background-image layer to be captured: {:?}",
+            style.get("background-image")
+        );
+        assert!(
+            matches!(style.get("background-gradient"), Some(CssValue::Keyword(v)) if v.starts_with("linear-gradient(")),
+            "expected gradient background-image layer to be captured: {:?}",
+            style.get("background-gradient")
+        );
+    }
+
+    #[test]
+    fn inline_background_image_same_slot_keeps_top_layer() {
+        let mut style = StyleMap::new();
+        apply_declaration(
+            &mut style,
+            "background-image",
+            "url(top.png), url(bottom.png)",
+            false,
+        );
+        assert!(
+            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v == "url(top.png)"),
+            "single raster slot should retain the topmost CSS layer: {:?}",
+            style.get("background-image")
+        );
+        assert!(
+            matches!(style.get("background-layer-slots"), Some(CssValue::Keyword(v)) if v == "raster,raster"),
+            "slot list should still preserve both source layers"
+        );
+    }
+
+    #[test]
+    fn inline_background_image_single_layer_unchanged() {
+        // A single gradient layer must still parse exactly as before (no
+        // spurious background-image key).
+        let mut style = StyleMap::new();
+        apply_declaration(
+            &mut style,
+            "background-image",
+            "linear-gradient(to right, red, blue)",
+            false,
+        );
+        assert!(
+            matches!(style.get("background-gradient"), Some(CssValue::Keyword(v)) if v.starts_with("linear-gradient(")),
+            "single gradient layer should set background-gradient"
+        );
+        assert!(
+            !matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v.contains("url(")),
+            "single gradient must not set a raster background-image"
+        );
+    }
+
+    #[test]
+    fn inline_background_shorthand_expands_layer_lists_and_final_color() {
+        let mut style = StyleMap::new();
+        apply_declaration(
+            &mut style,
+            "background",
+            "url(top.png) left top / 10px 20px no-repeat content-box, \
+             linear-gradient(red, blue) right bottom / 30px 40px repeat padding-box border-box #fdd835",
+            false,
+        );
+        assert!(
+            matches!(style.get("background-layer-slots"), Some(CssValue::Keyword(v)) if v == "raster,gradient"),
+            "slot list should preserve layer order"
+        );
+        assert!(
+            matches!(style.get("background-position"), Some(CssValue::Keyword(v)) if v == "left top, right bottom"),
+            "background-position list should match layers: {:?}",
+            style.get("background-position")
+        );
+        assert!(
+            matches!(style.get("background-size"), Some(CssValue::Keyword(v)) if v == "10px 20px, 30px 40px"),
+            "background-size list should match layers: {:?}",
+            style.get("background-size")
+        );
+        assert!(
+            matches!(style.get("background-origin"), Some(CssValue::Keyword(v)) if v == "content-box, padding-box"),
+            "background-origin list should match layers: {:?}",
+            style.get("background-origin")
+        );
+        assert!(
+            matches!(style.get("background-clip"), Some(CssValue::Keyword(v)) if v == "content-box, border-box"),
+            "background-clip list should match layers: {:?}",
+            style.get("background-clip")
+        );
+        assert!(
+            matches!(style.get("background-color"), Some(CssValue::Color(color)) if color.r == 0xfd && color.g == 0xd8 && color.b == 0x35),
+            "final-layer background-color should survive"
+        );
+    }
+
+    #[test]
+    fn inline_background_position_xy_longhands_compose_position() {
+        let mut style = StyleMap::new();
+        apply_declaration(&mut style, "background-position-x", "80px", false);
+        apply_declaration(&mut style, "background-position-y", "30px", false);
+        assert!(
+            matches!(style.get("background-position"), Some(CssValue::Keyword(v)) if v == "80px 30px"),
+            "x/y longhands should compose background-position: {:?}",
+            style.get("background-position")
         );
     }
 

@@ -94,6 +94,8 @@ pub fn resolve_calc(
             CalcToken::Rem(v) => values.push(*v * root_font_size),
             CalcToken::Vw(v) => values.push(page_width * v / 100.0),
             CalcToken::Vh(v) => values.push(page_height * v / 100.0),
+            CalcToken::Vmin(v) => values.push(page_width.min(page_height) * v / 100.0),
+            CalcToken::Vmax(v) => values.push(page_width.max(page_height) * v / 100.0),
             CalcToken::Op(op) => ops.push(*op),
         }
     }
@@ -152,9 +154,18 @@ pub fn resolve_length_value_in_context(
         CssValue::Length(v) => Some(*v),
         CssValue::Number(v) => Some(*v),
         CssValue::Percentage(v) => Some(ctx.parent_width * v / 100.0),
+        // ex/ch resolve against the element's own font metrics. The resolution
+        // context does not carry the font, so use the css-values-4 fallbacks
+        // (x-height ~= 0.5em, '0' advance ~= 0.5em). The `font-size` property —
+        // where the metric matters most and the font *is* known — resolves these
+        // with real metrics in `apply_style_map`.
+        CssValue::Ex(v) => Some(*v * 0.5 * ctx.font_size),
+        CssValue::Ch(v) => Some(*v * 0.5 * ctx.font_size),
         CssValue::Rem(v) => Some(*v * ctx.root_font_size),
         CssValue::Vw(v) => Some(ctx.page_width * v / 100.0),
         CssValue::Vh(v) => Some(ctx.page_height * v / 100.0),
+        CssValue::Vmin(v) => Some(ctx.page_width.min(ctx.page_height) * v / 100.0),
+        CssValue::Vmax(v) => Some(ctx.page_width.max(ctx.page_height) * v / 100.0),
         CssValue::Calc(tokens) => Some(resolve_calc(
             tokens,
             ctx.parent_width,
@@ -163,6 +174,20 @@ pub fn resolve_length_value_in_context(
             ctx.page_width,
             ctx.page_height,
         )),
+        CssValue::Clamp(min, preferred, max) => {
+            // clamp(min, preferred, max) == max(min, min(preferred, max)).
+            // Each operand resolves against the same context (percentages use
+            // `ctx.parent_width`; callers wanting a height basis substitute it
+            // into `parent_width`). If an operand can't resolve, fall back to the
+            // preferred value alone so we still produce a usable length.
+            let min = resolve_length_value_in_context(min, ctx, custom_properties);
+            let preferred = resolve_length_value_in_context(preferred, ctx, custom_properties);
+            let max = resolve_length_value_in_context(max, ctx, custom_properties);
+            match (min, preferred, max) {
+                (Some(lo), Some(pref), Some(hi)) => Some(pref.min(hi).max(lo)),
+                _ => preferred,
+            }
+        }
         CssValue::Var(name, fallback) => {
             let raw = resolve_var_to_string(name, fallback.as_deref(), custom_properties)?;
             let parsed = crate::parser::css::parse_inline_style(&format!("_x: {raw}"));

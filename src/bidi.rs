@@ -11,7 +11,11 @@ use unicode_bidi::{BidiInfo, Level};
 /// the downstream text shaper (rustybuzz, via `guess_segment_properties`)
 /// can apply the correct RTL shaping itself. Pre-reversing here would cause
 /// rustybuzz to reverse a second time, undoing the bidi reorder.
-pub(crate) fn reorder_runs_bidi(runs: &[TextRun], paragraph_rtl: bool) -> Vec<TextRun> {
+pub(crate) fn reorder_runs_bidi(
+    runs: &[TextRun],
+    paragraph_rtl: bool,
+    bidi_override: bool,
+) -> Vec<TextRun> {
     if runs.is_empty() {
         return Vec::new();
     }
@@ -19,6 +23,34 @@ pub(crate) fn reorder_runs_bidi(runs: &[TextRun], paragraph_rtl: bool) -> Vec<Te
     let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
     if full_text.is_empty() {
         return runs.to_vec();
+    }
+
+    // `unicode-bidi: bidi-override`: the characters' intrinsic bidi classes are
+    // ignored and the content is laid out strictly in sequence according to
+    // `direction` (css-writing-modes-4 §2.4). For `direction: rtl` this means
+    // the entire visual order is the reverse of logical order; for `ltr` the
+    // logical order is kept. The text inside each emitted run is reversed so the
+    // shaper does not re-flip it (rustybuzz reverses RTL-shaped runs itself, but
+    // these glyphs are forced, not naturally RTL, so we pre-reverse here).
+    if bidi_override {
+        if !paragraph_rtl {
+            return runs.to_vec();
+        }
+        let mut result: Vec<TextRun> = Vec::with_capacity(runs.len());
+        for run in runs.iter().rev() {
+            if run.text.is_empty() {
+                continue;
+            }
+            result.push(TextRun {
+                text: run.text.chars().rev().collect(),
+                ..run.clone()
+            });
+        }
+        return if result.is_empty() {
+            runs.to_vec()
+        } else {
+            result
+        };
     }
 
     let default_level = if paragraph_rtl {
@@ -106,7 +138,45 @@ pub(crate) fn reorder_runs_bidi(runs: &[TextRun], paragraph_rtl: bool) -> Vec<Te
     if result.is_empty() {
         runs.to_vec()
     } else {
+        move_first_visual_run_leading_spaces_to_end(&mut result);
+        move_trailing_spaces_to_previous_visual_run(&mut result);
         result
+    }
+}
+
+fn move_first_visual_run_leading_spaces_to_end(runs: &mut [TextRun]) {
+    let Some(first) = runs.first_mut() else {
+        return;
+    };
+    let count = first.text.chars().take_while(|ch| *ch == ' ').count();
+    if count == 0 || count == first.text.chars().count() {
+        return;
+    }
+    let mut rest = first.text.chars().skip(count).collect::<String>();
+    for _ in 0..count {
+        rest.push(' ');
+    }
+    first.text = rest;
+}
+
+fn move_trailing_spaces_to_previous_visual_run(runs: &mut [TextRun]) {
+    for idx in 1..runs.len() {
+        let trailing: String = runs[idx]
+            .text
+            .chars()
+            .rev()
+            .take_while(|ch| *ch == ' ')
+            .collect();
+        if trailing.is_empty() {
+            continue;
+        }
+        let count = trailing.chars().count();
+        for _ in 0..count {
+            runs[idx].text.pop();
+        }
+        for _ in 0..count {
+            runs[idx - 1].text.push(' ');
+        }
     }
 }
 
@@ -124,10 +194,33 @@ pub(crate) fn has_rtl_chars(text: &str) -> bool {
     })
 }
 
+pub(crate) fn first_strong_is_rtl(text: &str) -> bool {
+    for ch in text.chars() {
+        let c = ch as u32;
+        if (0x0041..=0x005a).contains(&c)
+            || (0x0061..=0x007a).contains(&c)
+            || (0x00c0..=0x02af).contains(&c)
+        {
+            return false;
+        }
+        if (0x0600..=0x06FF).contains(&c)
+            || (0x0750..=0x077F).contains(&c)
+            || (0x08A0..=0x08FF).contains(&c)
+            || (0xFB50..=0xFDFF).contains(&c)
+            || (0xFE70..=0xFEFF).contains(&c)
+            || (0x0590..=0x05FF).contains(&c)
+            || (0xFB1D..=0xFB4F).contains(&c)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::computed::FontFamily;
+    use crate::style::computed::{FontFamily, VerticalAlign};
 
     fn make_run(text: &str) -> TextRun {
         TextRun {
@@ -138,19 +231,25 @@ mod tests {
             underline: false,
             line_through: false,
             overline: false,
+            decoration_color: None,
             color: (0.0, 0.0, 0.0),
             link_url: None,
             font_family: FontFamily::Helvetica,
             background_color: None,
             padding: (0.0, 0.0),
             border_radius: 0.0,
+            line_height_factor: f32::NAN,
+            inline_box: None,
+            disable_ligatures: false,
+            vertical_align: VerticalAlign::Baseline,
+            text_shadow: Vec::new(),
         }
     }
 
     #[test]
     fn pure_ltr_unchanged() {
         let runs = vec![make_run("Hello World")];
-        let result = reorder_runs_bidi(&runs, false);
+        let result = reorder_runs_bidi(&runs, false, false);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "Hello World");
     }
@@ -166,7 +265,7 @@ mod tests {
     #[test]
     fn mixed_ltr_rtl_reorders() {
         let runs = vec![make_run("Hello مرحبا World")];
-        let result = reorder_runs_bidi(&runs, false);
+        let result = reorder_runs_bidi(&runs, false, false);
         let combined: String = result.iter().map(|r| r.text.as_str()).collect();
         // Should contain all characters
         assert!(combined.contains("Hello"));
@@ -181,7 +280,25 @@ mod tests {
 
     #[test]
     fn empty_runs() {
-        let result = reorder_runs_bidi(&[], false);
+        let result = reorder_runs_bidi(&[], false, false);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn bidi_override_rtl_reverses_ltr_text() {
+        // `unicode-bidi: bidi-override` + `direction: rtl` forces strictly
+        // sequential RTL layout, so Latin "ABCDEF" displays as "FEDCBA".
+        let runs = vec![make_run("ABCDEF")];
+        let result = reorder_runs_bidi(&runs, true, true);
+        let combined: String = result.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(combined, "FEDCBA");
+    }
+
+    #[test]
+    fn bidi_override_ltr_keeps_order() {
+        let runs = vec![make_run("ABCDEF")];
+        let result = reorder_runs_bidi(&runs, false, true);
+        let combined: String = result.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(combined, "ABCDEF");
     }
 }
