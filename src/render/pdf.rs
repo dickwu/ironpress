@@ -2498,6 +2498,7 @@ fn draw_image_border(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_image_filter_effect(
     content: &mut String,
     pdf_writer: &mut PdfWriter,
@@ -19790,6 +19791,7 @@ impl PdfWriter {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn maybe_resize_image(
         &self,
         data: &[u8],

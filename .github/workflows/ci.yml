@@ -129,7 +129,7 @@ jobs:
         run: cargo build --release
 
       - name: Run parity benchmarks (release)
-        run: cargo test --test parity_tests --release -- --ignored --nocapture 2>&1 | tee /tmp/bench-output.txt
+        run: cargo test --test parity_tests --release parity_benchmark_report -- --ignored --nocapture 2>&1 | tee /tmp/bench-output.txt
 
       - name: Render all fixtures to PDF
         run: bash scripts/render-fixtures.sh /tmp/parity-pdfs
@@ -203,8 +203,8 @@ jobs:
           path: ~/.cargo/bin/cargo-tarpaulin
           key: tarpaulin-${{ runner.os }}-v2
       - run: command -v cargo-tarpaulin || cargo install cargo-tarpaulin
-      - run: cargo tarpaulin --out xml --output-dir ./default-cov --skip-clean
-      - run: cargo tarpaulin --out xml --output-dir ./remote-cov --skip-clean --features remote
+      - run: cargo tarpaulin --lib --out xml --output-dir ./default-cov --skip-clean
+      - run: cargo tarpaulin --lib --out xml --output-dir ./remote-cov --skip-clean --features remote
       - uses: codecov/codecov-action@v5
         with:
           files: ./default-cov/cobertura.xml,./remote-cov/cobertura.xml

@@ -1491,6 +1491,7 @@ fn background_paint_differs(a: &ComputedStyle, b: &ComputedStyle) -> bool {
 const DEFAULT_FILTER_DPI: f32 = 150.0;
 
 /// Lay out the DOM nodes into pages with stylesheet rules and custom fonts.
+#[allow(clippy::too_many_arguments)]
 pub fn layout_with_rules_and_fonts(
     nodes: &[DomNode],
     page_size: PageSize,

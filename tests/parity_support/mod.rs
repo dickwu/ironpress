@@ -19,12 +19,13 @@
 //! multi-gate verdict is now the ONLY scoring path (revert safety net = the git
 //! tag `harness-pre-v2`).
 //!
-//! The engine ALWAYS writes `report.json` + `REPORT.md`, then enforces the
-//! regression gate against the committed baseline `report.json` (loaded before
-//! any write): it fails the test only on an overall-score regression beyond
-//! EPSILON, or a named PASS->FAIL transition. Missing baseline => first run
-//! (write baseline, pass). A missing reference or a missing `pdftoppm` yields
-//! UNKNOWN and never fails CI. A single fixture error never aborts the run.
+//! The engine writes `report.json` + `REPORT.md`, then enforces the regression
+//! gate against the committed baseline `report.json` (loaded before any write):
+//! it fails the test only on an overall-score regression beyond EPSILON, or a
+//! named PASS->FAIL transition. Missing baseline => first run (write baseline,
+//! pass). A missing reference yields UNKNOWN and never fails CI; a missing
+//! `pdftoppm` skips baseline writes and the gate because every fixture is
+//! UNKNOWN. A single fixture error never aborts the run.
 //!
 //! The engine is split into single-responsibility submodules (C1 mechanical
 //! split). This `mod.rs` is the thin orchestrator: it wires `run()`'s top-level
@@ -258,7 +259,18 @@ pub fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    // ALWAYS write report.json + REPORT.md.
+    // A full run without Poppler cannot produce scored parity data: every
+    // fixture is UNKNOWN. Keep that non-gating as documented, and do not
+    // overwrite the committed baseline with a zero-score report in generic CI.
+    if !pdftoppm_available {
+        println!(
+            "parity: pdftoppm unavailable; {} fixture(s) UNKNOWN - baseline NOT written, gate SKIPPED.",
+            report.overall.total
+        );
+        return Ok(());
+    }
+
+    // Full scored runs update report.json + REPORT.md before enforcing the gate.
     write_report_json(&baseline_path, &report)?;
     write_report_md(&parity_dir.join("REPORT.md"), &report)?;
 
