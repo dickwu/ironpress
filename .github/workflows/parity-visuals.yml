@@ -1,11 +1,13 @@
 name: Parity Visuals
 
-# On every pull request: regenerate the Chrome references with a PINNED Chromium,
-# re-run the parity engine (candidates + diff maps + report.json), rebuild the
-# committed visual report (refs | ironpress | diff side-by-side), and either
-#   * SAME-REPO PR  -> auto-commit tests/parity/{refs,out,reports,refs.lock} back
-#                      to the PR head branch (with [skip ci] so it doesn't loop), or
-#   * FORK PR        -> upload the report as a build artifact (no write token).
+# On every pull request: re-run the parity engine (candidates + diff maps +
+# report.json), rebuild the visual report (refs | ironpress | diff
+# side-by-side), and either
+#   * SAME-REPO PR  -> refresh refs with pinned Chromium, then auto-commit
+#                      tests/parity/{refs,out,reports,refs.lock} back to the PR
+#                      head branch (with [skip ci] so it doesn't loop), or
+#   * FORK PR        -> keep committed refs and upload the report as a build
+#                      artifact (no write token).
 # A PR summary with the overall % and PASS/PARTIAL/FAIL counts is always posted.
 #
 # This workflow is for VISUALS / refresh only — it is NOT the gate. If the pinned
@@ -89,7 +91,9 @@ jobs:
         run: |
           set -e
           CHROME_PATH="${{ steps.chrome.outputs.chrome-path }}"
-          if [ "${{ steps.chrome.outcome }}" = "success" ] && [ -n "$CHROME_PATH" ] && [ -x "$CHROME_PATH" ]; then
+          if [ "${{ steps.fork.outputs.is_fork }}" = "true" ]; then
+            echo "::notice::fork PR: keeping committed refs; parity.yml owns regression gating."
+          elif [ "${{ steps.chrome.outcome }}" = "success" ] && [ -n "$CHROME_PATH" ] && [ -x "$CHROME_PATH" ]; then
             # gen-refs auto-detects `chromium`/`google-chrome` on PATH. Expose the
             # pinned binary under a recognized name on a dir that is always on PATH.
             sudo ln -sf "$CHROME_PATH" /usr/local/bin/chromium
