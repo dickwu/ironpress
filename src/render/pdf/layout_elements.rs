@@ -1296,21 +1296,36 @@ pub(super) fn plan_nested_layout_elements(
                 flow_extra_bottom,
                 margin_top,
                 margin_bottom,
-                ..
-            }
-            | LayoutElement::Svg {
-                height,
-                flow_extra_bottom,
-                margin_top,
-                margin_bottom,
+                offset_top,
+                offset_left,
                 ..
             } => {
                 let top_y = cursor_y - *margin_top;
                 planned.push(PlannedNestedElement {
                     element,
                     source_index: element_idx,
-                    origin_x: frame.origin_x,
-                    top_y,
+                    origin_x: frame.origin_x + *offset_left,
+                    top_y: top_y - *offset_top,
+                    available_width: frame.available_width,
+                    blur_canvas_box: None,
+                });
+                cursor_y = top_y - *height - *flow_extra_bottom - *margin_bottom;
+            }
+            LayoutElement::Svg {
+                height,
+                flow_extra_bottom,
+                margin_top,
+                margin_bottom,
+                offset_top,
+                offset_left,
+                ..
+            } => {
+                let top_y = cursor_y - *margin_top;
+                planned.push(PlannedNestedElement {
+                    element,
+                    source_index: element_idx,
+                    origin_x: frame.origin_x + *offset_left,
+                    top_y: top_y - *offset_top,
                     available_width: frame.available_width,
                     blur_canvas_box: None,
                 });

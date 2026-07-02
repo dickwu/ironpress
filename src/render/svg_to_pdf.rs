@@ -7,13 +7,19 @@ use crate::parser::svg::{
 use crate::render::pdf::encode_pdf_text;
 use crate::render::shading::{ShadingEntry, push_axial_shading, push_radial_shading};
 use crate::render::svg_geometry::{
-    SvgPlacementRequest, SvgViewportBox, compute_raster_placement, compute_svg_placement,
+    SvgPlacement, SvgPlacementRequest, SvgViewportBox, compute_raster_placement,
+    compute_svg_placement,
 };
 use crate::style::computed::{FontFamily, parse_font_stack};
 use std::fmt::Write as _;
 
 pub(crate) trait SvgImageObjectSink {
-    fn register_raster(&mut self, raw_image: &[u8]) -> Option<String>;
+    fn register_raster(
+        &mut self,
+        raw_image: &[u8],
+        display_w_pt: f32,
+        display_h_pt: f32,
+    ) -> Option<String>;
 }
 
 pub(crate) struct SvgPdfResources<'a> {
@@ -21,6 +27,13 @@ pub(crate) struct SvgPdfResources<'a> {
     pub shading_counter: &'a mut usize,
     pub ext_gstates: Option<&'a mut Vec<(String, f32)>>,
     pub image_sink: Option<&'a mut dyn SvgImageObjectSink>,
+    /// Current SVG-user-unit to PDF-point scale for raster `<image>` resources.
+    ///
+    /// This is only metadata for sizing already-raster PNG/JPEG XObjects. Vector
+    /// SVG nodes still emit vector PDF operators; filters are the separate path
+    /// that intentionally bakes effect surfaces into rasters.
+    pub raster_scale_x: f32,
+    pub raster_scale_y: f32,
     /// Loaded custom (bundled) fonts, keyed by resolved face name. Lets SVG
     /// `<text>` shape and render with a registered custom family (e.g. a
     /// bundled `@font-face`) instead of a base-14 standard font.
@@ -38,6 +51,8 @@ impl<'a> SvgPdfResources<'a> {
             shading_counter,
             ext_gstates: None,
             image_sink: None,
+            raster_scale_x: 1.0,
+            raster_scale_y: 1.0,
             custom_fonts: None,
             prepared_custom_fonts: None,
         }
@@ -47,8 +62,44 @@ impl<'a> SvgPdfResources<'a> {
         (self.shadings, self.shading_counter)
     }
 
-    fn register_raster(&mut self, raw_image: &[u8]) -> Option<String> {
-        self.image_sink.as_deref_mut()?.register_raster(raw_image)
+    fn register_raster(
+        &mut self,
+        raw_image: &[u8],
+        display_w_pt: f32,
+        display_h_pt: f32,
+    ) -> Option<String> {
+        self.image_sink
+            .as_deref_mut()?
+            .register_raster(raw_image, display_w_pt, display_h_pt)
+    }
+
+    fn raster_display_size(&self, width: f32, height: f32) -> (f32, f32) {
+        (
+            width * self.raster_scale_x.abs(),
+            height * self.raster_scale_y.abs(),
+        )
+    }
+
+    fn push_raster_scale(&mut self, scale_x: f32, scale_y: f32) -> (f32, f32) {
+        let previous = (self.raster_scale_x, self.raster_scale_y);
+        self.raster_scale_x *= scale_x;
+        self.raster_scale_y *= scale_y;
+        previous
+    }
+
+    fn push_transform_scale(&mut self, transform: &SvgTransform) -> (f32, f32) {
+        match transform {
+            SvgTransform::Matrix(a, b, c, d, _, _) => {
+                let scale_x = (a * a + b * b).sqrt();
+                let scale_y = (c * c + d * d).sqrt();
+                self.push_raster_scale(scale_x, scale_y)
+            }
+        }
+    }
+
+    fn restore_raster_scale(&mut self, previous: (f32, f32)) {
+        self.raster_scale_x = previous.0;
+        self.raster_scale_y = previous.1;
     }
 
     /// Resolve an SVG text `font-family` to a registered custom (bundled) font.
@@ -302,8 +353,14 @@ fn render_node(
                 if let Some(SvgTransform::Matrix(a, b, c, d, e, f)) = transform {
                     out.push_str(&format!("{a} {b} {c} {d} {e} {f} cm\n"));
                 }
+                let previous_scale = transform
+                    .as_ref()
+                    .map(|transform| resources.push_transform_scale(transform));
                 for child in children {
                     render_node(child, style.clone(), text_ctx, defs, resources, out, mode);
+                }
+                if let Some(previous_scale) = previous_scale {
+                    resources.restore_raster_scale(previous_scale);
                 }
                 out.push_str("Q\n");
             };
@@ -323,8 +380,14 @@ fn render_node(
                         children_bounding_box(children, text_ctx),
                         out,
                     );
+                    let previous_scale = transform
+                        .as_ref()
+                        .map(|transform| resources.push_transform_scale(transform));
                     for child in children {
                         render_node(child, style.clone(), text_ctx, defs, resources, out, mode);
+                    }
+                    if let Some(previous_scale) = previous_scale {
+                        resources.restore_raster_scale(previous_scale);
                     }
                     out.push_str("Q\n");
                 } else {
@@ -335,8 +398,14 @@ fn render_node(
                 if let Some(SvgTransform::Matrix(a, b, c, d, e, f)) = transform {
                     out.push_str(&format!("{a} {b} {c} {d} {e} {f} cm\n"));
                 }
+                let previous_scale = transform
+                    .as_ref()
+                    .map(|transform| resources.push_transform_scale(transform));
                 for child in children {
                     render_node(child, style.clone(), text_ctx, defs, resources, out, mode);
+                }
+                if let Some(previous_scale) = previous_scale {
+                    resources.restore_raster_scale(previous_scale);
                 }
                 out.push_str("Q\n");
             }
@@ -1639,11 +1708,16 @@ fn render_image_with_resources(
 
     if let Some(raster) = parse_raster_image(&raw) {
         let (image_width, image_height) = raster.source_size();
-        if let Some(name) = resources.register_raster(&raw) {
-            render_registered_raster_image(&name, image_width, image_height, request, out);
+        let Some(placement) = compute_raster_placement(image_width, image_height, request) else {
+            return;
+        };
+        let (display_w_pt, display_h_pt) =
+            resources.raster_display_size(placement.draw_box.width, placement.draw_box.height);
+        if let Some(name) = resources.register_raster(&raw, display_w_pt, display_h_pt) {
+            render_registered_raster_image(&name, placement, out);
             return;
         }
-        raster.render_inline(&raw, request, out);
+        raster.render_inline(&raw, placement, out);
         return;
     }
 
@@ -1709,25 +1783,20 @@ fn render_svg_image_tree(
         tx = placement.translate_x,
         ty = placement.translate_y,
     ));
+    let previous_scale =
+        resources.push_raster_scale(placement.scale_x.abs(), placement.scale_y.abs());
     render_svg_tree_with_resources(tree, out, resources);
+    resources.restore_raster_scale(previous_scale);
     out.push_str("Q\n");
 }
 
-fn render_registered_raster_image(
-    name: &str,
-    source_width: u32,
-    source_height: u32,
-    request: SvgPlacementRequest,
-    out: &mut String,
-) {
-    let Some(placement) = compute_raster_placement(source_width, source_height, request) else {
-        return;
-    };
+fn render_registered_raster_image(name: &str, placement: SvgPlacement, out: &mut String) {
     emit_raster_draw_prefix(placement.draw_box, out);
     out.push_str(&format!("/{name} Do\n"));
     out.push_str("Q\n");
 }
 
+#[cfg(test)]
 fn render_raster_image(
     data: &[u8],
     source_width: u32,
@@ -1739,6 +1808,17 @@ fn render_raster_image(
     let Some(placement) = compute_raster_placement(source_width, source_height, request) else {
         return;
     };
+    render_raster_image_with_placement(data, source_width, source_height, kind, placement, out);
+}
+
+fn render_raster_image_with_placement(
+    data: &[u8],
+    source_width: u32,
+    source_height: u32,
+    kind: RasterImageKind,
+    placement: SvgPlacement,
+    out: &mut String,
+) {
     emit_raster_draw_prefix(placement.draw_box, out);
     emit_inline_image(data, source_width, source_height, kind, out);
     out.push_str("Q\n");
@@ -1757,13 +1837,13 @@ impl ParsedRasterImage {
         }
     }
 
-    fn render_inline(self, raw: &[u8], request: SvgPlacementRequest, out: &mut String) {
+    fn render_inline(self, raw: &[u8], placement: SvgPlacement, out: &mut String) {
         match self {
             Self::Png(png_info) => {
                 if png_info.has_alpha() {
                     return;
                 }
-                render_raster_image(
+                render_raster_image_with_placement(
                     &png_info.idat_data,
                     png_info.width,
                     png_info.height,
@@ -1771,12 +1851,19 @@ impl ParsedRasterImage {
                         channels: png_info.channels,
                         bit_depth: png_info.bit_depth,
                     },
-                    request,
+                    placement,
                     out,
                 );
             }
             Self::Jpeg { width, height } => {
-                render_raster_image(raw, width, height, RasterImageKind::Jpeg, request, out);
+                render_raster_image_with_placement(
+                    raw,
+                    width,
+                    height,
+                    RasterImageKind::Jpeg,
+                    placement,
+                    out,
+                );
             }
         }
     }
@@ -1955,11 +2042,18 @@ mod tests {
 
     struct TestImageSink {
         next_id: usize,
+        last_display_size: Option<(f32, f32)>,
     }
 
     impl SvgImageObjectSink for TestImageSink {
-        fn register_raster(&mut self, _raw_image: &[u8]) -> Option<String> {
+        fn register_raster(
+            &mut self,
+            _raw_image: &[u8],
+            display_w_pt: f32,
+            display_h_pt: f32,
+        ) -> Option<String> {
             self.next_id += 1;
+            self.last_display_size = Some((display_w_pt, display_h_pt));
             Some(format!("Im{}", self.next_id))
         }
     }
@@ -3032,12 +3126,17 @@ mod tests {
         let mut out = String::new();
         let mut shadings = Vec::new();
         let mut shading_counter = 0usize;
-        let mut image_sink = TestImageSink { next_id: 0 };
+        let mut image_sink = TestImageSink {
+            next_id: 0,
+            last_display_size: None,
+        };
         let mut resources = SvgPdfResources {
             shadings: &mut shadings,
             shading_counter: &mut shading_counter,
             ext_gstates: None,
             image_sink: Some(&mut image_sink),
+            raster_scale_x: 1.0,
+            raster_scale_y: 1.0,
             custom_fonts: None,
             prepared_custom_fonts: None,
         };
@@ -3056,6 +3155,11 @@ mod tests {
         assert!(
             out.contains("30 0 0 -20 0 20 cm\n"),
             "registered image should still use the target box"
+        );
+        assert_eq!(
+            image_sink.last_display_size,
+            Some((30.0, 20.0)),
+            "image sink should receive the displayed raster size in PDF points"
         );
     }
 

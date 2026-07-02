@@ -1019,6 +1019,7 @@ fn split_image_block(
         object_fit,
         border,
         blur_overflow,
+        filter_effect,
         src_crop,
         ..
     } = element
@@ -1028,6 +1029,7 @@ fn split_image_block(
     if *object_fit != ObjectFit::Fill
         || border.vertical_width() != 0.0
         || *blur_overflow != 0.0
+        || filter_effect.is_some()
         || *height <= 0.0
     {
         return None;

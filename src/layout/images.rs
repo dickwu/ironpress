@@ -5,9 +5,12 @@ use crate::style::computed::{
     ColorFilterOp, ComputedStyle, Display, FontStyle, FontWeight, VerticalAlign,
 };
 use crate::util::decode_base64;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
-use super::engine::{ImageFormat, LayoutBorder, LayoutElement, PngMetadata, RasterImageAsset};
+use super::engine::{
+    ImageEffectRaster, ImageFormat, LayoutBorder, LayoutElement, PngMetadata, RasterImageAsset,
+};
 use super::text::resolve_style_font_family;
 
 /// Load raw bytes from a `src` attribute value.
@@ -83,10 +86,9 @@ pub(crate) fn try_parse_svg_bytes(raw: &[u8]) -> Option<crate::parser::svg::SvgT
 /// Detect PNG/JPEG format and return a raster asset with source dimensions.
 pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
     if png::is_png(&raw) {
-        // The lightweight parser passes raw IDAT through to PDF FlateDecode and
-        // only supports color types whose samples map directly to a PDF color
-        // space (grayscale/RGB +/- alpha). Indexed (palette) PNGs and other
-        // exotic encodings are decoded and normalized to 8-bit RGB instead.
+        // The final PDF writer extracts raw IDAT for PDF FlateDecode embedding,
+        // but the layout asset keeps the complete PNG so later optimization
+        // stages can decode and resize it before embedding.
         let Some(png_info) = png::parse_png(&raw) else {
             return decode_png_to_rgb_asset(&raw);
         };
@@ -112,7 +114,7 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
             bit_depth: png_info.bit_depth,
         };
         Some(RasterImageAsset {
-            data: png_info.idat_data,
+            data: raw,
             source_width: png_info.width,
             source_height: png_info.height,
             format: ImageFormat::Png,
@@ -142,6 +144,7 @@ pub(crate) fn load_image_from_element(
     available_width: f32,
     available_height: f32,
     style: &ComputedStyle,
+    filter_dpi: f32,
 ) -> Option<LayoutElement> {
     let src = el.attributes.get("src")?;
 
@@ -191,6 +194,22 @@ pub(crate) fn load_image_from_element(
             flow_extra_bottom: 0.0,
             margin_top: style.margin.top,
             margin_bottom: style.margin.bottom,
+            position: if style.position == crate::style::computed::Position::Relative {
+                crate::style::computed::Position::Relative
+            } else {
+                crate::style::computed::Position::Static
+            },
+            offset_top: if style.position == crate::style::computed::Position::Relative {
+                style.top.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            offset_left: if style.position == crate::style::computed::Position::Relative {
+                style.left.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            z_index: style.z_index,
             background_color: style.background_color.map(|c| c.to_f32_rgba()),
             mix_blend_mode: style.mix_blend_mode,
             border,
@@ -251,16 +270,30 @@ pub(crate) fn load_image_from_element(
     let content_w =
         (width - LayoutBorder::from_computed(&style.border).horizontal_width()).max(0.0);
     let content_h = (height - LayoutBorder::from_computed(&style.border).vertical_width()).max(0.0);
+    let mut filter_effect = None;
     let (image, blur_overflow) = match raw_for_filter {
-        Some(bytes) => build_filter_raster(
+        Some(bytes) => match build_filter_raster(
             &bytes,
             content_w,
             content_h,
             &style.color_filters,
             style.blur_radius,
             style.drop_shadow,
-        )
-        .unwrap_or((image, 0.0)),
+            filter_dpi,
+        ) {
+            Some(FilterRaster::Replacement {
+                image,
+                blur_overflow,
+            }) => (image, blur_overflow),
+            Some(FilterRaster::Shadow {
+                source_image,
+                effect,
+            }) => {
+                filter_effect = Some(effect);
+                (source_image.unwrap_or(image), 0.0)
+            }
+            None => (image, 0.0),
+        },
         None => (image, 0.0),
     };
 
@@ -271,13 +304,41 @@ pub(crate) fn load_image_from_element(
         flow_extra_bottom: 0.0,
         margin_top: style.margin.top,
         margin_bottom: style.margin.bottom,
+        position: if style.position == crate::style::computed::Position::Relative {
+            crate::style::computed::Position::Relative
+        } else {
+            crate::style::computed::Position::Static
+        },
+        offset_top: if style.position == crate::style::computed::Position::Relative {
+            style.top.unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        offset_left: if style.position == crate::style::computed::Position::Relative {
+            style.left.unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        z_index: style.z_index,
         object_fit: style.object_fit,
         object_position: style.object_position,
         background_color: style.background_color.map(|c| c.to_f32_rgba()),
         border: LayoutBorder::from_computed(&style.border),
         blur_overflow,
+        filter_effect,
         src_crop: None,
     })
+}
+
+enum FilterRaster {
+    Replacement {
+        image: RasterImageAsset,
+        blur_overflow: f32,
+    },
+    Shadow {
+        source_image: Option<RasterImageAsset>,
+        effect: ImageEffectRaster,
+    },
 }
 
 /// Decode `raw`, apply the non-blur color filters, then produce the blurred /
@@ -291,13 +352,61 @@ fn build_filter_raster(
     color_filters: &[ColorFilterOp],
     blur_radius_pt: f32,
     drop_shadow: Option<crate::style::computed::DropShadow>,
-) -> Option<(RasterImageAsset, f32)> {
+    filter_dpi: f32,
+) -> Option<FilterRaster> {
     let rgba = decode_image_for_blur(raw)?.to_rgba8();
     if let Some(ds) = drop_shadow {
+        let has_blur_op = blur_radius_pt > 0.0
+            || color_filters
+                .iter()
+                .any(|op| matches!(op, ColorFilterOp::Blur(radius) if *radius > 0.0));
+        if !has_blur_op {
+            let mut shadow_source = rgba;
+            let mut source_image = None;
+            if color_filters
+                .iter()
+                .any(|op| !matches!(op, ColorFilterOp::Blur(_)))
+            {
+                let (filtered, _) = apply_filter_ops_rgba(
+                    &shadow_source,
+                    color_filters,
+                    content_w_pt,
+                    content_h_pt,
+                    0.0,
+                    filter_dpi,
+                )?;
+                source_image = Some(encode_rgba_subimage_as_asset(filtered.clone())?);
+                shadow_source = filtered;
+            }
+            return crate::render::blur::drop_shadow_image(
+                &shadow_source,
+                content_w_pt,
+                content_h_pt,
+                ds.dx,
+                ds.dy,
+                ds.blur,
+                ds.color,
+                filter_dpi,
+            )
+            .map(|b| FilterRaster::Shadow {
+                source_image,
+                effect: ImageEffectRaster {
+                    image: b.asset,
+                    overflow: b.overflow_pt,
+                },
+            });
+        }
+
         // drop-shadow operates on the (color-filtered) source.
-        let (src, _) =
-            apply_filter_ops_rgba(&rgba, color_filters, content_w_pt, content_h_pt, 0.0)?;
-        return crate::render::blur::drop_shadow_image(
+        let (src, _) = apply_filter_ops_rgba(
+            &rgba,
+            color_filters,
+            content_w_pt,
+            content_h_pt,
+            0.0,
+            filter_dpi,
+        )?;
+        return crate::render::blur::drop_shadow_image_with_source(
             &src,
             content_w_pt,
             content_h_pt,
@@ -305,8 +414,12 @@ fn build_filter_raster(
             ds.dy,
             ds.blur,
             ds.color,
+            filter_dpi,
         )
-        .map(|b| (b.asset, b.overflow_pt));
+        .map(|b| FilterRaster::Replacement {
+            image: b.asset,
+            blur_overflow: b.overflow_pt,
+        });
     }
     if blur_radius_pt > 0.0 {
         let (buf, overflow) = apply_filter_ops_rgba(
@@ -315,9 +428,14 @@ fn build_filter_raster(
             content_w_pt,
             content_h_pt,
             blur_radius_pt,
+            filter_dpi,
         )?;
-        return crate::render::blur::raster_from_buffer(buf, overflow)
-            .map(|b| (b.asset, b.overflow_pt));
+        return crate::render::blur::raster_from_buffer(buf, overflow).map(|b| {
+            FilterRaster::Replacement {
+                image: b.asset,
+                blur_overflow: b.overflow_pt,
+            }
+        });
     }
     None
 }
@@ -328,6 +446,7 @@ fn apply_filter_ops_rgba(
     content_w_pt: f32,
     content_h_pt: f32,
     fallback_blur_pt: f32,
+    filter_dpi: f32,
 ) -> Option<(image::RgbaImage, f32)> {
     let mut current = img.clone();
     let mut overflow = 0.0;
@@ -338,7 +457,7 @@ fn apply_filter_ops_rgba(
                 let display_w = content_w_pt + 2.0 * overflow;
                 let display_h = content_h_pt + 2.0 * overflow;
                 let (buf, ov) = crate::render::blur::blur_image_buffer(
-                    &current, display_w, display_h, radius, 300.0,
+                    &current, display_w, display_h, radius, filter_dpi,
                 )?;
                 current = buf;
                 overflow += ov;
@@ -354,7 +473,7 @@ fn apply_filter_ops_rgba(
             content_w_pt,
             content_h_pt,
             fallback_blur_pt,
-            300.0,
+            filter_dpi,
         )?;
         current = buf;
         overflow += ov;
@@ -393,7 +512,7 @@ fn decode_png_to_rgb_asset(raw: &[u8]) -> Option<RasterImageAsset> {
         .ok()?;
     let png_info = png::parse_png(&encoded)?;
     Some(RasterImageAsset {
-        data: png_info.idat_data,
+        data: encoded,
         source_width: width,
         source_height: height,
         format: ImageFormat::Png,
@@ -429,40 +548,55 @@ pub(crate) fn crop_raster_asset(
     encode_rgba_subimage_as_asset(sub)
 }
 
+/// Return a complete PNG file for decoders from either a complete PNG asset or
+/// the legacy raw-IDAT storage used by some older opaque PNG paths.
+pub(crate) fn png_bytes_for_decoding<'a>(
+    data: &'a [u8],
+    width: u32,
+    height: u32,
+    png_metadata: Option<&PngMetadata>,
+) -> Option<Cow<'a, [u8]>> {
+    if png::is_png(data) {
+        return Some(Cow::Borrowed(data));
+    }
+    let meta = png_metadata?;
+    let color_type = match meta.channels {
+        1 => 0,
+        2 => 4,
+        3 => 2,
+        4 => 6,
+        _ => return None,
+    };
+    Some(Cow::Owned(reconstruct_png(
+        width,
+        height,
+        meta.bit_depth,
+        color_type,
+        data,
+    )))
+}
+
 /// Decode a stored [`RasterImageAsset`] back to RGBA pixels regardless of its
-/// on-disk storage format: a JPEG/alpha-PNG asset carries the complete file, an
-/// opaque PNG asset carries only the raw IDAT (zlib) stream so a minimal PNG
-/// container is rebuilt around it before decoding.
+/// storage format.
 fn decode_asset_to_rgba(asset: &RasterImageAsset) -> Option<image::RgbaImage> {
     match asset.format {
         ImageFormat::Jpeg => Some(image::load_from_memory(&asset.data).ok()?.to_rgba8()),
         ImageFormat::PngAlpha => Some(decode_image_for_blur(&asset.data)?.to_rgba8()),
         ImageFormat::Png => {
-            let meta = asset.png_metadata.as_ref()?;
-            // PNG color-type from channel count (opaque PNGs are gray=1 or rgb=3,
-            // but handle the alpha variants too for robustness).
-            let color_type = match meta.channels {
-                1 => 0,
-                2 => 4,
-                3 => 2,
-                4 => 6,
-                _ => return None,
-            };
-            let png = reconstruct_png(
+            let png = png_bytes_for_decoding(
+                &asset.data,
                 asset.source_width,
                 asset.source_height,
-                meta.bit_depth,
-                color_type,
-                &asset.data,
-            );
+                asset.png_metadata.as_ref(),
+            )?;
             Some(decode_image_for_blur(&png)?.to_rgba8())
         }
     }
 }
 
 /// Re-encode a cropped RGBA buffer into an embeddable asset: a lossless RGB PNG
-/// (raw-IDAT passthrough, the common opaque path) when every pixel is opaque, or
-/// a full RGBA PNG (the alpha-preserving `/SMask` embedding path) otherwise.
+/// when every pixel is opaque, or a full RGBA PNG (the alpha-preserving
+/// `/SMask` embedding path) otherwise.
 fn encode_rgba_subimage_as_asset(sub: image::RgbaImage) -> Option<RasterImageAsset> {
     let (w, h) = (sub.width(), sub.height());
     let opaque = sub.pixels().all(|p| p[3] == 255);
@@ -480,7 +614,7 @@ fn encode_rgba_subimage_as_asset(sub: image::RgbaImage) -> Option<RasterImageAss
             .ok()?;
         let info = png::parse_png(&encoded)?;
         Some(RasterImageAsset {
-            data: info.idat_data,
+            data: encoded,
             source_width: w,
             source_height: h,
             format: ImageFormat::Png,
@@ -688,11 +822,16 @@ pub(crate) fn add_inline_replaced_baseline_gap(
             flow_extra_bottom,
             margin_top,
             margin_bottom,
+            position,
+            offset_top,
+            offset_left,
+            z_index,
             object_fit,
             object_position,
             background_color,
             border,
             blur_overflow,
+            filter_effect,
             src_crop,
         } => LayoutElement::Image {
             image,
@@ -701,11 +840,16 @@ pub(crate) fn add_inline_replaced_baseline_gap(
             flow_extra_bottom: flow_extra_bottom + baseline_gap,
             margin_top,
             margin_bottom,
+            position,
+            offset_top,
+            offset_left,
+            z_index,
             object_fit,
             object_position,
             background_color,
             border,
             blur_overflow,
+            filter_effect,
             src_crop,
         },
         LayoutElement::Svg {
@@ -715,6 +859,10 @@ pub(crate) fn add_inline_replaced_baseline_gap(
             flow_extra_bottom,
             margin_top,
             margin_bottom,
+            position,
+            offset_top,
+            offset_left,
+            z_index,
             background_color,
             mix_blend_mode,
             border,
@@ -725,6 +873,10 @@ pub(crate) fn add_inline_replaced_baseline_gap(
             flow_extra_bottom: flow_extra_bottom + baseline_gap,
             margin_top,
             margin_bottom,
+            position,
+            offset_top,
+            offset_left,
+            z_index,
             background_color,
             mix_blend_mode,
             border,
@@ -1109,7 +1261,7 @@ fn apply_image_filters(
         .ok()?;
     let png_info = png::parse_png(&encoded)?;
     Some(RasterImageAsset {
-        data: png_info.idat_data,
+        data: encoded,
         source_width: width,
         source_height: height,
         format: ImageFormat::Png,
@@ -1581,6 +1733,74 @@ mod tests {
         assert_eq!(asset.data, png, "raw PNG bytes should be carried through");
         assert_eq!(asset.source_width, 1);
         assert_eq!(asset.source_height, 1);
+    }
+
+    #[test]
+    fn opaque_png_crop_decodes_full_png_asset() {
+        let img = image::RgbImage::from_fn(4, 3, |x, y| {
+            image::Rgb([(x * 50) as u8, (y * 80) as u8, (x * 20 + y * 30) as u8])
+        });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let asset = load_image_bytes(png.clone()).expect("opaque PNG should load");
+        assert_eq!(asset.format, ImageFormat::Png);
+        assert_eq!(asset.data, png);
+
+        let cropped =
+            crop_raster_asset(&asset, [1.0, 1.0, 2.0, 1.0]).expect("full-PNG asset should crop");
+        assert_eq!(cropped.source_width, 2);
+        assert_eq!(cropped.source_height, 1);
+        assert!(
+            png::is_png(&cropped.data),
+            "cropped opaque PNG should remain decodable for later resizing"
+        );
+
+        let rgba = decode_asset_to_rgba(&cropped).expect("cropped asset should decode");
+        assert_eq!(rgba.width(), 2);
+        assert_eq!(rgba.height(), 1);
+        assert_eq!(rgba.get_pixel(0, 0).0[..3], [50, 80, 50]);
+        assert_eq!(rgba.get_pixel(1, 0).0[..3], [100, 80, 70]);
+    }
+
+    #[test]
+    fn drop_shadow_split_keeps_color_filtered_source_image() {
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200, 100, 50]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let result = build_filter_raster(
+            &png,
+            72.0,
+            72.0,
+            &[ColorFilterOp::Brightness(0.5)],
+            0.0,
+            Some(crate::style::computed::DropShadow {
+                dx: 0.0,
+                dy: 0.0,
+                blur: 0.0,
+                color: (0.0, 0.0, 0.0, 0.5),
+            }),
+            72.0,
+        )
+        .expect("drop-shadow filter should build");
+
+        let FilterRaster::Shadow {
+            source_image,
+            effect,
+        } = result
+        else {
+            panic!("non-blur drop-shadow should split source and shadow");
+        };
+        assert!(effect.image.source_width > 0);
+        let source_image =
+            source_image.expect("color-filtered source image should be returned with shadow");
+        let rgba = decode_asset_to_rgba(&source_image).expect("filtered source should decode");
+        assert_eq!(rgba.get_pixel(0, 0).0[..3], [100, 50, 25]);
     }
 
     #[test]

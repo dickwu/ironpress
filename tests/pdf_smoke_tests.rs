@@ -84,6 +84,13 @@ fn pdf_has_text(pdf: &[u8], text: &str) -> bool {
     decoded.contains(text)
 }
 
+fn smoke_html_to_pdf(html: &str) -> Vec<u8> {
+    ironpress::HtmlConverter::new()
+        .compress(false)
+        .convert(html)
+        .unwrap()
+}
+
 fn pdf_page_count(pdf: &[u8]) -> usize {
     let s = String::from_utf8_lossy(pdf);
     // Extract /Count N from /Type /Pages
@@ -105,7 +112,7 @@ fn pdf_page_count(pdf: &[u8]) -> usize {
 
 #[test]
 fn smoke_simple_html() {
-    let pdf = ironpress::html_to_pdf("<h1>Hello</h1><p>World</p>").unwrap();
+    let pdf = smoke_html_to_pdf("<h1>Hello</h1><p>World</p>");
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Hello"));
     assert!(pdf_has_text(&pdf, "World"));
@@ -124,7 +131,7 @@ fn smoke_markdown() {
 #[test]
 fn smoke_headings_produce_bookmarks() {
     let html = "<h1>Ch1</h1><h2>Sec1</h2><h3>Sub1</h3><p>Content</p>";
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "/Type /Outlines"));
     assert!(pdf_has_text(&pdf, "Ch1"));
@@ -141,7 +148,7 @@ fn smoke_inline_formatting() {
         <p><del>Deleted</del> <code>Code</code> <mark>Highlighted</mark></p>
         <p><a href="https://example.com">Link</a></p>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Bold"));
     assert!(pdf_has_text(&pdf, "/Subtype /Link"));
@@ -160,7 +167,7 @@ fn smoke_table() {
             </tbody>
         </table>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Alice"));
 }
@@ -174,7 +181,7 @@ fn smoke_lists() {
         <ol><li>First</li><li>Second</li></ol>
         <dl><dt>Term</dt><dd>Definition</dd></dl>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Item A"));
 }
@@ -184,7 +191,7 @@ fn smoke_lists() {
 #[test]
 fn smoke_image_png() {
     let html = r#"<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==" width="50" height="50">"#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "/Subtype /Image"));
 }
@@ -200,7 +207,7 @@ fn smoke_css_styling() {
         </style>
         <div class="box"><p class="center">Styled box</p></div>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Styled box"));
 }
@@ -211,7 +218,7 @@ fn smoke_flexbox() {
         <style>.flex { display: flex; gap: 10pt; }</style>
         <div class="flex"><div>A</div><div>B</div><div>C</div></div>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -221,7 +228,7 @@ fn smoke_grid() {
         <style>.grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-gap: 5pt; }</style>
         <div class="grid"><div>1</div><div>2</div><div>3</div></div>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -231,7 +238,7 @@ fn smoke_grid_minmax() {
         <style>.grid { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr; }</style>
         <div class="grid"><div>Left</div><div>Right</div></div>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -241,7 +248,7 @@ fn smoke_multi_column() {
         <style>.cols { column-count: 3; column-gap: 10pt; }</style>
         <div class="cols"><div>A</div><div>B</div><div>C</div></div>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -254,7 +261,7 @@ fn smoke_form_controls() {
         <select><option>France</option><option>USA</option></select>
         <textarea>Some text here</textarea>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "John Doe"));
 }
@@ -265,7 +272,7 @@ fn smoke_media_elements() {
         <video width="320" height="240"></video>
         <audio></audio>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -275,7 +282,7 @@ fn smoke_progress_meter() {
         <progress value="70" max="100"></progress>
         <meter value="0.6" max="1" low="0.25" high="0.75"></meter>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -284,7 +291,7 @@ fn smoke_progress_meter() {
 #[test]
 fn smoke_page_break() {
     let html = r#"<p>Page 1</p><div style="page-break-before: always"><p>Page 2</p></div>"#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_page_count(&pdf) >= 2);
 }
@@ -292,6 +299,7 @@ fn smoke_page_break() {
 #[test]
 fn smoke_header_footer() {
     let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
         .header("My Report")
         .footer("Page {page} of {pages}")
         .convert("<h1>Title</h1><p>Content</p>")
@@ -304,6 +312,7 @@ fn smoke_header_footer() {
 #[test]
 fn smoke_custom_page_size() {
     let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
         .page_size(ironpress::PageSize::LETTER)
         .margin(ironpress::Margin::uniform(36.0))
         .convert("<p>Letter size</p>")
@@ -321,7 +330,7 @@ fn smoke_inline_svg() {
             <circle cx="50" cy="50" r="20" fill="red" />
         </svg>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
 }
 
@@ -362,6 +371,7 @@ fn smoke_full_document() {
         <p><a href="https://example.com">More details</a></p>
     "#;
     let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
         .header("Confidential")
         .footer("Page {page} of {pages}")
         .convert(html)
@@ -384,6 +394,7 @@ body { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org
 <p>This page should have an SVG pattern background.</p>
 </body></html>"#;
     let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
         .sanitize(false)
         .convert(html)
         .unwrap();
@@ -404,6 +415,7 @@ body { background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDov
 <p>Base64 SVG background</p>
 </body></html>"#;
     let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
         .sanitize(false)
         .convert(html)
         .unwrap();
@@ -420,7 +432,7 @@ body { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org
 <p>Sanitized SVG background</p>
 </body></html>"#;
     // With sanitizer enabled (default)
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "Sanitized SVG background"));
 }
@@ -436,9 +448,12 @@ fn smoke_filter_blur_png_image() {
         <img class="blurred" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFklEQVQYV2P8z8BQz0BFwMgwasCoAgBGWAkF3c01mQAAAABJRU5ErkJggg==" width="200" height="200" />
         <p>Text below blurred image</p>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
+        .convert(html)
+        .unwrap();
     assert!(pdf_is_valid(&pdf));
-    assert!(pdf_has_text(&pdf, "/Filter /DCTDecode"));
+    assert!(pdf_has_text(&pdf, "/SMask"));
     assert!(pdf_has_text(&pdf, "Text below blurred image"));
 }
 
@@ -450,7 +465,7 @@ fn smoke_filter_blur_zero_radius_no_blur() {
         </style>
         <img class="no-blur" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFklEQVQYV2P8z8BQz0BFwMgwasCoAgBGWAkF3c01mQAAAABJRU5ErkJggg==" width="100" height="100" />
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "/Filter /FlateDecode"));
 }
@@ -463,7 +478,7 @@ fn smoke_filter_blur_none_keyword() {
         </style>
         <img class="clear" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFklEQVQYV2P8z8BQz0BFwMgwasCoAgBGWAkF3c01mQAAAABJRU5ErkJggg==" width="100" height="100" />
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
     assert!(pdf_has_text(&pdf, "/Filter /FlateDecode"));
 }
@@ -474,9 +489,12 @@ fn smoke_filter_blur_inline_style() {
         <img style="filter: blur(10px)" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFklEQVQYV2P8z8BQz0BFwMgwasCoAgBGWAkF3c01mQAAAABJRU5ErkJggg==" width="150" height="150" />
         <p>After inline blur</p>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = ironpress::HtmlConverter::new()
+        .compress(false)
+        .convert(html)
+        .unwrap();
     assert!(pdf_is_valid(&pdf));
-    assert!(pdf_has_text(&pdf, "/Filter /DCTDecode"));
+    assert!(pdf_has_text(&pdf, "/SMask"));
     assert!(pdf_has_text(&pdf, "After inline blur"));
 }
 
@@ -489,8 +507,8 @@ fn smoke_filter_blur_text_element_no_crash() {
         <p class="blurred-text">This text has a blur filter applied</p>
         <p>Normal text</p>
     "#;
-    let pdf = ironpress::html_to_pdf(html).unwrap();
+    let pdf = smoke_html_to_pdf(html);
     assert!(pdf_is_valid(&pdf));
-    assert!(pdf_has_text(&pdf, "This text has a blur filter applied"));
+    assert!(pdf_has_text(&pdf, "/SMask"));
     assert!(pdf_has_text(&pdf, "Normal text"));
 }

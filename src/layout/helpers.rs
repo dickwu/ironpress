@@ -2522,6 +2522,12 @@ pub(crate) fn layout_element_paint_order(element: &LayoutElement) -> (i32, i32) 
         }
         | LayoutElement::Container {
             position, z_index, ..
+        }
+        | LayoutElement::Image {
+            position, z_index, ..
+        }
+        | LayoutElement::Svg {
+            position, z_index, ..
         } => {
             if *z_index < 0 {
                 (-1, *z_index)

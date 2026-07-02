@@ -2498,6 +2498,39 @@ fn draw_image_border(
     }
 }
 
+fn draw_image_filter_effect(
+    content: &mut String,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+    effect: &crate::layout::engine::ImageEffectRaster,
+    box_x: f32,
+    box_bottom: f32,
+    box_w: f32,
+    box_h: f32,
+) {
+    let img_obj_id = pdf_writer.add_image_object(
+        &effect.image.data,
+        effect.image.source_width,
+        effect.image.source_height,
+        effect.image.format,
+        effect.image.png_metadata.as_ref(),
+    );
+    let img_name = format!("Im{img_obj_id}");
+    let ov = effect.overflow;
+    content.push_str(&format!(
+        "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
+        w = box_w + 2.0 * ov,
+        h = box_h + 2.0 * ov,
+        ix = box_x - ov,
+        iy = box_bottom - ov,
+        name = img_name,
+    ));
+    page_images.push(ImageRef {
+        name: img_name,
+        obj_id: img_obj_id,
+    });
+}
+
 /// A link annotation to be placed on a PDF page.
 struct LinkAnnotation {
     x1: f32,
@@ -3126,7 +3159,12 @@ fn page_shrink_to_fit_scale(page: &Page, page_size: PageSize, margin: Margin) ->
                 *offset_left,
                 crate::layout::paginate::table_row_content_width(element),
             ),
-            LayoutElement::Image { width, .. } | LayoutElement::Svg { width, .. } => (0.0, *width),
+            LayoutElement::Image {
+                width, offset_left, ..
+            }
+            | LayoutElement::Svg {
+                width, offset_left, ..
+            } => (*offset_left, *width),
             _ => (0.0, 0.0),
         };
         max_right = max_right.max(margin.left + off_left + width);
@@ -8395,14 +8433,16 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     background_color,
                     border,
                     blur_overflow,
+                    offset_top,
+                    offset_left,
                     ..
                 } if *blur_overflow > 0.0 => {
-                    // CSS `filter: blur()`/`drop-shadow()`: the embedded bitmap is
-                    // the blurred result padded by `blur_overflow` on each side,
-                    // drawn overflowing the content box (filter ignores layout).
+                    // CSS `filter: blur()`: the embedded bitmap is the blurred
+                    // result padded by `blur_overflow` on each side, drawn
+                    // overflowing the content box (filter ignores layout).
                     let _ = (object_fit, object_position, background_color, border);
-                    let img_x = margin.left;
-                    let img_y = page_size.height - margin.top - y_pos - height;
+                    let img_x = margin.left + offset_left;
+                    let img_y = page_size.height - margin.top - y_pos - height - offset_top;
                     // Occlusion culling (default off): the filtered bitmap paints
                     // expanded by `blur_overflow` on every side; skip it only if a
                     // later opaque coverer hides that full expanded rect.
@@ -8448,6 +8488,9 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     object_position,
                     background_color,
                     border,
+                    filter_effect,
+                    offset_top,
+                    offset_left,
                     src_crop,
                     ..
                 } => {
@@ -8459,21 +8502,34 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     let sliced =
                         src_crop.and_then(|c| crate::layout::images::crop_raster_asset(image, c));
                     let img = sliced.as_ref().unwrap_or(image);
-                    let img_x = margin.left;
+                    let img_x = margin.left + offset_left;
                     // PDF y-axis is bottom-up; y_pos is top of margin, image draws from bottom-left
-                    let img_y = page_size.height - margin.top - y_pos - height;
+                    let img_y = page_size.height - margin.top - y_pos - height - offset_top;
                     // Occlusion culling (default off): skip embedding the image
                     // entirely when a later fully-opaque coverer hides its box.
                     if pdf_writer.opts.occlusion_cull {
+                        let ov = filter_effect.as_ref().map_or(0.0, |effect| effect.overflow);
                         let raster = OcclRect {
-                            x0: img_x,
-                            y0: img_y,
-                            x1: img_x + *width,
-                            y1: img_y + *height,
+                            x0: img_x - ov,
+                            y0: img_y - ov,
+                            x1: img_x + *width + ov,
+                            y1: img_y + *height + ov,
                         };
                         if raster_is_occluded(&occlusion_coverers, &raster, elem_idx) {
                             continue;
                         }
+                    }
+                    if let Some(effect) = filter_effect {
+                        draw_image_filter_effect(
+                            &mut content,
+                            &mut pdf_writer,
+                            &mut page_images,
+                            effect,
+                            img_x,
+                            img_y,
+                            *width,
+                            *height,
+                        );
                     }
                     // Paint the image-box background first; with object-fit it may
                     // remain visible where the image content does not cover the box.
@@ -8558,11 +8614,13 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     background_color,
                     mix_blend_mode,
                     border,
+                    offset_top,
+                    offset_left,
                     ..
                 } => {
-                    let svg_x = margin.left;
+                    let svg_x = margin.left + offset_left;
                     // PDF y-axis is bottom-up, SVG is top-down
-                    let svg_y = page_size.height - margin.top - y_pos - height;
+                    let svg_y = page_size.height - margin.top - y_pos - height - offset_top;
 
                     // Occlusion culling (default off): skip embedding the SVG (and
                     // any rasters it would register) when a later opaque coverer
@@ -8630,6 +8688,8 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                                 shading_counter: &mut shading_counter,
                                 ext_gstates: Some(&mut page_ext_gstates),
                                 image_sink: Some(&mut image_sink),
+                                raster_scale_x: placement.scale_x.abs(),
+                                raster_scale_y: placement.scale_y.abs(),
                                 custom_fonts: Some(custom_fonts),
                                 prepared_custom_fonts: Some(&prepared_custom_fonts),
                             };
@@ -10474,6 +10534,144 @@ fn collapsed_children_height(children: &[LayoutElement]) -> f32 {
     total
 }
 
+fn container_child_flow_top_positions(
+    children: &[LayoutElement],
+    container_top_y: f32,
+    float_top_by_index: &HashMap<usize, f32>,
+    left_float_bottom: f32,
+    right_float_bottom: f32,
+) -> HashMap<usize, f32> {
+    let mut positions = HashMap::new();
+    let mut cursor_y = container_top_y;
+    let mut prev_margin_bottom = 0.0;
+
+    for (child_index, child) in children.iter().enumerate() {
+        match child {
+            LayoutElement::TableRow { .. } | LayoutElement::GridRow { .. } => {
+                positions.insert(child_index, cursor_y);
+                cursor_y -= crate::layout::engine::estimate_element_height(child);
+                prev_margin_bottom = 0.0;
+            }
+            LayoutElement::TextBlock {
+                lines,
+                margin_top,
+                margin_bottom,
+                padding_top,
+                padding_bottom,
+                border,
+                block_height,
+                float,
+                clear,
+                position,
+                ..
+            } => {
+                if *position == Position::Absolute {
+                    continue;
+                }
+                if *float != Float::None {
+                    let rel_top = float_top_by_index.get(&child_index).copied().unwrap_or(0.0);
+                    positions.insert(child_index, container_top_y - rel_top);
+                    prev_margin_bottom = 0.0;
+                    continue;
+                }
+                if *clear != Clear::None {
+                    cursor_y = clear_cursor(
+                        cursor_y,
+                        *clear,
+                        left_float_bottom,
+                        right_float_bottom,
+                        &mut prev_margin_bottom,
+                    );
+                }
+                cursor_y -= collapsed_margin_top_extra(*margin_top, prev_margin_bottom);
+                positions.insert(child_index, cursor_y);
+                let text_h: f32 = lines.iter().map(|l| l.height).sum();
+                let pad_box_h = block_height.unwrap_or(padding_top + text_h + padding_bottom);
+                cursor_y -= pad_box_h + border.vertical_width() + *margin_bottom;
+                prev_margin_bottom = *margin_bottom;
+            }
+            LayoutElement::Container {
+                children: nested_kids,
+                padding_top,
+                padding_bottom,
+                margin_top,
+                margin_bottom,
+                border,
+                block_height,
+                float,
+                clear,
+                position,
+                ..
+            } => {
+                if *position == Position::Absolute {
+                    continue;
+                }
+                if *float != Float::None {
+                    let rel_top = float_top_by_index.get(&child_index).copied().unwrap_or(0.0);
+                    positions.insert(child_index, container_top_y - rel_top);
+                    prev_margin_bottom = 0.0;
+                    continue;
+                }
+                if *clear != Clear::None {
+                    cursor_y = clear_cursor(
+                        cursor_y,
+                        *clear,
+                        left_float_bottom,
+                        right_float_bottom,
+                        &mut prev_margin_bottom,
+                    );
+                }
+                cursor_y -= collapsed_margin_top_extra(*margin_top, prev_margin_bottom);
+                positions.insert(child_index, cursor_y);
+                let children_h = collapsed_children_height(nested_kids);
+                let content_h = padding_top + children_h + padding_bottom + border.vertical_width();
+                cursor_y -= block_height.unwrap_or(content_h) + *margin_bottom;
+                prev_margin_bottom = *margin_bottom;
+            }
+            LayoutElement::Image {
+                height, margin_top, ..
+            }
+            | LayoutElement::Svg {
+                height, margin_top, ..
+            } => {
+                cursor_y -= collapsed_margin_top_extra(*margin_top, prev_margin_bottom);
+                positions.insert(child_index, cursor_y);
+                cursor_y -= height;
+                prev_margin_bottom = 0.0;
+            }
+            LayoutElement::FlexRow {
+                margin_top,
+                margin_bottom,
+                ..
+            } => {
+                cursor_y -= collapsed_margin_top_extra(*margin_top, prev_margin_bottom);
+                positions.insert(child_index, cursor_y);
+                let row_h = crate::layout::engine::estimate_element_height(child)
+                    - margin_top
+                    - margin_bottom;
+                cursor_y -= row_h + margin_bottom;
+                prev_margin_bottom = *margin_bottom;
+            }
+            LayoutElement::HorizontalRule {
+                margin_top,
+                margin_bottom,
+            } => {
+                cursor_y -= collapsed_margin_top_extra(*margin_top, prev_margin_bottom);
+                positions.insert(child_index, cursor_y);
+                cursor_y -= 1.0 + margin_bottom;
+                prev_margin_bottom = *margin_bottom;
+            }
+            _ => {
+                positions.insert(child_index, cursor_y);
+                cursor_y -= crate::layout::engine::estimate_element_height(child);
+                prev_margin_bottom = 0.0;
+            }
+        }
+    }
+
+    positions
+}
+
 /// CSS paint-order key for a sibling child of a container.
 ///
 /// Returns `(layer, z_index)` where `layer` is `0` for in-flow / non-positioned
@@ -10485,6 +10683,33 @@ fn collapsed_children_height(children: &[LayoutElement]) -> f32 {
 /// and among the positioned ones, lower `z_index` paints first.
 fn child_paint_order(element: &LayoutElement, promote_relative: bool) -> (u8, i32) {
     match element {
+        LayoutElement::Image {
+            position,
+            z_index,
+            offset_top,
+            offset_left,
+            ..
+        }
+        | LayoutElement::Svg {
+            position,
+            z_index,
+            offset_top,
+            offset_left,
+            ..
+        } => {
+            if *z_index < 0 {
+                (0, *z_index)
+            } else if promote_relative
+                && *position == Position::Relative
+                && (*z_index != 0
+                    || offset_top.abs() > f32::EPSILON
+                    || offset_left.abs() > f32::EPSILON)
+            {
+                (2, *z_index)
+            } else {
+                (0, 0)
+            }
+        }
         LayoutElement::TextBlock {
             position,
             z_index,
@@ -10513,7 +10738,9 @@ fn child_paint_order(element: &LayoutElement, promote_relative: bool) -> (u8, i3
             } else if *position == Position::Absolute
                 || (promote_relative
                     && *position == Position::Relative
-                    && (offset_top.abs() > f32::EPSILON || offset_left.abs() > f32::EPSILON))
+                    && (*z_index != 0
+                        || offset_top.abs() > f32::EPSILON
+                        || offset_left.abs() > f32::EPSILON))
             {
                 (2, *z_index)
             } else if *float != Float::None {
@@ -10631,11 +10858,51 @@ fn render_container_children(
                 z_index,
                 ..
             } if *z_index >= 0
+        ) || matches!(
+            c,
+            LayoutElement::TextBlock {
+                position: Position::Relative,
+                z_index,
+                offset_top,
+                offset_left,
+                ..
+            } | LayoutElement::Container {
+                position: Position::Relative,
+                z_index,
+                offset_top,
+                offset_left,
+                ..
+            } | LayoutElement::Image {
+                position: Position::Relative,
+                z_index,
+                offset_top,
+                offset_left,
+                ..
+            } | LayoutElement::Svg {
+                position: Position::Relative,
+                z_index,
+                offset_top,
+                offset_left,
+                ..
+            } if *z_index != 0
+                || offset_top.abs() > f32::EPSILON
+                || offset_left.abs() > f32::EPSILON
         )
     });
     let needs_reorder = children
         .iter()
         .any(|c| child_paint_order(c, promote_relative) != (0, 0));
+    let flow_top_by_index = if needs_reorder {
+        container_child_flow_top_positions(
+            children,
+            container_top_y,
+            &float_top_by_index,
+            left_float_bottom,
+            right_float_bottom,
+        )
+    } else {
+        HashMap::new()
+    };
     let paint_order: Vec<(usize, &LayoutElement)> = if needs_reorder {
         let mut ordered: Vec<(usize, &LayoutElement)> = children.iter().enumerate().collect();
         ordered.sort_by_key(|(_, c)| child_paint_order(c, promote_relative));
@@ -10650,6 +10917,29 @@ fn render_container_children(
             LayoutElement::TableRow { .. } | LayoutElement::GridRow { .. }
         );
         if handled_by_nested {
+            if needs_reorder {
+                let batch = vec![child.clone()];
+                render_nested_table_rows(
+                    content,
+                    &batch,
+                    x,
+                    flow_top_by_index
+                        .get(&child_index)
+                        .copied()
+                        .unwrap_or(cursor_y),
+                    page_ext_gstates,
+                    bg_alpha_counter,
+                    custom_fonts,
+                    prepared_custom_fonts,
+                    page_shadings,
+                    shading_counter,
+                    pdf_writer,
+                    page_images,
+                    annotations,
+                );
+                prev_margin_bottom = 0.0;
+                continue;
+            }
             nested_batch.push(child);
             cursor_y -= crate::layout::engine::estimate_element_height(child);
             // Table/grid rows do not collapse margins with sibling blocks.
@@ -10901,7 +11191,10 @@ fn render_container_children(
                 // margin-top with the previous sibling, after first clearing any
                 // floats it must drop below.
                 let is_float = *tb_float != Float::None;
-                if is_float {
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                if let Some(top) = planned_flow_top {
+                    y = top;
+                } else if is_float {
                     // Place the float from the shared simulator's top so its
                     // paint position (it paints last) matches the flow.
                     let rel_top = float_top_by_index.get(&child_index).copied().unwrap_or(0.0);
@@ -11005,6 +11298,8 @@ fn render_container_children(
                     // below (the filter does not change layout).
                     if is_float {
                         prev_margin_bottom = 0.0;
+                    } else if planned_flow_top.is_some() {
+                        prev_margin_bottom = *margin_bottom;
                     } else {
                         cursor_y -= child_h + *margin_bottom;
                         y = cursor_y;
@@ -11574,6 +11869,8 @@ fn render_container_children(
                     // the margin-collapse chain for the next in-flow sibling.
                     let _ = child_h;
                     prev_margin_bottom = 0.0;
+                } else if planned_flow_top.is_some() {
+                    prev_margin_bottom = *margin_bottom;
                 } else {
                     // Advance past the box AND its margin-bottom so a following
                     // in-flow sibling sits below the margin gap (e.g. stacked
@@ -11669,7 +11966,10 @@ fn render_container_children(
                 // are out of flow and take their margin-top in full.
                 let nk_is_float = !nk_is_abs && *nk_float != Float::None;
                 let nk_in_flow = !nk_is_abs && !nk_is_float;
-                if nk_in_flow {
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                if let Some(top) = planned_flow_top {
+                    y = top;
+                } else if nk_in_flow {
                     if *nk_clear != Clear::None {
                         cursor_y = clear_cursor(
                             cursor_y,
@@ -11857,6 +12157,8 @@ fn render_container_children(
                     // (the filter does not change layout).
                     if nk_is_float {
                         prev_margin_bottom = 0.0;
+                    } else if planned_flow_top.is_some() {
+                        prev_margin_bottom = *margin_bottom;
                     } else if !nk_is_abs {
                         cursor_y -= nk_total_h + margin_bottom;
                         y = cursor_y;
@@ -11901,6 +12203,8 @@ fn render_container_children(
                         );
                         if nk_is_float {
                             prev_margin_bottom = 0.0;
+                        } else if planned_flow_top.is_some() {
+                            prev_margin_bottom = *margin_bottom;
                         } else if !nk_is_abs {
                             cursor_y -= nk_total_h + margin_bottom;
                             y = cursor_y;
@@ -12629,6 +12933,8 @@ fn render_container_children(
                 // later `clear` siblings; it breaks the margin-collapse chain.
                 if nk_is_float {
                     prev_margin_bottom = 0.0;
+                } else if planned_flow_top.is_some() {
+                    prev_margin_bottom = *margin_bottom;
                 } else if !nk_is_abs {
                     cursor_y -= nk_total_h + margin_bottom;
                     y = cursor_y;
@@ -12647,16 +12953,25 @@ fn render_container_children(
                 background_color,
                 border,
                 blur_overflow,
+                filter_effect,
+                offset_top,
+                offset_left,
                 src_crop,
                 ..
             } => {
-                cursor_y -= collapsed_margin_top_extra(*img_mt, prev_margin_bottom);
-                y = cursor_y;
-                let box_top = y;
-                let box_bottom = y - img_h;
-                // CSS `filter: blur()`/`drop-shadow()`: the embedded bitmap is the
-                // blurred/feathered result, padded by `blur_overflow` on each side
-                // so it overflows the content box without affecting flow.
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                let flow_top = if let Some(top) = planned_flow_top {
+                    top
+                } else {
+                    cursor_y -= collapsed_margin_top_extra(*img_mt, prev_margin_bottom);
+                    cursor_y
+                };
+                let render_x = x + offset_left;
+                let box_top = flow_top - offset_top;
+                let box_bottom = box_top - img_h;
+                // CSS `filter: blur()`: the embedded bitmap is the blurred /
+                // feathered result, padded by `blur_overflow` on each side so it
+                // overflows the content box without affecting flow.
                 if *blur_overflow > 0.0 {
                     let img_obj_id = pdf_writer.add_image_object(
                         &image.data,
@@ -12671,7 +12986,7 @@ fn render_container_children(
                         "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
                         w = img_w + 2.0 * ov,
                         h = img_h + 2.0 * ov,
-                        ix = x - ov,
+                        ix = render_x - ov,
                         iy = box_bottom - ov,
                         name = img_name,
                     ));
@@ -12679,10 +12994,24 @@ fn render_container_children(
                         name: img_name,
                         obj_id: img_obj_id,
                     });
-                    cursor_y -= img_h;
-                    y = cursor_y;
+                    if planned_flow_top.is_none() {
+                        cursor_y -= img_h;
+                        y = cursor_y;
+                    }
                     prev_margin_bottom = 0.0;
                     continue;
+                }
+                if let Some(effect) = filter_effect {
+                    draw_image_filter_effect(
+                        content,
+                        pdf_writer,
+                        page_images,
+                        effect,
+                        render_x,
+                        box_bottom,
+                        *img_w,
+                        *img_h,
+                    );
                 }
                 // Paint the image-box background first; with object-fit it may
                 // remain visible where the image content does not cover the box.
@@ -12696,6 +13025,7 @@ fn render_container_children(
                     };
                     content.push_str(&format!(
                         "{br} {bg} {bb} rg\n{x} {by} {w} {h} re\nf\n",
+                        x = render_x,
                         by = box_bottom,
                         w = bg_w,
                         h = img_h,
@@ -12703,7 +13033,7 @@ fn render_container_children(
                 }
                 // With box-sizing:border-box the box (img_w/img_h) includes the
                 // border, so inset the image content rect by the border widths.
-                let content_x = x + border.left.width;
+                let content_x = render_x + border.left.width;
                 let content_bottom = box_bottom + border.bottom.width;
                 let content_top = box_top - border.top.width;
                 let content_w = (img_w - border.horizontal_width()).max(0.0);
@@ -12759,7 +13089,7 @@ fn render_container_children(
                 // Stroke the border frame around the image box.
                 draw_image_border(
                     content,
-                    x,
+                    render_x,
                     box_bottom,
                     *img_w,
                     *img_h,
@@ -12767,8 +13097,10 @@ fn render_container_children(
                     page_ext_gstates,
                     bg_alpha_counter,
                 );
-                cursor_y -= img_h;
-                y = cursor_y;
+                if planned_flow_top.is_none() {
+                    cursor_y -= img_h;
+                    y = cursor_y;
+                }
                 // Image arm subtracts no margin-bottom; next sibling's
                 // margin-top applies in full.
                 prev_margin_bottom = 0.0;
@@ -12779,12 +13111,19 @@ fn render_container_children(
                 height: svg_h,
                 margin_top: svg_mt,
                 mix_blend_mode,
+                offset_top,
+                offset_left,
                 ..
             } => {
-                cursor_y -= collapsed_margin_top_extra(*svg_mt, prev_margin_bottom);
-                y = cursor_y;
-                let svg_x = x;
-                let svg_y = y - svg_h;
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                if let Some(top) = planned_flow_top {
+                    y = top;
+                } else {
+                    cursor_y -= collapsed_margin_top_extra(*svg_mt, prev_margin_bottom);
+                    y = cursor_y;
+                }
+                let svg_x = x + offset_left;
+                let svg_y = y - offset_top - svg_h;
                 content.push_str("q\n");
                 if *mix_blend_mode != crate::style::computed::BlendMode::Normal {
                     begin_blend_mode(content, page_ext_gstates, *mix_blend_mode);
@@ -12812,11 +13151,17 @@ fn render_container_children(
                         ty = placement.translate_y,
                     ));
                     {
+                        let mut image_sink = SvgPageImageSink {
+                            pdf_writer,
+                            page_images,
+                        };
                         let mut res = crate::render::svg_to_pdf::SvgPdfResources {
                             shadings: &mut *page_shadings,
                             shading_counter: &mut *shading_counter,
                             ext_gstates: Some(page_ext_gstates),
-                            image_sink: None,
+                            image_sink: Some(&mut image_sink),
+                            raster_scale_x: placement.scale_x.abs(),
+                            raster_scale_y: placement.scale_y.abs(),
                             custom_fonts: Some(custom_fonts),
                             prepared_custom_fonts: Some(prepared_custom_fonts),
                         };
@@ -12826,11 +13171,17 @@ fn render_container_children(
                     }
                     content.push_str("Q\n");
                 } else {
+                    let mut image_sink = SvgPageImageSink {
+                        pdf_writer,
+                        page_images,
+                    };
                     let mut res = crate::render::svg_to_pdf::SvgPdfResources {
                         shadings: &mut *page_shadings,
                         shading_counter: &mut *shading_counter,
                         ext_gstates: Some(page_ext_gstates),
-                        image_sink: None,
+                        image_sink: Some(&mut image_sink),
+                        raster_scale_x: 1.0,
+                        raster_scale_y: 1.0,
                         custom_fonts: Some(custom_fonts),
                         prepared_custom_fonts: Some(prepared_custom_fonts),
                     };
@@ -12839,8 +13190,10 @@ fn render_container_children(
                     );
                 }
                 content.push_str("Q\n");
-                cursor_y -= svg_h;
-                y = cursor_y;
+                if planned_flow_top.is_none() {
+                    cursor_y -= svg_h;
+                    y = cursor_y;
+                }
                 // Svg arm subtracts no margin-bottom; next sibling's
                 // margin-top applies in full.
                 prev_margin_bottom = 0.0;
@@ -12872,8 +13225,13 @@ fn render_container_children(
                 positioned_depth: flex_positioned_depth,
                 ..
             } => {
-                cursor_y -= collapsed_margin_top_extra(*flex_mt, prev_margin_bottom);
-                y = cursor_y;
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                if let Some(top) = planned_flow_top {
+                    y = top;
+                } else {
+                    cursor_y -= collapsed_margin_top_extra(*flex_mt, prev_margin_bottom);
+                    y = cursor_y;
+                }
                 let row_h =
                     crate::layout::engine::estimate_element_height(child) - flex_mt - flex_mb;
 
@@ -13568,30 +13926,43 @@ fn render_container_children(
                         content.push_str("Q\n");
                     }
                 }
-                cursor_y -= row_h + flex_mb;
-                y = cursor_y;
+                if planned_flow_top.is_none() {
+                    cursor_y -= row_h + flex_mb;
+                    y = cursor_y;
+                }
                 prev_margin_bottom = *flex_mb;
             }
             LayoutElement::HorizontalRule {
                 margin_top: rule_mt,
                 margin_bottom: rule_mb,
             } => {
-                cursor_y -= collapsed_margin_top_extra(*rule_mt, prev_margin_bottom);
-                y = cursor_y;
+                let planned_flow_top = flow_top_by_index.get(&child_index).copied();
+                if let Some(top) = planned_flow_top {
+                    y = top;
+                } else {
+                    cursor_y -= collapsed_margin_top_extra(*rule_mt, prev_margin_bottom);
+                    y = cursor_y;
+                }
                 // Default rule: gray line across container width
                 content.push_str(&format!(
                     "0.8 0.8 0.8 RG\n0.75 w\n{x} {ry} m {x2} {ry} l\nS\n",
                     ry = y - 0.5,
                     x2 = x + width,
                 ));
-                cursor_y -= 1.0 + rule_mb;
-                y = cursor_y;
+                if planned_flow_top.is_none() {
+                    cursor_y -= 1.0 + rule_mb;
+                    y = cursor_y;
+                }
                 prev_margin_bottom = *rule_mb;
             }
             _ => {
                 let h = crate::layout::engine::estimate_element_height(child);
-                cursor_y -= h;
-                y = cursor_y;
+                if let Some(top) = flow_top_by_index.get(&child_index).copied() {
+                    y = top - h;
+                } else {
+                    cursor_y -= h;
+                    y = cursor_y;
+                }
                 // Unknown/other element: its full estimated height (incl. any
                 // margins) was consumed; do not collapse the next sibling.
                 prev_margin_bottom = 0.0;
@@ -17261,6 +17632,7 @@ fn render_svg_background(
             canvas_box: paint.local_blur_canvas_box(),
             image_box,
             blur_radius: paint.blur_radius,
+            filter_dpi: pdf_writer.opts.filter_dpi,
         });
         register_background_image(pdf_writer, page_images, href, image_box, request)
             .map(|registered| (image_box, registered))
@@ -17339,6 +17711,8 @@ fn render_svg_background(
                         shading_counter,
                         ext_gstates: ext_gstates.as_deref_mut(),
                         image_sink: Some(&mut image_sink),
+                        raster_scale_x: placement.scale_x.abs(),
+                        raster_scale_y: placement.scale_y.abs(),
                         // SVG used as a CSS background image: custom-font text in
                         // background SVGs is out of scope here (no font context is
                         // threaded this far), so fall back to standard fonts.
@@ -18374,8 +18748,22 @@ impl SvgPageImageSink<'_> {
 }
 
 impl crate::render::svg_to_pdf::SvgImageObjectSink for SvgPageImageSink<'_> {
-    fn register_raster(&mut self, raw_image: &[u8]) -> Option<String> {
-        let obj_id = self.pdf_writer.add_raw_raster_image_object(raw_image)?;
+    fn register_raster(
+        &mut self,
+        raw_image: &[u8],
+        display_w_pt: f32,
+        display_h_pt: f32,
+    ) -> Option<String> {
+        let asset = crate::layout::images::load_image_bytes(raw_image.to_vec())?;
+        let obj_id = self.pdf_writer.add_decodable_source_image_object(
+            &asset.data,
+            asset.source_width,
+            asset.source_height,
+            asset.format,
+            asset.png_metadata.as_ref(),
+            display_w_pt,
+            display_h_pt,
+        )?;
         Some(self.register_page_image(obj_id))
     }
 }
@@ -19354,9 +19742,15 @@ impl PdfWriter {
         display_w_pt: f32,
         display_h_pt: f32,
     ) -> usize {
-        if let Some(resized) =
-            self.maybe_resize_image(data, width, height, format, display_w_pt, display_h_pt)
-        {
+        if let Some(resized) = self.maybe_resize_image(
+            data,
+            width,
+            height,
+            format,
+            png_metadata,
+            display_w_pt,
+            display_h_pt,
+        ) {
             self.add_image_object(
                 &resized.data,
                 resized.width,
@@ -19402,6 +19796,7 @@ impl PdfWriter {
         source_width: u32,
         source_height: u32,
         format: ImageFormat,
+        png_metadata: Option<&PngMetadata>,
         display_w_pt: f32,
         display_h_pt: f32,
     ) -> Option<ResizedImage> {
@@ -19452,7 +19847,13 @@ impl PdfWriter {
                 })
             }
             ImageFormat::Png | ImageFormat::PngAlpha => {
-                let decoded = image::load_from_memory(data).ok()?;
+                let png = crate::layout::images::png_bytes_for_decoding(
+                    data,
+                    source_width,
+                    source_height,
+                    png_metadata,
+                )?;
+                let decoded = image::load_from_memory(&png).ok()?;
                 let has_alpha = matches!(
                     decoded.color(),
                     image::ColorType::La8
@@ -20421,15 +20822,6 @@ impl PdfWriter {
         Some(gs_name)
     }
 
-    pub(crate) fn add_raw_raster_image_object(&mut self, raw_image: &[u8]) -> Option<usize> {
-        if crate::parser::png::is_png(raw_image) {
-            return self.add_raw_png_image_object(raw_image);
-        }
-
-        let (width, height) = crate::parser::jpeg::parse_jpeg_dimensions(raw_image)?;
-        Some(self.add_image_object(raw_image, width, height, ImageFormat::Jpeg, None))
-    }
-
     /// Embed a TrueType font and return the PDF resource name to reference it.
     fn add_ttf_font(
         &mut self,
@@ -21378,6 +21770,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn page_shrink_to_fit_accounts_for_relative_replaced_offsets() {
+        let page_size = PageSize::new(100.0, 100.0);
+        let margin = Margin::uniform(0.0);
+        let expected = 100.0 / 110.0;
+
+        let image_page = test_page(vec![(
+            0.0,
+            LayoutElement::Image {
+                image: crate::layout::engine::RasterImageAsset {
+                    data: Vec::new(),
+                    source_width: 1,
+                    source_height: 1,
+                    format: ImageFormat::Jpeg,
+                    png_metadata: None,
+                },
+                width: 60.0,
+                height: 10.0,
+                flow_extra_bottom: 0.0,
+                margin_top: 0.0,
+                margin_bottom: 0.0,
+                position: Position::Relative,
+                offset_top: 0.0,
+                offset_left: 50.0,
+                z_index: 1,
+                object_fit: crate::style::computed::ObjectFit::Fill,
+                object_position: crate::style::computed::ObjectPosition::default(),
+                background_color: None,
+                border: LayoutBorder::default(),
+                blur_overflow: 0.0,
+                filter_effect: None,
+                src_crop: None,
+            },
+        )]);
+        let image_scale = page_shrink_to_fit_scale(&image_page, page_size, margin);
+        assert!((image_scale - expected).abs() < 0.001);
+
+        let svg_page = test_page(vec![(
+            0.0,
+            LayoutElement::Svg {
+                tree: crate::parser::svg::SvgTree {
+                    width: 10.0,
+                    height: 10.0,
+                    width_attr: None,
+                    height_attr: None,
+                    preserve_aspect_ratio: crate::parser::svg::SvgPreserveAspectRatio::default(),
+                    view_box: None,
+                    defs: Default::default(),
+                    children: Vec::new(),
+                    text_ctx: crate::parser::svg::SvgTextContext::default(),
+                    source_markup: None,
+                },
+                width: 60.0,
+                height: 10.0,
+                flow_extra_bottom: 0.0,
+                margin_top: 0.0,
+                margin_bottom: 0.0,
+                position: Position::Relative,
+                offset_top: 0.0,
+                offset_left: 50.0,
+                z_index: 1,
+                background_color: None,
+                mix_blend_mode: crate::style::computed::BlendMode::Normal,
+                border: LayoutBorder::default(),
+            },
+        )]);
+        let svg_scale = page_shrink_to_fit_scale(&svg_page, page_size, margin);
+        assert!((svg_scale - expected).abs() < 0.001);
+    }
+
     fn first_td_y(content: &str) -> Option<f32> {
         for line in content.lines() {
             if let Some(coords) = line.strip_suffix(" Td") {
@@ -21525,6 +21987,10 @@ mod tests {
                     flow_extra_bottom: 0.0,
                     margin_top: 0.0,
                     margin_bottom: 0.0,
+                    position: Position::Static,
+                    offset_top: 0.0,
+                    offset_left: 0.0,
+                    z_index: 0,
                     background_color: None,
                     mix_blend_mode: crate::style::computed::BlendMode::Normal,
                     border: Default::default(),
@@ -21577,6 +22043,10 @@ mod tests {
                     flow_extra_bottom: 0.0,
                     margin_top: 0.0,
                     margin_bottom: 0.0,
+                    position: Position::Static,
+                    offset_top: 0.0,
+                    offset_left: 0.0,
+                    z_index: 0,
                     background_color: None,
                     mix_blend_mode: crate::style::computed::BlendMode::Normal,
                     border: Default::default(),
@@ -22542,6 +23012,380 @@ mod tests {
     }
 
     #[test]
+    fn render_opaque_png_auto_resize_uses_target_dpi() {
+        let src = rgb_png_data_uri(96, 96);
+        let html = format!(r#"<img src="{src}" style="width:24pt;height:24pt">"#);
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .image_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("/Width 24 /Height 24"),
+            "opaque PNG should be resized to target image DPI before embedding"
+        );
+        assert!(
+            !content.contains("/Width 96 /Height 96"),
+            "opaque PNG should not embed the full source dimensions when downscaling"
+        );
+        assert!(
+            content.contains("/Filter /FlateDecode"),
+            "small resized PNG should stay on the lossless PNG/Flate path"
+        );
+    }
+
+    #[test]
+    fn render_color_filtered_png_auto_resize_uses_target_dpi() {
+        let src = rgb_png_data_uri(96, 96);
+        let html =
+            format!(r#"<img src="{src}" style="width:24pt;height:24pt;filter:brightness(90%)">"#);
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .image_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("/Width 24 /Height 24"),
+            "generated color-filter PNG should be resized to target image DPI before embedding"
+        );
+        assert!(
+            !content.contains("/Width 96 /Height 96"),
+            "generated color-filter PNG should not bypass downscaling"
+        );
+    }
+
+    #[test]
+    fn render_drop_shadow_image_honors_filter_dpi() {
+        let src = rgb_png_data_uri(16, 16);
+        let html = format!(
+            r#"
+            <style>
+              img {{
+                display: block;
+                width: 72pt;
+                height: 72pt;
+                filter: drop-shadow(0 0 0 rgba(0,0,0,.5));
+              }}
+            </style>
+            <img src="{src}">
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("/Width 76 /Height 76"),
+            "drop-shadow image raster should be baked at the requested filter DPI plus padding"
+        );
+        assert!(
+            !content.contains("/Width 152 /Height 152"),
+            "drop-shadow image raster should not use the old hardcoded 150+ DPI surface"
+        );
+        assert!(
+            !content.contains("/Width 302 /Height 302"),
+            "drop-shadow image raster should not use the old hardcoded 300 DPI surface"
+        );
+    }
+
+    #[test]
+    fn render_drop_shadow_keeps_source_image_at_image_dpi() {
+        let src = rgb_png_data_uri(192, 192);
+        let html = format!(
+            r#"
+            <style>
+              img {{
+                display: block;
+                width: 72pt;
+                height: 72pt;
+                filter: drop-shadow(0 0 0 rgba(0,0,0,.5));
+              }}
+            </style>
+            <img src="{src}">
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .image_dpi(150.0)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("/Width 150 /Height 150"),
+            "visible image should be resized using image DPI"
+        );
+        assert!(
+            content.contains("/Width 76 /Height 76"),
+            "drop-shadow raster should be sized using filter DPI plus padding"
+        );
+        assert!(
+            !content.contains("/Width 192 /Height 192"),
+            "visible image should not bypass image-DPI downscaling"
+        );
+    }
+
+    #[test]
+    fn render_drop_shadow_does_not_upscale_low_dpi_source_image() {
+        let src = rgb_png_data_uri(16, 16);
+        let html = format!(
+            r#"
+            <style>
+              img {{
+                display: block;
+                width: 72pt;
+                height: 72pt;
+                filter: drop-shadow(0 0 0 rgba(0,0,0,.5));
+              }}
+            </style>
+            <img src="{src}">
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .image_dpi(300.0)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("/Width 16 /Height 16"),
+            "visible image should stay at source dimensions when already below target image DPI"
+        );
+        assert!(
+            content.contains("/Width 76 /Height 76"),
+            "drop-shadow raster should still be sized using filter DPI plus padding"
+        );
+        assert!(
+            !content.contains("/Width 300 /Height 300"),
+            "visible image should not be upscaled to the target image DPI"
+        );
+    }
+
+    #[test]
+    fn render_pseudo_blur_background_paints_below_relative_image_z_index() {
+        let src = rgb_png_data_uri(96, 96);
+        let html = format!(
+            r#"
+            <style>
+              .wrap {{
+                position: relative;
+                width: 72pt;
+                height: 72pt;
+              }}
+              .wrap::before {{
+                content: "";
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 72pt;
+                height: 72pt;
+                background-image: url('{src}');
+                background-size: cover;
+                background-repeat: no-repeat;
+                filter: blur(4pt);
+                z-index: 0;
+              }}
+              .wrap img {{
+                display: block;
+                position: relative;
+                z-index: 1;
+                width: 72pt;
+                height: 72pt;
+              }}
+            </style>
+            <div class="wrap"><img src="{src}"></div>
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .image_dpi(72.0)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        let blur_name = image_name_for_dimensions(&content, 92, 92)
+            .expect("blurred pseudo background should use filter DPI plus blur padding");
+        let image_name = image_name_for_dimensions(&content, 72, 72)
+            .expect("foreground source image should use image DPI");
+        let blur_draw = content
+            .find(&format!("/{blur_name} Do"))
+            .expect("blurred pseudo background should be drawn");
+        let image_draw = content
+            .find(&format!("/{image_name} Do"))
+            .expect("foreground image should be drawn");
+
+        assert!(
+            blur_draw < image_draw,
+            "pseudo blur background must paint before the relative z-indexed image"
+        );
+    }
+
+    #[test]
+    fn render_reordered_relative_image_preserves_following_flow_top() {
+        let src = rgb_png_data_uri(96, 96);
+        let html = format!(
+            r#"
+            <style>
+              .wrap {{
+                position: relative;
+                width: 72pt;
+              }}
+              .wrap::before {{
+                content: "";
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 72pt;
+                height: 72pt;
+                background: rgba(0,0,0,.35);
+                filter: blur(2pt);
+                z-index: 0;
+              }}
+              .wrap img {{
+                display: block;
+                position: relative;
+                z-index: 1;
+                width: 72pt;
+                height: 72pt;
+              }}
+              .after {{
+                margin: 0;
+                width: 72pt;
+                height: 12pt;
+                background: rgb(255,0,0);
+              }}
+            </style>
+            <div class="wrap"><img src="{src}"><div class="after"></div></div>
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .image_dpi(72.0)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        let image_name = image_name_for_dimensions(&content, 72, 72)
+            .expect("foreground source image should use image DPI");
+        let image_bottom = image_draw_bottom_y(&content, &image_name)
+            .expect("foreground source image draw should have a placement matrix");
+        let (_, after_bottom, _, after_height) = rect_after_color(&content, "1 0 0 rg")
+            .expect("following block should paint as a red rectangle");
+
+        assert!(
+            after_bottom + after_height <= image_bottom + 0.1,
+            "following in-flow block must stay below the image slot; after_bottom={after_bottom}, after_height={after_height}, image_bottom={image_bottom}"
+        );
+    }
+
+    #[test]
+    fn render_pseudo_blur_background_paints_below_relative_svg_z_index() {
+        let bg = rgb_png_data_uri(96, 96);
+        let svg = svg_data_uri(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+                <rect x="8" y="8" width="80" height="80" fill="#336699"/>
+            </svg>"##,
+        );
+        let html = format!(
+            r#"
+            <style>
+              .wrap {{
+                position: relative;
+                width: 72pt;
+                height: 72pt;
+              }}
+              .wrap::before {{
+                content: "";
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 72pt;
+                height: 72pt;
+                background-image: url('{bg}');
+                background-size: cover;
+                background-repeat: no-repeat;
+                filter: blur(4pt);
+                z-index: 0;
+              }}
+              .wrap img {{
+                display: block;
+                position: relative;
+                z-index: 1;
+                width: 72pt;
+                height: 72pt;
+              }}
+            </style>
+            <div class="wrap"><img src="{svg}"></div>
+            "#
+        );
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .image_dpi(72.0)
+            .filter_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        let blur_name = image_name_for_dimensions(&content, 92, 92)
+            .expect("blurred pseudo background should use filter DPI plus blur padding");
+        let blur_draw = content
+            .find(&format!("/{blur_name} Do"))
+            .expect("blurred pseudo background should be drawn");
+        let svg_rect = content
+            .find("8 8 80 80 re")
+            .expect("foreground SVG should remain vector PDF geometry");
+
+        assert!(
+            blur_draw < svg_rect,
+            "pseudo blur background must paint before the relative z-indexed SVG image"
+        );
+    }
+
+    #[test]
+    fn render_svg_embedded_png_uses_image_dpi_without_rasterizing_svg_vector_content() {
+        let embedded = rgb_png_data_uri(96, 96);
+        let svg = svg_data_uri(&format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">
+                <rect x="2" y="2" width="8" height="8" fill="#00ff00"/>
+                <image href="{embedded}" x="0" y="0" width="72" height="72" preserveAspectRatio="none"/>
+            </svg>"##
+        ));
+        let html = format!(r#"<img src="{svg}" style="width:72pt;height:72pt">"#);
+        let pdf = crate::HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .image_dpi(72.0)
+            .convert(&html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(
+            content.contains("2 2 8 8 re"),
+            "SVG vector geometry should remain vector PDF content"
+        );
+        assert!(
+            content.contains("/Width 72 /Height 72"),
+            "embedded raster inside SVG should be downsampled using image DPI"
+        );
+        assert!(
+            !content.contains("/Width 96 /Height 96"),
+            "embedded raster inside SVG should not bypass image-DPI optimization"
+        );
+    }
+
+    #[test]
     fn render_png_grayscale_image() {
         let png_bytes = build_test_png_with_color_type(0); // Grayscale
         let b64 = simple_base64_encode_test(&png_bytes);
@@ -22558,6 +23402,72 @@ mod tests {
     /// Build a minimal valid PNG (1x1 RGB, 8-bit).
     fn build_minimal_test_png() -> Vec<u8> {
         build_test_png_with_color_type(2) // RGB
+    }
+
+    fn rgb_png_data_uri(width: u32, height: u32) -> String {
+        let img = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([
+                ((x * 3 + y) % 256) as u8,
+                ((x + y * 5) % 256) as u8,
+                ((x * 7 + y * 11) % 256) as u8,
+            ])
+        });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        format!("data:image/png;base64,{}", simple_base64_encode_test(&png))
+    }
+
+    fn svg_data_uri(markup: &str) -> String {
+        format!(
+            "data:image/svg+xml;base64,{}",
+            simple_base64_encode_test(markup.as_bytes())
+        )
+    }
+
+    fn image_name_for_dimensions(content: &str, width: u32, height: u32) -> Option<String> {
+        let dimensions = format!("/Width {width} /Height {height}");
+        let mut search_from = 0;
+        while let Some(relative_pos) = content[search_from..].find(&dimensions) {
+            let dimensions_pos = search_from + relative_pos;
+            let before = &content[..dimensions_pos];
+            let marker = " 0 obj\n";
+            let marker_pos = before.rfind(marker)?;
+            let id_start = before[..marker_pos].rfind('\n').map_or(0, |pos| pos + 1);
+            let id = before[id_start..marker_pos].trim().parse::<usize>().ok()?;
+            let name = format!("Im{id}");
+            if content.contains(&format!("/{name} Do")) {
+                return Some(name);
+            }
+            search_from = dimensions_pos + dimensions.len();
+        }
+        None
+    }
+
+    fn image_draw_bottom_y(content: &str, image_name: &str) -> Option<f32> {
+        let draw_pos = content.find(&format!("/{image_name} Do"))?;
+        let before = &content[..draw_pos];
+        let cm_pos = before.rfind(" cm\n")?;
+        let line_start = before[..cm_pos].rfind('\n').map_or(0, |pos| pos + 1);
+        let nums: Vec<f32> = before[line_start..cm_pos]
+            .split_whitespace()
+            .filter_map(|part| part.parse::<f32>().ok())
+            .collect();
+        nums.get(5).copied()
+    }
+
+    fn rect_after_color(content: &str, color_operator: &str) -> Option<(f32, f32, f32, f32)> {
+        let color_pos = content.find(color_operator)?;
+        let after_color = &content[color_pos + color_operator.len()..];
+        let re_pos = after_color.find(" re\n")?;
+        let before_re = &after_color[..re_pos];
+        let line_start = before_re.rfind('\n').map_or(0, |pos| pos + 1);
+        let nums: Vec<f32> = before_re[line_start..]
+            .split_whitespace()
+            .filter_map(|part| part.parse::<f32>().ok())
+            .collect();
+        Some((*nums.first()?, *nums.get(1)?, *nums.get(2)?, *nums.get(3)?))
     }
 
     fn build_test_png_with_color_type(color_type: u8) -> Vec<u8> {

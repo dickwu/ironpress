@@ -7,7 +7,7 @@ use super::engine::CounterState;
 
 /// Shared mutable environment for the layout traversal.
 ///
-/// Bundles the CSS rules, font map, and counter state that flow through
+/// Bundles the CSS rules, font map, counter state, and raster options that flow through
 /// every layout function unchanged in shape.
 pub(crate) struct LayoutEnv<'a> {
     pub rules: &'a [CssRule],
@@ -17,6 +17,9 @@ pub(crate) struct LayoutEnv<'a> {
     /// (css-filter-effects-1 §3) to the inline SVG `<filter>` element. Built
     /// once over the whole DOM before the traversal begins.
     pub filter_defs: &'a HashMap<String, ElementNode>,
+    /// Rasterization DPI for layout-time filter bitmaps such as replaced-image
+    /// `filter: blur()` and `filter: drop-shadow()`.
+    pub filter_dpi: f32,
 }
 
 /// Containing block information for `position: absolute` elements.

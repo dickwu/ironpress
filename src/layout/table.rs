@@ -1131,6 +1131,7 @@ fn measure_caption_min_width(
     rules: &[CssRule],
     fonts: &HashMap<String, TtfFont>,
     filter_defs: &HashMap<String, ElementNode>,
+    filter_dpi: f32,
     counter_state: &mut CounterState,
     available_width: f32,
 ) -> f32 {
@@ -1154,6 +1155,7 @@ fn measure_caption_min_width(
         rules,
         fonts,
         filter_defs,
+        filter_dpi,
         false,
         false,
         true,
@@ -1543,6 +1545,7 @@ pub(crate) fn flatten_table(
     let rules = env.rules;
     let fonts = env.fonts;
     let filter_defs = env.filter_defs;
+    let filter_dpi = env.filter_dpi;
     let counter_state = &mut *env.counter_state;
     let inner_width = resolve_table_inner_width(style, available_width);
     let table_attr_border_width =
@@ -1775,6 +1778,7 @@ pub(crate) fn flatten_table(
                 rules,
                 fonts,
                 filter_defs,
+                filter_dpi,
                 counter_state,
                 inner_width,
             )
@@ -2154,6 +2158,7 @@ pub(crate) fn flatten_table(
                             rules,
                             fonts,
                             filter_defs,
+                            filter_dpi,
                             false,
                             recurse_descendants,
                             recurse_descendants,
@@ -2844,6 +2849,7 @@ pub(crate) fn flatten_table(
                 rules,
                 fonts,
                 filter_defs,
+                filter_dpi,
                 false,
                 recurse_descendants,
                 recurse_descendants,
@@ -3250,6 +3256,7 @@ pub(crate) fn flatten_table(
             rules,
             fonts,
             filter_defs,
+            filter_dpi,
             false,
             false,
             true,
@@ -3465,6 +3472,7 @@ fn collect_table_cell_content_inner(
     rules: &[CssRule],
     fonts: &HashMap<String, TtfFont>,
     filter_defs: &HashMap<String, ElementNode>,
+    filter_dpi: f32,
     inline_parent: bool,
     recurse_blocks: bool,
     suppress_direct_text_padding: bool,
@@ -3630,6 +3638,7 @@ fn collect_table_cell_content_inner(
                         fonts,
                         counter_state,
                         filter_defs,
+                        filter_dpi,
                     };
                     flatten_element(
                         el,
@@ -3659,6 +3668,7 @@ fn collect_table_cell_content_inner(
                             rules,
                             fonts,
                             filter_defs,
+                            filter_dpi,
                             collects_as_inline_text(el.tag),
                             recurse_blocks,
                             false,

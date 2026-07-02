@@ -1219,12 +1219,14 @@ fn svg_lerp(t: f64, a: f64, b: f64) -> f64 {
 }
 
 /// Build a `drop-shadow(dx dy blur color)` raster from an already-decoded source
-/// image: take the source alpha, blur it, tint it with the shadow colour, and
-/// composite the *original* image on top, offset within a padded buffer.
+/// image: take the source alpha, blur it, and tint it with the shadow colour.
+/// The source image itself is rendered separately so image pixels follow image
+/// DPI while this shadow raster follows filter DPI.
 ///
 /// `display_w_pt`/`display_h_pt` are the rendered image-content size in points.
 /// `dx_pt`/`dy_pt` are the shadow offsets (points; +y is downward). Returns the
-/// blurred raster plus the overflow it adds beyond each border-box edge.
+/// shadow raster plus the overflow it adds beyond each border-box edge.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn drop_shadow_image(
     source: &image::RgbaImage,
     display_w_pt: f32,
@@ -1233,6 +1235,58 @@ pub(crate) fn drop_shadow_image(
     dy_pt: f32,
     blur_radius_pt: f32,
     color: (f32, f32, f32, f32),
+    filter_dpi: f32,
+) -> Option<BlurredRaster> {
+    drop_shadow_image_impl(
+        source,
+        display_w_pt,
+        display_h_pt,
+        dx_pt,
+        dy_pt,
+        blur_radius_pt,
+        color,
+        filter_dpi,
+        false,
+    )
+}
+
+/// Build a `drop-shadow()` replacement raster containing both the shadow and the
+/// source image, used when prior filter ops have already rasterized the source.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drop_shadow_image_with_source(
+    source: &image::RgbaImage,
+    display_w_pt: f32,
+    display_h_pt: f32,
+    dx_pt: f32,
+    dy_pt: f32,
+    blur_radius_pt: f32,
+    color: (f32, f32, f32, f32),
+    filter_dpi: f32,
+) -> Option<BlurredRaster> {
+    drop_shadow_image_impl(
+        source,
+        display_w_pt,
+        display_h_pt,
+        dx_pt,
+        dy_pt,
+        blur_radius_pt,
+        color,
+        filter_dpi,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drop_shadow_image_impl(
+    source: &image::RgbaImage,
+    display_w_pt: f32,
+    display_h_pt: f32,
+    dx_pt: f32,
+    dy_pt: f32,
+    blur_radius_pt: f32,
+    color: (f32, f32, f32, f32),
+    filter_dpi: f32,
+    composite_source: bool,
 ) -> Option<BlurredRaster> {
     if display_w_pt <= 0.0 || display_h_pt <= 0.0 {
         return None;
@@ -1244,7 +1298,7 @@ pub(crate) fn drop_shadow_image(
     // CSS filters operate on the painted element. Build the shadow surface at
     // the displayed image resolution so a scaled image's alpha silhouette has
     // the same pixel grid Chrome filters.
-    let s = filter_dpi_scale(300.0);
+    let s = filter_dpi_scale(filter_dpi);
     let dev_w = (display_w_pt / PT_PER_PX * s).round().max(1.0) as u32;
     let dev_h = (display_h_pt / PT_PER_PX * s).round().max(1.0) as u32;
     let painted =
@@ -1290,17 +1344,18 @@ pub(crate) fn drop_shadow_image(
         shadow
     };
 
-    // Composite the original image over the shadow (source-over).
-    for y in 0..dev_h {
-        for x in 0..dev_w {
-            let src = *painted.get_pixel(x, y);
-            if src[3] == 0 {
-                continue;
+    if composite_source {
+        for y in 0..dev_h {
+            for x in 0..dev_w {
+                let src = *painted.get_pixel(x, y);
+                if src[3] == 0 {
+                    continue;
+                }
+                let dx0 = x + pad;
+                let dy0 = y + pad;
+                let bg = *composed.get_pixel(dx0, dy0);
+                composed.put_pixel(dx0, dy0, over(src, bg));
             }
-            let dx0 = x + pad;
-            let dy0 = y + pad;
-            let bg = *composed.get_pixel(dx0, dy0);
-            composed.put_pixel(dx0, dy0, over(src, bg));
         }
     }
 

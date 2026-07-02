@@ -194,6 +194,7 @@ pub(crate) struct RasterBackgroundRequest {
     pub canvas_box: SvgViewportBox,
     pub image_box: SvgViewportBox,
     pub blur_radius: f32,
+    pub filter_dpi: f32,
 }
 
 pub(crate) struct RegisteredBackgroundImage {
@@ -244,16 +245,14 @@ fn blur_padding_pixels(blur_sigma_pixels: f32) -> u32 {
     (blur_sigma_pixels.max(0.0) * 2.5).ceil() as u32
 }
 
-const FILTERED_BACKGROUND_PPI: f32 = 300.0;
-
-fn points_to_filtered_background_pixels(points: f32) -> u32 {
-    ((points.max(0.0) * FILTERED_BACKGROUND_PPI / 72.0)
+fn points_to_filtered_background_pixels(points: f32, filter_dpi: f32) -> u32 {
+    ((points.max(0.0) * filter_dpi.max(1.0) / 72.0)
         .round()
         .max(1.0)) as u32
 }
 
-fn filtered_background_pixels_to_points(pixels: u32) -> f32 {
-    pixels as f32 * 72.0 / FILTERED_BACKGROUND_PPI
+fn filtered_background_pixels_to_points(pixels: u32, filter_dpi: f32) -> f32 {
+    pixels as f32 * 72.0 / filter_dpi.max(1.0)
 }
 
 fn pad_rgba_image(image: &image::RgbaImage, padding: u32) -> Option<image::RgbaImage> {
@@ -334,10 +333,11 @@ fn encode_blurred_png_for_background(
         return None;
     }
 
-    let canvas_width = points_to_filtered_background_pixels(request.canvas_box.width);
-    let canvas_height = points_to_filtered_background_pixels(request.canvas_box.height);
-    let image_width = points_to_filtered_background_pixels(request.image_box.width);
-    let image_height = points_to_filtered_background_pixels(request.image_box.height);
+    let filter_dpi = request.filter_dpi.max(1.0);
+    let canvas_width = points_to_filtered_background_pixels(request.canvas_box.width, filter_dpi);
+    let canvas_height = points_to_filtered_background_pixels(request.canvas_box.height, filter_dpi);
+    let image_width = points_to_filtered_background_pixels(request.image_box.width, filter_dpi);
+    let image_height = points_to_filtered_background_pixels(request.image_box.height, filter_dpi);
 
     let mut canvas =
         image::RgbaImage::from_pixel(canvas_width, canvas_height, image::Rgba([0, 0, 0, 0]));
@@ -347,19 +347,17 @@ fn encode_blurred_png_for_background(
         image_height,
         image::imageops::FilterType::Lanczos3,
     );
-    let image_x = ((request.image_box.x - request.canvas_box.x) * FILTERED_BACKGROUND_PPI / 72.0)
-        .round() as i64;
-    let image_y = ((request.image_box.y - request.canvas_box.y) * FILTERED_BACKGROUND_PPI / 72.0)
-        .round() as i64;
+    let image_x = ((request.image_box.x - request.canvas_box.x) * filter_dpi / 72.0).round() as i64;
+    let image_y = ((request.image_box.y - request.canvas_box.y) * filter_dpi / 72.0).round() as i64;
     image::imageops::overlay(&mut canvas, &resized, image_x, image_y);
 
-    let blur_pixels = (request.blur_radius * FILTERED_BACKGROUND_PPI / 72.0).max(0.0);
+    let blur_pixels = (request.blur_radius * filter_dpi / 72.0).max(0.0);
     let padding = blur_padding_pixels(blur_pixels);
     let premultiplied = premultiply_rgba(&canvas);
     let padded = pad_rgba_image(&premultiplied, padding)?;
     let blurred = image::imageops::blur(&image::DynamicImage::ImageRgba8(padded), blur_pixels);
     let encoded = encode_rgba_png(&unpremultiply_rgba(&blurred))?;
-    let padding_points = filtered_background_pixels_to_points(padding);
+    let padding_points = filtered_background_pixels_to_points(padding, filter_dpi);
     let draw_box = SvgViewportBox::new(
         request.canvas_box.x - padding_points,
         request.canvas_box.y - padding_points,
@@ -580,17 +578,17 @@ mod tests {
         // Convert a point value → pixels → back to points.
         // Due to rounding the roundtrip is approximate.
         let original_points = 72.0f32; // exactly 300 px at 300 PPI
-        let pixels = points_to_filtered_background_pixels(original_points);
+        let pixels = points_to_filtered_background_pixels(original_points, 300.0);
         assert_eq!(pixels, 300);
-        let recovered = filtered_background_pixels_to_points(pixels);
+        let recovered = filtered_background_pixels_to_points(pixels, 300.0);
         assert!((recovered - original_points).abs() < 0.5);
     }
 
     #[test]
     fn points_to_filtered_background_pixels_zero_clamps_to_one() {
         // Negative / zero input should yield the minimum of 1 pixel.
-        assert_eq!(points_to_filtered_background_pixels(0.0), 1);
-        assert_eq!(points_to_filtered_background_pixels(-100.0), 1);
+        assert_eq!(points_to_filtered_background_pixels(0.0, 300.0), 1);
+        assert_eq!(points_to_filtered_background_pixels(-100.0, 300.0), 1);
     }
 
     // ── premultiply_rgba / unpremultiply_rgba roundtrip ──────────────────────

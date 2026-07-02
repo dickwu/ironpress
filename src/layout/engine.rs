@@ -753,6 +753,14 @@ pub struct RasterImageAsset {
     pub png_metadata: Option<PngMetadata>,
 }
 
+/// A rasterized effect associated with an image, drawn independently from the
+/// source image so the effect can use filter DPI while the image uses image DPI.
+#[derive(Debug, Clone)]
+pub struct ImageEffectRaster {
+    pub image: RasterImageAsset,
+    pub overflow: f32,
+}
+
 pub use super::context::*;
 
 /// Parity side carried by a forced `LayoutElement::PageBreak` (CSS Fragmentation
@@ -931,6 +939,13 @@ pub enum LayoutElement {
         flow_extra_bottom: f32,
         margin_top: f32,
         margin_bottom: f32,
+        /// Relative-position / stacking metadata for replaced images. Absolute
+        /// image layout is not modeled here; non-relative images stay static so
+        /// existing flow behavior is preserved.
+        position: Position,
+        offset_top: f32,
+        offset_left: f32,
+        z_index: i32,
         /// CSS `object-fit` controlling how the image is scaled within its box.
         object_fit: crate::style::computed::ObjectFit,
         /// CSS `object-position` (alignment fractions of the free space).
@@ -942,12 +957,16 @@ pub enum LayoutElement {
         /// `width`/`height` already include the border, so the image content is
         /// inset by the border widths and the frame is stroked on the perimeter.
         border: LayoutBorder,
-        /// CSS `filter: blur()`/`drop-shadow()` overflow: when `> 0` the embedded
-        /// bitmap already contains the blurred/feathered result padded on every
-        /// side by this many points, and the renderer draws it expanded beyond
-        /// the content box (the filter does not affect layout flow). Zero means
-        /// no filter raster (the normal sharp image path).
+        /// CSS `filter: blur()` overflow: when `> 0` the embedded bitmap already
+        /// contains the blurred/feathered result padded on every side by this
+        /// many points, and the renderer draws it expanded beyond the content
+        /// box (the filter does not affect layout flow). Zero means no
+        /// replacement blur raster.
         blur_overflow: f32,
+        /// Rasterized `drop-shadow()` drawn behind the normal source image. Kept
+        /// separate from `image` so the shadow uses filter DPI while the source
+        /// image still uses image DPI in the PDF optimizer.
+        filter_effect: Option<ImageEffectRaster>,
         /// Source-pixel sub-rectangle `[x, y, w, h]` of `image` that THIS element
         /// must display, set when pagination has SLICED a too-tall raster across
         /// page boundaries (css-break-3 §4.1: monolithic content taller than the
@@ -977,6 +996,11 @@ pub enum LayoutElement {
         margin_top: f32,
         /// Bottom margin.
         margin_bottom: f32,
+        /// Relative-position / stacking metadata for vector images.
+        position: Position,
+        offset_top: f32,
+        offset_left: f32,
+        z_index: i32,
         background_color: Option<(f32, f32, f32, f32)>,
         mix_blend_mode: crate::style::computed::BlendMode,
         border: LayoutBorder,
@@ -1464,8 +1488,9 @@ fn background_paint_differs(a: &ComputedStyle, b: &ComputedStyle) -> bool {
         || a.background_svg.is_some() != b.background_svg.is_some()
 }
 
+const DEFAULT_FILTER_DPI: f32 = 150.0;
+
 /// Lay out the DOM nodes into pages with stylesheet rules and custom fonts.
-#[allow(clippy::too_many_arguments)]
 pub fn layout_with_rules_and_fonts(
     nodes: &[DomNode],
     page_size: PageSize,
@@ -1475,6 +1500,33 @@ pub fn layout_with_rules_and_fonts(
     page_background: Option<&ComputedStyle>,
     page_bleed: f32,
     page_margin_overrides: super::paginate::PageMarginOverrides,
+) -> Vec<Page> {
+    layout_with_rules_and_fonts_filter_dpi(
+        nodes,
+        page_size,
+        margin,
+        rules,
+        custom_fonts,
+        page_background,
+        page_bleed,
+        page_margin_overrides,
+        DEFAULT_FILTER_DPI,
+    )
+}
+
+/// Lay out the DOM nodes into pages with stylesheet rules, custom fonts, and a
+/// caller-controlled filter bitmap resolution.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn layout_with_rules_and_fonts_filter_dpi(
+    nodes: &[DomNode],
+    page_size: PageSize,
+    margin: Margin,
+    rules: &[CssRule],
+    custom_fonts: &HashMap<String, TtfFont>,
+    page_background: Option<&ComputedStyle>,
+    page_bleed: f32,
+    page_margin_overrides: super::paginate::PageMarginOverrides,
+    filter_dpi: f32,
 ) -> Vec<Page> {
     // Expose the loaded fonts to style resolution for the whole pass so the
     // `ex`/`ch` units resolve against real font metrics (css-values-4 §6.1.1).
@@ -1816,6 +1868,7 @@ pub fn layout_with_rules_and_fonts(
         fonts: custom_fonts,
         counter_state: &mut counter_state,
         filter_defs: &filter_defs,
+        filter_dpi: filter_dpi.max(1.0),
     };
     flatten_nodes(
         nodes,
@@ -2860,7 +2913,6 @@ fn filtered_color(
     }
 }
 
-const FILTER_GROUP_RASTER_DPI: f32 = 300.0;
 const DIRECT_FILTER_IMAGE_OVERFLOW_PT: f32 = 0.001;
 
 struct FilterGroupRaster {
@@ -2918,9 +2970,10 @@ fn replace_filtered_output_with_raster(
         return false;
     }
     let raster = if has_displacement {
-        filter_el.and_then(|filter| rasterize_svg_displacement_rect(&element, filter))
+        filter_el
+            .and_then(|filter| rasterize_svg_displacement_rect(&element, filter, env.filter_dpi))
     } else {
-        rasterize_filtered_group(&element, ops, linear_rgb, env.fonts)
+        rasterize_filtered_group(&element, ops, linear_rgb, env.fonts, env.filter_dpi)
     };
     let Some(raster) = raster else {
         return false;
@@ -2938,7 +2991,24 @@ fn replace_filtered_output_with_raster(
         object_position: crate::style::computed::ObjectPosition::default(),
         background_color: None,
         border: LayoutBorder::default(),
+        position: if style.position == Position::Relative {
+            Position::Relative
+        } else {
+            Position::Static
+        },
+        offset_top: if style.position == Position::Relative {
+            style.top.unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        offset_left: if style.position == Position::Relative {
+            style.left.unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        z_index: style.z_index,
         blur_overflow: raster.overflow.max(DIRECT_FILTER_IMAGE_OVERFLOW_PT),
+        filter_effect: None,
         src_crop: None,
     });
     true
@@ -2949,6 +3019,7 @@ fn rasterize_filtered_group(
     ops: &[crate::style::computed::ColorFilterOp],
     linear_rgb: bool,
     fonts: &HashMap<String, TtfFont>,
+    filter_dpi: f32,
 ) -> Option<FilterGroupRaster> {
     let text_mode = if ops
         .iter()
@@ -2959,13 +3030,9 @@ fn rasterize_filtered_group(
         FilterTextRasterMode::Stroked { alpha: 1.0 }
     };
     let (mut img, width, height, margin_top, margin_bottom) =
-        paint_filter_source_element(element, fonts, text_mode)?;
-    let (filtered, overflow) = crate::render::blur::apply_ordered_filter_ops_rgba(
-        &img,
-        ops,
-        linear_rgb,
-        FILTER_GROUP_RASTER_DPI,
-    )?;
+        paint_filter_source_element(element, fonts, text_mode, filter_dpi)?;
+    let (filtered, overflow) =
+        crate::render::blur::apply_ordered_filter_ops_rgba(&img, ops, linear_rgb, filter_dpi)?;
     img = filtered;
     let asset = crate::render::blur::rgba_to_png_alpha_asset(img)?;
     Some(FilterGroupRaster {
@@ -2982,14 +3049,15 @@ fn paint_filter_source_element(
     element: &LayoutElement,
     fonts: &HashMap<String, TtfFont>,
     text_mode: FilterTextRasterMode,
+    filter_dpi: f32,
 ) -> Option<(image::RgbaImage, f32, f32, f32, f32)> {
     let (width, height, margin_top, margin_bottom) = filter_source_box(element)?;
-    let px_per_pt = crate::render::blur::px_per_pt_at_filter_dpi(FILTER_GROUP_RASTER_DPI);
+    let px_per_pt = crate::render::blur::px_per_pt_at_filter_dpi(filter_dpi);
     let px_w = (width * px_per_pt).round().max(1.0) as u32;
     let px_h = (height * px_per_pt).round().max(1.0) as u32;
     let mut img = image::RgbaImage::new(px_w, px_h);
     paint_filter_element_into(
-        &mut img, px_per_pt, element, 0.0, 0.0, width, height, fonts, text_mode,
+        &mut img, px_per_pt, element, 0.0, 0.0, width, height, fonts, text_mode, filter_dpi,
     )?;
     Some((img, width, height, margin_top, margin_bottom))
 }
@@ -3129,6 +3197,7 @@ fn paint_filter_element_into(
     height_pt: f32,
     fonts: &HashMap<String, TtfFont>,
     text_mode: FilterTextRasterMode,
+    filter_dpi: f32,
 ) -> Option<()> {
     match element {
         LayoutElement::TextBlock {
@@ -3166,6 +3235,7 @@ fn paint_filter_element_into(
                 *text_indent,
                 fonts,
                 text_mode,
+                filter_dpi,
             )
         }
         LayoutElement::Container {
@@ -3204,6 +3274,7 @@ fn paint_filter_element_into(
                 let paint_w = if child_w > 0.0 { child_w } else { content_w };
                 paint_filter_element_into(
                     img, px_per_pt, child, child_x, child_y, paint_w, child_h, fonts, text_mode,
+                    filter_dpi,
                 )?;
                 cursor_y += child_h + margin_bottom;
                 prev_margin_bottom = margin_bottom;
@@ -3230,6 +3301,7 @@ fn paint_filter_text_lines(
     text_indent: f32,
     fonts: &HashMap<String, TtfFont>,
     text_mode: FilterTextRasterMode,
+    filter_dpi: f32,
 ) -> Option<()> {
     let content_w = (width_pt - padding_left - padding_right).max(0.0);
     let mut baseline_y = y_pt + padding_top;
@@ -3290,7 +3362,7 @@ fn paint_filter_text_lines(
                 run.font_size,
                 &shaped.glyphs,
                 0.0,
-                FILTER_GROUP_RASTER_DPI,
+                filter_dpi,
                 stroke_width_px,
             )?;
             let mask = match text_mode {
@@ -3506,6 +3578,7 @@ fn svg_filter_has_turbulence_displacement(filter_el: &ElementNode) -> bool {
 fn rasterize_svg_displacement_rect(
     element: &LayoutElement,
     filter_el: &ElementNode,
+    filter_dpi: f32,
 ) -> Option<FilterGroupRaster> {
     let (width, height, margin_top, margin_bottom) = filter_source_box(element)?;
     let color = solid_filter_rect_color(element)?;
@@ -3513,13 +3586,8 @@ fn rasterize_svg_displacement_rect(
     let css_h = height / 0.75;
     let overflow_css = svg_filter_overflow_css(filter_el, css_w, css_h).max(1.0);
     let spec = svg_turbulence_displacement_spec(filter_el, overflow_css)?;
-    let raster = crate::render::blur::turbulence_displacement_rect(
-        width,
-        height,
-        color,
-        &spec,
-        FILTER_GROUP_RASTER_DPI,
-    )?;
+    let raster =
+        crate::render::blur::turbulence_displacement_rect(width, height, color, &spec, filter_dpi)?;
     Some(FilterGroupRaster {
         asset: raster.asset,
         width,
@@ -4310,9 +4378,13 @@ pub(crate) fn flatten_element(
     }
 
     if el.tag == HtmlTag::Img {
-        if let Some(img_element) =
-            load_image_from_element(el, available_width, available_height, &style)
-        {
+        if let Some(img_element) = load_image_from_element(
+            el,
+            available_width,
+            available_height,
+            &style,
+            env.filter_dpi,
+        ) {
             output.push(add_inline_replaced_baseline_gap(
                 img_element,
                 &style,
@@ -4366,6 +4438,22 @@ pub(crate) fn flatten_element(
                 flow_extra_bottom: 0.0,
                 margin_top: style.margin.top,
                 margin_bottom: style.margin.bottom,
+                position: if style.position == Position::Relative {
+                    Position::Relative
+                } else {
+                    Position::Static
+                },
+                offset_top: if style.position == Position::Relative {
+                    style.top.unwrap_or(0.0)
+                } else {
+                    0.0
+                },
+                offset_left: if style.position == Position::Relative {
+                    style.left.unwrap_or(0.0)
+                } else {
+                    0.0
+                },
+                z_index: style.z_index,
                 background_color: style.background_color.map(|c| c.to_f32_rgba()),
                 mix_blend_mode: style.mix_blend_mode,
                 border: LayoutBorder::from_computed(&style.border),

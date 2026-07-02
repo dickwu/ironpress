@@ -779,7 +779,7 @@ impl HtmlConverter {
         });
 
         // Step 5: Layout
-        let mut pages = layout::engine::layout_with_rules_and_fonts(
+        let mut pages = layout::engine::layout_with_rules_and_fonts_filter_dpi(
             &result.nodes,
             effective_page_size,
             effective_margin,
@@ -796,6 +796,7 @@ impl HtmlConverter {
                 named: named_page_overrides,
                 footnote_area,
             },
+            self.filter_dpi,
         );
         let mut footnote_area_for_overflow = footnote_area;
         footnote_area_for_overflow.content_width =
