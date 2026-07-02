@@ -213,6 +213,46 @@ pub async fn convert_markdown_file_async(input: &str, output: &str) -> Result<()
     Ok(())
 }
 
+/// A document laid out into pages, plus the effective geometry and fonts the
+/// layout resolved — everything the PDF renderer or a measurement pass needs.
+struct LaidOutDocument {
+    pages: Vec<layout::engine::Page>,
+    page_size: PageSize,
+    margin: Margin,
+    fonts: std::collections::HashMap<String, parser::ttf::TtfFont>,
+}
+
+/// True when a laid-out element is a measurement sentinel: an empty block
+/// whose fixed height and solid background color both match the caller's
+/// signature (see [`HtmlConverter::measure_sentinel_tops`]). An empty div can
+/// lay out as either a childless `Container` or a line-less `TextBlock`, so
+/// both are recognised.
+fn sentinel_matches(el: &layout::engine::LayoutElement, height: f32, color: (f32, f32, f32)) -> bool {
+    let (block_height, background) = match el {
+        layout::engine::LayoutElement::TextBlock {
+            lines,
+            block_height,
+            background_color,
+            ..
+        } if lines.is_empty() => (*block_height, *background_color),
+        layout::engine::LayoutElement::Container {
+            children,
+            block_height,
+            background_color,
+            ..
+        } if children.is_empty() => (*block_height, *background_color),
+        _ => return false,
+    };
+
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    match (block_height, background) {
+        (Some(h), Some((r, g, b, a))) => {
+            close(h, height) && a > 0.99 && close(r, color.0) && close(g, color.1) && close(b, color.2)
+        }
+        _ => false,
+    }
+}
+
 /// Builder for HTML-to-PDF conversion with custom options.
 ///
 /// Use [`HtmlConverter::new`] to start, chain configuration methods,
@@ -371,6 +411,33 @@ impl HtmlConverter {
         html: &str,
         writer: &mut W,
     ) -> Result<(), IronpressError> {
+        let doc = self.layout_document(html)?;
+
+        // Step 6: Render PDF
+        let decoration = if self.header.is_some() || self.footer.is_some() {
+            Some(render::pdf::PageDecoration {
+                header: self.header.clone(),
+                footer: self.footer.clone(),
+            })
+        } else {
+            None
+        };
+
+        render::pdf::render_pdf_to_writer_full(
+            &doc.pages,
+            doc.page_size,
+            doc.margin,
+            writer,
+            &doc.fonts,
+            decoration.as_ref(),
+        )
+    }
+
+    /// Lay out `html` without rendering: run the full pipeline (sanitize,
+    /// parse, style, fonts, layout) and return the laid-out pages plus the
+    /// effective geometry and fonts — everything the PDF renderer or a
+    /// measurement pass needs.
+    fn layout_document(&self, html: &str) -> Result<LaidOutDocument, IronpressError> {
         // Step 1: Sanitize
         let html = if self.sanitize {
             security::sanitizer::sanitize_html(html)?
@@ -525,24 +592,65 @@ impl HtmlConverter {
             &parsed_fonts,
         );
 
-        // Step 6: Render PDF
-        let decoration = if self.header.is_some() || self.footer.is_some() {
-            Some(render::pdf::PageDecoration {
-                header: self.header.clone(),
-                footer: self.footer.clone(),
-            })
-        } else {
-            None
-        };
+        Ok(LaidOutDocument {
+            pages,
+            page_size: effective_page_size,
+            margin: effective_margin,
+            fonts: parsed_fonts,
+        })
+    }
 
-        render::pdf::render_pdf_to_writer_full(
-            &pages,
-            effective_page_size,
-            effective_margin,
-            writer,
-            &parsed_fonts,
-            decoration.as_ref(),
-        )
+    /// Lay out `html` (without rendering a PDF) and return the top y-position,
+    /// in points from the top of the page content box, of every "sentinel"
+    /// element, in flow order.
+    ///
+    /// A sentinel is an empty block whose computed `height` AND solid
+    /// `background-color` both match the given signature — both values are
+    /// author-controlled, so exact matching is reliable, e.g.
+    /// `.msr { height: 2.5pt; background-color: #010203; margin: 0; }`.
+    ///
+    /// Interleave sentinel divs between the blocks you want measured: the
+    /// distance between consecutive sentinel tops, minus the sentinel height,
+    /// is the exact flow height (content plus vertical margins) of the block
+    /// between them. Wrapping, fonts and CSS resolve exactly as in `convert`,
+    /// so the numbers match the rendered PDF.
+    ///
+    /// Declare a page tall enough for the whole document (e.g.
+    /// `@page { size: 612pt 14000pt; }`) — band geometry is only meaningful
+    /// when nothing paginates, so this returns `LayoutError` if layout
+    /// produced more than one page.
+    pub fn measure_sentinel_tops(
+        &self,
+        html: &str,
+        sentinel_height: f32,
+        sentinel_color: (u8, u8, u8),
+    ) -> Result<Vec<f32>, IronpressError> {
+        let doc = self.layout_document(html)?;
+        if doc.pages.len() > 1 {
+            return Err(IronpressError::LayoutError(format!(
+                "measure_sentinel_tops needs the whole document on one page, got {} pages — declare a taller @page size",
+                doc.pages.len()
+            )));
+        }
+
+        let color = (
+            f32::from(sentinel_color.0) / 255.0,
+            f32::from(sentinel_color.1) / 255.0,
+            f32::from(sentinel_color.2) / 255.0,
+        );
+        let mut tops: Vec<f32> = doc
+            .pages
+            .first()
+            .map(|page| {
+                page.elements
+                    .iter()
+                    .filter(|(_, el)| sentinel_matches(el, sentinel_height, color))
+                    .map(|(y, _)| *y)
+                    .collect()
+            })
+            .unwrap_or_default();
+        tops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(tops)
     }
 
     /// Convert a Markdown string to PDF, writing directly to any `std::io::Write` implementation.
@@ -664,6 +772,56 @@ pub mod wasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sentinel bands: interleaved marker divs report exact per-block flow
+    /// heights (content + margins), the contract PHP-side pagination relies on.
+    #[test]
+    fn measure_sentinel_tops_reports_block_heights() {
+        let html = r##"<html><head><style>
+            @page { size: 612pt 5000pt; margin: 20pt; }
+            .msr { height: 2.5pt; background-color: #010203; margin: 0; padding: 0; }
+            p { margin: 0 0 10pt 0; font-size: 12pt; }
+        </style></head><body>
+            <div class="msr"></div>
+            <p>one line</p>
+            <div class="msr"></div>
+            <p>one line</p>
+            <p>another line</p>
+            <div class="msr"></div>
+        </body></html>"##;
+
+        let tops = HtmlConverter::new()
+            .measure_sentinel_tops(html, 2.5, (1, 2, 3))
+            .expect("measurement must succeed on a single tall page");
+
+        assert_eq!(tops.len(), 3, "all three sentinels must be found, got {tops:?}");
+        let band1 = tops[1] - tops[0] - 2.5;
+        let band2 = tops[2] - tops[1] - 2.5;
+        assert!(band1 > 10.0, "one-paragraph band must include line + margin, got {band1}");
+        assert!(
+            band2 > band1 * 1.6 && band2 < band1 * 2.4,
+            "two-paragraph band must be roughly double one paragraph, got {band1} vs {band2}"
+        );
+    }
+
+    /// The one-page contract: a document too tall for its declared page must
+    /// error rather than silently return cross-page geometry.
+    #[test]
+    fn measure_sentinel_tops_rejects_multi_page_documents() {
+        let mut html = String::from(
+            r##"<html><head><style>
+            @page { size: 612pt 200pt; margin: 20pt; }
+            .msr { height: 2.5pt; background-color: #010203; margin: 0; padding: 0; }
+        </style></head><body><div class="msr"></div>"##,
+        );
+        for i in 0..60 {
+            html.push_str(&format!("<p>filler paragraph number {i}</p>"));
+        }
+        html.push_str(r##"<div class="msr"></div></body></html>"##);
+
+        let result = HtmlConverter::new().measure_sentinel_tops(&html, 2.5, (1, 2, 3));
+        assert!(matches!(result, Err(IronpressError::LayoutError(_))), "must reject multi-page docs");
+    }
 
     /// Check if a PDF contains a given text string, handling both WinAnsi
     /// (plain text in parentheses) and CID encoding (hex glyph IDs with
