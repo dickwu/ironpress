@@ -623,6 +623,10 @@ pub fn layout_with_rules_and_fonts(
     rules: &[CssRule],
     custom_fonts: &HashMap<String, TtfFont>,
 ) -> Vec<Page> {
+    // Fresh document: drop any table-sizing memo from a previous layout so
+    // cell pointers from a freed DOM are never reused as cache keys.
+    crate::layout::table::reset_table_sizing_cache();
+
     // Apply body/html/:root rules to the root style so that inherited root
     // properties still take effect even though the HTML parser unwraps the
     // <html>/<body> elements before layout.

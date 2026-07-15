@@ -269,8 +269,7 @@ pub(crate) fn load_unicode_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
 
     for family in UNICODE_FALLBACK_FAMILIES {
         let query = SystemFontQuery::new(family, FontVariant::new(false, false));
-        if let Some(font) = query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-        {
+        if let Some(font) = load_system_font_cached(db, &query) {
             fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font);
             return;
         }
@@ -296,7 +295,7 @@ pub(crate) fn load_unicode_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
 #[cfg(feature = "wasm")]
 fn load_bundled_cjk_font(fonts: &mut HashMap<String, TtfFont>) {
     static CJK_SUBSET_DATA: &[u8] = include_bytes!("../assets/NotoSansCJK-Subset.ttf");
-    if let Ok(font) = crate::parser::ttf::parse_ttf(CJK_SUBSET_DATA.to_vec()) {
+    if let Some(font) = crate::parser::ttf::parse_ttf_cached(CJK_SUBSET_DATA) {
         fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font);
     }
 }
@@ -322,8 +321,7 @@ pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
     let db = system_fontdb();
     for family in EMOJI_FALLBACK_FAMILIES {
         let query = SystemFontQuery::new(family, FontVariant::new(false, false));
-        if let Some(font) = query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-        {
+        if let Some(font) = load_system_font_cached(db, &query) {
             fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font);
             return;
         }
@@ -336,7 +334,7 @@ pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
 fn load_bundled_emoji_font(fonts: &mut HashMap<String, TtfFont>) {
     static NOTO_EMOJI_DATA: &[u8] = include_bytes!("../assets/NotoEmoji-Regular.ttf");
 
-    if let Ok(font) = crate::parser::ttf::parse_ttf(NOTO_EMOJI_DATA.to_vec()) {
+    if let Some(font) = crate::parser::ttf::parse_ttf_cached(NOTO_EMOJI_DATA) {
         fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font);
     }
 }
@@ -436,6 +434,37 @@ fn system_fontdb() -> &'static fontdb::Database {
     })
 }
 
+/// Process-global cache of resolved system fonts keyed by variant key
+/// (family + bold/italic). Resolving a system font walks the (already cached)
+/// fontdb and parses the matched face; both steps are deterministic per
+/// process, so memoizing avoids re-querying and re-parsing ~12 system faces
+/// plus the CJK/emoji fallbacks on every render. `None` results are cached too
+/// (negative cache) so absent families aren't looked up repeatedly.
+static SYSTEM_FONT_RESOLUTION_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<HashMap<String, Option<TtfFont>>>,
+> = std::sync::OnceLock::new();
+
+fn system_font_resolution_cache() -> &'static std::sync::RwLock<HashMap<String, Option<TtfFont>>> {
+    SYSTEM_FONT_RESOLUTION_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Memoized wrapper over [`load_system_font`]. The variant key fully determines
+/// resolution behavior (including the ui-sans-serif preference path), so the
+/// cached value is always identical to a fresh `load_system_font` call.
+fn load_system_font_cached(db: &fontdb::Database, query: &SystemFontQuery<'_>) -> Option<TtfFont> {
+    let key = query.variant_key();
+    if let Ok(cache) = system_font_resolution_cache().read() {
+        if let Some(cached) = cache.get(&key) {
+            return cached.clone();
+        }
+    }
+    let result = load_system_font(db, query);
+    if let Ok(mut cache) = system_font_resolution_cache().write() {
+        cache.entry(key).or_insert_with(|| result.clone());
+    }
+    result
+}
+
 fn parse_all_bundled_fonts() -> Vec<(String, TtfFont)> {
     let mut result = Vec::new();
     for bundled in LIBERATION_FONTS {
@@ -470,9 +499,7 @@ pub(crate) fn load_system_default_fonts(fonts: &mut HashMap<String, TtfFont>) {
             if fonts.contains_key(&key) {
                 continue;
             }
-            if let Some(font) =
-                query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-            {
+            if let Some(font) = load_system_font_cached(db, &query) {
                 fonts.insert(key, font);
             }
         }
@@ -559,7 +586,7 @@ fn load_family_variants(db: &fontdb::Database, family: &str, fonts: &mut HashMap
         match fonts.entry(query.variant_key()) {
             Entry::Occupied(_) => {}
             Entry::Vacant(slot) => {
-                let Some(font) = load_system_font(db, &query) else {
+                let Some(font) = load_system_font_cached(db, &query) else {
                     continue;
                 };
                 slot.insert(font);

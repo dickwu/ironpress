@@ -449,6 +449,41 @@ fn resolve_fixed_table_columns(
     resolved_widths
 }
 
+thread_local! {
+    /// Per-document memo of the table auto-sizing pass's per-cell preferred
+    /// width, keyed by `(cell element pointer, table inner-width bits)`.
+    ///
+    /// The sizing pass measures every cell — including flattening any nested
+    /// tables just to read their width — and an ancestor table is re-flattened
+    /// once per pass (sizing + placement) at every nesting level, so nested
+    /// cells are otherwise re-measured `2^depth` times. Caching the reduced
+    /// width collapses that to once per `(cell, width)`.
+    ///
+    /// Only populated for cells whose subtree touches no CSS counters (see
+    /// [`flatten_table`]), so a cached width never depends on counter context.
+    /// Cleared at the start of every top-level layout via
+    /// [`reset_table_sizing_cache`], so pointers from a freed DOM are never
+    /// reused as keys.
+    static TABLE_CELL_PREF_WIDTH_CACHE: std::cell::RefCell<HashMap<(usize, u32), f32>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Clear the per-document table auto-sizing memo. Called once at the start of
+/// each top-level layout.
+pub(crate) fn reset_table_sizing_cache() {
+    TABLE_CELL_PREF_WIDTH_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+fn table_cell_pref_width_get(key: (usize, u32)) -> Option<f32> {
+    TABLE_CELL_PREF_WIDTH_CACHE.with(|c| c.borrow().get(&key).copied())
+}
+
+fn table_cell_pref_width_insert(key: (usize, u32), width: f32) {
+    TABLE_CELL_PREF_WIDTH_CACHE.with(|c| {
+        c.borrow_mut().insert(key, width);
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn flatten_table(
     el: &ElementNode,
@@ -724,105 +759,123 @@ pub(crate) fn flatten_table(
                             .and_then(|v| v.parse::<usize>().ok())
                             .unwrap_or(1)
                             .max(1);
-                        let cell_classes = cell_el.class_list();
-                        let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
-                        cell_sizing_ancestors.push(AncestorInfo {
-                            element: row,
-                            child_index: row_section_indices[sizing_row_idx],
-                            sibling_count: row_section_sizes[sizing_row_idx],
-                            preceding_siblings: Vec::new(),
-                        });
-                        let cell_sizing_ctx = SelectorContext {
-                            ancestors: cell_sizing_ancestors,
-                            child_index: col_pos,
-                            sibling_count: num_cols,
-                            preceding_siblings: Vec::new(),
-                        };
-                        let cell_style = compute_style_with_context(
-                            cell_el.tag,
-                            cell_el.style_attr(),
-                            &row_style,
-                            rules,
-                            cell_el.tag_name(),
-                            &cell_classes,
-                            cell_el.id(),
-                            &cell_el.attributes,
-                            &cell_sizing_ctx,
-                        );
-                        let mut runs = Vec::new();
-                        let mut nested_rows = Vec::new();
-                        let recurse_descendants = cell_el.children.iter().any(
+                        // Memoize this cell's preferred width by (cell, inner
+                        // width). Only safe to read/store when no CSS counters
+                        // are active in the subtree, so the width can't depend
+                        // on — or leak — counter state (see the thread-local).
+                        let cache_key =
+                            (std::ptr::from_ref(cell_el) as usize, inner_width.to_bits());
+                        let counters_empty_before = counter_state.stacks.is_empty();
+                        let total_preferred: f32 = 'cell_pref: {
+                            if counters_empty_before {
+                                if let Some(w) = table_cell_pref_width_get(cache_key) {
+                                    break 'cell_pref w;
+                                }
+                            }
+                            let cell_classes = cell_el.class_list();
+                            let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
+                            cell_sizing_ancestors.push(AncestorInfo {
+                                element: row,
+                                child_index: row_section_indices[sizing_row_idx],
+                                sibling_count: row_section_sizes[sizing_row_idx],
+                                preceding_siblings: Vec::new(),
+                            });
+                            let cell_sizing_ctx = SelectorContext {
+                                ancestors: cell_sizing_ancestors,
+                                child_index: col_pos,
+                                sibling_count: num_cols,
+                                preceding_siblings: Vec::new(),
+                            };
+                            let cell_style = compute_style_with_context(
+                                cell_el.tag,
+                                cell_el.style_attr(),
+                                &row_style,
+                                rules,
+                                cell_el.tag_name(),
+                                &cell_classes,
+                                cell_el.id(),
+                                &cell_el.attributes,
+                                &cell_sizing_ctx,
+                            );
+                            let mut runs = Vec::new();
+                            let mut nested_rows = Vec::new();
+                            let recurse_descendants = cell_el.children.iter().any(
                             |node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)),
                         );
-                        let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
-                        text_ancestors.push(AncestorInfo {
-                            element: cell_el,
-                            child_index: col_pos,
-                            sibling_count: num_cols,
-                            preceding_siblings: Vec::new(),
-                        });
-                        collect_table_cell_content_inner(
-                            &cell_el.children,
-                            &cell_style,
-                            &mut runs,
-                            &mut nested_rows,
-                            None,
-                            rules,
-                            fonts,
-                            false,
-                            recurse_descendants,
-                            recurse_descendants,
-                            &text_ancestors,
-                            inner_width.max(1.0),
-                            counter_state,
-                        );
-                        // Estimate content width using estimate_word_width for accurate
-                        // measurement. Use the maximum of (full text width, longest word
-                        // width) to avoid hyphenation of short columns like "Unit Price".
-                        let content_width: f32 = runs
-                            .iter()
-                            .map(|run| {
-                                // Atomic inline-block boxes (fill-in underlines /
-                                // checkbox squares) reserve their explicit width so
-                                // the column is wide enough not to truncate them.
-                                if let Some(box_width) = run.box_width {
-                                    return box_width;
-                                }
-                                // Measure full text width using estimate_word_width
-                                let full_width = estimate_word_width(
-                                    &run.text,
-                                    run.font_size,
-                                    &run.font_family,
-                                    run.bold,
-                                    run.italic,
-                                    fonts,
-                                );
-                                // Also ensure the column is at least as wide as
-                                // the longest word to prevent hyphenation.
-                                let longest_word_width = run
-                                    .text
-                                    .split_whitespace()
-                                    .map(|w| {
-                                        estimate_word_width(
-                                            w,
-                                            run.font_size,
-                                            &run.font_family,
-                                            run.bold,
-                                            run.italic,
-                                            fonts,
-                                        )
-                                    })
-                                    .fold(0.0f32, f32::max);
-                                full_width.max(longest_word_width)
-                            })
-                            .sum();
-                        let nested_width = nested_rows
-                            .iter()
-                            .map(table_row_content_width)
-                            .fold(0.0f32, f32::max);
-                        let total_preferred = content_width.max(nested_width)
-                            + cell_style.padding.left
-                            + cell_style.padding.right;
+                            let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
+                            text_ancestors.push(AncestorInfo {
+                                element: cell_el,
+                                child_index: col_pos,
+                                sibling_count: num_cols,
+                                preceding_siblings: Vec::new(),
+                            });
+                            collect_table_cell_content_inner(
+                                &cell_el.children,
+                                &cell_style,
+                                &mut runs,
+                                &mut nested_rows,
+                                None,
+                                rules,
+                                fonts,
+                                false,
+                                recurse_descendants,
+                                recurse_descendants,
+                                &text_ancestors,
+                                inner_width.max(1.0),
+                                counter_state,
+                            );
+                            // Estimate content width using estimate_word_width for accurate
+                            // measurement. Use the maximum of (full text width, longest word
+                            // width) to avoid hyphenation of short columns like "Unit Price".
+                            let content_width: f32 = runs
+                                .iter()
+                                .map(|run| {
+                                    // Atomic inline-block boxes (fill-in underlines /
+                                    // checkbox squares) reserve their explicit width so
+                                    // the column is wide enough not to truncate them.
+                                    if let Some(box_width) = run.box_width {
+                                        return box_width;
+                                    }
+                                    // Measure full text width using estimate_word_width
+                                    let full_width = estimate_word_width(
+                                        &run.text,
+                                        run.font_size,
+                                        &run.font_family,
+                                        run.bold,
+                                        run.italic,
+                                        fonts,
+                                    );
+                                    // Also ensure the column is at least as wide as
+                                    // the longest word to prevent hyphenation.
+                                    let longest_word_width = run
+                                        .text
+                                        .split_whitespace()
+                                        .map(|w| {
+                                            estimate_word_width(
+                                                w,
+                                                run.font_size,
+                                                &run.font_family,
+                                                run.bold,
+                                                run.italic,
+                                                fonts,
+                                            )
+                                        })
+                                        .fold(0.0f32, f32::max);
+                                    full_width.max(longest_word_width)
+                                })
+                                .sum();
+                            let nested_width = nested_rows
+                                .iter()
+                                .map(table_row_content_width)
+                                .fold(0.0f32, f32::max);
+                            let total_preferred = content_width.max(nested_width)
+                                + cell_style.padding.left
+                                + cell_style.padding.right;
+                            if counters_empty_before && counter_state.stacks.is_empty() {
+                                table_cell_pref_width_insert(cache_key, total_preferred);
+                            }
+                            total_preferred
+                        };
                         if colspan == 1 {
                             if col_pos < num_cols {
                                 preferred_widths[col_pos] =
