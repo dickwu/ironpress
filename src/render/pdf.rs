@@ -2267,6 +2267,9 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                                             &mut bg_alpha_counter,
                                             &mut page_shadings,
                                             &mut shading_counter,
+                                            &mut pdf_writer,
+                                            &mut page_images,
+                                            &mut annotations,
                                             *cont_pl + cont_border.left.width,
                                             *cont_pt + cont_border.top.width,
                                         );
@@ -2506,6 +2509,9 @@ pub(crate) fn render_pdf_to_writer_full<W: std::io::Write>(
                         &mut bg_alpha_counter,
                         &mut page_shadings,
                         &mut shading_counter,
+                        &mut pdf_writer,
+                        &mut page_images,
+                        &mut annotations,
                         *c_pl + border.left.width,
                         *c_pt + border.top.width,
                     );
@@ -2943,6 +2949,9 @@ fn render_container_children(
     bg_alpha_counter: &mut usize,
     page_shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+    annotations: &mut Vec<LinkAnnotation>,
     abs_pad_left: f32,
     abs_pad_top: f32,
 ) {
@@ -2979,6 +2988,11 @@ fn render_container_children(
                 bg_alpha_counter,
                 custom_fonts,
                 prepared_custom_fonts,
+                pdf_writer,
+                page_images,
+                page_shadings,
+                shading_counter,
+                annotations,
             );
             y = cursor_y;
         }
@@ -3463,6 +3477,9 @@ fn render_container_children(
                     bg_alpha_counter,
                     page_shadings,
                     shading_counter,
+                    pdf_writer,
+                    page_images,
+                    annotations,
                     *padding_left + border.left.width,
                     *padding_top + border.top.width,
                 );
@@ -3722,6 +3739,9 @@ fn render_container_children(
                             bg_alpha_counter,
                             page_shadings,
                             shading_counter,
+                            pdf_writer,
+                            page_images,
+                            annotations,
                             0.0, // flex cells don't have separate padding for abs children
                             0.0,
                         );
@@ -3766,6 +3786,11 @@ fn render_container_children(
             bg_alpha_counter,
             custom_fonts,
             prepared_custom_fonts,
+            pdf_writer,
+            page_images,
+            page_shadings,
+            shading_counter,
+            annotations,
         );
     }
 }
@@ -3781,6 +3806,11 @@ fn render_nested_table_rows(
     bg_alpha_counter: &mut usize,
     custom_fonts: &HashMap<String, TtfFont>,
     prepared_custom_fonts: &PreparedCustomFonts,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+    page_shadings: &mut Vec<ShadingEntry>,
+    shading_counter: &mut usize,
+    annotations: &mut Vec<LinkAnnotation>,
 ) {
     for element in elements {
         match element {
@@ -3867,73 +3897,36 @@ fn render_nested_table_rows(
                         }
                     }
 
-                    // Compute cell content top (simplified vertical alignment)
-                    let content_top = row_y - cell.padding_top;
-                    let cell_inner_w = cell_w - cell.padding_left - cell.padding_right;
-                    let mut text_y = content_top;
-                    for line in &cell.lines {
-                        let metrics = line_box_metrics(line, custom_fonts);
-                        text_y -= metrics.half_leading + metrics.ascender;
-                        let text_content: String =
-                            line.runs.iter().map(|run| run.text.as_str()).collect();
-                        if text_content.is_empty() {
-                            continue;
-                        }
-                        let merged = merge_runs(&line.runs);
-                        let line_width: f32 = merged
-                            .iter()
-                            .map(|run| estimate_run_width_with_fonts(run, custom_fonts))
-                            .sum();
-                        let text_x = match cell.text_align {
-                            TextAlign::Right => {
-                                cell_x + cell.padding_left + (cell_inner_w - line_width).max(0.0)
-                            }
-                            TextAlign::Center => {
-                                cell_x
-                                    + cell.padding_left
-                                    + ((cell_inner_w - line_width) / 2.0).max(0.0)
-                            }
-                            _ => cell_x + cell.padding_left,
-                        };
-                        let mut lx = text_x;
-                        for run in &merged {
-                            if run.text.is_empty() {
-                                continue;
-                            }
-                            // Inline background (for status badges etc.)
-                            if let Some((br, bg_c, bb, _ba)) = run.background_color {
-                                let (pad_h, pad_v) = run.padding;
-                                let run_w = estimate_run_width_with_fonts(run, custom_fonts);
-                                let rx = lx - pad_h;
-                                let ry = text_y - 2.0 - pad_v;
-                                let rw2 = run_w + pad_h * 2.0;
-                                let rh = run.font_size + 2.0 + pad_v * 2.0;
-                                content.push_str(&format!("{br} {bg_c} {bb} rg\n"));
-                                if run.border_radius > 0.0 {
-                                    content.push_str(&rounded_rect_path(
-                                        rx,
-                                        ry,
-                                        rw2,
-                                        rh,
-                                        run.border_radius,
-                                    ));
-                                    content.push_str("\nf\n");
-                                } else {
-                                    content.push_str(&format!("{rx} {ry} {rw2} {rh} re\nf\n"));
-                                }
-                            }
-                            let rw = render_run_text(
-                                content,
-                                run,
-                                lx,
-                                text_y,
-                                custom_fonts,
-                                prepared_custom_fonts,
-                            );
-                            lx += rw;
-                        }
-                        text_y -= metrics.descender + metrics.half_leading;
-                    }
+                    // Delegate cell content to the main-path painter so text,
+                    // vertical alignment, and nested content (tables, SVG,
+                    // images) inside Container-hosted rows render exactly like
+                    // page-level table cells. The text-only loop this replaces
+                    // dropped cell.nested_rows entirely: an avoid-wrapped table
+                    // whose cells hold nested tables reserved its space but
+                    // painted blank (gwd #4604, anaesthesia page 2).
+                    let mut cell_ctx = PageRenderContext::new(
+                        pdf_writer,
+                        page_images,
+                        custom_fonts,
+                        prepared_custom_fonts,
+                        page_shadings,
+                        shading_counter,
+                        page_ext_gstates,
+                        bg_alpha_counter,
+                        annotations,
+                    );
+                    render_cell_content(
+                        content,
+                        cell,
+                        TableCellRenderBox::new(
+                            cell_x,
+                            row_y,
+                            cell_w,
+                            row_height,
+                            NestedLayoutFrame::new(cell_x, row_y, origin_x, row_y, cell_w),
+                        ),
+                        &mut cell_ctx,
+                    );
 
                     col_pos += cell.colspan;
                 }
@@ -11437,6 +11430,56 @@ mod tests {
             content.contains("Inside container"),
             "Container children text should be rendered"
         );
+    }
+
+    /// gwd #4604 regression — a `page-break-inside: avoid` block wraps its
+    /// content in a Container; tables inside it must still paint their cells'
+    /// nested content. The old Container-path cell painter drew only direct
+    /// cell text and dropped `nested_rows`, so a nested table inside a cell
+    /// reserved its space but painted nothing.
+    #[test]
+    fn render_avoid_container_paints_nested_table_in_cell() {
+        let html = r#"
+            <div style="page-break-inside: avoid;">
+                <table><tr><td>
+                    OUTER-TEXT
+                    <table><tr><td>NESTED-TEXT</td></tr></table>
+                </td></tr></table>
+            </div>
+        "#;
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(
+            content.contains("OUTER-TEXT"),
+            "direct cell text must render inside an avoid Container"
+        );
+        assert!(
+            content.contains("NESTED-TEXT"),
+            "nested table content inside an avoid Container must render"
+        );
+    }
+
+    /// Same shape as the anaesthesia page-2 airway/grid section: a fixed-layout
+    /// outer table whose two cells each hold nested tables. Every marker must
+    /// survive into the page content stream.
+    #[test]
+    fn render_avoid_container_paints_two_column_nested_tables() {
+        let html = r#"
+            <div style="page-break-inside: avoid;">
+                <table style="width:100%;table-layout:fixed;"><tr>
+                    <td style="width:9%;"><table><tr><td>COL-A</td></tr></table></td>
+                    <td style="width:91%;"><table><tr><td>COL-B</td></tr></table></td>
+                </tr></table>
+            </div>
+        "#;
+        let nodes = parse_html(html).unwrap();
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(content.contains("COL-A"), "left column nested table must render");
+        assert!(content.contains("COL-B"), "right column nested table must render");
     }
 
     #[test]
