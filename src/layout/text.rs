@@ -168,6 +168,45 @@ pub(crate) fn split_word_to_fit(
 }
 
 // ---------------------------------------------------------------------------
+// split_preserved_segment
+// ---------------------------------------------------------------------------
+
+/// Whether `c` is a space character a preserved-whitespace segment may break
+/// at. Only ASCII space and tab qualify: U+00A0 and the other Unicode spaces
+/// must stay inside their word so they remain non-breaking.
+const fn is_preserved_space(c: char) -> bool {
+    matches!(c, ' ' | '\t')
+}
+
+/// Split a preserved-whitespace segment (`white-space: pre`/`pre-wrap`,
+/// newlines already handled by the caller) into alternating space-run and
+/// word tokens. The tokens concatenate back to the original segment
+/// byte-for-byte — spacing is never collapsed — but queueing them separately
+/// restores the soft-wrap opportunities CSS keeps at preserved spaces.
+/// Previously such a segment was queued as one indivisible word, so any
+/// segment wider than the line (e.g. a clinical note containing a double
+/// space) could never wrap and overflowed the page edge.
+fn split_preserved_segment(segment: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut prev_is_space: Option<bool> = None;
+    for (idx, c) in segment.char_indices() {
+        let is_space = is_preserved_space(c);
+        if let Some(prev) = prev_is_space {
+            if prev != is_space {
+                tokens.push(&segment[start..idx]);
+                start = idx;
+            }
+        }
+        prev_is_space = Some(is_space);
+    }
+    if start < segment.len() {
+        tokens.push(&segment[start..]);
+    }
+    tokens
+}
+
+// ---------------------------------------------------------------------------
 // wrap_text_runs
 // ---------------------------------------------------------------------------
 
@@ -232,7 +271,9 @@ pub(crate) fn wrap_text_runs(
                     || segment.chars().last().is_some_and(char::is_whitespace)
                     || segment.contains("  ")
                 {
-                    styled_words.push((segment.to_string(), run.clone(), true));
+                    for token in split_preserved_segment(segment) {
+                        styled_words.push((token.to_string(), run.clone(), true));
+                    }
                 } else {
                     for word in segment.split_whitespace() {
                         styled_words.push((word.to_string(), run.clone(), false));
@@ -240,7 +281,9 @@ pub(crate) fn wrap_text_runs(
                 }
             }
         } else if has_preserved_spacing {
-            styled_words.push((run.text.clone(), run.clone(), true));
+            for token in split_preserved_segment(&run.text) {
+                styled_words.push((token.to_string(), run.clone(), true));
+            }
         } else {
             for word in run.text.split_whitespace() {
                 styled_words.push((word.to_string(), run.clone(), false));
@@ -337,7 +380,13 @@ pub(crate) fn wrap_text_runs(
             }
         }
 
-        if overflows && current_width > 0.0 {
+        // A preserved space-run never forces a wrap: CSS lets preserved
+        // spaces hang past a soft-wrapped line end rather than starting the
+        // next line with them. The run still adds its width, so the next
+        // word token wraps.
+        let is_space_run =
+            preserve_spacing && !word.is_empty() && word.chars().all(is_preserved_space);
+        if overflows && current_width > 0.0 && !is_space_run {
             lines.push(TextLine {
                 runs: std::mem::take(&mut current_runs),
                 height: line_height,
@@ -954,5 +1003,107 @@ impl<'a> FlexTextRunCollector<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(text: &str) -> TextRun {
+        TextRun {
+            text: text.to_string(),
+            font_size: 10.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            line_through: false,
+            overline: false,
+            color: (0.0, 0.0, 0.0),
+            link_url: None,
+            font_family: FontFamily::Helvetica,
+            background_color: None,
+            padding: (0.0, 0.0),
+            border_radius: 0.0,
+            box_width: None,
+            box_height: None,
+            border_bottom: None,
+        }
+    }
+
+    fn line_text(line: &TextLine) -> String {
+        line.runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    fn wrap(text: &str, max_width: f32) -> Vec<TextLine> {
+        wrap_text_runs(
+            vec![run(text)],
+            TextWrapOptions::new(max_width, 10.0, 1.2, OverflowWrap::Normal),
+            &HashMap::new(),
+        )
+    }
+
+    fn width_of(text: &str) -> f32 {
+        estimate_word_width(
+            text,
+            10.0,
+            &FontFamily::Helvetica,
+            false,
+            false,
+            &HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn split_preserved_segment_is_lossless_and_alternating() {
+        let seg = "  recieved patient  to\tPACU ";
+        let tokens = split_preserved_segment(seg);
+        assert_eq!(tokens.concat(), seg);
+        for pair in tokens.windows(2) {
+            let a = pair[0].chars().all(is_preserved_space);
+            let b = pair[1].chars().all(is_preserved_space);
+            assert_ne!(a, b, "adjacent tokens must alternate: {pair:?}");
+        }
+    }
+
+    #[test]
+    fn nbsp_stays_inside_its_word() {
+        let tokens = split_preserved_segment("a\u{a0}b  c");
+        assert_eq!(tokens, vec!["a\u{a0}b", "  ", "c"]);
+    }
+
+    /// Regression for the clinical-note overflow (gwd #4585): a pre-wrap
+    /// segment containing a double space must still soft-wrap at its spaces
+    /// instead of laying out as one line that overflows the page edge.
+    #[test]
+    fn preserved_double_space_segment_wraps() {
+        let text = "alpha bravo  charlie delta echo foxtrot golf hotel india juliet";
+        let lines = wrap(text, width_of(text) / 3.0);
+        assert!(
+            lines.len() > 1,
+            "expected multiple lines, got {}",
+            lines.len()
+        );
+        let joined: String = lines.iter().map(line_text).collect();
+        assert_eq!(joined, text, "wrapping must not alter the preserved bytes");
+    }
+
+    #[test]
+    fn preserved_space_run_hangs_at_line_end() {
+        // Width sized to one word: the double space after "aaaa" must hang at
+        // the end of line 1, not start line 2.
+        let lines = wrap("aaaa  bbbb", width_of("aaaa") * 1.2);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(line_text(&lines[0]), "aaaa  ");
+        assert_eq!(line_text(&lines[1]), "bbbb");
+    }
+
+    #[test]
+    fn preserved_leading_indent_is_kept() {
+        let text = "  indent one two three four five six seven eight nine ten";
+        let lines = wrap(text, width_of(text) / 3.0);
+        assert!(line_text(&lines[0]).starts_with("  indent"));
+        let joined: String = lines.iter().map(line_text).collect();
+        assert_eq!(joined, text);
     }
 }
