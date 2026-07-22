@@ -4,7 +4,7 @@ use crate::layout::elements::{IntoLayoutNode, LayoutSize};
 use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight};
 use crate::style::computed::{
     BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition, GradientRamp,
-    GradientStop, LinearGradient, Position, TextDecorationStyle,
+    GradientStop, LinearGradient, Overflow, Position, TextDecorationStyle,
 };
 
 fn test_fonts() -> HashMap<String, TtfFont> {
@@ -191,6 +191,47 @@ fn flex_cell_filter_source_clips_background_to_rounded_border_box() {
         72.0,
     )
     .expect("rounded flex source");
+
+    assert_eq!(source.pixels.get_pixel(0, 0)[3], 0);
+    assert_eq!(source.pixels.get_pixel(10, 5)[3], 255);
+}
+
+#[test]
+fn container_filter_source_clips_descendants_to_rounded_padding_box() {
+    let child = TextBlock {
+        box_model: BoxModel {
+            size: LayoutSize::fixed(20.0, Some(20.0)),
+            ..Default::default()
+        },
+        paint: BoxPaint {
+            background: crate::layout::elements::BackgroundPaint {
+                color: Some(Color::from_srgb(1.0, 0.0, 0.0, 1.0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let container = Container {
+        children: vec![child.boxed()],
+        box_model: BoxModel {
+            size: LayoutSize::fixed(20.0, Some(10.0)),
+            ..Default::default()
+        },
+        paint: BoxPaint {
+            border_radii: crate::types::CornerRadii::circular(4.0),
+            ..Default::default()
+        },
+        overflow: crate::layout::elements::OverflowBehavior {
+            combined: Overflow::Hidden,
+            x: Overflow::Hidden,
+            y: Overflow::Hidden,
+        },
+        ..Default::default()
+    };
+
+    let source = paint_source_graphic(&container, &HashMap::new(), 72.0)
+        .expect("overflow-clipped container filter source");
 
     assert_eq!(source.pixels.get_pixel(0, 0)[3], 0);
     assert_eq!(source.pixels.get_pixel(10, 5)[3], 255);

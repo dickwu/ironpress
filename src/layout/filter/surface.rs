@@ -10,6 +10,7 @@ use crate::layout::elements::{
 use crate::layout::engine::{FlexCell, TextLine, TextRun};
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::ttf::TtfFont;
+use crate::render::borders::CssRoundedRect;
 use crate::style::computed::{AlignItems, Position, TextAlign};
 use crate::types::{Color, EdgeSizes, Point, Size};
 
@@ -161,6 +162,28 @@ struct SourcePainter<'a> {
 }
 
 impl SourcePainter<'_> {
+    fn paint_clipped_descendants(
+        &mut self,
+        clip: CssRoundedRect,
+        paint: impl FnOnce(&mut SourcePainter<'_>) -> Option<()>,
+    ) -> Option<()> {
+        let mut group =
+            image::RgbaImage::new(self.canvas.pixels.width(), self.canvas.pixels.height());
+        let mut descendant_painter = SourcePainter {
+            canvas: RasterCanvas {
+                pixels: &mut group,
+                pixels_per_point: self.canvas.pixels_per_point,
+            },
+            space: self.space,
+            fonts: self.fonts,
+            filter_dpi: self.filter_dpi,
+            result: None,
+        };
+        paint(&mut descendant_painter)?;
+        self.canvas.composite_clipped_group(&group, clip);
+        Some(())
+    }
+
     fn paint_box(&mut self, element: &impl FilterBox) -> Option<DescendantPaintArea> {
         let model = element.box_model();
         let paint = element.paint();
@@ -596,18 +619,26 @@ impl LayoutVisitor for SourcePainter<'_> {
     fn visit_text_block(&mut self, element: &TextBlock) {
         self.result = (|| {
             if element.paint.group.transform.value.is_some()
-                || element.clipping.rect.is_some()
                 || element.text.writing_mode != crate::style::computed::WritingMode::HorizontalTb
             {
                 return None;
             }
             let area = self.paint_box(element)?;
-            self.paint_text_lines(
-                &element.lines,
-                area.content_box,
-                element.text.alignment,
-                element.text.indent,
-            )
+            let paint_lines = |painter: &mut SourcePainter<'_>| {
+                painter.paint_text_lines(
+                    &element.lines,
+                    area.content_box,
+                    element.text.alignment,
+                    element.text.indent,
+                )
+            };
+            if element.clipping.rect.is_some() {
+                let clip = CssRoundedRect::new(self.space.border_box, element.paint.border_radii)
+                    .inset(element.box_model.border.widths());
+                self.paint_clipped_descendants(clip, paint_lines)
+            } else {
+                paint_lines(self)
+            }
         })();
     }
 
@@ -616,7 +647,6 @@ impl LayoutVisitor for SourcePainter<'_> {
             let effects_owned_by_caller =
                 self.space.root_effects == RootEffectHandling::DeferToOwner;
             if (element.paint.group.transform.value.is_some() && !effects_owned_by_caller)
-                || element.overflow.combined != crate::style::computed::Overflow::Visible
                 || (element.paint.group.effects.masking.clip_path.is_some()
                     && !effects_owned_by_caller)
                 || (element.paint.group.effects.masking.image.is_some() && !effects_owned_by_caller)
@@ -624,7 +654,15 @@ impl LayoutVisitor for SourcePainter<'_> {
                 return None;
             }
             let area = self.paint_box(element)?;
-            self.paint_container_children(&element.children, area)
+            if element.overflow.combined.clips() {
+                let clip = CssRoundedRect::new(self.space.border_box, element.paint.border_radii)
+                    .inset(element.box_model.border.widths());
+                self.paint_clipped_descendants(clip, |painter| {
+                    painter.paint_container_children(&element.children, area)
+                })
+            } else {
+                self.paint_container_children(&element.children, area)
+            }
         })();
     }
 

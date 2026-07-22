@@ -39,6 +39,40 @@ impl RasterCanvas<'_> {
         }
     }
 
+    /// Composite an isolated descendant group through a CSS rounded clip.
+    ///
+    /// Overflow clips apply after a box's own decoration but before an
+    /// ancestor filter consumes the complete SourceGraphic. Sampling the same
+    /// [`CssRoundedRect`] used by borders and backgrounds keeps those three
+    /// edges on one geometry instead of approximating the clip with a second
+    /// radius implementation.
+    pub(super) fn composite_clipped_group(
+        &mut self,
+        source: &image::RgbaImage,
+        clip: CssRoundedRect,
+    ) {
+        let width = source.width().min(self.pixels.width());
+        let height = source.height().min(self.pixels.height());
+        for y in 0..height {
+            for x in 0..width {
+                let source_pixel = *source.get_pixel(x, y);
+                if source_pixel[3] == 0 {
+                    continue;
+                }
+                let coverage =
+                    sample_coverage(x, y, self.pixels_per_point, |point| clip.contains(point));
+                if coverage <= 0.0 {
+                    continue;
+                }
+                let mut clipped = source_pixel;
+                clipped[3] = (f32::from(clipped[3]) * coverage).round() as u8;
+                let destination = *self.pixels.get_pixel(x, y);
+                self.pixels
+                    .put_pixel(x, y, alpha_over(clipped, destination));
+            }
+        }
+    }
+
     pub(super) fn fill(&mut self, rect: SurfaceRect, color: Color) {
         self.fill_rgba(rect, color.to_f32_rgba());
     }
