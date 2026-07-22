@@ -663,10 +663,7 @@ impl SurfaceDecorationPhase {
 impl LayoutVisitor for SourcePainter<'_> {
     fn visit_column_rule(&mut self, element: &ColumnRule) {
         self.result = self.canvas.paint_column_rule(
-            Point::new(
-                self.space.border_box.origin.x + element.origin.x,
-                self.space.border_box.origin.y + element.origin.y,
-            ),
+            self.space.border_box.origin,
             element.height,
             element.paint,
         );
@@ -1145,11 +1142,11 @@ pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeome
     struct Geometry(Option<SourceGeometry>);
 
     impl LayoutVisitor for Geometry {
-        fn visit_column_rule(&mut self, _element: &ColumnRule) {
+        fn visit_column_rule(&mut self, element: &ColumnRule) {
             self.0 = Some(SourceGeometry {
-                size: Size::default(),
+                size: Size::new(element.paint.width, element.height),
                 margins: BlockMargins::ZERO,
-                positioning: Positioning::default(),
+                positioning: element.positioning.clone(),
             });
         }
 

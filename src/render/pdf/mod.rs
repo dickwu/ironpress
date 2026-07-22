@@ -205,13 +205,11 @@ struct PageElementRenderer<'call, 'frame, 'page> {
 
 impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
     fn visit_column_rule(&mut self, element: &ColumnRule) {
+        let origin = element.positioning.origin();
         paint_column_rule_line(
             self.content,
-            self.frame.margin.left + element.origin.x,
-            self.frame.page_size.height
-                - self.frame.margin.top
-                - self.frame.y_pos
-                - element.origin.y,
+            self.frame.margin.left + origin.x,
+            self.frame.page_size.height - self.frame.margin.top - self.frame.y_pos - origin.y,
             element.paint.width,
             element.height,
             &element.paint,

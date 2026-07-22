@@ -7,7 +7,7 @@ use crate::style::computed::{
     BlendMode, BoxDecorationBreak, BoxShadow, Clear, ClipPath, Float, Isolation, MaskMode,
     MaskSource, Overflow, Position, TextAlign, Transform, TransformOrigin, Visibility, WritingMode,
 };
-use crate::types::{Color, CornerRadii, EdgeSizes, Rect};
+use crate::types::{Color, CornerRadii, EdgeSizes, Point, Rect};
 
 /// Inline-axis sizing carried by a laid-out box.
 ///
@@ -665,6 +665,26 @@ pub(crate) struct Positioning {
 }
 
 impl Positioning {
+    /// Position an implementation-owned child from its containing padding box.
+    ///
+    /// Anonymous layout boxes such as multicolumn columns and rules use the
+    /// same containing-block contract as authored absolute descendants. Keeping
+    /// that placement in [`Positioning`] lets every recursive painter resolve
+    /// it through the ordinary positioned-child path.
+    pub(crate) const fn absolute_at(origin: Point) -> Self {
+        Self {
+            scheme: Position::Absolute,
+            insets: EdgeSizes::new(origin.y, 0.0, 0.0, origin.x),
+            containing_block: None,
+            containing_block_depth: 0,
+        }
+    }
+
+    /// Physical top-left inset represented as a point.
+    pub(crate) const fn origin(&self) -> Point {
+        Point::new(self.insets.left, self.insets.top)
+    }
+
     pub(crate) fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
         Self {
             scheme: style.position,

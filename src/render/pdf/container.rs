@@ -115,10 +115,11 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
     }
 
     fn visit_column_rule(&mut self, element: &ColumnRule) {
+        let origin = element.positioning.origin();
         paint_column_rule_line(
             self.content,
-            self.flow.frame.padding_origin.x + element.origin.x,
-            self.flow.frame.padding_origin.y - element.origin.y,
+            self.flow.frame.padding_origin.x + origin.x,
+            self.flow.frame.padding_origin.y - origin.y,
             element.paint.width,
             element.height,
             &element.paint,

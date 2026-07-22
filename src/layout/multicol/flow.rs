@@ -1389,7 +1389,7 @@ pub(super) fn make_rule_container(
 ) -> LayoutNode {
     ColumnRule {
         gap_after,
-        origin: crate::types::Point::new(off_left, off_top),
+        positioning: Positioning::absolute_at(crate::types::Point::new(off_left, off_top)),
         height,
         paint: LayoutBorderSide {
             width,

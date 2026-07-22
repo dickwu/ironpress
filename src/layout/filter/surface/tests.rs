@@ -3,9 +3,9 @@ use crate::layout::cells::CellPaint;
 use crate::layout::elements::{IntoLayoutNode, LayoutSize};
 use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight};
 use crate::style::computed::{
-    BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition, GradientRamp,
-    GradientStop, LinearGradient, Overflow, Position, TextDecoration, TextDecorationLines,
-    TextDecorationStyle,
+    BorderStyle, BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition,
+    GradientRamp, GradientStop, LinearGradient, Overflow, Position, TextDecoration,
+    TextDecorationLines, TextDecorationStyle,
 };
 
 fn test_fonts() -> HashMap<String, TtfFont> {
@@ -95,6 +95,36 @@ fn axis_aligned_source_paint_retains_fractional_pixel_coverage() {
 
     assert!((127..=128).contains(&pixels.get_pixel(0, 0)[3]));
     assert_eq!(pixels.get_pixel(1, 0)[3], 0);
+}
+
+#[test]
+fn positioned_column_rule_uses_the_parent_padding_box_once() {
+    let rule = ColumnRule {
+        positioning: Positioning::absolute_at(Point::new(10.0, 0.0)),
+        height: 10.0,
+        paint: crate::layout::engine::LayoutBorderSide {
+            width: 2.0,
+            color: Color::from_srgb(1.0, 0.0, 0.0, 1.0),
+            style: BorderStyle::Solid,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let root = Container {
+        children: vec![rule.boxed()],
+        box_model: BoxModel {
+            size: LayoutSize::fixed(30.0, Some(20.0)),
+            padding: EdgeSizes::new(0.0, 0.0, 0.0, 5.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0)
+        .expect("positioned column rule filter source");
+
+    assert_eq!(source.pixels.get_pixel(10, 1).0, [255, 0, 0, 255]);
+    assert_eq!(source.pixels.get_pixel(15, 1)[3], 0);
 }
 
 #[test]

@@ -1,23 +1,33 @@
 use super::{
     BlockFlowParticipant, InlineFlowExtent, LayoutElement, LayoutNode, LayoutVisitor,
-    LayoutVisitorMut, PaintGroup, PaintGroupOwner,
+    LayoutVisitorMut, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
 };
 use crate::layout::engine::LayoutBorderSide;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
-use crate::types::{Color, Point, Size};
+use crate::types::{Color, Size};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ColumnRule {
     /// Document-order column immediately before this rule.
     pub(crate) gap_after: usize,
-    pub(crate) origin: Point,
+    pub(crate) positioning: Positioning,
     pub(crate) height: f32,
     pub(crate) paint: LayoutBorderSide,
 }
 
+impl PositioningOwner for ColumnRule {
+    fn positioning(&self) -> &Positioning {
+        &self.positioning
+    }
+
+    fn positioning_mut(&mut self) -> &mut Positioning {
+        &mut self.positioning
+    }
+}
+
 impl LayoutElement for ColumnRule {
     fn clone_box(&self) -> LayoutNode {
-        Box::new(*self)
+        Box::new(self.clone())
     }
 
     fn accept(&self, visitor: &mut dyn LayoutVisitor) {
@@ -26,6 +36,14 @@ impl LayoutElement for ColumnRule {
 
     fn accept_mut(&mut self, visitor: &mut dyn LayoutVisitorMut) {
         visitor.visit_column_rule(self);
+    }
+
+    fn positioning_owner(&self) -> Option<&dyn PositioningOwner> {
+        Some(self)
+    }
+
+    fn positioning_owner_mut(&mut self) -> Option<&mut dyn PositioningOwner> {
+        Some(self)
     }
 
     fn contributes_to_normal_flow(&self) -> bool {

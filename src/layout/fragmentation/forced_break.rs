@@ -338,7 +338,7 @@ fn retain_supported_column_rules(principal: &mut Container) {
         }
 
         fn visit_column_rule(&mut self, element: &ColumnRule) {
-            self.rule = Some((element.gap_after, element.origin.y));
+            self.rule = Some((element.gap_after, element.positioning.insets.top));
         }
     }
 

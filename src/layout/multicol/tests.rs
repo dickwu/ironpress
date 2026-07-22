@@ -109,7 +109,7 @@ fn paginated_span_rows_preserve_exact_layout_offsets() {
         .iter()
         .map(|element| {
             element
-                .inspect_column_rule(|rule| rule.origin.y)
+                .inspect_column_rule(|rule| rule.positioning.insets.top)
                 .or_else(|| element.inspect_container(|container| container.positioning.insets.top))
                 .expect("expected positioned multicol wrapper")
         })
