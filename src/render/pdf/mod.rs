@@ -463,14 +463,24 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     page_index: page_idx,
                 };
                 let marker = ctx.stacking.marker();
+                let annotation_marker = ctx.text.annotation_marker();
+                let paint_only = element.is_page_paint_continuation();
                 let mut element_content = String::new();
+                let mut discarded_bookmarks = Vec::new();
                 element.accept(&mut PageElementRenderer {
                     content: &mut element_content,
                     frame: element_frame,
                     paint_phase: planned.phase,
-                    bookmarks: &mut bookmarks,
+                    bookmarks: if paint_only {
+                        &mut discarded_bookmarks
+                    } else {
+                        &mut bookmarks
+                    },
                     ctx: &mut ctx,
                 });
+                if paint_only {
+                    ctx.text.discard_annotations_since(annotation_marker);
+                }
                 let descendants = ctx.stacking.take_since(marker);
                 ctx.stacking.commit(
                     StackingScope::Local,

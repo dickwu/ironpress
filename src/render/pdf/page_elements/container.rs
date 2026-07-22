@@ -341,22 +341,29 @@ pub(in crate::render::pdf) fn render_container(
             PdfPoint::new(c_padding_box.left, c_padding_box.top()),
         );
     }
-    render_container_children(
-        content,
-        children,
-        ContainerFrame::new(
-            PdfPoint::new(inner_x, inner_y),
-            inner_w,
-            PdfPoint::new(c_padding_box.left, c_padding_box.top()),
-        ),
-        &mut abs_origins,
-        ctx,
-        ContainerRenderOptions {
-            device_space_available: c_transform.is_none(),
-            paint_phase: phase,
-            stacking_scope: StackingScope::for_element(element),
-        },
-    );
+    if phase.paints_contents() {
+        // Page-level phase separation belongs only to this principal box.
+        // Descendants retain their normal atomic paint order; recursively
+        // passing `Contents` used to suppress their backgrounds and borders,
+        // while passing `Decoration` painted transformed descendants too
+        // early. This is the same decoration/content boundary used by flex.
+        render_container_children(
+            content,
+            children,
+            ContainerFrame::new(
+                PdfPoint::new(inner_x, inner_y),
+                inner_w,
+                PdfPoint::new(c_padding_box.left, c_padding_box.top()),
+            ),
+            &mut abs_origins,
+            ctx,
+            ContainerRenderOptions {
+                device_space_available: c_transform.is_none(),
+                paint_phase: ElementPaintPhase::All,
+                stacking_scope: StackingScope::for_element(element),
+            },
+        );
+    }
 
     // Restore clip
     if needs_clip {

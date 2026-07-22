@@ -179,6 +179,12 @@ impl LayoutElement for Image {
     fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
         Some(self)
     }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.paint.group.transform.establishes_stacking_context()
+            || !self.paint.raster_overflow.is_zero()
+            || self.paint.filter_effect.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Default)]

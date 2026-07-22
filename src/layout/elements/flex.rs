@@ -1,7 +1,7 @@
 use super::LayoutNode;
 use super::{
-    BlockFlowParticipant, ChildContainer, FilterHolder, InlineFlowExtent, LayoutElement,
-    LayoutVisitor, LayoutVisitorMut, PageContentRole, PaintGroup, PaintGroupOwner, Positioning,
+    BlockFlowParticipant, BoxPaint, BoxPaintOwner, ChildContainer, FilterHolder, InlineFlowExtent,
+    LayoutElement, LayoutVisitor, LayoutVisitorMut, PageContentRole, PaintGroupOwner, Positioning,
     PositioningOwner,
 };
 use crate::layout::engine::{FlexCell, FlexFragmentRole, ForcedFlexLineBreak};
@@ -66,13 +66,13 @@ impl PositioningOwner for FlexRow {
     }
 }
 
-impl PaintGroupOwner for FlexRow {
-    fn paint_group(&self) -> &PaintGroup {
-        &self.paint.group
+impl BoxPaintOwner for FlexRow {
+    fn box_paint(&self) -> &BoxPaint {
+        &self.paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut PaintGroup {
-        &mut self.paint.group
+    fn box_paint_mut(&mut self) -> &mut BoxPaint {
+        &mut self.paint
     }
 }
 
@@ -173,6 +173,18 @@ impl LayoutElement for FlexRow {
 
     fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
         Some(self)
+    }
+
+    fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.paint.has_outset_graphical_effect()
+            || self.content.cells.iter().any(|cell| {
+                cell.paint.has_outset_graphical_effect()
+                    || super::text_lines_have_outset_shadows(&cell.lines)
+            })
     }
 
     fn page_content_role(&self) -> PageContentRole {

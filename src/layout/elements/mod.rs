@@ -103,6 +103,15 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
+    /// Canonical visual decoration owned by this principal box.
+    ///
+    /// Replaced content can own a paint group without owning ordinary CSS box
+    /// decoration, so this capability remains distinct from
+    /// [`PaintGroupOwner`].
+    fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        None
+    }
+
     fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {
         None
     }
@@ -144,6 +153,41 @@ pub(crate) trait LayoutElement: Debug {
         &self,
     ) -> Option<&dyn crate::layout::filter::ExactVectorFilterSource> {
         None
+    }
+
+    /// Whether this subtree has graphical output that can cross a page edge
+    /// after fragmentation has chosen its box fragments.
+    ///
+    /// CSS Fragmentation applies transforms and other graphical effects per
+    /// fragment, but separates page boxes only after painting. Keeping this
+    /// query recursive at the layout-element boundary prevents pagination from
+    /// enumerating concrete descendants or silently missing a deeper effect.
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        let own_group_transform = self
+            .paint_group_owner()
+            .is_some_and(|owner| owner.paint_group().transform.establishes_stacking_context());
+        own_group_transform
+            || self
+                .box_paint_owner()
+                .is_some_and(|owner| owner.box_paint().has_outset_graphical_effect())
+    }
+
+    fn has_page_spanning_graphical_effect(&self) -> bool {
+        if self.has_own_page_spanning_graphical_effect() {
+            return true;
+        }
+
+        let mut descendant_has_effect = false;
+        self.visit_children(&mut |child| {
+            descendant_has_effect |= child.has_page_spanning_graphical_effect();
+        });
+        descendant_has_effect
+    }
+
+    /// Whether this node contributes paint only, without creating duplicate
+    /// document semantics or influencing page-local flow corrections.
+    fn is_page_paint_continuation(&self) -> bool {
+        false
     }
 
     /// Whether this node advances normal flow. Positioned boxes derive this
@@ -252,6 +296,10 @@ impl LayoutElement for LayoutNode {
         self.as_mut().paint_group_owner_mut()
     }
 
+    fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        self.as_ref().box_paint_owner()
+    }
+
     fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {
         self.as_ref().block_fragmentation_source()
     }
@@ -276,6 +324,18 @@ impl LayoutElement for LayoutNode {
         &self,
     ) -> Option<&dyn crate::layout::filter::ExactVectorFilterSource> {
         self.as_ref().exact_vector_filter_source()
+    }
+
+    fn has_page_spanning_graphical_effect(&self) -> bool {
+        self.as_ref().has_page_spanning_graphical_effect()
+    }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.as_ref().has_own_page_spanning_graphical_effect()
+    }
+
+    fn is_page_paint_continuation(&self) -> bool {
+        self.as_ref().is_page_paint_continuation()
     }
 
     fn contributes_to_normal_flow(&self) -> bool {
@@ -364,6 +424,27 @@ pub(crate) trait PositioningOwner {
 pub(crate) trait PaintGroupOwner {
     fn paint_group(&self) -> &PaintGroup;
     fn paint_group_mut(&mut self) -> &mut PaintGroup;
+}
+
+/// Ownership of the canonical paint state shared by ordinary CSS boxes.
+///
+/// This is the single capability for backgrounds, borders, shadows, outlines,
+/// filters, and their enclosing paint group. Algorithms interested in one of
+/// those families should ask for this structure instead of adding a concrete
+/// node visitor.
+pub(crate) trait BoxPaintOwner {
+    fn box_paint(&self) -> &BoxPaint;
+    fn box_paint_mut(&mut self) -> &mut BoxPaint;
+}
+
+impl<T: BoxPaintOwner + ?Sized> PaintGroupOwner for T {
+    fn paint_group(&self) -> &PaintGroup {
+        &self.box_paint().group
+    }
+
+    fn paint_group_mut(&mut self) -> &mut PaintGroup {
+        &mut self.box_paint_mut().group
+    }
 }
 
 /// A principal box that exposes legal block-axis fragmentation boundaries.

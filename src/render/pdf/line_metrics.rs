@@ -507,13 +507,19 @@ pub(super) fn fixed_textblock_flow_adjustments(elements: &[(f32, LayoutNode)]) -
         .iter()
         .map(|(_, element)| {
             let current = adjustment;
-            adjustment += fixed_textblock_flow_overage(element);
+            if !element.is_page_paint_continuation() {
+                adjustment += fixed_textblock_flow_overage(element);
+            }
             current
         })
         .collect()
 }
 
 pub(super) fn element_uses_flow_y_adjustment(element: &dyn LayoutElement) -> bool {
+    if element.is_page_paint_continuation() {
+        return false;
+    }
+
     struct UsesAdjustment(bool);
 
     impl LayoutVisitor for UsesAdjustment {

@@ -537,6 +537,30 @@ impl BoxPaint {
             visible: style.visibility == Visibility::Visible,
         }
     }
+
+    /// Whether paint owned by this box can escape its fragment border box.
+    ///
+    /// The exact overflow bounds are renderer geometry, but ownership of an
+    /// outset effect is semantic layout state. Page separation uses this
+    /// conservative predicate to retain complete graphical output without
+    /// teaching fragmentation about individual effect implementations.
+    pub(crate) fn has_outset_graphical_effect(&self) -> bool {
+        self.group.transform.establishes_stacking_context()
+            || self.shadows.iter().any(|shadow| !shadow.inset)
+            || self.outline.width > 0.0
+            || self.background.layers.blur_radius > 0.0
+            || self
+                .filter
+                .as_ref()
+                .is_some_and(crate::layout::filter::ResolvedFilter::has_composited_output)
+    }
+}
+
+pub(crate) fn text_lines_have_outset_shadows(lines: &[crate::layout::engine::TextLine]) -> bool {
+    lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .any(|run| run.text_shadow.iter().any(|shadow| !shadow.inset))
 }
 
 /// Ownership of one resolved filter retained until fragmentation has produced

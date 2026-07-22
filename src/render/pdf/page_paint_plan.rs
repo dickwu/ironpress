@@ -6,7 +6,7 @@
 //! additionally expose separate decoration/content phases: their decoration
 //! belongs to the backdrop while their item content stays above the overflow.
 
-use crate::layout::elements::{FlexRow, LayoutElement, LayoutNode, LayoutVisitor, PageContentRole};
+use crate::layout::elements::{LayoutElement, LayoutNode, LayoutVisitor, PageContentRole};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ElementPaintPhase {
@@ -91,42 +91,23 @@ fn supports_phased_paint(element: &dyn LayoutElement) -> bool {
 
     impl LayoutVisitor for PhaseSupport {
         fn visit_container(&mut self, element: &crate::layout::elements::Container) {
-            let paint_is_atomic = !element.paint.group.is_identity();
             self.0 = Some(
-                !paint_is_atomic
-                    && element
-                        .children
-                        .iter()
-                        .all(|child| supports_phased_container_child(child.as_ref())),
+                element.paint.group.is_identity()
+                    && element.paint.background.layers.blur_radius == 0.0
+                    && element.paint.filter.is_none(),
             );
         }
 
-        fn visit_flex_row(&mut self, element: &FlexRow) {
-            let paint_is_atomic = !element.paint.group.is_identity();
-            self.0 = Some(!paint_is_atomic);
+        fn visit_flex_row(&mut self, element: &crate::layout::elements::FlexRow) {
+            self.0 = Some(
+                element.paint.group.is_identity()
+                    && element.paint.background.layers.blur_radius == 0.0
+                    && element.paint.filter.is_none(),
+            );
         }
     }
 
     let mut visitor = PhaseSupport::default();
-    element.accept(&mut visitor);
-    visitor.0.unwrap_or(false)
-}
-
-fn supports_phased_container_child(element: &dyn LayoutElement) -> bool {
-    #[derive(Default)]
-    struct ChildSupport(Option<bool>);
-
-    impl LayoutVisitor for ChildSupport {
-        fn visit_container(&mut self, element: &crate::layout::elements::Container) {
-            self.0 = Some(supports_phased_paint(element));
-        }
-
-        fn visit_text_block(&mut self, element: &crate::layout::elements::TextBlock) {
-            self.0 = Some(element.paint.group.is_identity());
-        }
-    }
-
-    let mut visitor = ChildSupport::default();
     element.accept(&mut visitor);
     visitor.0.unwrap_or(false)
 }

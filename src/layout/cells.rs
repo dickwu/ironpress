@@ -1,5 +1,5 @@
 use crate::layout::elements::{
-    BoxPaint, LayoutNode, LayoutSize, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
+    BoxPaint, BoxPaintOwner, LayoutNode, LayoutSize, Positioning, PositioningOwner,
 };
 use crate::layout::engine::{LayoutBorder, TextLine};
 use crate::layout::filter::FilterRasterOutput;
@@ -46,6 +46,14 @@ impl CellPaint {
             box_paint: BoxPaint::from_style(style, size),
             ..Default::default()
         }
+    }
+
+    pub(crate) fn has_outset_graphical_effect(&self) -> bool {
+        self.box_paint.has_outset_graphical_effect()
+            || self
+                .filter_output
+                .as_ref()
+                .is_some_and(|output| !output.raster_overflow.is_zero())
     }
 }
 
@@ -100,6 +108,13 @@ pub struct CellBox {
     pub alignment: CellAlignment,
 }
 
+impl CellBox {
+    pub(crate) fn has_outset_graphical_effect(&self) -> bool {
+        self.paint.has_outset_graphical_effect()
+            || crate::layout::elements::text_lines_have_outset_shadows(&self.content.lines)
+    }
+}
+
 /// Access to the common cell box without erasing the concrete cell role.
 pub trait CellBoxHolder {
     fn cell_box(&self) -> &CellBox;
@@ -126,13 +141,13 @@ impl PositioningOwner for CellBox {
     }
 }
 
-impl PaintGroupOwner for CellBox {
-    fn paint_group(&self) -> &PaintGroup {
-        &self.paint.box_paint.group
+impl BoxPaintOwner for CellBox {
+    fn box_paint(&self) -> &BoxPaint {
+        &self.paint.box_paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut PaintGroup {
-        &mut self.paint.box_paint.group
+    fn box_paint_mut(&mut self) -> &mut BoxPaint {
+        &mut self.paint.box_paint
     }
 }
 

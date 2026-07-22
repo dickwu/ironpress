@@ -159,6 +159,10 @@ impl LayoutElement for TableBoxDecoration {
         Some(&mut self.block)
     }
 
+    fn box_paint_owner(&self) -> Option<&dyn super::BoxPaintOwner> {
+        Some(&self.block)
+    }
+
     fn table_box_decoration_owner(&self) -> Option<&dyn TableBoxDecorationOwner> {
         Some(self)
     }
@@ -476,6 +480,13 @@ impl LayoutElement for TableRow {
 
     fn block_flow_participant_mut(&mut self) -> Option<&mut dyn BlockFlowParticipant> {
         Some(self)
+    }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.content
+            .cells
+            .iter()
+            .any(|cell| cell.layout.has_outset_graphical_effect())
     }
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn LayoutElement)) {
         self.visit_layout_children(visitor);

@@ -1,7 +1,7 @@
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BoxFragmentation, BoxFragmentationOwner,
-    BoxModel, ChildContainer, Container, ContainingBlockConsumer, InlineFlowExtent, LayoutElement,
-    LayoutNode, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
+    BoxModel, BoxPaint, BoxPaintOwner, ChildContainer, Container, ContainingBlockConsumer,
+    InlineFlowExtent, LayoutElement, LayoutNode, Positioning, PositioningOwner,
 };
 use crate::layout::engine::ContainingBlock;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -66,13 +66,13 @@ impl<T: PrincipalBox> BlockFlowOwner for T {
     }
 }
 
-impl<T: PrincipalBox> PaintGroupOwner for T {
-    fn paint_group(&self) -> &PaintGroup {
-        &self.principal().paint.group
+impl<T: PrincipalBox> BoxPaintOwner for T {
+    fn box_paint(&self) -> &BoxPaint {
+        &self.principal().paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut PaintGroup {
-        &mut self.principal_mut().paint.group
+    fn box_paint_mut(&mut self) -> &mut BoxPaint {
+        &mut self.principal_mut().paint
     }
 }
 
@@ -181,6 +181,10 @@ macro_rules! impl_principal_layout_element {
             }
 
             fn paint_group_owner_mut(&mut self) -> Option<&mut dyn super::PaintGroupOwner> {
+                Some(self)
+            }
+
+            fn box_paint_owner(&self) -> Option<&dyn super::BoxPaintOwner> {
                 Some(self)
             }
 

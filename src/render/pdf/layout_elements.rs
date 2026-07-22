@@ -35,6 +35,14 @@ impl<'a> TextRenderContext<'a> {
             page_images,
         }
     }
+
+    pub(super) fn annotation_marker(&self) -> usize {
+        self.annotations.len()
+    }
+
+    pub(super) fn discard_annotations_since(&mut self, marker: usize) {
+        self.annotations.truncate(marker);
+    }
 }
 
 pub(super) struct PageRenderContext<'a> {

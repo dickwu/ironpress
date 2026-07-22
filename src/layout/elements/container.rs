@@ -1,9 +1,9 @@
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource, BoxFragmentation,
-    BoxFragmentationOwner, BoxModel, BoxPaint, ChildContainer, ContainingBlockConsumer,
-    FilterHolder, FragmentBreakQuery, InlineFlowExtent, LayoutElement, LayoutNode, LayoutVisitor,
-    LayoutVisitorMut, OverflowBehavior, PageContentRole, PaintGroup, PaintGroupOwner, Positioning,
-    PositioningOwner,
+    BoxFragmentationOwner, BoxModel, BoxPaint, BoxPaintOwner, ChildContainer,
+    ContainingBlockConsumer, FilterHolder, FragmentBreakQuery, InlineFlowExtent, LayoutElement,
+    LayoutNode, LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole,
+    PaintGroupOwner, Positioning, PositioningOwner,
 };
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
 
@@ -124,13 +124,13 @@ impl BlockFlowOwner for Container {
     }
 }
 
-impl PaintGroupOwner for Container {
-    fn paint_group(&self) -> &PaintGroup {
-        &self.paint.group
+impl BoxPaintOwner for Container {
+    fn box_paint(&self) -> &BoxPaint {
+        &self.paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut PaintGroup {
-        &mut self.paint.group
+    fn box_paint_mut(&mut self) -> &mut BoxPaint {
+        &mut self.paint
     }
 }
 
@@ -288,6 +288,10 @@ impl LayoutElement for Container {
     }
 
     fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
+        Some(self)
+    }
+
+    fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }
 

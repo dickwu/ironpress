@@ -118,6 +118,13 @@ impl LayoutElement for GridRow {
     fn block_flow_participant_mut(&mut self) -> Option<&mut dyn BlockFlowParticipant> {
         Some(self)
     }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.content
+            .cells
+            .iter()
+            .any(|cell| cell.layout.has_outset_graphical_effect())
+    }
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn LayoutElement)) {
         self.visit_layout_children(visitor);
     }

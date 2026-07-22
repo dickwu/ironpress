@@ -682,13 +682,13 @@ impl super::elements::PositioningOwner for FlexCell {
     }
 }
 
-impl super::elements::PaintGroupOwner for FlexCell {
-    fn paint_group(&self) -> &super::elements::PaintGroup {
-        &self.paint.box_paint.group
+impl super::elements::BoxPaintOwner for FlexCell {
+    fn box_paint(&self) -> &super::elements::BoxPaint {
+        &self.paint.box_paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut super::elements::PaintGroup {
-        &mut self.paint.box_paint.group
+    fn box_paint_mut(&mut self) -> &mut super::elements::BoxPaint {
+        &mut self.paint.box_paint
     }
 }
 
@@ -2086,6 +2086,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         custom_fonts,
     );
     super::filter::materialize_page_filters(&mut pages, custom_fonts, raster_quality.filter_dpi);
+    super::fragmentation::transfer_page_spanning_graphical_effects(&mut pages, page_size, margin);
     pages[0].document_svg_defs = document_svg_defs;
     let mut dom_targets = HashMap::new();
     collect_dom_targets(nodes, &mut dom_targets);

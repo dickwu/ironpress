@@ -1,9 +1,9 @@
 use super::LayoutNode;
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource,
-    BoxFragmentationOwner, BoxModel, BoxPaint, ContainingBlockConsumer, DescendantClip,
-    FilterHolder, FragmentBreakQuery, FragmentBreakScope, InlineFlowExtent, LayoutElement,
-    LayoutVisitor, LayoutVisitorMut, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
+    BoxFragmentationOwner, BoxModel, BoxPaint, BoxPaintOwner, ContainingBlockConsumer,
+    DescendantClip, FilterHolder, FragmentBreakQuery, FragmentBreakScope, InlineFlowExtent,
+    LayoutElement, LayoutVisitor, LayoutVisitorMut, PaintGroupOwner, Positioning, PositioningOwner,
     TextBlockStyle, TextFragmentation, TextSemantics,
 };
 use crate::layout::engine::TextLine;
@@ -226,13 +226,13 @@ impl BlockFlowOwner for TextBlock {
     }
 }
 
-impl PaintGroupOwner for TextBlock {
-    fn paint_group(&self) -> &PaintGroup {
-        &self.paint.group
+impl BoxPaintOwner for TextBlock {
+    fn box_paint(&self) -> &BoxPaint {
+        &self.paint
     }
 
-    fn paint_group_mut(&mut self) -> &mut PaintGroup {
-        &mut self.paint.group
+    fn box_paint_mut(&mut self) -> &mut BoxPaint {
+        &mut self.paint
     }
 }
 
@@ -351,6 +351,15 @@ impl LayoutElement for TextBlock {
 
     fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
         Some(self)
+    }
+
+    fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn has_own_page_spanning_graphical_effect(&self) -> bool {
+        self.paint.has_outset_graphical_effect()
+            || super::text_lines_have_outset_shadows(&self.lines)
     }
 
     fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {

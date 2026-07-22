@@ -1,0 +1,211 @@
+//! Page-box separation for post-layout graphical effects.
+//!
+//! CSS Fragmentation applies transforms and other graphical effects to each
+//! box fragment, then separates page boxes last. A fragment's paint can
+//! therefore contribute to another page without becoming layout content on
+//! that page. This module represents that contribution as a transparent layout
+//! node so it continues through the ordinary renderer and stacking machinery.
+
+use crate::layout::elements::{
+    LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut, PageContentRole,
+};
+use crate::layout::engine::Page;
+use crate::types::{Margin, PageSize};
+
+/// Paint-only view of a fragment whose graphical output can reach another
+/// page. Visitor dispatch deliberately stays transparent: the renderer sees
+/// the original concrete element, while page scheduling sees the continuation
+/// role.
+#[derive(Debug, Clone)]
+struct GraphicalOverflowContinuation {
+    source: LayoutNode,
+}
+
+impl GraphicalOverflowContinuation {
+    fn new(source: LayoutNode) -> Self {
+        Self { source }
+    }
+}
+
+impl LayoutElement for GraphicalOverflowContinuation {
+    fn clone_box(&self) -> LayoutNode {
+        Box::new(self.clone())
+    }
+
+    fn accept(&self, visitor: &mut dyn LayoutVisitor) {
+        self.source.accept(visitor);
+    }
+
+    fn accept_mut(&mut self, visitor: &mut dyn LayoutVisitorMut) {
+        self.source.accept_mut(visitor);
+    }
+
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn LayoutElement)) {
+        self.source.visit_children(visitor);
+    }
+
+    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn LayoutElement)) {
+        self.source.visit_children_mut(visitor);
+    }
+
+    fn visit_child_nodes_mut(&mut self, visitor: &mut dyn FnMut(&mut LayoutNode)) {
+        self.source.visit_child_nodes_mut(visitor);
+    }
+
+    fn has_page_spanning_graphical_effect(&self) -> bool {
+        self.source.has_page_spanning_graphical_effect()
+    }
+
+    fn is_page_paint_continuation(&self) -> bool {
+        true
+    }
+
+    fn page_content_role(&self) -> PageContentRole {
+        PageContentRole::OverflowContinuation
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PageStackGeometry {
+    block_start: f32,
+    margin: Margin,
+}
+
+impl PageStackGeometry {
+    fn content_y_on(self, target: Self, source_content_y: f32) -> f32 {
+        self.block_start + self.margin.top + source_content_y
+            - target.block_start
+            - target.margin.top
+    }
+}
+
+/// Copy each fragment with potentially page-spanning paint onto every other
+/// existing page, translated into that page's content coordinate system.
+///
+/// Pages clip the copied operators to their media box, so only the slice that
+/// actually crosses a boundary remains visible. Contributions from earlier
+/// pages precede local content in document order; contributions from later
+/// pages follow it. No comparison or source raster is involved.
+pub(crate) fn transfer_page_spanning_graphical_effects(
+    pages: &mut [Page],
+    default_page_size: PageSize,
+    default_margin: Margin,
+) {
+    if pages.len() < 2 {
+        return;
+    }
+
+    let mut block_start = 0.0;
+    let geometries = pages
+        .iter()
+        .map(|page| {
+            let size = page.page_size_override.unwrap_or(default_page_size);
+            let geometry = PageStackGeometry {
+                block_start,
+                margin: page.margin_override.unwrap_or(default_margin),
+            };
+            block_start += size.height;
+            geometry
+        })
+        .collect::<Vec<_>>();
+
+    let sources = pages
+        .iter()
+        .map(|page| {
+            page.elements
+                .iter()
+                .filter(|(_, element)| {
+                    element.page_content_role() != PageContentRole::RepeatedDecoration
+                        && element.has_page_spanning_graphical_effect()
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for target_index in 0..pages.len() {
+        let target_geometry = geometries[target_index];
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+
+        for (source_index, source_elements) in sources.iter().enumerate() {
+            if source_index == target_index {
+                continue;
+            }
+            let destination = if source_index < target_index {
+                &mut before
+            } else {
+                &mut after
+            };
+            let source_geometry = geometries[source_index];
+            destination.extend(source_elements.iter().map(|(y, element)| {
+                (
+                    source_geometry.content_y_on(target_geometry, *y),
+                    Box::new(GraphicalOverflowContinuation::new(element.clone())) as LayoutNode,
+                )
+            }));
+        }
+
+        if before.is_empty() && after.is_empty() {
+            continue;
+        }
+        let local = std::mem::take(&mut pages[target_index].elements);
+        before.extend(local);
+        before.extend(after);
+        pages[target_index].elements = before;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::elements::{BoxTransform, Container, IntoLayoutNode, TextBlock};
+    use crate::style::computed::Transform;
+
+    fn transformed_text() -> LayoutNode {
+        let mut text = TextBlock::default();
+        text.paint.group.transform = BoxTransform {
+            value: Some(Transform::Rotate(5.0)),
+            ..Default::default()
+        };
+        text.boxed()
+    }
+
+    #[test]
+    fn recursive_effect_capability_finds_transformed_descendants() {
+        let container = Container {
+            children: vec![transformed_text()],
+            ..Default::default()
+        };
+
+        assert!(container.has_page_spanning_graphical_effect());
+    }
+
+    #[test]
+    fn transfers_effect_paint_in_document_order_and_page_coordinates() {
+        let mut pages = vec![
+            Page {
+                elements: vec![(80.0, transformed_text())],
+                page_size_override: Some(PageSize::new(100.0, 100.0)),
+                margin_override: Some(Margin::uniform(10.0)),
+                ..Default::default()
+            },
+            Page {
+                elements: vec![(4.0, TextBlock::default().boxed())],
+                page_size_override: Some(PageSize::new(100.0, 120.0)),
+                margin_override: Some(Margin::uniform(20.0)),
+                ..Default::default()
+            },
+        ];
+
+        transfer_page_spanning_graphical_effects(&mut pages, PageSize::A4, Margin::default());
+
+        assert_eq!(pages[1].elements.len(), 2);
+        assert_eq!(pages[1].elements[0].0, -30.0);
+        assert_eq!(
+            pages[1].elements[0].1.page_content_role(),
+            PageContentRole::OverflowContinuation
+        );
+        assert_eq!(pages[1].elements[1].0, 4.0);
+    }
+}

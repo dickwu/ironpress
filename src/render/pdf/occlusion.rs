@@ -135,6 +135,9 @@ pub(super) fn collect_opaque_coverers(
         .iter()
         .enumerate()
         .filter_map(|(idx, (y_pos, element))| {
+            if element.is_page_paint_continuation() {
+                return None;
+            }
             opaque_block_coverer_rect(element, *y_pos, page_size, margin, available_width)
                 .map(|rect| (rect, idx))
         })
