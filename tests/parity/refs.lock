@@ -12618,13 +12618,13 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-transforms-x-units-values.html",
       "html_sha256": "ec486d18e93b1f59890dded75d9da014f283692d909b9956a764e992b7695efb",
-      "manifest_sha256": "fcc4fef269f5c7694cbd13f572a9738d016c27cb2442340c48299bbff1168384",
-      "oracle": "chrome",
+      "manifest_sha256": "0c7583d4bab9e03329a91ffb2726ce6757271045e7c3c9220beb18ee9ebb8735",
+      "oracle": "weasyprint",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-transforms-x-units-values.pdf",
-        "sha256": "5f06b22e005291a661030bc73be27a6afcff90222d44f2f5ae8d1ea75758e8d0"
+        "sha256": "1530cb1bd1b7878b34842d21e31f015903b8ed63be042dc14a2da635c39517bb"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "17490e7f67ba6703325ce685296cbc49e79b5683d9c7d38364b3c6fa8c35f90d",
       "reference_file": "cases/interactions/interactions-cartesian-transforms-x-units-values.html",
       "reference_html_sha256": "ec486d18e93b1f59890dded75d9da014f283692d909b9956a764e992b7695efb"
     },

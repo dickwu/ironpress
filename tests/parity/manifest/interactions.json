@@ -6902,14 +6902,14 @@
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
     "subfeature": "same-element-and-bidirectional-nesting",
-    "description": "Cartesian family interaction for transforms and units-values: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
+    "description": "Cartesian family interaction for transforms and units-values: both representatives compose on one element and in both outer/inner orders. The oracle preserves the fractional coordinates required by flex centering, percentage padding, and transforms; Chromium print-to-PDF asymmetrically snaps them to whole paint pixels.",
     "file": "cases/interactions/interactions-cartesian-transforms-x-units-values.html",
     "interaction_of": [
       "transforms",
       "units-values"
     ],
     "kind": "interaction",
-    "oracle": "chrome",
+    "oracle": "weasyprint",
     "expected_support": "implemented",
     "depends_on": [
       "probe-text-baseline",
