@@ -322,17 +322,21 @@ fn explicit_run_metadata_drives_decoration_and_drop_cap_state() {
     let mut run = test_text_run("Decorated");
     run.border_radii = CornerRadii::circular(6.0);
     run.line_height_factor = 1.25;
-    run.metadata.decoration_style = crate::style::computed::TextDecorationStyle::Wavy;
-    run.metadata.decoration_thickness = Some(1.25);
-    run.metadata.underline_offset = Some(2.5);
+    run.decorations.push(crate::style::computed::TextDecoration {
+        style: crate::style::computed::TextDecorationStyle::Wavy,
+        thickness: Some(1.25),
+        underline_offset: Some(2.5),
+        ..Default::default()
+    });
     run.metadata.emphasis.mark = true;
     run.metadata.letter_spacing = 0.375;
     run.metadata.is_drop_cap = true;
 
-    assert!(decoration_is_wavy(&run));
+    let decoration = &run.decorations[0];
+    assert!(decoration_is_wavy(decoration));
     assert!(decoration_is_emphasis(&run));
-    assert_eq!(decoration_thickness(&run), 1.25);
-    assert_eq!(underline_center_y(&run, 10.0), 6.875);
+    assert_eq!(decoration_thickness(&run, decoration), 1.25);
+    assert_eq!(underline_center_y(&run, decoration, 10.0), 6.875);
     assert_eq!(text_run_letter_spacing(&run), 0.375);
     assert!(is_drop_cap_run(&run));
     assert_eq!(run.border_radii, CornerRadii::circular(6.0));
@@ -343,17 +347,24 @@ fn explicit_run_metadata_drives_decoration_and_drop_cap_state() {
 fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     let mut run = test_text_run("thin");
     run.font_size = 1.0;
-    run.metadata.decoration_thickness = Some(0.075);
-    run.metadata.underline_offset = Some(-0.125);
+    run.decorations.push(crate::style::computed::TextDecoration {
+        thickness: Some(0.075),
+        underline_offset: Some(-0.125),
+        ..Default::default()
+    });
 
-    assert_eq!(decoration_thickness(&run), crate::fonts::PT_PER_CSS_PX);
-    assert_eq!(underline_center_y(&run, 3.0), 2.75);
+    assert_eq!(
+        decoration_thickness(&run, &run.decorations[0]),
+        crate::fonts::PT_PER_CSS_PX
+    );
+    assert_eq!(underline_center_y(&run, &run.decorations[0], 3.0), 2.75);
 
     let mut solid = String::new();
     push_decoration_stroke(
         &mut solid,
         (0.0, 0.0, 0.0),
         &run,
+        &run.decorations[0],
         DecorationLine::Underline,
         1.0,
         2.0,
@@ -361,12 +372,13 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     );
     assert!(solid.contains("1 2.625 1 0.75 re"));
 
-    run.metadata.decoration_style = crate::style::computed::TextDecorationStyle::Wavy;
+    run.decorations[0].style = crate::style::computed::TextDecorationStyle::Wavy;
     let mut wavy = String::new();
     push_decoration_stroke(
         &mut wavy,
         (0.0, 0.0, 0.0),
         &run,
+        &run.decorations[0],
         DecorationLine::Underline,
         1.0,
         2.0,
@@ -375,13 +387,14 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     assert!(wavy.contains("0.75 w"));
     assert!(wavy.contains("-6.5 1.5 m"));
 
-    run.metadata.decoration_style = crate::style::computed::TextDecorationStyle::Solid;
-    run.metadata.decoration_thickness = Some(0.0);
+    run.decorations[0].style = crate::style::computed::TextDecorationStyle::Solid;
+    run.decorations[0].thickness = Some(0.0);
     let mut zero = String::new();
     push_decoration_stroke(
         &mut zero,
         (0.0, 0.0, 0.0),
         &run,
+        &run.decorations[0],
         DecorationLine::Underline,
         1.0,
         2.0,
@@ -393,9 +406,15 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
 #[test]
 fn shared_horizontal_decoration_painter_emits_wavy_line_and_shadow_layers() {
     let mut run = test_text_run("wave");
-    run.underline = true;
-    run.decoration_color = Some(Color::rgb(239, 71, 111));
-    run.metadata.decoration_style = crate::style::computed::TextDecorationStyle::Wavy;
+    run.decorations.push(crate::style::computed::TextDecoration {
+        lines: crate::style::computed::TextDecorationLines {
+            underline: true,
+            ..Default::default()
+        },
+        color: Some(Color::rgb(239, 71, 111)),
+        style: crate::style::computed::TextDecorationStyle::Wavy,
+        ..Default::default()
+    });
     run.text_shadow.push(crate::style::computed::BoxShadow {
         offset_x: 1.0,
         offset_y: 1.0,
@@ -407,10 +426,11 @@ fn shared_horizontal_decoration_painter_emits_wavy_line_and_shadow_layers() {
     });
 
     let custom_fonts = HashMap::new();
-    let decoration = HorizontalRunDecoration::new(&run, 2.0, 20.0, 10.0, &custom_fonts);
+    let decoration = HorizontalRunDecorations::new(&run, 2.0, 20.0, 10.0, &custom_fonts);
     let mut content = String::new();
     decoration.paint_shadows(&mut content);
-    decoration.paint_lines(&mut content);
+    decoration.paint_below_text(&mut content);
+    decoration.paint_above_text(&mut content);
 
     assert!(content.contains("1 1 1 RG"), "{content}");
     assert!(content.contains("0.9373 0.2784 0.4353 RG"), "{content}");
@@ -418,27 +438,133 @@ fn shared_horizontal_decoration_painter_emits_wavy_line_and_shadow_layers() {
 }
 
 #[test]
+fn horizontal_line_paints_underlines_below_glyphs_and_line_through_above() {
+    let mut run = test_text_run("Decorated");
+    run.decorations.push(crate::style::computed::TextDecoration {
+        lines: crate::style::computed::TextDecorationLines {
+            underline: true,
+            line_through: true,
+            ..Default::default()
+        },
+        color: Some(Color::rgb(239, 71, 111)),
+        ..Default::default()
+    });
+    let mut content = String::new();
+    let mut writer = PdfWriter::new();
+    let mut images = Vec::new();
+
+    paint_horizontal_line_text(
+        &mut content,
+        &[run],
+        HorizontalLinePaint {
+            origin: PdfPoint::new(2.0, 10.0),
+            line_ascender: 9.0,
+            word_spacing: 0.0,
+            text_space: PdfTextSpace::Points,
+        },
+        &HashMap::new(),
+        &PreparedCustomFonts::new(),
+        &mut writer,
+        &mut images,
+    );
+
+    let decoration_color = PdfRgb::from(Color::rgb(239, 71, 111)).fill_operator();
+    let color_positions = content
+        .match_indices(&decoration_color)
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let glyph = content.find("(Decorated) Tj").expect("text glyph operator");
+    assert_eq!(color_positions.len(), 2, "{content}");
+    assert!(color_positions[0] < glyph, "{content}");
+    assert!(glyph < color_positions[1], "{content}");
+}
+
+#[test]
+fn horizontal_line_preserves_independent_decoration_origins() {
+    let mut run = test_text_run("Decorated");
+    run.decorations = vec![
+        crate::style::computed::TextDecoration {
+            lines: crate::style::computed::TextDecorationLines {
+                underline: true,
+                ..Default::default()
+            },
+            color: Some(Color::rgb(255, 0, 0)),
+            ..Default::default()
+        },
+        crate::style::computed::TextDecoration {
+            lines: crate::style::computed::TextDecorationLines {
+                line_through: true,
+                ..Default::default()
+            },
+            color: Some(Color::rgb(0, 0, 255)),
+            ..Default::default()
+        },
+    ];
+    let mut content = String::new();
+
+    paint_horizontal_line_text(
+        &mut content,
+        &[run],
+        HorizontalLinePaint {
+            origin: PdfPoint::new(2.0, 10.0),
+            line_ascender: 9.0,
+            word_spacing: 0.0,
+            text_space: PdfTextSpace::Points,
+        },
+        &HashMap::new(),
+        &PreparedCustomFonts::new(),
+        &mut PdfWriter::new(),
+        &mut Vec::new(),
+    );
+
+    let underline = content.find("1 0 0 rg").expect("red underline paint");
+    let glyph = content.find("(Decorated) Tj").expect("text glyph operator");
+    let line_through = content.find("0 0 1 rg").expect("blue line-through paint");
+    assert!(underline < glyph, "{content}");
+    assert!(glyph < line_through, "{content}");
+}
+
+#[test]
 fn automatic_decoration_thickness_uses_the_same_device_floor() {
     let mut run = test_text_run("auto");
     run.font_size = 1.0;
-    assert_eq!(decoration_thickness(&run), crate::fonts::PT_PER_CSS_PX);
-    assert_eq!(underline_center_y(&run, 3.0), 1.875);
+    run.decorations.push(Default::default());
+    assert_eq!(
+        decoration_thickness(&run, &run.decorations[0]),
+        crate::fonts::PT_PER_CSS_PX
+    );
+    assert_eq!(
+        underline_center_y(&run, &run.decorations[0], 3.0),
+        1.875
+    );
 
     run.font_size = 25.5;
-    run.metadata.decoration_thickness = Some(4.5);
-    assert_eq!(underline_center_y(&run, 30.0), 25.5);
+    run.decorations[0].thickness = Some(4.5);
+    assert_eq!(
+        underline_center_y(&run, &run.decorations[0], 30.0),
+        25.5
+    );
 
-    run.metadata.underline_offset = Some(0.0);
-    assert_eq!(underline_center_y(&run, 30.0), 27.75);
-    run.metadata.decoration_style = crate::style::computed::TextDecorationStyle::Wavy;
-    assert_eq!(decoration_thickness(&run), 4.5);
+    run.decorations[0].underline_offset = Some(0.0);
+    assert_eq!(
+        underline_center_y(&run, &run.decorations[0], 30.0),
+        27.75
+    );
+    run.decorations[0].style = crate::style::computed::TextDecorationStyle::Wavy;
+    assert_eq!(decoration_thickness(&run, &run.decorations[0]), 4.5);
 }
 
 #[test]
 fn emphasis_marks_keep_a_color_distinct_from_overline() {
     let mut run = test_text_run("AB");
-    run.overline = true;
-    run.decoration_color = Some(Color::rgb(255, 0, 0));
+    run.decorations.push(crate::style::computed::TextDecoration {
+        lines: crate::style::computed::TextDecorationLines {
+            overline: true,
+            ..Default::default()
+        },
+        color: Some(Color::rgb(255, 0, 0)),
+        ..Default::default()
+    });
     run.metadata.emphasis.mark = true;
     run.metadata.emphasis.color = Color::rgb(0, 0, 255);
 

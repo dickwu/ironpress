@@ -218,14 +218,14 @@ pub(super) fn render_text_child(
                     .iter()
                     .rev()
                     .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
-                let decoration = HorizontalRunDecoration::new(
+                let decoration = HorizontalRunDecorations::new(
                     run,
                     lx,
                     run_width,
                     text_y_abs,
                     ctx.text.custom_fonts,
                 )
-                .continuing_after(previous, lx);
+                .continuing_after(previous);
                 let rw = decoration.paint_text(
                     content,
                     crate::layout::text::line_primary_font_size(&merged),
@@ -756,11 +756,24 @@ pub(super) fn render_text_child(
                     .iter()
                     .rev()
                     .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
-                HorizontalRunDecoration::new(run, lx, run_width, run_y, ctx.text.custom_fonts)
-                    .continuing_after(previous, lx)
+                HorizontalRunDecorations::new(run, lx, run_width, run_y, ctx.text.custom_fonts)
+                    .continuing_after(previous)
             });
             if let Some(decoration) = &decoration {
                 decoration.paint_shadows(content);
+                render_run_text_shadows(
+                    content,
+                    run,
+                    lx,
+                    run_y,
+                    crate::layout::text::line_primary_font_size(&merged),
+                    ctx.text.custom_fonts,
+                    ctx.text.prepared_custom_fonts,
+                    *tb_word_spacing,
+                    ctx.text.pdf_writer,
+                    ctx.text.page_images,
+                );
+                decoration.paint_below_text(content);
             }
             let rw = if *tb_bg_blur > 0.0
                 && render_text_shadow_blur(
@@ -812,21 +825,36 @@ pub(super) fn render_text_child(
                     ctx.text.page_images,
                 )
             } else {
-                render_run_glyphs(
-                    content,
-                    run,
-                    lx,
-                    run_y,
-                    crate::layout::text::line_primary_font_size(&merged),
-                    ctx.text.custom_fonts,
-                    ctx.text.prepared_custom_fonts,
-                    *tb_word_spacing,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                )
+                if decoration.is_some() {
+                    render_run_glyphs_without_shadows(
+                        content,
+                        run,
+                        lx,
+                        run_y,
+                        crate::layout::text::line_primary_font_size(&merged),
+                        ctx.text.custom_fonts,
+                        ctx.text.prepared_custom_fonts,
+                        *tb_word_spacing,
+                        ctx.text.pdf_writer,
+                        ctx.text.page_images,
+                    )
+                } else {
+                    render_run_glyphs(
+                        content,
+                        run,
+                        lx,
+                        run_y,
+                        crate::layout::text::line_primary_font_size(&merged),
+                        ctx.text.custom_fonts,
+                        ctx.text.prepared_custom_fonts,
+                        *tb_word_spacing,
+                        ctx.text.pdf_writer,
+                        ctx.text.page_images,
+                    )
+                }
             };
             if let Some(decoration) = &decoration {
-                decoration.paint_lines(content);
+                decoration.paint_above_text(content);
             }
             let advance_letter_spacing = if run.metadata.text_combine_upright.is_active()
                 || text_run_letter_spacing(run) != 0.0

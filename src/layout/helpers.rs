@@ -1427,9 +1427,7 @@ pub(crate) fn apply_first_line_style(
         run.font_variant_position = fl.font_variant_position;
         run.bold = fl.font_weight == FontWeight::Bold;
         run.font_style = fl.font_style;
-        run.underline = fl.text_decoration_underline;
-        run.line_through = fl.text_decoration_line_through;
-        run.overline = fl.text_decoration_overline;
+        run.decorations = fl.text_decorations.active(fl.color);
         run.font_family = family.clone();
         run.background_color = fl.background_color;
         run.line_height_factor = line_height;
@@ -1641,9 +1639,7 @@ pub(crate) fn apply_first_letter_style(
     letter_run.color = fl.color;
     letter_run.bold = fl.font_weight == FontWeight::Bold;
     letter_run.font_style = fl.font_style;
-    letter_run.underline = fl.text_decoration_underline;
-    letter_run.line_through = fl.text_decoration_line_through;
-    letter_run.overline = fl.text_decoration_overline;
+    letter_run.decorations = fl.text_decorations.active(fl.color);
     letter_run.font_family = resolve_style_font_family(fl, fonts);
     letter_run.background_color = fl.background_color;
     letter_run.line_height_factor = text_run_line_height_factor(fl, fonts);
@@ -1949,10 +1945,7 @@ pub(crate) fn build_pseudo_block(
                 font_size: used_font_size(pseudo_style, fonts),
                 bold: pseudo_style.font_weight == FontWeight::Bold,
                 font_style: pseudo_style.font_style,
-                underline: pseudo_style.text_decoration_underline,
-                line_through: pseudo_style.text_decoration_line_through,
-                overline: pseudo_style.text_decoration_overline,
-                decoration_color: pseudo_style.text_decoration_color,
+                decorations: pseudo_style.text_decorations.active(pseudo_style.color),
                 color: pseudo_style.color,
                 font_family: resolve_style_font_family(pseudo_style, fonts),
                 line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
@@ -2222,10 +2215,7 @@ pub(crate) fn build_pseudo_inline_run(
         font_size: used_font_size(pseudo_style, fonts),
         bold: pseudo_style.font_weight == FontWeight::Bold,
         font_style: pseudo_style.font_style,
-        underline: pseudo_style.text_decoration_underline,
-        line_through: pseudo_style.text_decoration_line_through,
-        overline: pseudo_style.text_decoration_overline,
-        decoration_color: pseudo_style.text_decoration_color,
+        decorations: pseudo_style.text_decorations.active(pseudo_style.color),
         color: pseudo_style.color,
         font_family: resolve_style_font_family(pseudo_style, fonts),
         background_color: pseudo_style.background_color,
@@ -2258,10 +2248,7 @@ fn build_pseudo_inline_box(
             font_size: used_font_size(pseudo_style, fonts),
             bold: pseudo_style.font_weight == FontWeight::Bold,
             font_style: pseudo_style.font_style,
-            underline: pseudo_style.text_decoration_underline,
-            line_through: pseudo_style.text_decoration_line_through,
-            overline: pseudo_style.text_decoration_overline,
-            decoration_color: pseudo_style.text_decoration_color,
+            decorations: pseudo_style.text_decorations.active(pseudo_style.color),
             color: pseudo_style.color,
             font_family: resolve_style_font_family(pseudo_style, fonts),
             line_height_factor: text_run_line_height_factor(pseudo_style, fonts),

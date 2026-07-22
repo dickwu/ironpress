@@ -602,9 +602,7 @@ pub(super) fn merge_runs(runs: &[TextRun]) -> Vec<TextRun> {
                 && prev.font_size == run.font_size
                 && prev.bold == run.bold
                 && prev.font_style == run.font_style
-                && prev.underline == run.underline
-                && prev.line_through == run.line_through
-                && prev.overline == run.overline
+                && prev.decorations == run.decorations
                 && prev.color == run.color
                 && prev.link_url == run.link_url
                 && prev.font_family == run.font_family

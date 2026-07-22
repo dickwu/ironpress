@@ -635,6 +635,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "text-decoration"
             | "text-decoration-line"
             | "text-decoration-style"
+            | "text-decoration-skip-ink"
             | "display"
     ) {
         return Some(CssValue::Keyword(lower));

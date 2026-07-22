@@ -502,8 +502,8 @@ pub(in crate::render::pdf) fn render_flex_row(
                         previous.inline_box.is_none() && !previous.text.is_empty()
                     });
                     let decoration =
-                        HorizontalRunDecoration::new(run, x, rw, text_y, ctx.text.custom_fonts)
-                            .continuing_after(previous, x);
+                        HorizontalRunDecorations::new(run, x, rw, text_y, ctx.text.custom_fonts)
+                            .continuing_after(previous);
 
                     // Draw background rectangle for inline spans
                     if let Some(background) = run.background_color {

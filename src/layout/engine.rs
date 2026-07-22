@@ -764,9 +764,6 @@ impl RunWhitespace {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TextRunMetadata {
-    pub decoration_style: crate::style::computed::TextDecorationStyle,
-    pub decoration_thickness: Option<f32>,
-    pub underline_offset: Option<f32>,
     /// CSS `text-emphasis` state, kept together because its mark, colour,
     /// position, and resolved ruby geometry must travel as one unit.
     pub emphasis: crate::layout::text_emphasis::TextEmphasis,
@@ -820,13 +817,8 @@ pub struct TextRun {
     pub font_size: f32,
     pub bold: bool,
     pub font_style: FontStyle,
-    pub underline: bool,
-    pub line_through: bool,
-    pub overline: bool,
     pub color: crate::types::Color,
-    /// CSS `text-decoration-color`: colour of the underline/line-through/overline.
-    /// `None` means use the text `color` (currentColor).
-    pub decoration_color: Option<crate::types::Color>,
+    pub decorations: Vec<crate::style::computed::TextDecoration>,
     pub link_url: Option<String>,
     pub font_family: FontFamily,
     /// Explicit algorithmic font treatment; never encoded in geometry.
@@ -889,11 +881,8 @@ impl Default for TextRun {
             font_size: 12.0,
             bold: false,
             font_style: FontStyle::default(),
-            underline: false,
-            line_through: false,
-            overline: false,
             color: crate::types::Color::BLACK,
-            decoration_color: None,
+            decorations: Vec::new(),
             link_url: None,
             font_family: FontFamily::default(),
             font_synthesis: FontSynthesisState::default(),
@@ -2424,10 +2413,7 @@ fn build_running_element(
                     font_size: used_font_size(style, env.fonts),
                     bold: style.font_weight == FontWeight::Bold,
                     font_style: style.font_style,
-                    underline: style.text_decoration_underline,
-                    line_through: style.text_decoration_line_through,
-                    overline: style.text_decoration_overline,
-                    decoration_color: style.text_decoration_color,
+                    decorations: style.text_decorations.active(style.color),
                     color: style.color,
                     font_family: resolve_style_font_family(style, env.fonts),
                     line_height_factor: text_run_line_height_factor(style, env.fonts),
@@ -3070,10 +3056,7 @@ pub(crate) fn flatten_nodes(
                             font_size: used_font_size(parent_style, env.fonts),
                             bold: parent_style.font_weight == FontWeight::Bold,
                             font_style: parent_style.font_style,
-                            underline: parent_style.text_decoration_underline,
-                            line_through: parent_style.text_decoration_line_through,
-                            overline: parent_style.text_decoration_overline,
-                            decoration_color: parent_style.text_decoration_color,
+                            decorations: parent_style.text_decorations.active(parent_style.color),
                             color: parent_style.color,
                             font_family: resolve_style_font_family(parent_style, env.fonts),
                             line_height_factor: text_run_line_height_factor(
@@ -4010,10 +3993,7 @@ pub(crate) fn flatten_element(
                             font_size: used_font_size(ps, env.fonts),
                             bold: ps.font_weight == FontWeight::Bold,
                             font_style: ps.font_style,
-                            underline: ps.text_decoration_underline,
-                            line_through: ps.text_decoration_line_through,
-                            overline: ps.text_decoration_overline,
-                            decoration_color: ps.text_decoration_color,
+                            decorations: ps.text_decorations.active(ps.color),
                             color: ps.color,
                             font_family: resolve_style_font_family(ps, env.fonts),
                             line_height_factor: text_run_line_height_factor(ps, env.fonts),
@@ -5717,8 +5697,17 @@ mod tests {
             .inspect_text(|text| {
                 assert!(!text.lines.is_empty());
                 let run = &text.lines[0].runs[0];
-                assert!(run.line_through, "del element should set line_through");
-                assert!(!run.underline);
+                assert!(
+                    run.decorations
+                        .iter()
+                        .any(|decoration| decoration.lines.line_through),
+                    "del element should set line_through"
+                );
+                assert!(
+                    !run.decorations
+                        .iter()
+                        .any(|decoration| decoration.lines.underline)
+                );
             })
             .expect("expected text block");
     }
@@ -5734,7 +5723,12 @@ mod tests {
             .inspect_text(|text| {
                 assert!(!text.lines.is_empty());
                 let run = &text.lines[0].runs[0];
-                assert!(run.line_through, "s element should set line_through");
+                assert!(
+                    run.decorations
+                        .iter()
+                        .any(|decoration| decoration.lines.line_through),
+                    "s element should set line_through"
+                );
             })
             .expect("expected text block");
     }

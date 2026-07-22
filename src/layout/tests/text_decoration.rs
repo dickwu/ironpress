@@ -13,7 +13,14 @@ fn block_decoration_reaches_text_through_a_structured_flex_item() {
     );
 
     assert!(!runs.is_empty());
-    assert!(runs.iter().all(|run| run.underline), "runs: {runs:#?}");
+    assert!(
+        runs.iter().all(|run| {
+            run.decorations
+                .iter()
+                .any(|decoration| decoration.lines.underline)
+        }),
+        "runs: {runs:#?}"
+    );
 }
 
 #[test]
@@ -25,18 +32,27 @@ fn cartesian_fixture_retains_explicit_decoration_on_every_run() {
     )));
 
     assert_eq!(runs.len(), 10, "runs: {runs:#?}");
-    let decorated = runs.iter().filter(|run| run.underline).collect::<Vec<_>>();
+    let decorated = runs
+        .iter()
+        .filter(|run| {
+            run.decorations
+                .iter()
+                .any(|decoration| decoration.lines.underline)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(decorated.len(), 8, "runs: {runs:#?}");
     assert!(
-        decorated
+        decorated.iter().all(|run| run
+            .decorations
             .iter()
-            .all(|run| run.metadata.decoration_style == TextDecorationStyle::Solid),
+            .all(|decoration| decoration.style == TextDecorationStyle::Solid)),
         "runs: {runs:#?}"
     );
     assert!(
-        decorated
+        decorated.iter().all(|run| run
+            .decorations
             .iter()
-            .all(|run| run.metadata.decoration_thickness == Some(1.5)),
+            .all(|decoration| decoration.thickness == Some(1.5))),
         "runs: {runs:#?}"
     );
 }

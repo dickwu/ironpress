@@ -236,8 +236,8 @@ pub(super) fn render_inline_box(
                 .iter()
                 .rev()
                 .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
-            let decoration = HorizontalRunDecoration::new(run, x, run_width, run_y, custom_fonts)
-                .continuing_after(previous, x);
+            let decoration = HorizontalRunDecorations::new(run, x, run_width, run_y, custom_fonts)
+                .continuing_after(previous);
             x += decoration.paint_text(
                 content,
                 parent_font_size,
@@ -251,7 +251,7 @@ pub(super) fn render_inline_box(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_line_glyphs_in_space(
+pub(super) fn render_line_glyphs_without_shadows_in_space(
     content: &mut String,
     runs: &[TextRun],
     start_x: f32,
@@ -259,8 +259,6 @@ pub(super) fn render_line_glyphs_in_space(
     custom_fonts: &HashMap<String, TtfFont>,
     prepared_custom_fonts: &PreparedCustomFonts,
     word_spacing: f32,
-    // Line box ascent above the baseline, used to seat a drop-cap glyph's top on
-    // the line's text top. The drop cap is excluded from this value.
     line_ascender: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
@@ -368,7 +366,7 @@ pub(super) fn render_line_glyphs_in_space(
             // A floated `::first-letter` drop cap is lowered so its glyph top
             // sits on the line's text top (css-pseudo-4 §2.2).
             let run_y = y + drop_cap_baseline_shift(run, line_ascender, custom_fonts);
-            let run_width = render_run_glyphs_in_space(
+            let run_width = render_run_glyph_layers_in_space(
                 content,
                 run,
                 x,
@@ -380,6 +378,7 @@ pub(super) fn render_line_glyphs_in_space(
                 pdf_writer,
                 page_images,
                 text_space,
+                TextShadowPaint::Skip,
             );
             x += run_width;
         }

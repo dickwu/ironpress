@@ -437,8 +437,8 @@ pub(super) fn render_cell_text(
                 .rev()
                 .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
             let decoration =
-                HorizontalRunDecoration::new(run, x, run_width, text_y, ctx.custom_fonts)
-                    .continuing_after(previous, x);
+                HorizontalRunDecorations::new(run, x, run_width, text_y, ctx.custom_fonts)
+                    .continuing_after(previous);
 
             if let Some(background) = run.background_color {
                 let (background_r, background_g, background_b) = background.to_f32_rgb();

@@ -104,7 +104,7 @@ pub(super) fn render_run_glyphs(
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) -> f32 {
-    render_run_glyphs_in_space(
+    render_run_glyph_layers_in_space(
         content,
         run,
         x,
@@ -116,12 +116,69 @@ pub(super) fn render_run_glyphs(
         pdf_writer,
         page_images,
         PdfTextSpace::Points,
+        TextShadowPaint::Include,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::collapsible_if)]
-pub(super) fn render_run_glyphs_in_space(
+pub(super) fn render_run_glyphs_without_shadows(
+    content: &mut String,
+    run: &TextRun,
+    x: f32,
+    text_y: f32,
+    parent_font_size: f32,
+    custom_fonts: &HashMap<String, TtfFont>,
+    prepared_custom_fonts: &PreparedCustomFonts,
+    word_spacing: f32,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+) -> f32 {
+    render_run_glyph_layers_in_space(
+        content,
+        run,
+        x,
+        text_y,
+        parent_font_size,
+        custom_fonts,
+        prepared_custom_fonts,
+        word_spacing,
+        pdf_writer,
+        page_images,
+        PdfTextSpace::Points,
+        TextShadowPaint::Skip,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_run_text_shadows(
+    content: &mut String,
+    run: &TextRun,
+    x: f32,
+    text_y: f32,
+    parent_font_size: f32,
+    custom_fonts: &HashMap<String, TtfFont>,
+    prepared_custom_fonts: &PreparedCustomFonts,
+    word_spacing: f32,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+) {
+    render_run_text_shadows_in_space(
+        content,
+        run,
+        x,
+        text_y,
+        parent_font_size,
+        custom_fonts,
+        prepared_custom_fonts,
+        word_spacing,
+        pdf_writer,
+        page_images,
+        PdfTextSpace::Points,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_run_text_shadows_in_space(
     content: &mut String,
     run: &TextRun,
     x: f32,
@@ -133,6 +190,44 @@ pub(super) fn render_run_glyphs_in_space(
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
     text_space: PdfTextSpace,
+) {
+    let baseline = run_paint_baseline(run, text_y, parent_font_size);
+    paint_run_text_shadows_at_baseline(
+        content,
+        run,
+        x,
+        baseline,
+        parent_font_size,
+        custom_fonts,
+        prepared_custom_fonts,
+        word_spacing,
+        pdf_writer,
+        page_images,
+        text_space,
+    );
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TextShadowPaint {
+    Include,
+    Skip,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::collapsible_if)]
+pub(super) fn render_run_glyph_layers_in_space(
+    content: &mut String,
+    run: &TextRun,
+    x: f32,
+    text_y: f32,
+    parent_font_size: f32,
+    custom_fonts: &HashMap<String, TtfFont>,
+    prepared_custom_fonts: &PreparedCustomFonts,
+    word_spacing: f32,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+    text_space: PdfTextSpace,
+    shadow_paint: TextShadowPaint,
 ) -> f32 {
     let (r, g, b) = run.color.to_f32_rgb();
     let letter_spacing = text_run_letter_spacing(run);
@@ -140,9 +235,7 @@ pub(super) fn render_run_glyphs_in_space(
     // baseline raised/lowered by a fraction of the parent (line) font size. This
     // only moves the painted glyphs vertically; the horizontal advance (the
     // returned width) is unchanged, so callers position the next run normally.
-    let text_y = text_y
-        + run_vertical_align_shift(run, parent_font_size)
-        + text_emphasis_baseline_shift(run);
+    let text_y = run_paint_baseline(run, text_y, parent_font_size);
 
     // CSS `text-shadow` (css-text-decor-3 §3): paint the glyphs again behind the
     // real text, once per shadow (back-to-front: the last listed shadow is
@@ -156,51 +249,20 @@ pub(super) fn render_run_glyphs_in_space(
     // halo. When `blur == 0` (or rasterization is unavailable), paint a sharp
     // offset vector copy. Decorations and nested shadows are cleared on the
     // shadow run to avoid double-painting.
-    if !run.text_shadow.is_empty() {
-        for shadow in run.text_shadow.iter().rev() {
-            let (sr, sg, sb, alpha) = shadow.color.to_f32_rgba();
-            if alpha <= 0.0 {
-                continue;
-            }
-            // Try the glyph-alpha raster path first when the shadow has blur and
-            // the run is a shapeable custom font (outlines available).
-            if shadow.blur > 0.0 {
-                if render_text_shadow_blur(
-                    content,
-                    run,
-                    x + shadow.offset_x,
-                    text_y - shadow.offset_y,
-                    shadow.blur,
-                    (sr, sg, sb, alpha),
-                    custom_fonts,
-                    pdf_writer,
-                    page_images,
-                ) {
-                    continue;
-                }
-            }
-            let mut shadow_run = run.clone();
-            shadow_run.color = shadow.color;
-            shadow_run.text_shadow = Vec::new();
-            shadow_run.decoration_color = None;
-            shadow_run.background_color = None;
-            shadow_run.link_url = None;
-            // `text_y` already includes the vertical-align shift; neutralise it
-            // on the recursive call so the shift is not applied twice.
-            shadow_run.vertical_align = VerticalAlign::Baseline;
-            render_run_glyphs(
-                content,
-                &shadow_run,
-                x + shadow.offset_x,
-                text_y - shadow.offset_y,
-                parent_font_size,
-                custom_fonts,
-                prepared_custom_fonts,
-                word_spacing,
-                pdf_writer,
-                page_images,
-            );
-        }
+    if shadow_paint == TextShadowPaint::Include {
+        paint_run_text_shadows_at_baseline(
+            content,
+            run,
+            x,
+            text_y,
+            parent_font_size,
+            custom_fonts,
+            prepared_custom_fonts,
+            word_spacing,
+            pdf_writer,
+            page_images,
+            text_space,
+        );
     }
 
     // For runs with mixed scripts (e.g. "Chinese: 你好世界"), split into
@@ -217,6 +279,7 @@ pub(super) fn render_run_glyphs_in_space(
             // `text_y` already carries this run's vertical-align shift; clear it on
             // the per-segment recursion so the shift is not applied a second time.
             sub_run.vertical_align = VerticalAlign::Baseline;
+            sub_run.metadata.emphasis = Default::default();
             if *use_fallback {
                 if let Some((fallback_shaped, fallback_key, fallback_font)) =
                     crate::text::shape_with_unicode_fallback(&sub_run, custom_fonts)
@@ -256,7 +319,7 @@ pub(super) fn render_run_glyphs_in_space(
                     total_width += w;
                 }
             } else {
-                let w = render_run_glyphs_in_space(
+                let w = render_run_glyph_layers_in_space(
                     content,
                     &sub_run,
                     cur_x,
@@ -268,6 +331,7 @@ pub(super) fn render_run_glyphs_in_space(
                     pdf_writer,
                     page_images,
                     text_space,
+                    TextShadowPaint::Skip,
                 );
                 cur_x += w;
                 total_width += w;
@@ -385,6 +449,75 @@ pub(super) fn render_run_glyphs_in_space(
         content.push_str(end);
     }
     run_width
+}
+
+fn run_paint_baseline(run: &TextRun, text_y: f32, parent_font_size: f32) -> f32 {
+    text_y + run_vertical_align_shift(run, parent_font_size) + text_emphasis_baseline_shift(run)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_run_text_shadows_at_baseline(
+    content: &mut String,
+    run: &TextRun,
+    x: f32,
+    text_y: f32,
+    parent_font_size: f32,
+    custom_fonts: &HashMap<String, TtfFont>,
+    prepared_custom_fonts: &PreparedCustomFonts,
+    word_spacing: f32,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+    text_space: PdfTextSpace,
+) {
+    if !run.text_shadow.is_empty() {
+        for shadow in run.text_shadow.iter().rev() {
+            let (sr, sg, sb, alpha) = shadow.color.to_f32_rgba();
+            if alpha <= 0.0 {
+                continue;
+            }
+            // Try the glyph-alpha raster path first when the shadow has blur and
+            // the run is a shapeable custom font (outlines available).
+            if shadow.blur > 0.0 {
+                if render_text_shadow_blur(
+                    content,
+                    run,
+                    x + shadow.offset_x,
+                    text_y - shadow.offset_y,
+                    shadow.blur,
+                    (sr, sg, sb, alpha),
+                    custom_fonts,
+                    pdf_writer,
+                    page_images,
+                ) {
+                    continue;
+                }
+            }
+            let mut shadow_run = run.clone();
+            shadow_run.color = shadow.color;
+            shadow_run.text_shadow = Vec::new();
+            shadow_run.decorations.clear();
+            shadow_run.background_color = None;
+            shadow_run.link_url = None;
+            // `text_y` already includes the vertical-align shift; neutralise it
+            // on the recursive call so the shift is not applied twice.
+            shadow_run.vertical_align = VerticalAlign::Baseline;
+            shadow_run.metadata.emphasis = Default::default();
+            render_run_glyph_layers_in_space(
+                content,
+                &shadow_run,
+                x + shadow.offset_x,
+                text_y - shadow.offset_y,
+                parent_font_size,
+                custom_fonts,
+                prepared_custom_fonts,
+                word_spacing,
+                pdf_writer,
+                page_images,
+                text_space,
+                TextShadowPaint::Skip,
+            );
+        }
+    }
 }
 
 /// Physical horizontal advance of an already-identified

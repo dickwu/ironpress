@@ -278,10 +278,7 @@ fn styled_text_run(
         font_size: font_size * style.font_variant_position.glyph_scale(),
         bold: style_run_bold(style, fonts),
         font_style: style_run_font_style(style, fonts),
-        underline: style.text_decoration_underline,
-        line_through: style.text_decoration_line_through,
-        overline: style.text_decoration_overline,
-        decoration_color: style.text_decoration_color,
+        decorations: style.text_decorations.active(style.color),
         color: style.color,
         link_url: link_url.map(String::from),
         font_family: resolve_style_font_family(style, fonts),
@@ -326,9 +323,6 @@ pub(crate) fn push_styled_text_run(
 
 pub(crate) fn text_run_metadata(style: &ComputedStyle) -> crate::layout::engine::TextRunMetadata {
     crate::layout::engine::TextRunMetadata {
-        decoration_style: style.text_decoration_style,
-        decoration_thickness: style.text_decoration_thickness,
-        underline_offset: style.text_underline_offset,
         emphasis: crate::layout::text_emphasis::TextEmphasis {
             mark: style.text_emphasis_mark,
             color: style.text_emphasis_color,
@@ -2489,10 +2483,7 @@ pub(crate) fn wrap_text_runs(
                 let prev_run = current_runs.last().unwrap_or(&template);
                 current_runs.push(TextRun {
                     text: " ".to_string(),
-                    underline: false,
-                    line_through: false,
-                    overline: false,
-                    decoration_color: None,
+                    decorations: Vec::new(),
                     link_url: None,
                     background_color: None,
                     padding: EdgeSizes::ZERO,
@@ -3837,9 +3828,9 @@ mod indent_tests {
         style.font_stack = crate::style::computed::FontStack::from_family(family);
         style.font_size = 12.0;
         style.line_height = 1.5;
-        style.text_decoration_style = crate::style::computed::TextDecorationStyle::Wavy;
-        style.text_decoration_thickness = Some(1.25);
-        style.text_underline_offset = Some(2.5);
+        style.text_decorations.current.style = crate::style::computed::TextDecorationStyle::Wavy;
+        style.text_decorations.current.thickness = Some(1.25);
+        style.text_decorations.current.underline_offset = Some(2.5);
         style.text_emphasis_mark = true;
         style.text_emphasis_color = crate::types::Color::rgb(21, 101, 192);
 
@@ -3853,11 +3844,11 @@ mod indent_tests {
         assert!((strut.above - expected.above).abs() < f32::EPSILON);
         assert!((strut.below - expected.below).abs() < f32::EPSILON);
         assert_eq!(
-            metadata.decoration_style,
+            style.text_decorations.current.style,
             crate::style::computed::TextDecorationStyle::Wavy
         );
-        assert_eq!(metadata.decoration_thickness, Some(1.25));
-        assert_eq!(metadata.underline_offset, Some(2.5));
+        assert_eq!(style.text_decorations.current.thickness, Some(1.25));
+        assert_eq!(style.text_decorations.current.underline_offset, Some(2.5));
         assert!(metadata.emphasis.mark);
         assert_eq!(
             metadata.emphasis.color,

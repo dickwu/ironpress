@@ -351,14 +351,14 @@ pub(super) fn render_flex_child(
                     let previous = merged[..run_index].iter().rev().find(|previous| {
                         previous.inline_box.is_none() && !previous.text.is_empty()
                     });
-                    let decoration = HorizontalRunDecoration::new(
+                    let decoration = HorizontalRunDecorations::new(
                         run,
                         lx,
                         run_width,
                         text_y,
                         ctx.text.custom_fonts,
                     )
-                    .continuing_after(previous, lx);
+                    .continuing_after(previous);
                     let rw = decoration.paint_text(
                         content,
                         crate::layout::text::line_primary_font_size(&merged),

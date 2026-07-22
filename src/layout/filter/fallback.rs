@@ -469,8 +469,10 @@ fn apply_color_to_flex_cell(cell: &mut FlexCell, operation: &FilterOperation, li
 
 fn apply_color_to_run(run: &mut TextRun, operation: &FilterOperation, linear_rgb: bool) {
     run.color = filtered_color(run.color, operation, linear_rgb);
-    if let Some(color) = run.decoration_color {
-        run.decoration_color = Some(filtered_color(color, operation, linear_rgb));
+    for decoration in &mut run.decorations {
+        if let Some(color) = decoration.color {
+            decoration.color = Some(filtered_color(color, operation, linear_rgb));
+        }
     }
     if run.metadata.emphasis.mark {
         run.metadata.emphasis.color =

@@ -20,8 +20,13 @@ use crate::util::{AxisRepeatMode, AxisRepeatPattern};
 
 mod borders;
 mod gradient_geometry;
+mod text_decoration;
 pub use gradient_geometry::{
     ConicGradient, RadialExtent, RadialGradient, RadialPoint, RadialPos, RadialShape, RadialVector,
+};
+pub use text_decoration::{
+    TextDecoration, TextDecorationLines, TextDecorationSkipInk, TextDecorationStyle,
+    TextDecorations,
 };
 
 /// CSS display property.
@@ -60,6 +65,16 @@ impl Display {
             Self::InlineTable => Self::Table,
             other => other,
         }
+    }
+
+    /// Atomic inline boxes stop decorations imposed by their ancestors from
+    /// entering their contents. A decoration originated on the atomic box
+    /// itself can still propagate to its own in-flow children.
+    const fn is_atomic_inline(self) -> bool {
+        matches!(
+            self,
+            Self::InlineBlock | Self::InlineFlex | Self::InlineGrid | Self::InlineTable
+        )
     }
 }
 
@@ -1769,13 +1784,6 @@ impl TextEmphasisPosition {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDecorationStyle {
-    #[default]
-    Solid,
-    Wavy,
-}
-
 /// CSS white-space property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum WhiteSpace {
@@ -3325,16 +3333,7 @@ pub struct ComputedStyle {
     /// CSS `unicode-bidi: plaintext`: each forced line break resolves its own
     /// paragraph base direction from its first strong character.
     pub bidi_plaintext: bool,
-    pub text_decoration_underline: bool,
-    pub text_decoration_line_through: bool,
-    pub text_decoration_overline: bool,
-    pub text_decoration_style: TextDecorationStyle,
-    pub text_decoration_thickness: Option<f32>,
-    pub text_underline_offset: Option<f32>,
-    /// CSS `text-decoration-color` (css-text-decor-3 §2.2): the colour of the
-    /// underline/line-through/overline, independent of the text `color`. `None`
-    /// means `currentColor` (fall back to the run's text colour). Not inherited.
-    pub text_decoration_color: Option<Color>,
+    pub text_decorations: TextDecorations,
     pub line_height: f32,
     pub line_height_absolute: Option<f32>,
     pub page_break_before: bool,
@@ -3853,13 +3852,7 @@ impl Default for ComputedStyle {
             text_combine_upright: TextCombineUpright::None,
             bidi_override: false,
             bidi_plaintext: false,
-            text_decoration_underline: false,
-            text_decoration_line_through: false,
-            text_decoration_overline: false,
-            text_decoration_style: TextDecorationStyle::Solid,
-            text_decoration_thickness: None,
-            text_underline_offset: None,
-            text_decoration_color: None,
+            text_decorations: TextDecorations::default(),
             line_height: f32::NAN,
             line_height_absolute: None,
             page_break_before: false,
@@ -4273,6 +4266,11 @@ fn compute_style_with_context_and_percentage_basis_impl(
     font_metrics: FontMetrics<'_>,
 ) -> ComputedStyle {
     let mut style = parent.clone();
+    style.text_decorations = TextDecorations::for_descendant(
+        &parent.text_decorations,
+        parent.color,
+        !parent.display.is_atomic_inline(),
+    );
     let html_layers = html_cascade_layers(tag, attributes, selector_ctx);
 
     // Set default display based on tag
@@ -4534,6 +4532,9 @@ fn compute_style_with_context_and_percentage_basis_impl(
     sync_line_height_from_absolute(&mut style);
 
     if style.position.is_absolute() || matches!(style.float, Float::Left | Float::Right) {
+        // Text decorations do not propagate into out-of-flow descendants.
+        // Decorations originated by this element remain active.
+        style.text_decorations.clear_propagated();
         style.display = style.display.blockified();
     }
 
@@ -4646,28 +4647,13 @@ pub(crate) fn compute_pseudo_element_style_with_font_metrics(
         cascade_style_map_filtered(&mut cascaded, &rule.declarations, Importance::Important);
     }
 
-    // Decorations propagate through inline descendants rather than inheriting.
-    // Keep the originating element's resolved decoration values together so a
-    // pseudo-element changing its text `color` cannot repaint that ancestor's
-    // underline. CSS Text Decoration 3 §2.3 requires the origin's decoration
-    // color to remain unchanged across differently colored descendants.
-    let propagated_decoration = (parent_style.text_decoration_underline
-        || parent_style.text_decoration_line_through
-        || parent_style.text_decoration_overline)
-        .then_some((
-            parent_style.text_decoration_underline,
-            parent_style.text_decoration_line_through,
-            parent_style.text_decoration_overline,
-            parent_style
-                .text_decoration_color
-                .unwrap_or(parent_style.color),
-            parent_style.text_decoration_style,
-            parent_style.text_decoration_thickness,
-            parent_style.text_underline_offset,
-        ));
-
     // Start from parent style (inherits inherited properties)
     let mut style = parent_style.clone();
+    style.text_decorations = TextDecorations::for_descendant(
+        &parent_style.text_decorations,
+        parent_style.color,
+        !parent_style.display.is_atomic_inline(),
+    );
 
     // Reset non-inherited properties (pseudo-elements are generated boxes)
     style.margin = EdgeSizes::default();
@@ -4790,25 +4776,8 @@ pub(crate) fn compute_pseudo_element_style_with_font_metrics(
     // or rule order. `parent_style` remains the inheritance source.
     apply_style_map_with_font_metrics(&mut style, &cascaded, parent_style, font_metrics);
 
-    if let Some((
-        underline,
-        line_through,
-        overline,
-        color,
-        decoration_style,
-        decoration_thickness,
-        underline_offset,
-    )) = propagated_decoration
-    {
-        // A descendant cannot remove or restyle a line which originated on its
-        // ancestor. Preserve the origin after the pseudo-element cascade.
-        style.text_decoration_underline |= underline;
-        style.text_decoration_line_through |= line_through;
-        style.text_decoration_overline |= overline;
-        style.text_decoration_color = Some(color);
-        style.text_decoration_style = decoration_style;
-        style.text_decoration_thickness = decoration_thickness;
-        style.text_underline_offset = underline_offset;
+    if style.position.is_absolute() || matches!(style.float, Float::Left | Float::Right) {
+        style.text_decorations.clear_propagated();
     }
 
     // `content: none`/`normal` suppress `::before`/`::after` generation (no box
@@ -4867,10 +4836,7 @@ fn is_inherited_property(property: &str) -> bool {
             | "line-height"
             | "text-align"
             | "text-align-last"
-            | "text-decoration"
-            | "text-decoration-line"
-            | "text-decoration-style"
-            | "text-decoration-thickness"
+            | "text-decoration-skip-ink"
             | "text-shadow"
             | "text-emphasis-color"
             | "-webkit-text-emphasis-color"
@@ -4941,16 +4907,30 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         }
         "text-align" => style.text_align = default.text_align,
         "text-align-last" => style.text_align_last = default.text_align_last,
-        "text-decoration" | "text-decoration-line" => {
-            style.text_decoration_underline = default.text_decoration_underline;
-            style.text_decoration_line_through = default.text_decoration_line_through;
-            style.text_decoration_overline = default.text_decoration_overline;
+        "text-decoration" => {
+            let controls = (
+                style.text_decorations.current.skip_ink,
+                style.text_decorations.current.underline_offset,
+            );
+            style.text_decorations.current = TextDecoration {
+                skip_ink: controls.0,
+                underline_offset: controls.1,
+                ..Default::default()
+            };
         }
-        "text-decoration-style" => style.text_decoration_style = default.text_decoration_style,
+        "text-decoration-line" => {
+            style.text_decorations.current.lines = default.text_decorations.current.lines;
+        }
+        "text-decoration-style" => {
+            style.text_decorations.current.style = default.text_decorations.current.style
+        }
         "text-decoration-thickness" => {
-            style.text_decoration_thickness = default.text_decoration_thickness
+            style.text_decorations.current.thickness = default.text_decorations.current.thickness
         }
-        "text-decoration-color" => style.text_decoration_color = None,
+        "text-decoration-color" => style.text_decorations.current.color = None,
+        "text-decoration-skip-ink" => {
+            style.text_decorations.current.skip_ink = default.text_decorations.current.skip_ink
+        }
         "text-shadow" => style.text_shadow.clear(),
         "text-emphasis-color" | "-webkit-text-emphasis-color" => {
             style.text_emphasis_color = style.color;
@@ -4959,7 +4939,10 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "text-emphasis-position" | "-webkit-text-emphasis-position" => {
             style.text_emphasis_position = default.text_emphasis_position;
         }
-        "text-underline-offset" => style.text_underline_offset = default.text_underline_offset,
+        "text-underline-offset" => {
+            style.text_decorations.current.underline_offset =
+                default.text_decorations.current.underline_offset
+        }
         "visibility" => style.visibility = default.visibility,
         "initial-letter" => style.initial_letter = default.initial_letter,
         "text-indent" => style.text_indent = default.text_indent,
@@ -5163,6 +5146,10 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
 }
 
 fn reset_all_to_initial(style: &mut ComputedStyle) {
+    // `all` resets computed longhands on this element; it cannot erase line
+    // decorations propagated from an ancestor decorating box.
+    let mut text_decorations = std::mem::take(&mut style.text_decorations);
+    text_decorations.current = TextDecoration::default();
     let raster_quality = style.raster_quality;
     let root_font_size = style.root_font_size;
     let viewport_width = style.viewport_width;
@@ -5182,6 +5169,7 @@ fn reset_all_to_initial(style: &mut ComputedStyle) {
     style.bidi_override = bidi_override;
     style.bidi_plaintext = bidi_plaintext;
     style.custom_properties = custom_properties;
+    style.text_decorations = text_decorations;
 }
 
 /// Restore a property to the parent's value (inherit behavior).
@@ -5214,16 +5202,33 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         }
         "text-align" => style.text_align = parent.text_align,
         "text-align-last" => style.text_align_last = parent.text_align_last,
-        "text-decoration" | "text-decoration-line" => {
-            style.text_decoration_underline = parent.text_decoration_underline;
-            style.text_decoration_line_through = parent.text_decoration_line_through;
-            style.text_decoration_overline = parent.text_decoration_overline;
+        "text-decoration" => {
+            let controls = (
+                style.text_decorations.current.skip_ink,
+                style.text_decorations.current.underline_offset,
+            );
+            style.text_decorations.current = parent.text_decorations.current;
+            style.text_decorations.current.skip_ink = controls.0;
+            style.text_decorations.current.underline_offset = controls.1;
+            style.text_decorations.current.color =
+                Some(parent.text_decorations.current.resolved_color(parent.color));
         }
-        "text-decoration-style" => style.text_decoration_style = parent.text_decoration_style,
+        "text-decoration-line" => {
+            style.text_decorations.current.lines = parent.text_decorations.current.lines;
+        }
+        "text-decoration-style" => {
+            style.text_decorations.current.style = parent.text_decorations.current.style
+        }
         "text-decoration-thickness" => {
-            style.text_decoration_thickness = parent.text_decoration_thickness
+            style.text_decorations.current.thickness = parent.text_decorations.current.thickness
         }
-        "text-decoration-color" => style.text_decoration_color = parent.text_decoration_color,
+        "text-decoration-color" => {
+            style.text_decorations.current.color =
+                Some(parent.text_decorations.current.resolved_color(parent.color))
+        }
+        "text-decoration-skip-ink" => {
+            style.text_decorations.current.skip_ink = parent.text_decorations.current.skip_ink
+        }
         "text-shadow" => style.text_shadow = parent.text_shadow.clone(),
         "text-emphasis-color" | "-webkit-text-emphasis-color" => {
             style.text_emphasis_color = parent.text_emphasis_color;
@@ -5232,7 +5237,10 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "text-emphasis-position" | "-webkit-text-emphasis-position" => {
             style.text_emphasis_position = parent.text_emphasis_position;
         }
-        "text-underline-offset" => style.text_underline_offset = parent.text_underline_offset,
+        "text-underline-offset" => {
+            style.text_decorations.current.underline_offset =
+                parent.text_decorations.current.underline_offset
+        }
         "visibility" => style.visibility = parent.visibility,
         "initial-letter" => style.initial_letter = parent.initial_letter,
         "text-indent" => style.text_indent = parent.text_indent.clone(),
@@ -5518,25 +5526,17 @@ fn ligatures_disabled_by_feature_settings(value: &str) -> bool {
 }
 
 fn apply_text_decoration_line(style: &mut ComputedStyle, value: &str) {
-    let mut underline = false;
-    let mut overline = false;
-    let mut line_through = false;
+    let mut lines = TextDecorationLines::default();
     for token in value.split_whitespace() {
         match token {
-            "underline" => underline = true,
-            "overline" => overline = true,
-            "line-through" => line_through = true,
-            "none" => {
-                underline = false;
-                overline = false;
-                line_through = false;
-            }
+            "underline" => lines.underline = true,
+            "overline" => lines.overline = true,
+            "line-through" => lines.line_through = true,
+            "none" => lines = TextDecorationLines::default(),
             _ => {}
         }
     }
-    style.text_decoration_underline = underline;
-    style.text_decoration_overline = overline;
-    style.text_decoration_line_through = line_through;
+    style.text_decorations.current.lines = lines;
 }
 
 fn color_in_text_emphasis_shorthand(value: &str) -> Option<SpecifiedColor> {
@@ -5759,11 +5759,17 @@ fn apply_all_keyword(style: &mut ComputedStyle, keyword: &str, parent: &Computed
             let bidi_override = style.bidi_override;
             let bidi_plaintext = style.bidi_plaintext;
             let custom_properties = std::mem::take(&mut style.custom_properties);
+            let mut text_decorations = std::mem::take(&mut style.text_decorations);
             *style = parent.clone();
+            text_decorations.current = parent
+                .text_decorations
+                .current
+                .with_resolved_color(parent.color);
             style.direction_rtl = direction_rtl;
             style.bidi_override = bidi_override;
             style.bidi_plaintext = bidi_plaintext;
             style.custom_properties = custom_properties;
+            style.text_decorations = text_decorations;
         }
         "initial" | "unset" => reset_all_to_initial(style),
         _ => {}
@@ -6165,34 +6171,44 @@ fn apply_style_map_with_percentage_basis(
     if let Some(value) = get_non_special(map, "text-decoration")
         && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
     {
+        let inherited_controls = (
+            style.text_decorations.current.skip_ink,
+            style.text_decorations.current.underline_offset,
+        );
+        style.text_decorations.current = TextDecoration {
+            skip_ink: inherited_controls.0,
+            underline_offset: inherited_controls.1,
+            ..Default::default()
+        };
         apply_text_decoration_line(style, &k);
         if k.split_whitespace().any(|t| t == "wavy") {
-            style.text_decoration_style = TextDecorationStyle::Wavy;
+            style.text_decorations.current.style = TextDecorationStyle::Wavy;
         }
         for token in k.split_whitespace() {
             if let Some(CssValue::Length(v)) = parse_length(token) {
-                style.text_decoration_thickness = Some(v);
+                style.text_decorations.current.thickness = Some(v);
             }
         }
         if let Some(color) = color_in_text_emphasis_shorthand(&k) {
-            style.text_decoration_color = Some(color.resolve(style.color));
+            style.text_decorations.current.color = Some(color.resolve(style.color));
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration-line") {
         apply_text_decoration_line(style, k);
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration-style") {
-        style.text_decoration_style = if k.split_whitespace().any(|token| token == "wavy") {
+        style.text_decorations.current.style = if k.split_whitespace().any(|token| token == "wavy")
+        {
             TextDecorationStyle::Wavy
         } else {
             TextDecorationStyle::Solid
         };
     }
     if let Some(CssValue::Length(v)) = get_non_special(map, "text-decoration-thickness") {
-        style.text_decoration_thickness = Some(*v);
+        style.text_decorations.current.thickness = Some(*v);
     }
     if let Some(CssValue::Length(v)) = get_non_special(map, "text-underline-offset") {
-        style.text_underline_offset = Some(*v);
+        style.text_decorations.current.underline_offset = Some(*v);
     }
 
     // `text-decoration-color` longhand (css-text-decor-3 §2.2): an explicit line
@@ -6200,7 +6216,13 @@ fn apply_style_map_with_percentage_basis(
     if let Some(value) = get_non_special(map, "text-decoration-color")
         && let Some(color) = specified_color_from_value(value, &style.custom_properties)
     {
-        style.text_decoration_color = Some(color.resolve(style.color));
+        style.text_decorations.current.color = Some(color.resolve(style.color));
+    }
+    if let Some(value) = get_non_special(map, "text-decoration-skip-ink")
+        && let Some(keyword) = resolved_raw_css_value(value, &style.custom_properties)
+        && let Some(skip_ink) = TextDecorationSkipInk::parse(&keyword)
+    {
+        style.text_decorations.current.skip_ink = skip_ink;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "line-height") {
@@ -15586,7 +15608,102 @@ mod tests {
     fn text_decoration_underline() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Span, Some("text-decoration: underline"), &parent);
-        assert!(style.text_decoration_underline);
+        assert!(style.text_decorations.current.lines.underline);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_is_inherited_and_independently_cascaded() {
+        let parent = compute_style(
+            HtmlTag::Span,
+            Some("text-decoration-skip-ink: all"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            parent.text_decorations.current.skip_ink,
+            TextDecorationSkipInk::All
+        );
+
+        let inherited = compute_style(HtmlTag::Span, None, &parent);
+        assert_eq!(
+            inherited.text_decorations.current.skip_ink,
+            TextDecorationSkipInk::All
+        );
+
+        let overridden = compute_style(
+            HtmlTag::Span,
+            Some("text-decoration: underline; text-decoration-skip-ink: none"),
+            &parent,
+        );
+        assert!(overridden.text_decorations.current.lines.underline);
+        assert_eq!(
+            overridden.text_decorations.current.skip_ink,
+            TextDecorationSkipInk::None
+        );
+    }
+
+    #[test]
+    fn descendant_decoration_keeps_ancestor_origin_independent() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some(
+                "color: #0055aa; text-decoration-line: underline; \
+                 text-decoration-style: wavy; text-decoration-thickness: 2px",
+            ),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(
+            HtmlTag::Span,
+            Some(
+                "color: #aa2200; text-decoration-line: line-through; \
+                 text-decoration-color: #008844",
+            ),
+            &parent,
+        );
+
+        let active = child.text_decorations.active(child.color);
+        assert_eq!(active.len(), 2);
+        assert!(active[0].lines.underline);
+        assert_eq!(active[0].style, TextDecorationStyle::Wavy);
+        assert_eq!(active[0].thickness, Some(1.5));
+        assert_eq!(active[0].color, Some(Color::rgb(0x00, 0x55, 0xaa)));
+        assert!(active[1].lines.line_through);
+        assert_eq!(active[1].style, TextDecorationStyle::Solid);
+        assert_eq!(active[1].color, Some(Color::rgb(0x00, 0x88, 0x44)));
+    }
+
+    #[test]
+    fn descendant_none_does_not_cancel_an_ancestor_decoration() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("text-decoration: underline"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(HtmlTag::Span, Some("text-decoration: none"), &parent);
+
+        assert!(child.text_decorations.current.is_empty());
+        let active = child.text_decorations.active(child.color);
+        assert_eq!(active.len(), 1);
+        assert!(active[0].lines.underline);
+    }
+
+    #[test]
+    fn atomic_inline_contents_exclude_outer_decoration_origins() {
+        let ancestor = compute_style(
+            HtmlTag::Div,
+            Some("text-decoration: underline"),
+            &ComputedStyle::default(),
+        );
+        let atomic = compute_style(
+            HtmlTag::Span,
+            Some("display: inline-block; text-decoration: line-through"),
+            &ancestor,
+        );
+        let content = compute_style(HtmlTag::Span, None, &atomic);
+
+        let active = content.text_decorations.active(content.color);
+        assert_eq!(active.len(), 1);
+        assert!(active[0].lines.line_through);
+        assert!(!active[0].lines.underline);
     }
 
     #[test]
@@ -15677,22 +15794,22 @@ mod tests {
             Some("text-decoration: line-through"),
             &parent,
         );
-        assert!(style.text_decoration_line_through);
-        assert!(!style.text_decoration_underline);
+        assert!(style.text_decorations.current.lines.line_through);
+        assert!(!style.text_decorations.current.lines.underline);
     }
 
     #[test]
     fn del_tag_has_line_through() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Del, None, &parent);
-        assert!(style.text_decoration_line_through);
+        assert!(style.text_decorations.current.lines.line_through);
     }
 
     #[test]
     fn s_tag_has_line_through() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::S, None, &parent);
-        assert!(style.text_decoration_line_through);
+        assert!(style.text_decorations.current.lines.line_through);
     }
 
     #[test]
@@ -18177,11 +18294,11 @@ mod tests {
         let parent = ComputedStyle::default();
         // First set text-decoration underline, then reset with initial
         let style = compute_style(HtmlTag::Span, Some("text-decoration: underline"), &parent);
-        assert!(style.text_decoration_underline);
+        assert!(style.text_decorations.current.lines.underline);
         // Now use initial to reset
         let style2 = compute_style(HtmlTag::Span, Some("text-decoration: initial"), &parent);
-        assert!(!style2.text_decoration_underline);
-        assert!(!style2.text_decoration_line_through);
+        assert!(!style2.text_decorations.current.lines.underline);
+        assert!(!style2.text_decorations.current.lines.line_through);
     }
 
     #[test]
@@ -18492,11 +18609,11 @@ mod tests {
     #[test]
     fn text_decoration_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.text_decoration_underline = true;
-        parent.text_decoration_line_through = true;
+        parent.text_decorations.current.lines.underline = true;
+        parent.text_decorations.current.lines.line_through = true;
         let style = compute_style(HtmlTag::Span, Some("text-decoration: inherit"), &parent);
-        assert!(style.text_decoration_underline);
-        assert!(style.text_decoration_line_through);
+        assert!(style.text_decorations.current.lines.underline);
+        assert!(style.text_decorations.current.lines.line_through);
     }
 
     #[test]
@@ -22854,7 +22971,10 @@ mod tests {
         assert_eq!(style.box_shadow[0].color_source, ColorSource::Absolute);
         assert_eq!(rgba_tuple(style.text_shadow[0].color), expected);
         assert_eq!(style.text_shadow[0].color_source, ColorSource::Absolute);
-        assert_eq!(rgba_tuple(style.text_decoration_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.text_decorations.current.color.unwrap()),
+            expected
+        );
     }
 
     #[test]
@@ -22890,7 +23010,10 @@ mod tests {
         assert_eq!(style.box_shadow[0].color_source, ColorSource::CurrentColor);
         assert_eq!(rgba_tuple(style.text_shadow[0].color), expected);
         assert_eq!(style.text_shadow[0].color_source, ColorSource::CurrentColor);
-        assert_eq!(rgba_tuple(style.text_decoration_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.text_decorations.current.color.unwrap()),
+            expected
+        );
     }
 
     #[test]
@@ -22959,10 +23082,10 @@ mod tests {
             &ComputedStyle::default(),
         );
 
-        assert!(style.text_decoration_overline);
+        assert!(style.text_decorations.current.lines.overline);
         assert!(style.text_emphasis_mark);
         assert_eq!(
-            rgba_tuple(style.text_decoration_color.unwrap()),
+            rgba_tuple(style.text_decorations.current.color.unwrap()),
             (0xd7, 0x26, 0x3d, 0xff)
         );
         assert_eq!(
@@ -23085,7 +23208,7 @@ mod tests {
 
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(0, 0, 238);
-        parent.text_decoration_underline = true;
+        parent.text_decorations.current.lines.underline = true;
         let rules = parse_stylesheet(
             ".link::after { content: ' target'; color: #d7263d; text-decoration: none; }",
         );
@@ -23101,10 +23224,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(pseudo.text_decoration_underline);
+        assert!(!pseudo.text_decorations.active(pseudo.color).is_empty());
         assert_eq!(rgba_tuple(pseudo.color), (0xd7, 0x26, 0x3d, 0xff));
         assert_eq!(
-            rgba_tuple(pseudo.text_decoration_color.unwrap()),
+            rgba_tuple(
+                pseudo.text_decorations.active(pseudo.color)[0]
+                    .color
+                    .unwrap()
+            ),
             (0x00, 0x00, 0xee, 0xff)
         );
     }

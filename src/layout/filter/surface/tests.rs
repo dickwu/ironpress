@@ -4,7 +4,8 @@ use crate::layout::elements::{IntoLayoutNode, LayoutSize};
 use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight};
 use crate::style::computed::{
     BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition, GradientRamp,
-    GradientStop, LinearGradient, Overflow, Position, TextDecorationStyle,
+    GradientStop, LinearGradient, Overflow, Position, TextDecoration, TextDecorationLines,
+    TextDecorationStyle,
 };
 
 fn test_fonts() -> HashMap<String, TtfFont> {
@@ -379,8 +380,17 @@ fn filtered_text_source_paints_shared_decoration_and_shadow_geometry() {
                 text: "Decorated".to_string(),
                 font_size: 18.0,
                 font_family: FontFamily::Custom("ParitySans".to_string()),
-                underline: true,
-                decoration_color: Some(Color::from_srgb(1.0, 0.0, 0.0, 1.0)),
+                decorations: vec![TextDecoration {
+                    lines: TextDecorationLines {
+                        underline: true,
+                        ..Default::default()
+                    },
+                    color: Some(Color::from_srgb(1.0, 0.0, 0.0, 1.0)),
+                    style: TextDecorationStyle::Solid,
+                    thickness: Some(1.5),
+                    underline_offset: Some(2.0),
+                    ..Default::default()
+                }],
                 text_shadow: vec![BoxShadow {
                     offset_x: 2.0,
                     offset_y: 1.0,
@@ -390,12 +400,6 @@ fn filtered_text_source_paints_shared_decoration_and_shadow_geometry() {
                     color_source: crate::style::computed::ColorSource::Absolute,
                     inset: false,
                 }],
-                metadata: crate::layout::engine::TextRunMetadata {
-                    decoration_style: TextDecorationStyle::Solid,
-                    decoration_thickness: Some(1.5),
-                    underline_offset: Some(2.0),
-                    ..Default::default()
-                },
                 ..Default::default()
             }],
             height: 24.0,

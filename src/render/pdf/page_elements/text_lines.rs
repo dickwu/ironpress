@@ -433,14 +433,6 @@ pub(super) fn render_text_block_lines(
                 estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
                     + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
             };
-            let previous = merged[..run_idx]
-                .iter()
-                .rev()
-                .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
-            let decoration =
-                HorizontalRunDecoration::new(run, bg_x, run_width, text_y, ctx.text.custom_fonts)
-                    .continuing_after(previous, bg_x);
-
             // Draw background rectangle for inline spans
             if let Some(background) = run.background_color {
                 let (br, bg, bb, ba) = background.to_f32_rgba();
@@ -474,21 +466,35 @@ pub(super) fn render_text_block_lines(
                 }
             }
 
-            decoration.paint_shadows(content);
-            decoration.paint_lines(content);
-
-            if decoration_is_emphasis(run) {
-                render_text_emphasis_marks(
-                    content,
+            if vertical {
+                let previous = merged[..run_idx]
+                    .iter()
+                    .rev()
+                    .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
+                let decoration = HorizontalRunDecorations::new(
                     run,
                     bg_x,
+                    run_width,
                     text_y,
-                    run.metadata.emphasis.color,
                     ctx.text.custom_fonts,
-                    ctx.text.prepared_custom_fonts,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                );
+                )
+                .continuing_after(previous);
+                decoration.paint_shadows(content);
+                decoration.paint_below_text(content);
+                decoration.paint_above_text(content);
+                if decoration_is_emphasis(run) {
+                    render_text_emphasis_marks(
+                        content,
+                        run,
+                        bg_x,
+                        text_y,
+                        run.metadata.emphasis.color,
+                        ctx.text.custom_fonts,
+                        ctx.text.prepared_custom_fonts,
+                        ctx.text.pdf_writer,
+                        ctx.text.page_images,
+                    );
+                }
             }
 
             // Track link annotation
@@ -610,22 +616,19 @@ pub(super) fn render_text_block_lines(
                     ctx.text.page_images,
                 );
             } else {
-                render_line_glyphs_in_space(
+                paint_horizontal_line_text(
                     content,
                     &merged,
-                    text_x,
-                    text_y,
+                    HorizontalLinePaint {
+                        origin: PdfPoint::new(text_x, text_y),
+                        line_ascender: line_text_top(line, ctx.text.custom_fonts),
+                        word_spacing: total_ws,
+                        text_space,
+                    },
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    total_ws,
-                    line_text_top(line, ctx.text.custom_fonts),
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
-                    if vertical {
-                        PdfTextSpace::Points
-                    } else {
-                        text_space
-                    },
                 );
             }
         }

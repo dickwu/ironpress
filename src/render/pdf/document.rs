@@ -692,8 +692,8 @@ fn render_running_text_margin_element(
                 .rev()
                 .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
             let decoration =
-                HorizontalRunDecoration::new(run, cursor_x, run_width, baseline_y, custom_fonts)
-                    .continuing_after(previous, cursor_x);
+                HorizontalRunDecorations::new(run, cursor_x, run_width, baseline_y, custom_fonts)
+                    .continuing_after(previous);
             let rw = decoration.paint_text(
                 content,
                 parent_font_size,
@@ -813,18 +813,19 @@ pub(super) fn render_page_footnotes(
         let metrics = line_box_metrics(line, custom_fonts);
         let baseline_y = baseline_cursor.next_horizontal(metrics);
         let merged = merge_runs(&line.runs);
-        render_line_glyphs_in_space(
+        paint_horizontal_line_text(
             content,
             &merged,
-            margin.left + area.padding.left,
-            baseline_y,
+            HorizontalLinePaint {
+                origin: PdfPoint::new(margin.left + area.padding.left, baseline_y),
+                line_ascender: metrics.ascender,
+                word_spacing: 0.0,
+                text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
+            },
             custom_fonts,
             prepared_custom_fonts,
-            0.0,
-            metrics.ascender,
             pdf_writer,
             page_images,
-            PdfTextSpace::page_css(pdf_writer.page_content_transform),
         );
     }
 }

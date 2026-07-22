@@ -305,7 +305,8 @@ impl SourcePainter<'_> {
                         run_advance,
                         run_baseline,
                         shadow_offset,
-                        shadow.color,
+                        Some(shadow.color),
+                        SurfaceDecorationPhase::All,
                     )?;
                     self.canvas.composite_mask(
                         &raster.mask,
@@ -320,6 +321,15 @@ impl SourcePainter<'_> {
                         shadow.color,
                     );
                 }
+                self.paint_run_decorations(
+                    run,
+                    run_x,
+                    run_advance,
+                    run_baseline,
+                    Point::default(),
+                    None,
+                    SurfaceDecorationPhase::BelowText,
+                )?;
                 self.canvas.composite_mask(
                     &raster.mask,
                     DevicePoint::new(
@@ -335,7 +345,8 @@ impl SourcePainter<'_> {
                     run_advance,
                     run_baseline,
                     Point::default(),
-                    run.decoration_color.unwrap_or(run.color),
+                    None,
+                    SurfaceDecorationPhase::AboveText,
                 )?;
                 run_x += run_advance;
             }
@@ -351,51 +362,79 @@ impl SourcePainter<'_> {
         run_width: f32,
         baseline: f32,
         offset: Point,
-        color: Color,
+        color_override: Option<Color>,
+        phase: SurfaceDecorationPhase,
     ) -> Option<()> {
-        if !run.underline && !run.line_through && !run.overline {
+        if run.decorations.is_empty() {
             return Some(());
         }
-        if run.metadata.decoration_style != crate::style::computed::TextDecorationStyle::Solid {
+        if run.decorations.iter().any(|decoration| {
+            decoration.style != crate::style::computed::TextDecorationStyle::Solid
+        }) {
             return None;
         }
         let (leading, trailing) =
             crate::render::text_decoration::whitespace_insets(run, self.fonts);
         let start = run_start + leading + offset.x;
         let width = (run_width - leading - trailing).max(0.0);
-        let thickness = crate::render::text_decoration::thickness(run);
-        let mut paint_line = |center_y: f32| {
-            self.canvas.fill(
-                SurfaceRect::new(
-                    Point::new(start, center_y - thickness / 2.0),
-                    Size::new(width, thickness),
-                ),
-                color,
-            );
-        };
-        if run.underline {
-            paint_line(
-                baseline
-                    + crate::render::text_decoration::underline_distance_from_baseline(run)
-                    + offset.y,
-            );
-        }
-        if run.line_through {
-            paint_line(baseline - run.font_size * 0.3 + offset.y);
-        }
-        if run.overline {
-            let (ascender_ratio, _) = crate::fonts::font_metrics_ratios(
-                &run.font_family,
-                run.bold,
-                run.font_style.is_slanted(),
-                self.fonts,
-            );
-            paint_line(
-                baseline
-                    - ascender_ratio * run.font_size
-                    - crate::render::text_decoration::overline_lift(run)
-                    + offset.y,
-            );
+        for decoration in &run.decorations {
+            let color = color_override.unwrap_or_else(|| decoration.resolved_color(run.color));
+            let thickness = crate::render::text_decoration::thickness(run, decoration);
+            let mut paint_line = |line, center_y: f32| {
+                let axis_from_baseline = baseline + offset.y - center_y;
+                let exclusions = crate::render::text_decoration::ink_skip_intervals(
+                    run,
+                    decoration,
+                    line,
+                    axis_from_baseline,
+                    self.fonts,
+                )
+                .into_iter()
+                .map(|interval| interval.translated(run_start + offset.x));
+                for segment in crate::render::text_decoration::visible_segments(
+                    crate::render::text_decoration::InlineInterval::new(start, start + width),
+                    exclusions,
+                ) {
+                    self.canvas.fill(
+                        SurfaceRect::new(
+                            Point::new(segment.start, center_y - thickness / 2.0),
+                            Size::new(segment.end - segment.start, thickness),
+                        ),
+                        color,
+                    );
+                }
+            };
+            if decoration.lines.underline && phase.paints_below_text() {
+                paint_line(
+                    crate::render::text_decoration::DecorationLine::Underline,
+                    baseline
+                        + crate::render::text_decoration::underline_distance_from_baseline(
+                            run, decoration,
+                        )
+                        + offset.y,
+                );
+            }
+            if decoration.lines.line_through && phase.paints_above_text() {
+                paint_line(
+                    crate::render::text_decoration::DecorationLine::LineThrough,
+                    baseline - run.font_size * 0.3 + offset.y,
+                );
+            }
+            if decoration.lines.overline && phase.paints_below_text() {
+                let (ascender_ratio, _) = crate::fonts::font_metrics_ratios(
+                    &run.font_family,
+                    run.bold,
+                    run.font_style.is_slanted(),
+                    self.fonts,
+                );
+                paint_line(
+                    crate::render::text_decoration::DecorationLine::Overline,
+                    baseline
+                        - ascender_ratio * run.font_size
+                        - crate::render::text_decoration::overline_lift(run)
+                        + offset.y,
+                );
+            }
         }
         Some(())
     }
@@ -601,6 +640,23 @@ impl SourcePainter<'_> {
             &cell.layout.content.children,
             area.after_normal_flow(text_height),
         )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SurfaceDecorationPhase {
+    All,
+    BelowText,
+    AboveText,
+}
+
+impl SurfaceDecorationPhase {
+    const fn paints_below_text(self) -> bool {
+        matches!(self, Self::All | Self::BelowText)
+    }
+
+    const fn paints_above_text(self) -> bool {
+        matches!(self, Self::All | Self::AboveText)
     }
 }
 

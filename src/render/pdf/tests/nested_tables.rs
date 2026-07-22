@@ -279,11 +279,23 @@
         );
 
         let underline_run = TextRun {
-            underline: true,
+            decorations: vec![crate::style::computed::TextDecoration {
+                lines: crate::style::computed::TextDecorationLines {
+                    underline: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
             ..test_text_run("Under")
         };
         let strike_run = TextRun {
-            line_through: true,
+            decorations: vec![crate::style::computed::TextDecoration {
+                lines: crate::style::computed::TextDecorationLines {
+                    line_through: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
             ..test_text_run("Strike")
         };
 

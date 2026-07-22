@@ -707,14 +707,14 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     let previous = margin_runs[..run_index].iter().rev().find(|previous| {
                         previous.inline_box.is_none() && !previous.text.is_empty()
                     });
-                    let decoration = HorizontalRunDecoration::new(
+                    let decoration = HorizontalRunDecorations::new(
                         margin_run,
                         cursor_x,
                         run_width,
                         text_y,
                         custom_fonts,
                     )
-                    .continuing_after(previous, cursor_x);
+                    .continuing_after(previous);
                     decoration.paint_text(
                         &mut decoration_content,
                         mb_font_size,
