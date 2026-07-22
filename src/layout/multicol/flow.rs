@@ -48,8 +48,7 @@ pub(super) fn build_paginated_column_rows(
     );
     let page_rows = fragmented.columns.len().div_ceil(num_cols);
 
-    let rule_active =
-        style.column_rule.width > 0.0 && style.column_rule.style.paints() && num_cols > 1;
+    let rule_active = style.column_rule.used_width() > 0.0 && num_cols > 1;
     let mut rows: Vec<(Vec<LayoutNode>, f32)> = Vec::new();
     for page in 0..page_rows {
         let mut row_children: Vec<LayoutNode> = Vec::new();
@@ -87,7 +86,7 @@ pub(super) fn build_paginated_column_rows(
             continue;
         }
         if rule_active {
-            let rule_w = style.column_rule.width;
+            let rule_w = style.column_rule.used_width();
             let rule_color = style.column_rule.color.resolve(style.color);
             for c in 0..num_cols - 1 {
                 let left = page * num_cols + c;
@@ -153,8 +152,8 @@ pub(super) fn build_balanced_paginated_column_rows(
         }
 
         let mut row_children: Vec<LayoutNode> = Vec::new();
-        if style.column_rule.width > 0.0 && style.column_rule.style.paints() && num_cols > 1 {
-            let rule_w = style.column_rule.width;
+        if style.column_rule.used_width() > 0.0 && num_cols > 1 {
+            let rule_w = style.column_rule.used_width();
             let rule_color = style.column_rule.color.resolve(style.color);
             for c in 0..num_cols - 1 {
                 if !column_has_content(&best_buckets, c)
@@ -236,14 +235,10 @@ pub(super) fn build_paginated_column_rows_with_spans(
     };
 
     let add_rules = |row_children: &mut Vec<LayoutNode>, run_top: f32, run_h: f32| {
-        if style.column_rule.width <= 0.0
-            || !style.column_rule.style.paints()
-            || num_cols <= 1
-            || run_h <= 0.0
-        {
+        if style.column_rule.used_width() <= 0.0 || num_cols <= 1 || run_h <= 0.0 {
             return;
         }
-        let rule_w = style.column_rule.width;
+        let rule_w = style.column_rule.used_width();
         let rule_color = style.column_rule.color.resolve(style.color);
         for c in 0..num_cols - 1 {
             let gap_center = column_rule_x(style, pad_left, col_width, gap, num_cols, c);

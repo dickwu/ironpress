@@ -8,7 +8,7 @@ use crate::layout::elements::{
     Container, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, Table,
 };
 use crate::layout::engine::{LayoutBorderSide, TextLine};
-use crate::style::computed::{BorderStyle, Position};
+use crate::style::computed::{BorderSide, BorderStyle, Position};
 
 fn item(height: f32, span_all: bool) -> MultiColItem {
     MultiColItem {
@@ -88,8 +88,7 @@ fn multicol_splitting_uses_fragmentation_capability_not_principal_box_shape() {
 #[test]
 fn paginated_span_rows_preserve_exact_layout_offsets() {
     let mut style = ComputedStyle::default();
-    style.column_rule.width = 2.0;
-    style.column_rule.style = BorderStyle::Solid;
+    style.column_rule = BorderSide::solid(2.0, style.column_rule.color);
     let rows = build_paginated_column_rows_with_spans(
         &[item(10.0, false), item(20.0, true)],
         2,

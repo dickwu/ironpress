@@ -9624,20 +9624,10 @@ mod tests {
     fn none_and_hidden_borders_have_zero_used_layout_width() {
         use crate::style::computed::{BorderSide, BorderStyle};
 
-        let hidden = BorderSide {
-            width: 24.0,
-            color: crate::types::Color::rgb(255, 0, 0).into(),
-            style: BorderStyle::Hidden,
-        };
-        let none = BorderSide {
-            style: BorderStyle::None,
-            ..hidden
-        };
-        let solid = BorderSide {
-            width: 3.0,
-            style: BorderStyle::Solid,
-            ..hidden
-        };
+        let color = crate::types::Color::rgb(255, 0, 0).into();
+        let hidden = BorderSide::new(24.0, color, BorderStyle::Hidden);
+        let none = BorderSide::new(24.0, color, BorderStyle::None);
+        let solid = BorderSide::solid(3.0, color);
         let border = LayoutBorder::from_computed(
             &BorderSides {
                 top: hidden,

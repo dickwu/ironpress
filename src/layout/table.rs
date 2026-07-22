@@ -1858,11 +1858,11 @@ fn collapse_outer_horizontal_borders(
         first
             .border
             .left
-            .width
+            .used_width()
             .max(table_style.border.left.used_width()),
         last.border
             .right
-            .width
+            .used_width()
             .max(table_style.border.right.used_width()),
     )
 }
@@ -4319,6 +4319,42 @@ mod subpoint_width_tests {
         assert!(first.table.collapsed_segments.right.is_empty());
         assert_eq!(second.table.collapsed_segments.left.len(), 1);
         assert_eq!(second.layout.box_model.border.left.width, 3.0);
+    }
+
+    #[test]
+    fn fixed_unspecified_columns_keep_the_declared_table_width() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { margin: 0; box-sizing: border-box; }
+                body { padding: 16px; }
+                table { width: 240px; table-layout: fixed; border-collapse: collapse; }
+                td { height: 64px; }
+                .large { font-size: 64px; background: #f57c00; }
+                .small { font-size: 8px; background: #1565c0; }
+            </style>
+            <table><tr><td class="large"></td><td class="small"></td></tr></table>"#,
+        )
+        .expect("valid fixed-table fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(204.0, 72.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let row = pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| element.inspect_table(Clone::clone))
+            .expect("one table row");
+
+        assert_eq!(row.content.column_widths, vec![90.0, 90.0]);
+        assert_eq!(row.box_inline_extent(), 180.0);
+        assert!(pages[0].print_content_scale.is_identity());
     }
 
     #[test]

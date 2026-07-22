@@ -800,8 +800,8 @@ pub(crate) fn layout_multicol_container(
         // Record one rule span per gap for this run; the final height is decided
         // after the loop (full content box for a single definite-height run,
         // otherwise the run's column-content height).
-        if style.column_rule.width > 0.0 && style.column_rule.style.paints() && num_cols > 1 {
-            let rule_w = style.column_rule.width;
+        if style.column_rule.used_width() > 0.0 && num_cols > 1 {
+            let rule_w = style.column_rule.used_width();
             for c in 0..run_nonempty_cols.len().saturating_sub(1) {
                 let has_left = run_nonempty_cols.get(c).copied().unwrap_or(false);
                 let has_right = run_nonempty_cols.get(c + 1).copied().unwrap_or(false);
@@ -830,7 +830,7 @@ pub(crate) fn layout_multicol_container(
     // top (`pad_top`) to its bottom (matching Chrome, which paints the rule the
     // full height of the box rather than only the filled content).
     if !rule_spans.is_empty() {
-        let rule_w = style.column_rule.width;
+        let rule_w = style.column_rule.used_width();
         let rule_color = style.column_rule.color.resolve(style.color);
         // Content-box bottom (border-box coords) when the height is definite.
         let content_box_bottom = explicit_border_box_h

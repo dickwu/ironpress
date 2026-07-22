@@ -81,7 +81,7 @@ enum ComponentValue {
 
 fn set_component(side: &mut BorderSide, value: ComponentValue) {
     match value {
-        ComponentValue::Width(value) => side.width = value,
+        ComponentValue::Width(value) => side.specified_width = value,
         ComponentValue::Style(value) => side.style = value,
         ComponentValue::Color(value) => side.color = value,
     }
@@ -99,7 +99,7 @@ fn parse_side(
     let mut color = function_color;
     for token in split_css_whitespace(&without_function_color) {
         if let Some(width) = parse_border_width_token(token, style, length_context, font_metrics) {
-            side.width = width;
+            side.specified_width = width;
         } else if let Some(border_style) = parse_border_style(token) {
             side.style = border_style;
         } else if let Some(parsed_color) = parse_border_color(token) {

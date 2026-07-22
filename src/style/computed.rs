@@ -3119,7 +3119,10 @@ impl BorderStyle {
 /// A single border side with width, color, and style.
 #[derive(Debug, Clone, Copy)]
 pub struct BorderSide {
-    pub width: f32,
+    /// Cascaded `border-*-width` before `none`/`hidden` style normalization.
+    /// Layout code must use [`Self::used_width`] so a non-painting side never
+    /// contributes the initial `medium` width to box geometry.
+    specified_width: f32,
     /// The computed border color. Keeping `currentColor` symbolic is required
     /// for explicit inheritance: a child inheriting `currentColor` binds it to
     /// the child's foreground color, not the parent's used RGB value.
@@ -3134,7 +3137,7 @@ impl Default for BorderSide {
             // style makes its computed/used width zero through `used_width`,
             // without losing the initial width needed when only border-style
             // is authored later in the cascade.
-            width: MEDIUM_RULE_WIDTH_PT,
+            specified_width: MEDIUM_RULE_WIDTH_PT,
             color: SpecifiedColor::CurrentColor,
             style: BorderStyle::None,
         }
@@ -3144,7 +3147,7 @@ impl Default for BorderSide {
 impl BorderSide {
     pub const fn new(width: f32, color: SpecifiedColor, style: BorderStyle) -> Self {
         Self {
-            width,
+            specified_width: width,
             color,
             style,
         }
@@ -3155,7 +3158,11 @@ impl BorderSide {
     }
 
     pub const fn used_width(self) -> f32 {
-        if self.style.paints() { self.width } else { 0.0 }
+        if self.style.paints() {
+            self.specified_width
+        } else {
+            0.0
+        }
     }
 
     pub const fn paints(self) -> bool {
@@ -5011,10 +5018,10 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "background-blend-mode" => style.background_blend_mode = default.background_blend_mode,
         "isolation" => style.isolation = default.isolation,
         "border-width" => {
-            style.border.top.width = default.border.top.width;
-            style.border.right.width = default.border.right.width;
-            style.border.bottom.width = default.border.bottom.width;
-            style.border.left.width = default.border.left.width;
+            style.border.top.specified_width = default.border.top.specified_width;
+            style.border.right.specified_width = default.border.right.specified_width;
+            style.border.bottom.specified_width = default.border.bottom.specified_width;
+            style.border.left.specified_width = default.border.left.specified_width;
         }
         "border-color" => {
             style.border.top.color = default.border.top.color;
@@ -5284,10 +5291,10 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "background-blend-mode" => style.background_blend_mode = parent.background_blend_mode,
         "isolation" => style.isolation = parent.isolation,
         "border-width" => {
-            style.border.top.width = parent.border.top.width;
-            style.border.right.width = parent.border.right.width;
-            style.border.bottom.width = parent.border.bottom.width;
-            style.border.left.width = parent.border.left.width;
+            style.border.top.specified_width = parent.border.top.specified_width;
+            style.border.right.specified_width = parent.border.right.specified_width;
+            style.border.bottom.specified_width = parent.border.bottom.specified_width;
+            style.border.left.specified_width = parent.border.left.specified_width;
         }
         "border-color" => {
             style.border.top.color = parent.border.top.color;
@@ -7045,19 +7052,19 @@ fn apply_style_map_with_percentage_basis(
     if let Some(val) = get_non_special(map, "column-rule-width") {
         if let CssValue::Length(w) = val {
             if *w >= 0.0 {
-                style.column_rule.width = *w;
+                style.column_rule.specified_width = *w;
             }
         } else if let CssValue::Keyword(k) = val {
             // `thin` / `medium` / `thick` keyword widths, else a parsed length.
             match k.trim().to_ascii_lowercase().as_str() {
-                "thin" => style.column_rule.width = 0.75,
-                "medium" => style.column_rule.width = MEDIUM_RULE_WIDTH_PT,
-                "thick" => style.column_rule.width = 3.75,
+                "thin" => style.column_rule.specified_width = 0.75,
+                "medium" => style.column_rule.specified_width = MEDIUM_RULE_WIDTH_PT,
+                "thick" => style.column_rule.specified_width = 3.75,
                 _ => {
                     if let Some(CssValue::Length(w)) = parse_length(k)
                         && w >= 0.0
                     {
-                        style.column_rule.width = w;
+                        style.column_rule.specified_width = w;
                     }
                 }
             }
@@ -7069,11 +7076,11 @@ fn apply_style_map_with_percentage_basis(
             // A visible style with no explicit width uses the medium default
             // (column-rule-width initial = medium) so the rule actually paints.
             if style.column_rule.style.paints()
-                && style.column_rule.width <= 0.0
+                && style.column_rule.specified_width <= 0.0
                 && get_non_special(map, "column-rule-width").is_none()
                 && get_non_special(map, "column-rule").is_none()
             {
-                style.column_rule.width = MEDIUM_RULE_WIDTH_PT;
+                style.column_rule.specified_width = MEDIUM_RULE_WIDTH_PT;
             }
         }
     }
@@ -7875,10 +7882,10 @@ fn apply_style_map_with_percentage_basis(
             s.row_gap = v;
         }),
         ("border-width", |s, v| {
-            s.border.top.width = v;
-            s.border.right.width = v;
-            s.border.bottom.width = v;
-            s.border.left.width = v;
+            s.border.top.specified_width = v;
+            s.border.right.specified_width = v;
+            s.border.bottom.specified_width = v;
+            s.border.left.specified_width = v;
         }),
         // NOTE: `border-radius` is intentionally NOT in this list. A border-radius
         // percentage resolves against the element's OWN border box (horizontal
@@ -13474,7 +13481,7 @@ fn parse_column_rule_shorthand(raw: &str, font_size: f32) -> Option<BorderSide> 
         found = true;
     }
     found.then(|| BorderSide {
-        width: width.unwrap_or(MEDIUM_RULE_WIDTH_PT),
+        specified_width: width.unwrap_or(MEDIUM_RULE_WIDTH_PT),
         color: color.unwrap_or(SpecifiedColor::CurrentColor),
         style: rule_style.unwrap_or(BorderStyle::None),
     })
@@ -14613,7 +14620,7 @@ mod tests {
             &ComputedStyle::default(),
         );
         assert_eq!(style.column_rule.style, BorderStyle::Double);
-        assert_eq!(style.column_rule.width, 3.0);
+        assert_eq!(style.column_rule.specified_width, 3.0);
     }
 
     #[test]
@@ -14623,7 +14630,7 @@ mod tests {
             Some("column-rule-width: 4px; column-rule-width: -2px"),
             &ComputedStyle::default(),
         );
-        assert_eq!(style.column_rule.width, 3.0);
+        assert_eq!(style.column_rule.specified_width, 3.0);
     }
 
     #[test]
@@ -15063,7 +15070,7 @@ mod tests {
         // initial column-rule-width is `medium` (~2.25pt), so the rule paints.
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("column-rule: solid blue"), &parent);
-        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+        assert!((style.column_rule.specified_width - 2.25).abs() < 0.01);
         assert_eq!(style.column_rule.style, BorderStyle::Solid);
         assert_eq!(
             style.column_rule.color.resolve(style.color),
@@ -15132,7 +15139,7 @@ mod tests {
     fn column_rule_shorthand_dotted_paints_at_medium() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("column-rule: dotted"), &parent);
-        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+        assert!((style.column_rule.specified_width - 2.25).abs() < 0.01);
         assert_eq!(style.column_rule.style, BorderStyle::Dotted);
     }
 
@@ -15151,11 +15158,11 @@ mod tests {
     fn column_rule_width_keyword_thin_medium_thick() {
         let parent = ComputedStyle::default();
         let thin = compute_style(HtmlTag::Div, Some("column-rule-width: thin"), &parent);
-        assert!((thin.column_rule.width - 0.75).abs() < 0.01);
+        assert!((thin.column_rule.specified_width - 0.75).abs() < 0.01);
         let medium = compute_style(HtmlTag::Div, Some("column-rule-width: medium"), &parent);
-        assert!((medium.column_rule.width - 2.25).abs() < 0.01);
+        assert!((medium.column_rule.specified_width - 2.25).abs() < 0.01);
         let thick = compute_style(HtmlTag::Div, Some("column-rule-width: thick"), &parent);
-        assert!((thick.column_rule.width - 3.75).abs() < 0.01);
+        assert!((thick.column_rule.specified_width - 3.75).abs() < 0.01);
     }
 
     #[test]
@@ -15164,7 +15171,7 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("column-rule-style: dashed"), &parent);
         assert_eq!(style.column_rule.style, BorderStyle::Dashed);
-        assert!((style.column_rule.width - 2.25).abs() < 0.01);
+        assert!((style.column_rule.specified_width - 2.25).abs() < 0.01);
     }
 
     #[test]
@@ -15176,7 +15183,7 @@ mod tests {
             &parent,
         );
         assert_eq!(style.column_rule.style, BorderStyle::Double);
-        assert!((style.column_rule.width - 3.0).abs() < 0.01); // 4px -> 3pt
+        assert!((style.column_rule.specified_width - 3.0).abs() < 0.01); // 4px -> 3pt
     }
 
     #[test]
@@ -15692,7 +15699,7 @@ mod tests {
     fn border_shorthand_parsed() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid black"), &parent);
-        assert!((style.border.top.width - 0.75).abs() < 0.1); // 1px = 0.75pt
+        assert!((style.border.top.specified_width - 0.75).abs() < 0.1); // 1px = 0.75pt
         assert_eq!(
             style.border.top.color,
             SpecifiedColor::Absolute(Color::BLACK)
@@ -15805,7 +15812,7 @@ mod tests {
     fn border_with_custom_color() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 2px solid red"), &parent);
-        assert!((style.border.top.width - 1.5).abs() < 0.1); // 2px = 1.5pt
+        assert!((style.border.top.specified_width - 1.5).abs() < 0.1); // 2px = 1.5pt
         let c = style.border.top.color.resolve(style.color);
         assert_eq!(c.r, 255 as f32);
         assert_eq!(c.g, 0 as f32);
@@ -15825,11 +15832,11 @@ mod tests {
         );
         // 0.2em * 20px = 4px = 3pt.
         assert!(
-            (style.border.top.width - 3.0).abs() < 0.05,
+            (style.border.top.specified_width - 3.0).abs() < 0.05,
             "em border width should be 3pt, got {}",
-            style.border.top.width
+            style.border.top.specified_width
         );
-        assert!((style.border.bottom.width - 3.0).abs() < 0.05);
+        assert!((style.border.bottom.specified_width - 3.0).abs() < 0.05);
         let c = style.border.top.color.resolve(style.color);
         assert_eq!((c.r, c.g, c.b), (0x11 as f32, 0x30 as f32, 0x5f as f32));
     }
@@ -15845,9 +15852,9 @@ mod tests {
         );
         // 0.5em * 20px = 10px = 7.5pt.
         assert!(
-            (style.border.top.width - 7.5).abs() < 0.05,
+            (style.border.top.specified_width - 7.5).abs() < 0.05,
             "em uniform border width should be 7.5pt, got {}",
-            style.border.top.width
+            style.border.top.specified_width
         );
         let per_side = compute_style(
             HtmlTag::Div,
@@ -15855,7 +15862,7 @@ mod tests {
             &parent,
         );
         // 0.25em * 20px = 5px = 3.75pt.
-        assert!((per_side.border.top.width - 3.75).abs() < 0.05);
+        assert!((per_side.border.top.specified_width - 3.75).abs() < 0.05);
     }
 
     #[test]
@@ -15882,7 +15889,7 @@ mod tests {
             Some("border-width: 3pt; border-color: blue"),
             &parent,
         );
-        assert!((style.border.top.width - 3.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 3.0).abs() < 0.1);
         let c = style.border.top.color.resolve(style.color);
         assert_eq!(c.r, 0 as f32);
         assert_eq!(c.g, 0 as f32);
@@ -15905,10 +15912,10 @@ mod tests {
             &parent,
         );
         // px -> pt is a 0.75 factor.
-        assert!((style.border.top.width - 6.0 * 0.75).abs() < 0.01);
-        assert!((style.border.right.width - 14.0 * 0.75).abs() < 0.01);
-        assert!((style.border.bottom.width - 22.0 * 0.75).abs() < 0.01);
-        assert!((style.border.left.width - 30.0 * 0.75).abs() < 0.01);
+        assert!((style.border.top.specified_width - 6.0 * 0.75).abs() < 0.01);
+        assert!((style.border.right.specified_width - 14.0 * 0.75).abs() < 0.01);
+        assert!((style.border.bottom.specified_width - 22.0 * 0.75).abs() < 0.01);
+        assert!((style.border.left.specified_width - 30.0 * 0.75).abs() < 0.01);
         for side in [
             &style.border.top,
             &style.border.right,
@@ -15919,7 +15926,7 @@ mod tests {
             let c = side.color.resolve(style.color);
             assert_eq!((c.r, c.g, c.b), (0x11 as f32, 0x30 as f32, 0x5f as f32));
             // Paintable: width > 0 && style != None.
-            assert!(side.width > 0.0 && side.style != BorderStyle::None);
+            assert!(side.specified_width > 0.0 && side.style != BorderStyle::None);
         }
     }
 
@@ -16108,7 +16115,7 @@ mod tests {
     fn border_shorthand_pt_unit() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 2pt solid green"), &parent);
-        assert!((style.border.top.width - 2.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 2.0).abs() < 0.1);
         let c = style.border.top.color.resolve(style.color);
         assert_eq!(c.r, 0 as f32);
         assert_eq!(c.g, 128 as f32);
@@ -18609,7 +18616,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.border = BorderSides::uniform(BorderSide::solid(3.0, SpecifiedColor::CurrentColor));
         let style = compute_style(HtmlTag::Div, Some("border-width: inherit"), &parent);
-        assert!((style.border.top.width - 3.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 3.0).abs() < 0.1);
     }
 
     #[test]
@@ -18625,7 +18632,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.border = BorderSides::uniform(BorderSide::solid(2.0, Color::rgb(0, 0, 255).into()));
         let style = compute_style(HtmlTag::Div, Some("border: inherit"), &parent);
-        assert!((style.border.top.width - 2.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 2.0).abs() < 0.1);
         assert_eq!(style.border.top.color.resolve(style.color).b, 255.0);
     }
 
@@ -21497,7 +21504,7 @@ mod tests {
     fn border_width_from_rem() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("border-width: 0.5rem"), &parent);
-        assert!((s.border.top.width - 6.0).abs() < 0.1);
+        assert!((s.border.top.specified_width - 6.0).abs() < 0.1);
     }
 
     #[test]
@@ -22322,7 +22329,7 @@ mod tests {
         let rules = crate::parser::css::parse_stylesheet("div { border-top: 1pt solid red }");
         let parent = ComputedStyle::default();
         let style = compute_style_with_rules(HtmlTag::Div, None, &parent, &rules, "div", &[], None);
-        assert!((style.border.top.width - 1.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 1.0).abs() < 0.1);
         let c = style.border.top.color.resolve(style.color);
         assert_eq!(c.r, 255.0);
         assert_eq!(c.g, 0.0);
@@ -22338,7 +22345,7 @@ mod tests {
         let rules = crate::parser::css::parse_stylesheet("div { border-left: 3pt solid blue }");
         let parent = ComputedStyle::default();
         let style = compute_style_with_rules(HtmlTag::Div, None, &parent, &rules, "div", &[], None);
-        assert!((style.border.left.width - 3.0).abs() < 0.1);
+        assert!((style.border.left.specified_width - 3.0).abs() < 0.1);
         let c = style.border.left.color.resolve(style.color);
         assert_eq!(c.r, 0.0);
         assert_eq!(c.g, 0.0);
@@ -22358,7 +22365,7 @@ mod tests {
             style.border.bottom,
             style.border.left,
         ] {
-            assert!((side.width - 2.0).abs() < 0.1);
+            assert!((side.specified_width - 2.0).abs() < 0.1);
             let c = side.color.resolve(style.color);
             assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0));
         }
@@ -22373,13 +22380,13 @@ mod tests {
             &parent,
         );
         // Top should be overridden to 2pt red
-        assert!((style.border.top.width - 2.0).abs() < 0.1);
+        assert!((style.border.top.specified_width - 2.0).abs() < 0.1);
         let top_c = style.border.top.color.resolve(style.color);
         assert_eq!(top_c.r, 255.0);
         assert_eq!(top_c.g, 0.0);
         // Other sides should remain 1pt black
         for side in [style.border.right, style.border.bottom, style.border.left] {
-            assert!((side.width - 1.0).abs() < 0.1);
+            assert!((side.specified_width - 1.0).abs() < 0.1);
             let c = side.color.resolve(style.color);
             assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0));
         }
@@ -22393,7 +22400,7 @@ mod tests {
             Some("border-top: 5pt solid red; border: 1pt solid blue"),
             &parent,
         );
-        assert_eq!(shorthand_last.border.top.width, 1.0);
+        assert_eq!(shorthand_last.border.top.specified_width, 1.0);
         assert_eq!(
             shorthand_last
                 .border
@@ -22408,7 +22415,7 @@ mod tests {
             Some("border: 1pt solid blue; border-top: 5pt solid red"),
             &parent,
         );
-        assert_eq!(longhand_last.border.top.width, 5.0);
+        assert_eq!(longhand_last.border.top.specified_width, 5.0);
         assert_eq!(
             longhand_last.border.top.color.resolve(longhand_last.color),
             Color::rgb(255, 0, 0)
@@ -22425,12 +22432,12 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(style.border.top.width, 5.0);
+        assert_eq!(style.border.top.specified_width, 5.0);
         assert_eq!(
             style.border.top.color.resolve(style.color),
             Color::rgb(255, 0, 0)
         );
-        assert_eq!(style.border.right.width, 1.0);
+        assert_eq!(style.border.right.specified_width, 1.0);
     }
 
     #[test]
@@ -22443,8 +22450,8 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(rtl.border.right.width, 5.0);
-        assert_eq!(rtl.border.left.width, 1.0);
+        assert_eq!(rtl.border.right.specified_width, 5.0);
+        assert_eq!(rtl.border.left.specified_width, 1.0);
 
         let physical_last = compute_style(
             HtmlTag::Div,
@@ -22454,7 +22461,7 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(physical_last.border.left.width, 2.0);
+        assert_eq!(physical_last.border.left.specified_width, 2.0);
         assert_eq!(
             physical_last.border.left.color.resolve(physical_last.color),
             Color::rgb(0, 0, 255)
@@ -22472,8 +22479,8 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(vertical_rl.border.right.width, 3.0);
-        assert_eq!(vertical_rl.border.top.width, 4.0);
+        assert_eq!(vertical_rl.border.right.specified_width, 3.0);
+        assert_eq!(vertical_rl.border.top.specified_width, 4.0);
 
         let vertical_upright_rtl = compute_style(
             HtmlTag::Div,
@@ -22483,7 +22490,7 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(vertical_upright_rtl.border.top.width, 6.0);
+        assert_eq!(vertical_upright_rtl.border.top.specified_width, 6.0);
 
         let sideways_lr = compute_style(
             HtmlTag::Div,
@@ -22494,8 +22501,8 @@ mod tests {
             ),
             &ComputedStyle::default(),
         );
-        assert_eq!(sideways_lr.border.left.width, 7.0);
-        assert_eq!(sideways_lr.border.bottom.width, 8.0);
+        assert_eq!(sideways_lr.border.left.specified_width, 7.0);
+        assert_eq!(sideways_lr.border.bottom.specified_width, 8.0);
     }
 
     #[test]
@@ -22547,11 +22554,7 @@ mod tests {
     #[test]
     fn border_does_not_inherit() {
         let mut parent = ComputedStyle::default();
-        parent.border.top = BorderSide {
-            width: 1.0,
-            color: Color::rgb(0, 0, 0).into(),
-            style: BorderStyle::Solid,
-        };
+        parent.border.top = BorderSide::solid(1.0, Color::rgb(0, 0, 0).into());
         let style = compute_style(HtmlTag::Span, None, &parent);
         assert!((style.border.top.used_width()).abs() < 0.01);
         assert!((style.border.bottom.used_width()).abs() < 0.01);
@@ -22563,26 +22566,10 @@ mod tests {
     fn border_sides_max_and_widths() {
         // Lines 353-358: BorderSides max_width, horizontal_width, vertical_width
         let b = BorderSides {
-            top: BorderSide {
-                width: 3.0,
-                color: SpecifiedColor::CurrentColor,
-                style: BorderStyle::Solid,
-            },
-            right: BorderSide {
-                width: 5.0,
-                color: SpecifiedColor::CurrentColor,
-                style: BorderStyle::Solid,
-            },
-            bottom: BorderSide {
-                width: 2.0,
-                color: SpecifiedColor::CurrentColor,
-                style: BorderStyle::Solid,
-            },
-            left: BorderSide {
-                width: 4.0,
-                color: SpecifiedColor::CurrentColor,
-                style: BorderStyle::Solid,
-            },
+            top: BorderSide::solid(3.0, SpecifiedColor::CurrentColor),
+            right: BorderSide::solid(5.0, SpecifiedColor::CurrentColor),
+            bottom: BorderSide::solid(2.0, SpecifiedColor::CurrentColor),
+            left: BorderSide::solid(4.0, SpecifiedColor::CurrentColor),
         };
         assert!((b.max_width() - 5.0).abs() < 0.01);
         assert!((b.horizontal_width() - 9.0).abs() < 0.01); // left + right = 4 + 5
@@ -22598,10 +22585,10 @@ mod tests {
             Some("border-right: 2pt solid red; border-left: 3pt solid blue"),
             &parent,
         );
-        assert!((style.border.right.width - 2.0).abs() < 0.1);
+        assert!((style.border.right.specified_width - 2.0).abs() < 0.1);
         let rc = style.border.right.color.resolve(style.color);
         assert_eq!(rc.r, 255.0);
-        assert!((style.border.left.width - 3.0).abs() < 0.1);
+        assert!((style.border.left.specified_width - 3.0).abs() < 0.1);
         let lc = style.border.left.color.resolve(style.color);
         assert_eq!(lc.b, 255.0);
     }

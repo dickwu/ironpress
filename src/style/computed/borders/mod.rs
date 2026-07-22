@@ -110,7 +110,7 @@ impl SideTargets {
 fn copy_component(target: &mut BorderSide, source: BorderSide, component: SideComponent) {
     match component {
         SideComponent::All => *target = source,
-        SideComponent::Width => target.width = source.width,
+        SideComponent::Width => target.specified_width = source.specified_width,
         SideComponent::Style => target.style = source.style,
         SideComponent::Color => target.color = source.color,
     }
