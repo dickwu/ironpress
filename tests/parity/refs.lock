@@ -8586,15 +8586,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-fonts-advanced.html",
       "html_sha256": "ca0c291ce8eb380c02fd7141cdf8232cc41eee354599ac29988367aef0bb2618",
-      "manifest_sha256": "78f1faf61eb20972bdc10ec0d8c676cc5c263e84cef8ec70eda3f133391d305a",
+      "manifest_sha256": "cd545deb35eca778f9e24888f780aa742183b0166921c0187bf6f5b78d047431",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-backgrounds-borders-x-fonts-advanced.pdf",
-        "sha256": "7d70b5ff4ec00202b79c05a0a657a9f65c4fb4e73a9f91507fc75694b6f84574"
+        "sha256": "680971ee8ce387a2a1237de4d1e9f948407ce75bb1f89bbacfb4f3d93b5bdf3f"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-fonts-advanced.html",
-      "reference_html_sha256": "ca0c291ce8eb380c02fd7141cdf8232cc41eee354599ac29988367aef0bb2618"
+      "reference_file": "references/interactions/interactions-cartesian-backgrounds-borders-x-fonts-advanced.html",
+      "reference_html_sha256": "59be8246d425dacc9935846fa75674c7f85b91b7f224942083967ca35eb7e225"
     },
     "interactions-cartesian-backgrounds-borders-x-generated-content": {
       "category": "interactions",
@@ -8908,15 +8908,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-fonts-advanced.html",
       "html_sha256": "5958fc3abda03c8f3a950571b60b105f40fe9a70e9cde275688bd89cbb8e82f1",
-      "manifest_sha256": "6d4beb72b79dfc113cf07a8d2cc2eebad419042ddb30ef5fcf4205880c38f542",
+      "manifest_sha256": "c6c852f913ab75b45d29dd6850099f7acf875d8b683bdfe7d99b414e96ebeb44",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-backgrounds-gradients-x-fonts-advanced.pdf",
-        "sha256": "c256726ecd32211b3e56beed4330d17680f9fca3ae310062d858bb7e64ad7763"
+        "sha256": "ada22a649c57c8c956165d7f84da426d7c7f704c70badd0885c409174194bef3"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-fonts-advanced.html",
-      "reference_html_sha256": "5958fc3abda03c8f3a950571b60b105f40fe9a70e9cde275688bd89cbb8e82f1"
+      "reference_file": "references/interactions/interactions-cartesian-backgrounds-gradients-x-fonts-advanced.html",
+      "reference_html_sha256": "9d6fdcdaafb4b5cc51fd11d14c45d1f1a3ff345fb11b88326186f3bd3c3e27a1"
     },
     "interactions-cartesian-backgrounds-gradients-x-generated-content": {
       "category": "interactions",
@@ -9216,15 +9216,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-block-box-model-x-fonts-advanced.html",
       "html_sha256": "5a01ec40b4142b5e2fb03a4171a1e74eb7b36086560d7b702dc1070770ab6fc0",
-      "manifest_sha256": "be1c67b757ab546236a74c4d661b0154820ef432bc39acb5e20c8d91ab2cd1f9",
+      "manifest_sha256": "52ed0ac67e95aec77aadb17c3456518b39891a9f9310d1239edf98d90fbfcba2",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-block-box-model-x-fonts-advanced.pdf",
-        "sha256": "0cb45945e6e2d524f7f3a5786a95b6c60dc350bdc16fbef14f8f59efca6ac80a"
+        "sha256": "c2f7f1aabef96326b7d40a3add0365d97bc1cd02d0dc4e4099736dd6a7a44ac8"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-block-box-model-x-fonts-advanced.html",
-      "reference_html_sha256": "5a01ec40b4142b5e2fb03a4171a1e74eb7b36086560d7b702dc1070770ab6fc0"
+      "reference_file": "references/interactions/interactions-cartesian-block-box-model-x-fonts-advanced.html",
+      "reference_html_sha256": "34839c83da31f02b304ba32e0af39bca5ef8c813d77a2f04ba7f750d7314aef1"
     },
     "interactions-cartesian-block-box-model-x-generated-content": {
       "category": "interactions",
@@ -9510,15 +9510,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-clip-mask-x-fonts-advanced.html",
       "html_sha256": "8011b9883a6dc3d0398ace56c68cecaf515958a8e792f785bb9e7da851e5b229",
-      "manifest_sha256": "def589baf9030325240ad8edc096a1e78f5ab50358e9c6520ca4f479495bad0a",
+      "manifest_sha256": "ab8345719c19c60eedb2306379be1fba4dd828790916c5b60ad310cfb957ce6f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-clip-mask-x-fonts-advanced.pdf",
-        "sha256": "560ca543b416c513e9ed77f6570d7fe17e55625ed706a2434e8aaa5b0451e680"
+        "sha256": "f452be412e790e4794115a1524b7c0028f5071e85585d750523fedc5848cd167"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-clip-mask-x-fonts-advanced.html",
-      "reference_html_sha256": "8011b9883a6dc3d0398ace56c68cecaf515958a8e792f785bb9e7da851e5b229"
+      "reference_file": "references/interactions/interactions-cartesian-clip-mask-x-fonts-advanced.html",
+      "reference_html_sha256": "6e1df3bf1161eb28e8b0ef080028f44be240cebe7e0c6174bccd029ec1c8bed1"
     },
     "interactions-cartesian-clip-mask-x-generated-content": {
       "category": "interactions",
@@ -9790,15 +9790,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-color-opacity-x-fonts-advanced.html",
       "html_sha256": "7f163742c18b0104152bf096cb0560b227f0629407a4c29024f12db460aa14f1",
-      "manifest_sha256": "f9a254575eeec42f26aae4e1484c06adadb1aac09aa15a2d276f218aa050708e",
+      "manifest_sha256": "c4b7ca7a553325665b417c478af162a75aaa25f279d345e10f899e66c89c957f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-color-opacity-x-fonts-advanced.pdf",
-        "sha256": "160248860daa7e5e6ed4b2ad5f406e9567cf08defacdf831734879cad44a4886"
+        "sha256": "02b515ed48af2963fe2af336ea6a8532d1ae50e752cc80ffccf90a70d85d0642"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-color-opacity-x-fonts-advanced.html",
-      "reference_html_sha256": "7f163742c18b0104152bf096cb0560b227f0629407a4c29024f12db460aa14f1"
+      "reference_file": "references/interactions/interactions-cartesian-color-opacity-x-fonts-advanced.html",
+      "reference_html_sha256": "0a71c354bd05645d6257539f45f4413864db121206f2a7d76dda660196b3222a"
     },
     "interactions-cartesian-color-opacity-x-generated-content": {
       "category": "interactions",
@@ -10056,15 +10056,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-effects-x-fonts-advanced.html",
       "html_sha256": "fa97bc23453a3a9e5922ff56a4a83b5fd35e7aa00d8d8f69d1402891b2c0c1af",
-      "manifest_sha256": "23af2bb5aac7ebfb869441713fb5fb6da5717281e8fc9cd5e1cfaa511b7dd805",
+      "manifest_sha256": "656ce46f2a312a7a91049bb732cfd68c0e0cb2b521e809cab056ee9b4e80d85d",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-effects-x-fonts-advanced.pdf",
-        "sha256": "380b47855c8029bbfdcd769272cdd0757710a7c0bd059de16d04140ecb2f852a"
+        "sha256": "22e405814b4baa08ab058685a5b682d7297b08390038a61ac369b5f891ef0241"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-effects-x-fonts-advanced.html",
-      "reference_html_sha256": "fa97bc23453a3a9e5922ff56a4a83b5fd35e7aa00d8d8f69d1402891b2c0c1af"
+      "reference_file": "references/interactions/interactions-cartesian-effects-x-fonts-advanced.html",
+      "reference_html_sha256": "ac417b37d7c198b1ab2784d17868099c7a22ebc798954a33e82c41a0f7c4cb1a"
     },
     "interactions-cartesian-effects-x-generated-content": {
       "category": "interactions",
@@ -10308,15 +10308,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-filters-x-fonts-advanced.html",
       "html_sha256": "1454f7bc4c37eda6d95656f749072c4b254ac37cf1ca174385d1cfef9432af0b",
-      "manifest_sha256": "c012253be819ce49073031d5a435da099228f1240224cb50364c76c96599718e",
+      "manifest_sha256": "64f2d7d9a8c884c89461c329ffd6d44e7eebd7420c3d3f0e308c7eb32e7d8702",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-filters-x-fonts-advanced.pdf",
-        "sha256": "d2e47946c706b4514d63d3ef3750b89b3f6b54295be3d783061e724b93459ae1"
+        "sha256": "452c94d4763e325e0f9483577914ade49c5ac78b9d468d92e125bf9d57971a9d"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-filters-x-fonts-advanced.html",
-      "reference_html_sha256": "1454f7bc4c37eda6d95656f749072c4b254ac37cf1ca174385d1cfef9432af0b"
+      "reference_file": "references/interactions/interactions-cartesian-filters-x-fonts-advanced.html",
+      "reference_html_sha256": "e0a250e35b7fd1f1a538f0730bdba5f5226e5a52722bd7cd9fd19ba786de931e"
     },
     "interactions-cartesian-filters-x-generated-content": {
       "category": "interactions",
@@ -10546,15 +10546,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-flexbox-x-fonts-advanced.html",
       "html_sha256": "0f5b4d1c10a540e71cfb4e0392c86a076c626476416ec37550f0601255e0202d",
-      "manifest_sha256": "d81b6588109cd77fe340ba73d9fdad0ab15e4a1abc5b0d498f29920331a5183b",
+      "manifest_sha256": "dd85caea5f3760aa6cccfbd480374e7a3896b228f8c730f99c5d26e209fb938e",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-flexbox-x-fonts-advanced.pdf",
-        "sha256": "ea4465d15b26ef312ace2fb50da1ff3b22b3a3dbc4801bcb153612efeb86e551"
+        "sha256": "6dbad3dcc248b4052f92e251342488aac604c8995a4c8efa1a632832de5693cd"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-flexbox-x-fonts-advanced.html",
-      "reference_html_sha256": "0f5b4d1c10a540e71cfb4e0392c86a076c626476416ec37550f0601255e0202d"
+      "reference_file": "references/interactions/interactions-cartesian-flexbox-x-fonts-advanced.html",
+      "reference_html_sha256": "095b86a341061b3d165d6e25cc449379bd3ba26336d9dc76d0907a68f0b8fe8e"
     },
     "interactions-cartesian-flexbox-x-generated-content": {
       "category": "interactions",
@@ -10630,15 +10630,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-flexbox-x-multicol.html",
       "html_sha256": "0d44e8f8883d70fdd1f2693920783fdaed5adb61f1a7d0d289fcc3dad3838379",
-      "manifest_sha256": "1baad0af34a2d96ef75ef8569eaac3d5c92cc1daaa49fa3a34def326d9da79be",
+      "manifest_sha256": "e9edd21d82e6f7f7094af41bf972798d880ef8057ac1723c57875e337fd0f589",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-flexbox-x-multicol.pdf",
-        "sha256": "de382d798323095559658d2a9673f9e38329d7e42894f3bc89704f9a25c54abe"
+        "sha256": "be79259bb038c57b4b63060fa98e530c861a8cb9f97b92be60a0d09b4a914537"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-flexbox-x-multicol.html",
-      "reference_html_sha256": "0d44e8f8883d70fdd1f2693920783fdaed5adb61f1a7d0d289fcc3dad3838379"
+      "reference_file": "references/interactions/interactions-cartesian-flexbox-x-multicol.html",
+      "reference_html_sha256": "1159db2c42675b5ac99ba99dc6e63e53824e55ffbc0e02bfa76c49cac48272ac"
     },
     "interactions-cartesian-flexbox-x-overflow-clipping": {
       "category": "interactions",
@@ -10770,225 +10770,225 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-fonts-advanced.html",
       "html_sha256": "627dd89933b4418d7a4b34997d64e7cb9245304720ece1f845a3c32b42b7f7c0",
-      "manifest_sha256": "cc8dac4dadadc24bd9d685ba3876cd836d6e5f8df5e0f4d971f9a3cbcdca8aa7",
+      "manifest_sha256": "03b446d9ad233fbba2af356ba102c3bb0752ceadad7e4ee3d4dc79391f199d7d",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-fonts-advanced.pdf",
-        "sha256": "6f88feefad83610338e174d2444a4f508b697374ccd2ec747906ef04067e8b32"
+        "sha256": "8d97de097e57bd0df2d4d6508d4a0c7cb962dcb2fee6a32433122d9b8b74579d"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-fonts-advanced.html",
-      "reference_html_sha256": "627dd89933b4418d7a4b34997d64e7cb9245304720ece1f845a3c32b42b7f7c0"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-fonts-advanced.html",
+      "reference_html_sha256": "183417e9778e995691c7719cd95e3a9efc845ef8c9ab1f77c8e1f96283257efb"
     },
     "interactions-cartesian-fonts-advanced-x-generated-content": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-generated-content.html",
       "html_sha256": "e308eaf24e1dff1d2d4fbe4f2ec3ee26d466e30e28be6c80ca4dd2cd58f2c3bc",
-      "manifest_sha256": "cf78c5b2002085799a754b0804a309f7003c1fe7e6ef8b8b7c74eeaba9c7c48d",
+      "manifest_sha256": "ad56d45cbe981f05d3f60f83993ceda787b091149440fe27c446ad3188d7aaa4",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-generated-content.pdf",
-        "sha256": "991194ab0519504d20176731a609f57a4ea3548d99471e104290428517e0aa68"
+        "sha256": "5d9928b0cd834386599105aeda5a89b7d78bcaa9497a618a813961fe38ece5fe"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-generated-content.html",
-      "reference_html_sha256": "e308eaf24e1dff1d2d4fbe4f2ec3ee26d466e30e28be6c80ca4dd2cd58f2c3bc"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-generated-content.html",
+      "reference_html_sha256": "72b4716ebcf1686384cd22eeb8e917d8e9a08f03fdab70ec11795ac65f1910ee"
     },
     "interactions-cartesian-fonts-advanced-x-grid": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-grid.html",
       "html_sha256": "2829ff24ea29d446f67cfe1c85f0551894cb07369da92c173cffcbce165b974a",
-      "manifest_sha256": "baab4ace49f1b501850abd09011699424b66d9cc3945019fdf8a44a3c5de47dd",
+      "manifest_sha256": "8f747453176ad7905923a2400cc6dacdf99c5c89924d7d81c4d6ed28f87ba083",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-grid.pdf",
-        "sha256": "bffb6c4ad2b658d51a922a4e3c674c92d9ae059925bead96b2c5f36f8cd97083"
+        "sha256": "1d26112b428e96bd0f1a3d9d4224558cdd80730e7df8f3407c68f45746bcd505"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-grid.html",
-      "reference_html_sha256": "2829ff24ea29d446f67cfe1c85f0551894cb07369da92c173cffcbce165b974a"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-grid.html",
+      "reference_html_sha256": "6176f7039bfa7ba3bb40d1cb429dc98f2ce8e446b70a32e5dcdfbf469c1e2f83"
     },
     "interactions-cartesian-fonts-advanced-x-images-replaced": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-images-replaced.html",
       "html_sha256": "0fa97a17d8003deac49a9120be5f8a7e31d148bed3abc56feb4d2587d8587a7d",
-      "manifest_sha256": "a0557c3e2389a605c21d6fba33a9e0f78b57e76099f7e0c3ef5ea93dfb13f482",
+      "manifest_sha256": "9a8ab5f9f817ae5183e97ef181628d09dff68bfe5ad4e44b8ac02c12dbb65297",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-images-replaced.pdf",
-        "sha256": "a4c2e3fa4a6d9e2ff0ed63fe303c9f02bc9ecef2c1289abb45c2774d3faaefe9"
+        "sha256": "7a737dc4ee56d6b4d72af1254bbdfdd8f8782b199ba6fd5451f6c81162052904"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-images-replaced.html",
-      "reference_html_sha256": "0fa97a17d8003deac49a9120be5f8a7e31d148bed3abc56feb4d2587d8587a7d"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-images-replaced.html",
+      "reference_html_sha256": "937d0daa86e0f9183a160f4c63042e7eb87f3a5a4951a39116041096289c8a6b"
     },
     "interactions-cartesian-fonts-advanced-x-inline-text": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-inline-text.html",
       "html_sha256": "e54bac14296ba704f84dba6fb039a97b2acc13c9c79378498cdb2cee8aac380c",
-      "manifest_sha256": "28ba71b8dc5f757fcdaafa8d13554afba9650905959f0127aa2b4c321d110e19",
+      "manifest_sha256": "7d3eb465c9597e4767fcf394c41eccd532a4c62ced818eec36626e8b1cc53a65",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-inline-text.pdf",
-        "sha256": "d45828266482eef0512065f0a3fd0a6d72fe6e2101a1b27b7372f2bea298194d"
+        "sha256": "ce1765cfb3f7ae1fcd58016649743721597089e81ee46582cc8e49282cda938f"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-inline-text.html",
-      "reference_html_sha256": "e54bac14296ba704f84dba6fb039a97b2acc13c9c79378498cdb2cee8aac380c"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-inline-text.html",
+      "reference_html_sha256": "ec3ee4b7de1eb5cf418f2defbe3a8e3eafc2edfb3714457f70e3abb4add544a7"
     },
     "interactions-cartesian-fonts-advanced-x-lists-counters": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-lists-counters.html",
       "html_sha256": "48611b2a3640802e9a3e0e3ae08429efdb2355317a3aefed5661e35742c926a4",
-      "manifest_sha256": "c6f939f1f098fec6a705e753dd0cd309a64fb0e9d1a6cfb97ca45d99cb2154bb",
+      "manifest_sha256": "c87ddaad56062df98ed5d1c6cef39302aa6a220bd8c994942832cb10bf7a94c9",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-lists-counters.pdf",
-        "sha256": "ff7fe084ed2a7768947e41afb2b929b3585681f92d65e57f35d1ec5fc84b8924"
+        "sha256": "acae78434c1cac459e300a0410b08db37140b20e800c65ff534320aea075b40e"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-lists-counters.html",
-      "reference_html_sha256": "48611b2a3640802e9a3e0e3ae08429efdb2355317a3aefed5661e35742c926a4"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-lists-counters.html",
+      "reference_html_sha256": "57603cd2571e2e381555dbcff350da750b9b5110a58b528e43ae0b6613cc072e"
     },
     "interactions-cartesian-fonts-advanced-x-multicol": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-multicol.html",
       "html_sha256": "47f629c1a45541e09d648c13a453508a74b46d20f936413f415e623455bfbeea",
-      "manifest_sha256": "c52ba5702da340d5c927f4549944ac862869a2ff27824baeac51602425bd67f7",
+      "manifest_sha256": "9004a5639c820ab4046496e1c8c5a6df0cea002680eee137c4115e3358a44c6b",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-multicol.pdf",
-        "sha256": "046bb6696c4c2728557d63d338f33f89e5bfa0e1675a9588afb492e7066fc157"
+        "sha256": "b0fb7b250f197df5c153fdd7cefdda4b90bf0320cc939cc6dc76a3d9b9863ec1"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-multicol.html",
-      "reference_html_sha256": "47f629c1a45541e09d648c13a453508a74b46d20f936413f415e623455bfbeea"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-multicol.html",
+      "reference_html_sha256": "ea620865ef03ba8f1a02b4cf4f0fbb7465219b61d9c1931b54ed00e024c97c36"
     },
     "interactions-cartesian-fonts-advanced-x-overflow-clipping": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html",
       "html_sha256": "951b62f18bdc138ba6d14d9733df54697b916c27d9f011da67aaf7740845c02b",
-      "manifest_sha256": "41b8ea89817c8de19c7ea6e8bc26ed366ca36aad744e528a0b616a4ed743a15a",
+      "manifest_sha256": "84fd655628064da8ca29fc044c371ed8b49edebf37be59dfb6ca866e72a36ee3",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.pdf",
-        "sha256": "a0afce5549724acd7c45845a27eb45b76b9241260c5fc41a80793880cffae1fc"
+        "sha256": "b6a4feae1d59186c9462b38337e5334b749300b3f553466c1967b1dedd77ef2f"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html",
-      "reference_html_sha256": "951b62f18bdc138ba6d14d9733df54697b916c27d9f011da67aaf7740845c02b"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html",
+      "reference_html_sha256": "7bfeb27a626672f56ccf299c7bd325c92504c6bc8e57254049de6a3e495964c3"
     },
     "interactions-cartesian-fonts-advanced-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-paged-media.html",
       "html_sha256": "9fc5e997b5d163bd36a99505af56795e4bd93687d82bd55fe53dd844684989c1",
-      "manifest_sha256": "cd0554ccded84db5512c766c41370a4def9a4518c6a61bd2d6b7eed398a4a998",
+      "manifest_sha256": "258854930a0c8530d08a2765544d226415e4b0a4f2c4ed7b84604dd53d57a32f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-paged-media.pdf",
-        "sha256": "59b1ba2f72bd813494a4061ccc437d39128fbcdf24a5b4d5215720d8978e8d83"
+        "sha256": "5a1353b9b70381d15feeec3111f55fd7f77bfa7de80750a965228dd22f7b281f"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-paged-media.html",
-      "reference_html_sha256": "9fc5e997b5d163bd36a99505af56795e4bd93687d82bd55fe53dd844684989c1"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-paged-media.html",
+      "reference_html_sha256": "56c95ce7ab232b236754d3b057d2ee73dc3f7ba3ac8987bceaa133bde375ae8b"
     },
     "interactions-cartesian-fonts-advanced-x-positioning": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-positioning.html",
       "html_sha256": "11ea75c23d3fef5918b0d56370e04572892a709f6d9243e0041a3fd17cce0e5d",
-      "manifest_sha256": "0780c717f7d46e548df20fe53fda87288bd849df57c3181d48b42b5c5cf1a2c2",
+      "manifest_sha256": "df1807aba478d3899aee485963eccbdfcc389e9b3a986aae244673d530406f78",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-positioning.pdf",
-        "sha256": "d8970e29df65878777efdd5794961fa9bd1ae5a5094c9700e615df697ae4a330"
+        "sha256": "55eb52a5ecb7f195df536a20dd31e7d9a99444ced15a391a8318b90d7e703e7f"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-positioning.html",
-      "reference_html_sha256": "11ea75c23d3fef5918b0d56370e04572892a709f6d9243e0041a3fd17cce0e5d"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-positioning.html",
+      "reference_html_sha256": "4392259e0dc18be1ff345e750d9f8849e1ab6cabd66914720e652d8b2b998b20"
     },
     "interactions-cartesian-fonts-advanced-x-selectors-cascade": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-selectors-cascade.html",
       "html_sha256": "cc6360bbe810b705c6f761d60641595ab57df0e854c756e597e54f8f3322c6fa",
-      "manifest_sha256": "1de6103ef65cbb611b8ab4949dcffbe703ac919b254c39e2cb59baf7b67c93b4",
+      "manifest_sha256": "f861ad32d864468a69a32a6ac56ec15e8ded4921ac0b523943f839bc1bd39218",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-selectors-cascade.pdf",
-        "sha256": "52489dc4f629652c6d258fa5947f23f10c037bfcbdafaee34b788f52be48dd05"
+        "sha256": "b1a0bc508ce9051bb491ff803b641e144fc0154f70a8707d66c6c40a63b91b82"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-selectors-cascade.html",
-      "reference_html_sha256": "cc6360bbe810b705c6f761d60641595ab57df0e854c756e597e54f8f3322c6fa"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-selectors-cascade.html",
+      "reference_html_sha256": "326eaee2f00b8a6e66c92c49bb552568554d168213a42987dac8866df37ca7fa"
     },
     "interactions-cartesian-fonts-advanced-x-tables": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-tables.html",
       "html_sha256": "ce7c623ac1875430fc87d36b0530fac1b7d74fcfc8618cecc45c2273a36d61fe",
-      "manifest_sha256": "3a59af3cc993ad0475ec425786ee04671121dd4b987c6d58348d26f8d9ad1915",
+      "manifest_sha256": "b161ab20f9db187f182d78475f9553a763428e40de219456d5bae2725812022e",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-tables.pdf",
-        "sha256": "baf02bf1f7813ab86bc0826310af2b4cfae29debc3d51ef57138a0f93ac62b01"
+        "sha256": "53ace5df027dacee44f58d4b9b1f2771b1a056269ec6b5dedceba6e547fae842"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-tables.html",
-      "reference_html_sha256": "ce7c623ac1875430fc87d36b0530fac1b7d74fcfc8618cecc45c2273a36d61fe"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-tables.html",
+      "reference_html_sha256": "ca86a9e7357012867f1c65ca3de8c15cca96c18927f564399e270ba7a56521ad"
     },
     "interactions-cartesian-fonts-advanced-x-text-advanced": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-text-advanced.html",
       "html_sha256": "d566e54e35e28f3d532eef77209fd8d39238008a49e1b0e49b7a6200b83bdbc1",
-      "manifest_sha256": "9c58108d4ab23731e351a7847c8fa85d764a83b9331a3be591bdd04316c60b22",
+      "manifest_sha256": "ff87671bb8456589204e3731fb6b2b51409c6adf7b29a745cd999cdad916bf3f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-text-advanced.pdf",
-        "sha256": "bc33856350cbd9cf55da481029784546bd7dff7de47793cf5916d047978e6d59"
+        "sha256": "29c6872bc2a6060a450e240c27393d9223c3c8ab875fc65f5b651a81bbf42aae"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-text-advanced.html",
-      "reference_html_sha256": "d566e54e35e28f3d532eef77209fd8d39238008a49e1b0e49b7a6200b83bdbc1"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-text-advanced.html",
+      "reference_html_sha256": "3a5e12d15e0cce476927e414da4866badf5b609bbfb4bff2ab0dab22752f8bb3"
     },
     "interactions-cartesian-fonts-advanced-x-transforms": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-transforms.html",
       "html_sha256": "0fd3f65e1068e3844adac4b6baad29822b3704bb9810f1246695275e34f4b510",
-      "manifest_sha256": "d95ec11f011eb0c20b6b2c229efe4cab15f4ec8c9e634891b1422e904c320700",
+      "manifest_sha256": "f930e554644b852c63bc85917c1125d440adc0523e73b7485a88687419b9e301",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-transforms.pdf",
-        "sha256": "24db314ef311f5626a7afaff0ee4cb86268694f5e3748b1b4a3706de6d46894a"
+        "sha256": "3e1cfdf760419e07391a0ac7ce427370820224025d42fcb56e712e1c6ab2a6ea"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-transforms.html",
-      "reference_html_sha256": "0fd3f65e1068e3844adac4b6baad29822b3704bb9810f1246695275e34f4b510"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-transforms.html",
+      "reference_html_sha256": "440e5d9db72e8cf8b60935dbd0cc89ac82da5d4ba5b34c8544de557027dc2348"
     },
     "interactions-cartesian-fonts-advanced-x-typography": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-typography.html",
       "html_sha256": "95a9b35d2a7f6e967cad397c41c9950f110410fba6cfd3a25de7b735805ddd1e",
-      "manifest_sha256": "be60d9d1ccb60607cd92a7c44e76bda2eb61ad8dbc7ba15dea1c0655e2ecca32",
+      "manifest_sha256": "766ca95e6aa43a4ba69e5d8d9062edbbcbaa7003d87250acc30b4f1e861b6b21",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-typography.pdf",
-        "sha256": "5cc31a6c92ffa034f467e487cfa32908dafed28bc0131a0a2e0a6cad9e560b72"
+        "sha256": "bc6fa139089bdc696d2b96081014d8bb8a7eda0533242842abcea23a1d21e847"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-typography.html",
-      "reference_html_sha256": "95a9b35d2a7f6e967cad397c41c9950f110410fba6cfd3a25de7b735805ddd1e"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-typography.html",
+      "reference_html_sha256": "b4a1524de9543c95fc29fa1ebaf124cd8d5303503e32c318619d07d0af62a5bd"
     },
     "interactions-cartesian-fonts-advanced-x-units-values": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-units-values.html",
       "html_sha256": "54c3c1b506b826171333ac0b85bad2ff007d9ee69d41c82acfce8c945cdbf7bc",
-      "manifest_sha256": "8874369d82caa47c1861bc1e0dc5371c4d72dc3b0452b97b518153d5a86fdbc9",
+      "manifest_sha256": "227d246e3d23d0b818032dab513e52daed385ce9cf90665060e9c87ed2574614",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-units-values.pdf",
-        "sha256": "9f8ea562d04cc5aaf38d6d908079fb62cedda76ed28ab7ad90b29804a230911f"
+        "sha256": "69ed379e60a41fe8dbea04bc3b50a386d42f7b5eb23e054f521e426d42cc534c"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-fonts-advanced-x-units-values.html",
-      "reference_html_sha256": "54c3c1b506b826171333ac0b85bad2ff007d9ee69d41c82acfce8c945cdbf7bc"
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-units-values.html",
+      "reference_html_sha256": "8ea24517ceaad7b92a2348dc7332643340d336dd30681bcbd44c10ed49494520"
     },
     "interactions-cartesian-generated-content-x-generated-content": {
       "category": "interactions",
@@ -11260,15 +11260,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-grid-x-multicol.html",
       "html_sha256": "da9be7af66e4cfba81125eccc0c7b9eb13d1b0bee76d46672eef4842bd268f7f",
-      "manifest_sha256": "fb06af2a41131fa177dd3248dad61bd53cb9d34ba76736fcd8dfc64d22bf141c",
+      "manifest_sha256": "dd25480fff5aefb18209ed25881a3d2f05b92950f7a758b565480724d44e6150",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-grid-x-multicol.pdf",
-        "sha256": "88161dc05c8ba9f803d444ea23942af9b3466b7b0ec9a906b54651770a09274a"
+        "sha256": "dd3ef5c3d7e5a36d0a3f35ccb7b77c40fc85c1a34f6908eaa857f67eb5549a32"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-grid-x-multicol.html",
-      "reference_html_sha256": "da9be7af66e4cfba81125eccc0c7b9eb13d1b0bee76d46672eef4842bd268f7f"
+      "reference_file": "references/interactions/interactions-cartesian-grid-x-multicol.html",
+      "reference_html_sha256": "28a5d75c50ee4fae1b270f8a234f123715892bd6193a9087423a7d80a46fad53"
     },
     "interactions-cartesian-grid-x-overflow-clipping": {
       "category": "interactions",
@@ -11974,15 +11974,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-multicol-x-tables.html",
       "html_sha256": "e76116c38fcb5dc190c95ac0e6472a4ad84aab4d6cdd016a3f5d3053e4c08760",
-      "manifest_sha256": "dd7d9e000c8e104c127e260f02833b2a3852e830c4b20dae76aaf498343ede44",
+      "manifest_sha256": "abe1b401b6be9f0bab79622119f18bb51de9a991c6f1d644c497ef40ba661d5f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-multicol-x-tables.pdf",
-        "sha256": "1b978741f95d68c378069968716b379a6e53350c6756c83b3c7a3480f9b6007c"
+        "sha256": "0ecdbff48d24e1a5b78760a43bc2c12037de8ca760f337cfa8f2ade4a5ea8cdc"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-multicol-x-tables.html",
-      "reference_html_sha256": "e76116c38fcb5dc190c95ac0e6472a4ad84aab4d6cdd016a3f5d3053e4c08760"
+      "reference_file": "references/interactions/interactions-cartesian-multicol-x-tables.html",
+      "reference_html_sha256": "2c436603091fcb0651ce69711c40e665fcac7b657f4983de6e13d46c0fc4d8ea"
     },
     "interactions-cartesian-multicol-x-text-advanced": {
       "category": "interactions",
@@ -18843,6 +18843,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/images-replaced/svg-inline-gradient-clip-path.html",
       "reference_html_sha256": "dc098c0130a978f33cb99ae6987a2a0884db4a1e5fc5f168d825131d0385bd39"
+    },
+    "svg-inline-leaf-transform-matrices": {
+      "category": "images-replaced",
+      "file": "cases/images-replaced/svg-inline-leaf-transform-matrices.html",
+      "html_sha256": "236e28ec54ae00a341dfafefd3e6a87f419fed8636e6fa4380cce0f6a6137d04",
+      "manifest_sha256": "8afc29f715452ff07118c2454afac04da51d2e11e9276af7faf2a8f544095d21",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/images-replaced/svg-inline-leaf-transform-matrices.pdf",
+        "sha256": "0903a827ea2c7c3847ce7356e73cf601d852c31bbd5c279c1ac5d4121a6e88c8"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/images-replaced/svg-inline-leaf-transform-matrices.html",
+      "reference_html_sha256": "236e28ec54ae00a341dfafefd3e6a87f419fed8636e6fa4380cce0f6a6137d04"
     },
     "svg-inline-linear-gradient": {
       "category": "images-replaced",

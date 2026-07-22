@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>inline svg leaf transform matrices</title>
+<style>
+  @page { size: 256px 256px; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 256px; height: 256px; background: #ffffff; }
+  body { padding: 16px; }
+  svg { display: block; width: 224px; height: 224px; background: #f3f4f8; }
+</style>
+</head>
+<body>
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <rect x="22" y="22" width="56" height="56" fill="#ffffff"></rect>
+    <path d="M 0 5 L 30 5" transform="matrix(-1 0 0 -1 90 10)" fill="none" stroke="#707cde" stroke-width="5"></path>
+    <path d="M 0 5 L 30 5" transform="matrix(0 -1 1 0 90 40)" fill="none" stroke="#c15b78" stroke-width="5"></path>
+    <path d="M 0 5 L 30 5" transform="matrix(1 0 0 1 10 80)" fill="none" stroke="#3f8f67" stroke-width="5"></path>
+    <path d="M 0 5 L 30 5" transform="matrix(0 1 -1 0 10 60)" fill="none" stroke="#d58b35" stroke-width="5"></path>
+  </svg>
+</body>
+</html>

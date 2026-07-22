@@ -21,9 +21,9 @@ Pure rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies
 [![Downloads](https://img.shields.io/crates/d/ironpress.svg)](https://crates.io/crates/ironpress)
 [![WASM](https://img.shields.io/badge/wasm-ready-blueviolet.svg)](../../wiki/WASM-Playground)
 [![Playground](https://img.shields.io/badge/try_it-playground-blueviolet.svg)](https://gastongouron.github.io/ironpress/)
-[![Parity](https://img.shields.io/badge/parity-dashboard-ff69b4.svg)](https://gastongouron.github.io/ironpress/parity/)
+[![Parity report](https://img.shields.io/badge/parity-report-ff69b4.svg)](tests/parity/REPORT.md)
 
-**[Try it in your browser](https://gastongouron.github.io/ironpress/)** | **[Parity dashboard](https://gastongouron.github.io/ironpress/parity/)** | **[Wiki](../../wiki)**
+**[Try it in your browser](https://gastongouron.github.io/ironpress/)** | **[Parity report](tests/parity/REPORT.md)** | **[Wiki](../../wiki)**
 
 </div>
 
@@ -103,7 +103,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
 | **WASM** | `npm install ironpress` - runs 100% client-side in the browser | [WASM & Playground](../../wiki/WASM-Playground) |
-| **Testing** | 2200+ unit tests, property-based tests, 6 fuzz targets, parity dashboard | [Testing Strategy](../../wiki/Testing-Strategy) |
+| **Testing** | 2200+ unit tests, property-based tests, 6 fuzz targets, parity report | [Testing Strategy](../../wiki/Testing-Strategy) |
 
 ## Custom fonts
 

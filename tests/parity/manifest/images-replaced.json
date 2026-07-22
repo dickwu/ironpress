@@ -554,5 +554,20 @@
       "probe-fill-box",
       "probe-image-render"
     ]
+  },
+  {
+    "id": "svg-inline-leaf-transform-matrices",
+    "category": "images-replaced",
+    "feature": "inline-svg",
+    "subfeature": "leaf-transform-matrices",
+    "description": "Transform matrices on SVG leaf paths position and orient four independently colored strokes; catches applying transforms only to SVG groups while discarding them on graphics elements.",
+    "file": "cases/images-replaced/svg-inline-leaf-transform-matrices.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box"
+    ]
   }
 ]

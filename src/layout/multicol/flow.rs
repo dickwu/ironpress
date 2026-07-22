@@ -1107,25 +1107,10 @@ pub(super) fn item_minimum_fragment_size(item: &MultiColItem) -> f32 {
 /// Anything else (multiple flattened elements, images, tables, …) is treated as
 /// atomic and never split.
 pub(super) fn item_is_splittable(item: &MultiColItem) -> bool {
-    #[derive(Default)]
-    struct Splittable(bool);
-
-    impl LayoutVisitor for Splittable {
-        fn visit_container(&mut self, _element: &Container) {
-            self.0 = true;
-        }
-
-        fn visit_text_block(&mut self, _element: &TextBlock) {
-            self.0 = true;
-        }
-    }
-
     let [element] = item.elements.as_slice() else {
         return false;
     };
-    let mut visitor = Splittable::default();
-    element.accept(&mut visitor);
-    visitor.0
+    element.block_fragmentation_source().is_some()
 }
 
 /// Remove source text lines assigned to an earlier fragment, retaining a

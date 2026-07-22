@@ -839,7 +839,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-backgrounds-borders-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-backgrounds-borders-x-generated-content",
@@ -1322,7 +1323,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-backgrounds-gradients-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-backgrounds-gradients-x-generated-content",
@@ -1784,7 +1786,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-block-box-model-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-block-box-model-x-generated-content",
@@ -2225,7 +2228,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-clip-mask-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-clip-mask-x-generated-content",
@@ -2645,7 +2649,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-color-opacity-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-color-opacity-x-generated-content",
@@ -3044,7 +3049,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-effects-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-effects-x-generated-content",
@@ -3422,7 +3428,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-filters-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-filters-x-generated-content",
@@ -3779,7 +3786,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-flexbox-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-flexbox-x-generated-content",
@@ -3905,7 +3913,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-flexbox-x-multicol.html"
   },
   {
     "id": "interactions-cartesian-flexbox-x-overflow-clipping",
@@ -4115,7 +4124,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-fonts-advanced.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-generated-content",
@@ -4136,7 +4146,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-generated-content.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-grid",
@@ -4157,7 +4168,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-grid.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-images-replaced",
@@ -4178,7 +4190,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-images-replaced.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-inline-text",
@@ -4199,7 +4212,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-inline-text.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-lists-counters",
@@ -4220,7 +4234,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-lists-counters.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-multicol",
@@ -4241,7 +4256,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-multicol.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-overflow-clipping",
@@ -4262,7 +4278,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-paged-media",
@@ -4283,7 +4300,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-paged-media.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-positioning",
@@ -4304,7 +4322,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-positioning.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-selectors-cascade",
@@ -4325,7 +4344,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-selectors-cascade.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-tables",
@@ -4346,7 +4366,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-tables.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-text-advanced",
@@ -4367,7 +4388,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-text-advanced.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-transforms",
@@ -4388,7 +4410,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-transforms.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-typography",
@@ -4409,7 +4432,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-typography.html"
   },
   {
     "id": "interactions-cartesian-fonts-advanced-x-units-values",
@@ -4430,7 +4454,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-units-values.html"
   },
   {
     "id": "interactions-cartesian-generated-content-x-generated-content",
@@ -4850,7 +4875,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-grid-x-multicol.html"
   },
   {
     "id": "interactions-cartesian-grid-x-overflow-clipping",
@@ -4886,14 +4912,14 @@
     ],
     "kind": "interaction",
     "oracle": "chrome",
-    "reference_file": "references/interactions/interactions-cartesian-grid-x-paged-media.html",
     "expected_support": "implemented",
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-grid-x-paged-media.html"
   },
   {
     "id": "interactions-cartesian-grid-x-positioning",
@@ -5847,7 +5873,6 @@
     "subfeature": "same-element-and-bidirectional-nesting",
     "description": "Cartesian family interaction for multicol and paged-media: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
     "file": "cases/interactions/interactions-cartesian-multicol-x-paged-media.html",
-    "reference_file": "references/interactions/interactions-cartesian-multicol-x-paged-media.html",
     "interaction_of": [
       "multicol",
       "paged-media"
@@ -5860,7 +5885,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-multicol-x-paged-media.html"
   },
   {
     "id": "interactions-cartesian-multicol-x-positioning",
@@ -5923,7 +5949,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-multicol-x-tables.html"
   },
   {
     "id": "interactions-cartesian-multicol-x-text-advanced",

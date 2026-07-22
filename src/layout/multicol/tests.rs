@@ -4,7 +4,9 @@ use super::flow::{
     project_text_lines_into_fragment,
 };
 use super::*;
-use crate::layout::elements::{LayoutElementTestExt, LayoutElementTestMutExt};
+use crate::layout::elements::{
+    Container, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, Table,
+};
 use crate::layout::engine::{LayoutBorderSide, TextLine};
 use crate::style::computed::{BorderStyle, Position};
 
@@ -66,6 +68,21 @@ fn atomic_avoid_item_with_margin(box_height: f32, margin_bottom: f32) -> MultiCo
         break_inside_avoid_column: true,
         ..item(box_height + margin_bottom, false)
     }
+}
+
+#[test]
+fn multicol_splitting_uses_fragmentation_capability_not_principal_box_shape() {
+    let container = MultiColItem {
+        elements: vec![Container::default().boxed()],
+        ..item(48.0, false)
+    };
+    let table = MultiColItem {
+        elements: vec![Table::new(Container::default()).boxed()],
+        ..item(48.0, false)
+    };
+
+    assert!(item_is_splittable(&container));
+    assert!(!item_is_splittable(&table));
 }
 
 #[test]

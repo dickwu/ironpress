@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fonts-advanced x text-advanced interaction — standards-derived reference</title>
+<style>
+  @page { size: 520px 200px; margin: 0; }
+
+  @font-face {
+    font-family: MatrixSans;
+    src: url('../../fonts/ParitySans.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+  }
+  html { font-family: ParitySans; font-size: 16px; line-height: 1.2; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; color: #17324d; font-size: 0; white-space: nowrap; }
+  .stage {
+    display: inline-flex;
+    width: 156px;
+    height: 164px;
+    margin-right: 8px;
+    align-items: center;
+    justify-content: center;
+    background: #f7fafc;
+    border: 1px solid #cbd5e1;
+    font-size: 16px;
+    vertical-align: top;
+  }
+  .stage:last-child { margin-right: 0; }
+  .node {
+    width: 126px;
+    height: 68px;
+    padding: 7px;
+    border: 2px solid #577590;
+    background-color: #e7f5ff;
+    color: #17324d;
+  }
+  .node.inner {
+    width: 58px;
+    height: 48px;
+    padding: 5px;
+  }
+  .node.outer { height: 96px; }
+  .own { height: 22px; white-space: nowrap; }
+  .asset { display: none; width: 34px; height: 24px; object-fit: cover; object-position: 70% 50%; }
+  .f-generated-content::before { content: '‹'; color: #d62828; font-weight: 700; }
+  .f-generated-content::after { content: '›'; color: #2a9d8f; font-weight: 700; }
+  .f-images-replaced > .own > .asset { display: inline-block; }
+  .f-inline-text > .own > .token:first-of-type { font-size: .72em; vertical-align: super; }
+  .f-lists-counters > .own > .token { counter-increment: pair-item; }
+  .f-lists-counters > .own > .token::before { content: counter(pair-item) '.'; color: #d62828; }
+  .f-positioning > .own > .token:last-of-type { position: absolute; right: 4px; bottom: 4px; }
+  .f-selectors-cascade:is(.node) > .own > .token:nth-of-type(2) { color: #c1121f; }
+  @supports (display:grid) {
+    .f-selectors-cascade { border-left-color: #06d6a0; border-right-color: #06d6a0; }
+  }
+  .f-tables > .own > .token { display: table-cell; vertical-align: middle; }
+  /* CSS Fonts 4 requires the authored 20deg synthetic oblique angle.
+     Chromium substitutes its 14deg default, so this oracle uses the
+     same bundled outlines pre-sheared 20deg about the baseline. */
+  @font-face {
+    font-family: MatrixSansOblique20Reference;
+    src: url('data:font/woff2;base64,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') format('woff2');
+    font-style: normal;
+    font-weight: 400;
+  }
+  .f-fonts-advanced {font-family:MatrixSansOblique20Reference;font-style:normal;}
+  .f-text-advanced {text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:#ef476f;text-decoration-thickness:2px;text-underline-offset:3px;text-shadow:1px 1px 0 #fff;}
+</style>
+</head>
+<body>
+  <div class="stage"><div class="node  f-fonts-advanced f-text-advanced"><div class="own"><span class="token">Ag</span><span class="token">Bb</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div></div></div>
+  <div class="stage"><div class="node outer f-fonts-advanced"><div class="own"><span class="token">Ag</span><span class="token">Bb</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div><div class="node inner f-text-advanced"><div class="own"><span class="token">A</span><span class="token">B</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div></div></div></div>
+  <div class="stage"><div class="node outer f-text-advanced"><div class="own"><span class="token">Ag</span><span class="token">Bb</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div><div class="node inner f-fonts-advanced"><div class="own"><span class="token">A</span><span class="token">B</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div></div></div></div>
+</body>
+</html>

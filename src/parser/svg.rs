@@ -642,32 +642,22 @@ fn parse_svg_node_with_viewport(
     ctx: &mut SvgParseContext<'_>,
 ) -> Option<SvgNode> {
     let tag = el.raw_tag_name.as_str();
-    match tag {
+    let node = match tag {
         "g" => {
-            let transform = el
-                .attributes
-                .get("transform")
-                .and_then(|v| parse_transform(v));
             let style = parse_svg_style(el);
             let children = parse_svg_children(&el.children, parent_viewport, ctx);
             Some(SvgNode::Group {
-                transform,
+                transform: None,
                 children,
                 style,
             })
         }
         "svg" => {
             let child_viewport = resolve_nested_svg_viewport(el, parent_viewport);
-            let transform = compose_transform(
-                el.attributes
-                    .get("transform")
-                    .and_then(|v| parse_transform(v)),
-                nested_svg_viewport_transform(el, child_viewport),
-            );
             let style = parse_svg_style(el);
             let children = parse_svg_children(&el.children, child_viewport, ctx);
             Some(SvgNode::Group {
-                transform,
+                transform: nested_svg_viewport_transform(el, child_viewport),
                 children,
                 style,
             })
@@ -679,16 +669,9 @@ fn parse_svg_node_with_viewport(
                     .or_else(|| el.attributes.get("xlink:href"))?,
             )?;
             let referenced = parse_svg_referenced_node(&href, parent_viewport, ctx)?;
-            let translate = svg_translate_from_use(el);
-            let transform = compose_transform(
-                el.attributes
-                    .get("transform")
-                    .and_then(|v| parse_transform(v)),
-                translate,
-            );
             let style = parse_svg_style(el);
             Some(SvgNode::Group {
-                transform,
+                transform: svg_translate_from_use(el),
                 children: vec![referenced],
                 style,
             })
@@ -839,6 +822,41 @@ fn parse_svg_node_with_viewport(
             })
         }
         _ => None,
+    }?;
+
+    Some(apply_svg_element_transform(el, node))
+}
+
+/// Apply `transform` uniformly to every supported SVG graphics element.
+///
+/// A transform is an element-level property in SVG, not a group-only feature.
+/// Leaf nodes stay focused on their own geometry and are wrapped in a neutral
+/// group, while group-like nodes compose their intrinsic viewport/use mapping
+/// with the explicit element transform.
+fn apply_svg_element_transform(el: &ElementNode, node: SvgNode) -> SvgNode {
+    let Some(element_transform) = el
+        .attributes
+        .get("transform")
+        .and_then(|value| parse_transform(value))
+    else {
+        return node;
+    };
+
+    match node {
+        SvgNode::Group {
+            transform,
+            children,
+            style,
+        } => SvgNode::Group {
+            transform: compose_transform(Some(element_transform), transform),
+            children,
+            style,
+        },
+        leaf => SvgNode::Group {
+            transform: Some(element_transform),
+            children: vec![leaf],
+            style: SvgStyle::default(),
+        },
     }
 }
 
@@ -3649,6 +3667,30 @@ mod tests {
                 assert_eq!(commands.len(), 3);
             }
             _ => panic!("Expected Path"),
+        }
+    }
+
+    #[test]
+    fn parse_node_path_preserves_element_transform() {
+        let el = make_el(
+            "path",
+            vec![
+                ("d", "M 0 7.5 L 84.5 7.5"),
+                ("transform", "matrix(-0.85 0 0 -0.85 337.5 50.3)"),
+            ],
+        );
+
+        let node = parse_svg_node(&el).unwrap();
+        match node {
+            SvgNode::Group {
+                transform: Some(SvgTransform::Matrix(a, b, c, d, e, f)),
+                children,
+                ..
+            } => {
+                assert_eq!((a, b, c, d, e, f), (-0.85, 0.0, 0.0, -0.85, 337.5, 50.3));
+                assert!(matches!(children.as_slice(), [SvgNode::Path { .. }]));
+            }
+            other => panic!("expected transformed path group, got {other:?}"),
         }
     }
 

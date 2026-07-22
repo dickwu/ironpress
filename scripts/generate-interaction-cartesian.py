@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import itertools
 import json
 from dataclasses import dataclass
@@ -26,8 +27,15 @@ PARITY = ROOT / "tests" / "parity"
 MANIFESTS = PARITY / "manifest"
 GENERATED_MANIFEST = MANIFESTS / "interactions.json"
 CASES = PARITY / "cases" / "interactions"
+REFERENCES = PARITY / "references" / "interactions"
 PREFIX = "interactions-cartesian-"
 CONTROL_ID = "interaction-product-carrier-control"
+OBLIQUE_REFERENCE_FONT = PARITY / "fonts" / "MatrixSansOblique20.woff2"
+
+STATIC_REFERENCE_PAIRS = {
+    ("grid", "paged-media"),
+    ("multicol", "paged-media"),
+}
 
 IMAGE_DATA = (
     "data:image/png;base64,"
@@ -39,6 +47,18 @@ IMAGE_DATA = (
 class Family:
     slug: str
     css: str
+
+
+@dataclass(frozen=True)
+class CssRule:
+    selector: str
+    declaration: str
+
+
+@dataclass(frozen=True)
+class ReferenceMaterialization:
+    rules: tuple[CssRule, ...]
+    rationale: str
 
 
 FAMILIES = {
@@ -83,6 +103,41 @@ FAMILIES = {
         Family("typography", "font-size:18px;font-weight:700;letter-spacing:.7px;"),
         Family("units-values", "width:calc(100% - 9px);padding-left:5%;"),
     )
+}
+
+
+ATOMIC_MULTICOL_REFERENCES = {
+    ("flexbox", "multicol"): ReferenceMaterialization(
+        rules=(
+            CssRule(
+                "body > .stage:nth-child(3) > .f-multicol > .inner",
+                "break-before: column;",
+            ),
+        ),
+        rationale="the unbreakable flex child establishes the balanced column height",
+    ),
+    ("grid", "multicol"): ReferenceMaterialization(
+        rules=(
+            CssRule(
+                "body > .stage:nth-child(1) > .f-grid",
+                "column-rule-style: none;",
+            ),
+            CssRule(
+                "body > .stage:nth-child(3) > .f-multicol > .inner",
+                "break-before: column;",
+            ),
+        ),
+        rationale="the unbreakable grid child establishes the balanced column height",
+    ),
+    ("multicol", "tables"): ReferenceMaterialization(
+        rules=(
+            CssRule(
+                "body > .stage:nth-child(2) > .f-multicol > .inner",
+                "break-before: column;",
+            ),
+        ),
+        rationale="the unbreakable table child establishes the balanced column height",
+    ),
 }
 
 
@@ -191,6 +246,15 @@ def class_rule(family: Family) -> str:
     return f"  .f-{family.slug} {{{family.css}}}\n"
 
 
+def reference_class_rule(family: Family) -> str:
+    if family.slug == "fonts-advanced":
+        return (
+            "  .f-fonts-advanced {"
+            "font-family:MatrixSansOblique20Reference;font-style:normal;}\n"
+        )
+    return class_rule(family)
+
+
 def node(classes: str, nested: str = "", role: str = "") -> str:
     token_a, token_b = ("A", "B") if role == "inner" else ("Ag", "Bb")
     return (
@@ -199,6 +263,14 @@ def node(classes: str, nested: str = "", role: str = "") -> str:
         f'<span class="token">{token_b}</span>'
         f'<img class="asset" alt="" src="{IMAGE_DATA}"></div>{nested}</div>'
     )
+
+
+def interaction_stages(first: Family, second: Family) -> list[str]:
+    return [
+        node(f"f-{first.slug} f-{second.slug}"),
+        node(f"f-{first.slug}", node(f"f-{second.slug}", role="inner"), role="outer"),
+        node(f"f-{second.slug}", node(f"f-{first.slug}", role="inner"), role="outer"),
+    ]
 
 
 def document(title: str, pair_css: str, stages: list[str], paged: bool = False) -> str:
@@ -236,17 +308,70 @@ def fixture_html(first: Family, second: Family) -> str:
     pair_css = class_rule(first)
     if second != first:
         pair_css += class_rule(second)
-    stages = [
-        node(f"f-{first.slug} f-{second.slug}"),
-        node(f"f-{first.slug}", node(f"f-{second.slug}", role="inner"), role="outer"),
-        node(f"f-{second.slug}", node(f"f-{first.slug}", role="inner"), role="outer"),
-    ]
     return document(
         f"{first.slug} x {second.slug} interaction",
         pair_css,
-        stages,
+        interaction_stages(first, second),
         paged="paged-media" in {first.slug, second.slug},
     )
+
+
+def oblique_reference_html(first: Family, second: Family) -> str:
+    encoded_font = base64.b64encode(OBLIQUE_REFERENCE_FONT.read_bytes()).decode("ascii")
+    pair_css = (
+        "  /* CSS Fonts 4 requires the authored 20deg synthetic oblique angle.\n"
+        "     Chromium substitutes its 14deg default, so this oracle uses the\n"
+        "     same bundled outlines pre-sheared 20deg about the baseline. */\n"
+        "  @font-face {\n"
+        "    font-family: MatrixSansOblique20Reference;\n"
+        f"    src: url('data:font/woff2;base64,{encoded_font}') format('woff2');\n"
+        "    font-style: normal;\n"
+        "    font-weight: 400;\n"
+        "  }\n"
+    )
+    pair_css += reference_class_rule(first)
+    if second != first:
+        pair_css += reference_class_rule(second)
+    return document(
+        f"{first.slug} x {second.slug} interaction — standards-derived reference",
+        pair_css,
+        interaction_stages(first, second),
+        paged="paged-media" in {first.slug, second.slug},
+    )
+
+
+def atomic_multicol_reference_html(first: Family, second: Family) -> str:
+    materialization = ATOMIC_MULTICOL_REFERENCES[(first.slug, second.slug)]
+    pair_css = class_rule(first)
+    if second != first:
+        pair_css += class_rule(second)
+    pair_css += (
+        "  /* CSS Multicol 1 section 7.1 establishes the shortest balanced\n"
+        "     column height, then fills columns sequentially. Chromium offsets\n"
+        f"     column two even though {materialization.rationale}. Force only\n"
+        "     that required column boundary in this reference. CSS Multicol's\n"
+        "     block-container applicability also suppresses grid-only rules. */\n"
+    )
+    pair_css += "".join(
+        f"  {rule.selector} {{{rule.declaration}}}\n" for rule in materialization.rules
+    )
+    return document(
+        f"{first.slug} x {second.slug} interaction — standards-derived reference",
+        pair_css,
+        interaction_stages(first, second),
+    )
+
+
+def reference_file(first: Family, second: Family) -> str | None:
+    pair = (first.slug, second.slug)
+    if (
+        "fonts-advanced" in pair
+        or pair in STATIC_REFERENCE_PAIRS
+        or pair in ATOMIC_MULTICOL_REFERENCES
+    ):
+        fixture_id = f"{PREFIX}{first.slug}-x-{second.slug}"
+        return f"references/interactions/{fixture_id}.html"
+    return None
 
 
 def carrier_html() -> str:
@@ -263,7 +388,7 @@ def carrier_html() -> str:
 
 def manifest_entry(first: Family, second: Family) -> dict[str, object]:
     fixture_id = f"{PREFIX}{first.slug}-x-{second.slug}"
-    return {
+    entry: dict[str, object] = {
         "id": fixture_id,
         "category": "interactions",
         "feature": "supported-family-cartesian-product",
@@ -285,6 +410,9 @@ def manifest_entry(first: Family, second: Family) -> dict[str, object]:
             "probe-color-swatch",
         ],
     }
+    if path := reference_file(first, second):
+        entry["reference_file"] = path
+    return entry
 
 
 def generated_files() -> dict[Path, str]:
@@ -304,6 +432,12 @@ def generated_files() -> dict[Path, str]:
         entry = manifest_entry(first, second)
         path = PARITY / str(entry["file"])
         generated[path] = fixture_html(first, second)
+        if "fonts-advanced" in {first.slug, second.slug}:
+            reference_path = PARITY / str(entry["reference_file"])
+            generated[reference_path] = oblique_reference_html(first, second)
+        elif (first.slug, second.slug) in ATOMIC_MULTICOL_REFERENCES:
+            reference_path = PARITY / str(entry["reference_file"])
+            generated[reference_path] = atomic_multicol_reference_html(first, second)
         manifest.append(entry)
     control_file = f"cases/interactions/{CONTROL_ID}.html"
     generated[PARITY / control_file] = carrier_html()
@@ -330,6 +464,24 @@ def stale_generated_cases(expected: set[Path]) -> list[Path]:
     return sorted(path for path in candidates if path.is_file() and path not in expected)
 
 
+def stale_generated_references(expected: set[Path]) -> list[Path]:
+    candidates = {
+        *REFERENCES.glob(f"{PREFIX}fonts-advanced-x-*.html"),
+        *REFERENCES.glob(f"{PREFIX}*-x-fonts-advanced.html"),
+        *(REFERENCES / f"{PREFIX}{first}-x-{second}.html"
+          for first, second in ATOMIC_MULTICOL_REFERENCES),
+    }
+    return sorted(path for path in candidates if path.is_file() and path not in expected)
+
+
+def generated_counts(files: dict[Path, str]) -> tuple[int, int]:
+    pairs = sum(
+        path.parent == CASES and path.name.startswith(PREFIX) for path in files
+    )
+    references = sum(path.parent == REFERENCES for path in files)
+    return pairs, references
+
+
 def check(files: dict[Path, str]) -> int:
     problems = []
     for path, expected in files.items():
@@ -340,21 +492,35 @@ def check(files: dict[Path, str]) -> int:
     problems.extend(
         f"unexpected {path.relative_to(ROOT)}" for path in stale_generated_cases(set(files))
     )
+    problems.extend(
+        f"unexpected {path.relative_to(ROOT)}"
+        for path in stale_generated_references(set(files))
+    )
     if problems:
         print("interaction Cartesian generation is stale:")
         print("\n".join(f"  - {problem}" for problem in problems))
         return 1
-    print(f"interaction Cartesian generation is current: {len(files) - 2} pairs + carrier control")
+    pairs, references = generated_counts(files)
+    print(
+        "interaction Cartesian generation is current: "
+        f"{pairs} pairs + {references} standards-derived references + carrier control"
+    )
     return 0
 
 
 def write(files: dict[Path, str]) -> None:
     for path in stale_generated_cases(set(files)):
         path.unlink()
+    for path in stale_generated_references(set(files)):
+        path.unlink()
     for path, content in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    print(f"generated {len(files) - 2} Cartesian interaction pairs + carrier control")
+    pairs, references = generated_counts(files)
+    print(
+        f"generated {pairs} Cartesian interaction pairs + "
+        f"{references} standards-derived references + carrier control"
+    )
 
 
 def main() -> int:
