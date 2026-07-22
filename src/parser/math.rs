@@ -112,10 +112,16 @@ pub fn parse_math(input: &str) -> MathNode {
     let mut pos = 0;
     let mut depth = 0;
     let nodes = parse_expression(&tokens, &mut pos, &mut depth);
-    if nodes.len() == 1 {
-        nodes.into_iter().next().unwrap()
-    } else {
-        MathNode::Row(nodes)
+    row_or_single(nodes)
+}
+
+fn row_or_single(mut nodes: Vec<MathNode>) -> MathNode {
+    if nodes.len() != 1 {
+        return MathNode::Row(nodes);
+    }
+    match nodes.pop() {
+        Some(node) => node,
+        None => MathNode::Row(Vec::new()),
     }
 }
 
@@ -301,12 +307,7 @@ fn parse_atom(tokens: &[Token], pos: &mut usize, depth: &mut usize) -> Option<Ma
             if *pos < tokens.len() && tokens[*pos] == Token::RBrace {
                 *pos += 1;
             }
-            let node = if inner.len() == 1 {
-                inner.into_iter().next().unwrap()
-            } else {
-                MathNode::Row(inner)
-            };
-            Some(node)
+            Some(row_or_single(inner))
         }
         _ => {
             *pos += 1;
@@ -322,11 +323,7 @@ fn parse_group(tokens: &[Token], pos: &mut usize, depth: &mut usize) -> MathNode
         if *pos < tokens.len() && tokens[*pos] == Token::RBrace {
             *pos += 1;
         }
-        if inner.len() == 1 {
-            inner.into_iter().next().unwrap()
-        } else {
-            MathNode::Row(inner)
-        }
+        row_or_single(inner)
     } else if let Some(atom) = parse_atom(tokens, pos, depth) {
         atom
     } else {
@@ -410,12 +407,7 @@ fn parse_command(
                 if *pos < tokens.len() && tokens[*pos] == Token::RBracket {
                     *pos += 1;
                 }
-                let node = if inner.len() == 1 {
-                    inner.into_iter().next().unwrap()
-                } else {
-                    MathNode::Row(inner)
-                };
-                Some(Box::new(node))
+                Some(Box::new(row_or_single(inner)))
             } else {
                 None
             };
@@ -630,11 +622,7 @@ fn parse_command(
             } else {
                 ')'
             };
-            let body = if inner.len() == 1 {
-                inner.into_iter().next().unwrap()
-            } else {
-                MathNode::Row(inner)
-            };
+            let body = row_or_single(inner);
             Some(MathNode::Delimited {
                 open,
                 close,
@@ -773,11 +761,7 @@ fn parse_environment(
             Token::Ampersand => {
                 *pos += 1;
                 let cell_nodes = std::mem::take(&mut current_row);
-                let cell = if cell_nodes.len() == 1 {
-                    cell_nodes.into_iter().next().unwrap()
-                } else {
-                    MathNode::Row(cell_nodes)
-                };
+                let cell = row_or_single(cell_nodes);
                 // We store cells directly; build row at \\
                 if let Some(last_row) = rows.last_mut() {
                     last_row.push(cell);
@@ -789,11 +773,7 @@ fn parse_environment(
                 *pos += 1;
                 // End current cell, end current row
                 let cell_nodes = std::mem::take(&mut current_row);
-                let cell = if cell_nodes.len() == 1 {
-                    cell_nodes.into_iter().next().unwrap()
-                } else {
-                    MathNode::Row(cell_nodes)
-                };
+                let cell = row_or_single(cell_nodes);
                 if let Some(last_row) = rows.last_mut() {
                     last_row.push(cell);
                 } else {
@@ -810,11 +790,7 @@ fn parse_environment(
 
     // Flush remaining
     if !current_row.is_empty() {
-        let cell = if current_row.len() == 1 {
-            current_row.into_iter().next().unwrap()
-        } else {
-            MathNode::Row(current_row)
-        };
+        let cell = row_or_single(current_row);
         if let Some(last_row) = rows.last_mut() {
             last_row.push(cell);
         } else {

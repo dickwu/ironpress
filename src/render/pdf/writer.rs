@@ -1,0 +1,183 @@
+use super::*;
+
+#[derive(Clone, Copy)]
+pub(crate) struct RenderOpts {
+    pub compress: bool,
+    pub jpeg_quality: u8,
+    pub auto_resize_images: bool,
+    /// One conversion-owned policy for all raster fallbacks. Keeping this
+    /// grouped prevents render paths from silently choosing their own density.
+    pub raster_quality: crate::style::raster_quality::RasterQuality,
+    /// Skip embedding raster images fully covered by a later fully-opaque
+    /// rectangular element (default false). Conservative; zero visual change.
+    pub occlusion_cull: bool,
+}
+
+impl Default for RenderOpts {
+    fn default() -> Self {
+        Self {
+            compress: true,
+            jpeg_quality: DEFAULT_JPEG_QUALITY,
+            auto_resize_images: true,
+            raster_quality: crate::style::raster_quality::RasterQuality::default(),
+            occlusion_cull: false,
+        }
+    }
+}
+
+/// Minimal PDF writer that produces valid PDF files.
+#[derive(Default)]
+pub(crate) struct PdfWriter {
+    pub(super) objects: Vec<String>,
+    /// Raw binary objects stored separately (index corresponds to objects slot).
+    pub(super) binary_objects: std::collections::HashMap<usize, Vec<u8>>,
+    pub(super) page_ids: Vec<usize>,
+    /// Annotation object IDs grouped by page index.
+    pub(super) page_annotations: Vec<Vec<usize>>,
+    /// Image references grouped by page index.
+    pub(super) page_images: Vec<Vec<ImageRef>>,
+    /// ExtGState entries (name, opacity) grouped by page index.
+    pub(super) page_ext_gstates: Vec<Vec<(String, f32)>>,
+    /// Shading dictionary entries grouped by page index.
+    pub(super) page_shadings: Vec<Vec<ShadingEntry>>,
+    /// Function-based conic shadings are document-global resources, like the shared
+    /// page resource dictionary that names them.
+    pub(super) conic_shadings: Vec<ConicShadingEntry>,
+    /// Custom TrueType font entries.
+    pub(super) custom_font_entries: Vec<CustomFontEntry>,
+    /// CSS `mask-image` transparency-group masks. Names are global because PDF
+    /// page resource dictionaries share the entries.
+    pub(super) soft_mask_gstates: Vec<PdfSoftMaskGState>,
+    /// Repeated-background pattern cells and their page-visible local forms.
+    pub(super) tiling_patterns: Vec<PdfTilingPatternEntry>,
+    /// Direct CSS gradients whose Pattern matrix lives in default page space.
+    pub(super) pdf_patterns: Vec<PdfPatternEntry>,
+    /// Page-visible Forms whose content needs an exact, acyclic resource map.
+    pub(super) local_forms: Vec<PdfLocalFormEntry>,
+    pub(super) svg_defs: crate::parser::svg::SvgDefs,
+    pub(super) opts: RenderOpts,
+    pub(super) page_content_transform: PageContentTransform,
+}
+
+impl PdfWriter {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn next_id(&self) -> usize {
+        self.objects.len() + 1
+    }
+
+    pub(crate) fn image_dimensions(&self, object_id: usize) -> Option<RasterDimensions> {
+        let object = self.objects.get(object_id.checked_sub(1)?)?;
+        let value_after = |name| {
+            object
+                .split_ascii_whitespace()
+                .zip(object.split_ascii_whitespace().skip(1))
+                .find_map(|(key, value)| (key == name).then(|| value.parse().ok()).flatten())
+        };
+        Some(RasterDimensions {
+            width: value_after("/Width")?,
+            height: value_after("/Height")?,
+        })
+    }
+
+    pub(super) fn add_conic_shading(
+        &mut self,
+        domain: PdfRect,
+        function: ConicShadingFunction,
+    ) -> String {
+        let name = format!("ShConic{}", self.conic_shadings.len());
+        self.conic_shadings.push(ConicShadingEntry {
+            name: name.clone(),
+            domain,
+            function,
+        });
+        name
+    }
+
+    pub(super) fn add_transparency_group_form(
+        &mut self,
+        stream: String,
+        paint_box: PdfRect,
+    ) -> ImageRef {
+        self.add_local_form(
+            stream,
+            paint_box,
+            Some("/Group << /Type /Group /S /Transparency /CS /DeviceRGB /I true /K false >>"),
+        )
+    }
+
+    pub(super) fn register_soft_mask(&mut self, name: String, form_id: usize) {
+        self.soft_mask_gstates.push(PdfSoftMaskGState {
+            name,
+            form_id,
+            mode: PdfSoftMaskMode::Luminosity,
+        });
+    }
+
+    /// Register a transparency form whose composited alpha is the mask.
+    ///
+    /// Layered CSS masks must retain alpha while their sources are composed;
+    /// reducing the final group to luminosity would lose that compositing
+    /// result for overlapping translucent coverage.
+    pub(super) fn register_alpha_soft_mask(&mut self, name: String, form_id: usize) {
+        self.soft_mask_gstates.push(PdfSoftMaskGState {
+            name,
+            form_id,
+            mode: PdfSoftMaskMode::Alpha,
+        });
+    }
+
+    pub(super) fn add_plain_local_form(&mut self, stream: String, paint_box: PdfRect) -> ImageRef {
+        self.add_local_form(stream, paint_box, None)
+    }
+
+    fn add_local_form(
+        &mut self,
+        stream: String,
+        paint_box: PdfRect,
+        group: Option<&str>,
+    ) -> ImageRef {
+        let form_id = self.next_id();
+        let [x, x1, y, y1] = paint_box.xy_domain();
+        let resources = PdfResourceUsage::from_stream(&stream);
+        let bytes = stream.into_bytes();
+        let group = group.map_or_else(String::new, |group| format!(" {group}"));
+        self.objects.push(format!(
+            "{form_id} 0 obj\n<< /Type /XObject /Subtype /Form /FormType 1 /BBox [{x} {y} {x1} {y1}]{group} /Resources __IP_LOCAL_FORM_RESOURCES__ /Length {len} >>\nstream\n",
+            len = bytes.len(),
+        ));
+        self.binary_objects.insert(form_id, bytes);
+        self.local_forms
+            .push(PdfLocalFormEntry { form_id, resources });
+        ImageRef {
+            name: format!("Fm{form_id}"),
+            obj_id: form_id,
+        }
+    }
+}
+
+/// The PDF soft-mask channel extracted from its transparency group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum PdfSoftMaskMode {
+    #[default]
+    Luminosity,
+    Alpha,
+}
+
+impl PdfSoftMaskMode {
+    pub(super) const fn pdf_name(self) -> &'static str {
+        match self {
+            Self::Luminosity => "/Luminosity",
+            Self::Alpha => "/Alpha",
+        }
+    }
+}
+
+/// One named PDF transparency-group mask.
+pub(super) struct PdfSoftMaskGState {
+    pub(super) name: String,
+    pub(super) form_id: usize,
+    pub(super) mode: PdfSoftMaskMode,
+}

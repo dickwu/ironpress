@@ -6,9 +6,6 @@
     "subfeature": "three",
     "description": "Six fixed-height bordered blocks flowed into a three-column container (column-count: 3); tests column fragmentation into equal-width tracks.",
     "file": "cases/multicol/multicol-column-count-three.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "partial",
     "depends_on": [
@@ -25,9 +22,6 @@
     "subfeature": "text-flow",
     "description": "Four short ParitySans paragraphs balanced across a two-column container (column-count: 2); tests text fragmentation and column balancing.",
     "file": "cases/multicol/multicol-column-count-text.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "partial",
     "depends_on": [
@@ -45,9 +39,6 @@
     "subfeature": "px",
     "description": "Three-column container with an explicit 40px column-gap separating the tracks; tests inter-column spacing.",
     "file": "cases/multicol/multicol-column-gap.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -64,9 +55,6 @@
     "subfeature": "px",
     "description": "Container using column-width: 140px so the column count is derived from the available inline size.",
     "file": "cases/multicol/multicol-column-width.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -83,9 +71,6 @@
     "subfeature": "shorthand",
     "description": "columns: 120px 3 shorthand setting both column-width and column-count at once.",
     "file": "cases/multicol/multicol-columns-shorthand.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -102,9 +87,6 @@
     "subfeature": "solid",
     "description": "Three-column container with a 6px solid column-rule painted in each gap, spanning the full content-box height.",
     "file": "cases/multicol/multicol-column-rule.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -121,9 +103,6 @@
     "subfeature": "all",
     "description": "A banner element with column-span: all spanning the full width above six blocks distributed into three columns.",
     "file": "cases/multicol/multicol-column-span-all.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -140,9 +119,6 @@
     "subfeature": "avoid",
     "description": "Six fixed-height cards with break-inside: avoid flowed across two columns; each atomic card stays whole within a column.",
     "file": "cases/multicol/multicol-break-inside-avoid.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -159,9 +135,6 @@
     "subfeature": "count-only",
     "description": "columns: 4 shorthand with only a column-count; four equal-width tracks.",
     "file": "cases/multicol/multicol-columns-count-only.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -178,9 +151,6 @@
     "subfeature": "width-only",
     "description": "columns: 140px shorthand with only a column-width; the used column count is derived from the inline size.",
     "file": "cases/multicol/multicol-columns-width-only.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -197,9 +167,6 @@
     "subfeature": "count-and-width",
     "description": "column-count: 2 with column-width: 100px; count caps the used columns (max), width is the minimum, so two columns are used.",
     "file": "cases/multicol/multicol-count-and-width.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -216,9 +183,6 @@
     "subfeature": "wider-than-container",
     "description": "column-width larger than the container width collapses to a single column.",
     "file": "cases/multicol/multicol-column-width-wide.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -235,9 +199,6 @@
     "subfeature": "normal",
     "description": "Three-column container with no explicit column-gap; the normal default (1em = font-size) separates the tracks.",
     "file": "cases/multicol/multicol-column-gap-normal.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -254,9 +215,6 @@
     "subfeature": "dashed",
     "description": "Three-column container with a 6px dashed column-rule painted in each gap.",
     "file": "cases/multicol/multicol-column-rule-dashed.html",
-    "weight": 1,
-    "pass_threshold_pct": 4.0,
-    "partial_threshold_pct": 12.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -273,9 +231,6 @@
     "subfeature": "double",
     "description": "Three-column container with a 9px double column-rule (two thin parallel lines) in each gap.",
     "file": "cases/multicol/multicol-column-rule-double.html",
-    "weight": 1,
-    "pass_threshold_pct": 4.0,
-    "partial_threshold_pct": 12.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -292,9 +247,6 @@
     "subfeature": "none",
     "description": "column-rule-style: none draws no rule and consumes no space; the gap matches a plain column-gap.",
     "file": "cases/multicol/multicol-column-rule-none.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -311,9 +263,6 @@
     "subfeature": "longhands",
     "description": "column-rule-width/style/color set as separate longhands (thick solid blue).",
     "file": "cases/multicol/multicol-column-rule-longhands.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -330,9 +279,6 @@
     "subfeature": "balance",
     "description": "column-fill: balance (explicit) distributes content into equal-height columns.",
     "file": "cases/multicol/multicol-column-fill-balance.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -349,9 +295,6 @@
     "subfeature": "auto",
     "description": "column-fill: auto with a definite height fills each column to the box height in turn, leaving the last column short.",
     "file": "cases/multicol/multicol-column-fill-auto.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -368,9 +311,6 @@
     "subfeature": "page-break-flow",
     "description": "An auto-height two-column container (column-count: 2; column-fill: auto) with twelve 50px blocks on a 150px page: the columns fill page 1, then continue as a fresh row of column boxes on page 2 (CSS Multicol L1 §2), rather than overflowing and being clipped. Multi-page reference (page-count gate).",
     "file": "cases/multicol/multicol-page-break-flow.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -394,10 +334,7 @@
       "probe-block-flow",
       "probe-color-swatch",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "multicol-column-rule-page-break",
@@ -413,10 +350,7 @@
       "probe-block-flow",
       "probe-color-swatch",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "multicol-break-before-column",
@@ -425,9 +359,6 @@
     "subfeature": "column",
     "description": "break-before:column inside a column-fill:auto multicol container must move the block to the top of the next column; catches multicol layout that ignores forced column break values.",
     "file": "cases/multicol/multicol-break-before-column.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -443,9 +374,6 @@
     "subfeature": "percentage",
     "description": "column-gap:10% must resolve against the multicol container and narrow the three columns accordingly; catches parsers that store percentages but drop them during column layout.",
     "file": "cases/multicol/multicol-column-gap-percentage.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -461,9 +389,6 @@
     "subfeature": "empty-adjacent-columns",
     "description": "Column rules must not paint beside empty columns when only the first column has content; catches renderers that draw rules in every column gap whenever column-count is greater than one.",
     "file": "cases/multicol/multicol-column-rule-empty-suppressed.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -481,9 +406,6 @@
     "description": "break-after:column inside a fixed-height multicol container starts the following block at the top of the next column; catches multicol layout that only supports automatic fill or break-before:column.",
     "file": "cases/multicol/multicol-break-after-column.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -500,9 +422,6 @@
     "description": "break-before:avoid-column keeps a heading with the following paragraph in the same column when possible; catches parsers that ignore avoid-column and split adjacent blocks across columns.",
     "file": "cases/multicol/multicol-break-before-avoid-column.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -520,9 +439,6 @@
     "description": "break-inside:avoid-column pushes a straddling card whole to the next column; catches column fragmenters that geometrically slice every crossing block.",
     "file": "cases/multicol/multicol-break-inside-avoid-column.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -540,9 +456,6 @@
     "description": "Forced break-after:column values can create an actual third overflow column beyond the two used columns; catches layouts that cap physical columns or ignore forced column breaks.",
     "file": "cases/multicol/multicol-forced-overflow-columns.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -559,9 +472,6 @@
     "description": "break-after:column outside a column fragmentation context must not force a page break; catches implementations that alias all forced break values to page breaks.",
     "file": "cases/multicol/multicol-break-column-outside-noop.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -578,9 +488,6 @@
     "description": "A fixed-height two-column container with column-fill:auto creates additional overflow columns inline instead of vertical overflow; catches layouts that let the last used column absorb all remaining content.",
     "file": "cases/multicol/multicol-overflow-columns-auto.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -598,9 +505,6 @@
     "description": "column-fill:balance-all balances every page fragment of a multicol flow, not only the final fragment; catches parsers that collapse balance-all to balance or auto.",
     "file": "cases/multicol/multicol-column-fill-balance-all.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -617,9 +521,6 @@
     "description": "direction:rtl places the first multicol column on the right side of the container; catches physical left-to-right column offset code.",
     "file": "cases/multicol/multicol-direction-rtl-columns.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -636,9 +537,6 @@
     "description": "writing-mode:vertical-rl changes multicol line boxes and column progression instead of rendering ordinary horizontal left-to-right columns; catches multicol layout that ignores writing mode.",
     "file": "cases/multicol/multicol-writing-mode-vertical-rl.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -656,9 +554,6 @@
     "description": "A column rule wider than the gap is centered in the gap and overlaps columns without widening the gutter; catches layouts that add rule width to column placement.",
     "file": "cases/multicol/multicol-column-rule-wider-than-gap.html",
     "oracle": "chrome",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -666,6 +561,22 @@
       "probe-block-flow",
       "probe-color-swatch",
       "probe-border-box"
+    ]
+  },
+  {
+    "id": "multicol-invalid-fractional-column-count-preserves-prior-value",
+    "category": "multicol",
+    "feature": "column-count",
+    "subfeature": "invalid-fractional-declaration-discard",
+    "description": "A fractional column-count is invalid and is discarded, preserving the earlier two-column layout instead of truncating 1.5 to one column.",
+    "file": "cases/multicol/multicol-invalid-fractional-column-count-preserves-prior-value.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-color-swatch"
     ]
   }
 ]

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>span-counts-only-matching-named-lines</title>
+<style>
+  @page { size: 304px 144px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .grid {
+    display: grid;
+    grid-template-columns: [start] 50px [target] 50px [other] 50px [target] 50px;
+    grid-template-rows: 70px;
+    width: 200px;
+    margin: 25px;
+    border: 3px solid #111111;
+    background: #f5f5f5;
+  }
+  .span {
+    grid-column: start / span 2 target;
+    background: #c62828;
+  }
+  .tail { background: #1565c0; }
+</style>
+</head>
+<body><div class="grid"><div class="span"></div><div class="tail"></div></div></body>
+</html>

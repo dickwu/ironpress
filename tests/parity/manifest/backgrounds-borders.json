@@ -7,15 +7,11 @@
     "description": "Single box filled with a solid opaque background-color.",
     "file": "cases/backgrounds-borders/background-color-solid.html",
     "kind": "feature",
-    "geometry": "rigid",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-color-rgba",
@@ -29,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-linear-gradient",
@@ -46,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-linear-gradient-diagonal",
@@ -63,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-radial-gradient",
@@ -80,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-solid-width",
@@ -97,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-style-dashed",
@@ -114,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-style-dotted",
@@ -131,10 +109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-style-double",
@@ -148,10 +123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-per-side-colors",
@@ -160,15 +132,55 @@
     "subfeature": "per-side-width-color",
     "description": "Box with four different per-side border widths and colors.",
     "file": "cases/backgrounds-borders/border-per-side-colors.html",
+    "reference_file": "references/backgrounds-borders/border-per-side-colors.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "border-rounded-per-side-width-color",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "rounded-per-side-width-color",
+    "description": "Unequal side widths and colors share one normalized elliptical border ring with non-overlapping corner ownership.",
+    "file": "cases/backgrounds-borders/border-rounded-per-side-width-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-rounded-mixed-styles",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "rounded-mixed-per-side",
+    "description": "Solid, dashed, dotted, and double sides follow one nonuniform rounded border geometry and meet only at their corner frontiers.",
+    "file": "cases/backgrounds-borders/border-rounded-mixed-styles.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-rounded-translucent-sides",
+    "category": "backgrounds-borders",
+    "feature": "border-color",
+    "subfeature": "rounded-translucent-side-joins",
+    "description": "Translucent unequal border sides retain single-paint diagonal ownership at normalized elliptical corners without alpha-dark overlap.",
+    "file": "cases/backgrounds-borders/border-rounded-translucent-sides.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
   },
   {
     "id": "border-radius-uniform",
@@ -182,10 +194,20 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "border-radius-invalid-unitless-preserves-prior",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A nonzero unitless border-radius is invalid and cannot replace the prior valid radius.",
+    "file": "cases/backgrounds-borders/border-radius-invalid-unitless-preserves-prior.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
   },
   {
     "id": "border-radius-circle",
@@ -199,10 +221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-per-corner",
@@ -216,27 +235,25 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "outline-solid",
     "category": "backgrounds-borders",
     "feature": "outline",
     "subfeature": "solid-offset",
-    "description": "Box with a solid outline drawn outside its border via outline-offset.",
+    "description": "Square-corner outline with a positive offset. Exact outline geometry is user-agent-defined; this fixture is a Chromium compatibility canary.",
     "file": "cases/backgrounds-borders/outline-solid.html",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Basic UI Level 4 leaves exact outline placement and shape implementation-defined; this Chromium oracle is retained as a compatibility canary rather than a normative pixel oracle."
+    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-box-shadow-offset",
@@ -250,10 +267,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-x-linear-gradient",
@@ -268,10 +282,7 @@
       "probe-fill-box",
       "probe-color-swatch",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-x-box-shadow",
@@ -285,10 +296,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-corner-longhands",
@@ -301,10 +309,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-four-values",
@@ -317,10 +322,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-two-values",
@@ -333,10 +335,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-percentage",
@@ -349,10 +348,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-clamped",
@@ -365,10 +361,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-elliptical",
@@ -381,10 +374,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-radius-ellipse-nonsquare",
@@ -397,10 +387,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-style-none",
@@ -414,10 +401,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-width-keywords",
@@ -431,10 +415,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-color-transparent",
@@ -443,15 +424,13 @@
     "subfeature": "transparent-side",
     "description": "border-color transparent on one side, solid on the rest.",
     "file": "cases/backgrounds-borders/border-color-transparent.html",
+    "reference_file": "references/backgrounds-borders/border-color-transparent.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-color-currentcolor",
@@ -465,10 +444,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "outline-offset-negative",
@@ -482,10 +458,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-conic-gradient",
@@ -494,16 +467,12 @@
     "subfeature": "center",
     "description": "Centered multi-stop conic-gradient background.",
     "file": "cases/backgrounds-borders/background-conic-gradient.html",
-    "floor_pct": 0.5,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-radial-gradient-ellipse",
@@ -517,10 +486,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-image-gradient-slice",
@@ -535,10 +501,143 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "border-image-width-multiplier",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "width-number-multiplier",
+    "description": "border-image-width:3 makes the image border 3× the computed 8px physical border width, dividing the border-image area 24px from every edge. Catches implementations that parse slices but always use the physical border width for the destination patches.",
+    "file": "cases/backgrounds-borders/border-image-width-multiplier.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-background-nested-inline",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "background-coexistence-nested-replaced",
+    "description": "A border image remains independent from a background gradient and replaces the red fallback border on block, nested-block, and replaced raster-image paths. Catches computed-style source collisions and child paint paths that bypass the shared border decoration pipeline.",
+    "file": "cases/backgrounds-borders/border-image-background-nested-inline.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-source-families",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "raster-svg-radial-conic-order-independent-shorthand",
+    "description": "Four border images use a raster data URL, SVG data URL, radial gradient, and conic gradient. The conic source appears after the slice and width components, exercising the order-independent shorthand grammar. Every source replaces the magenta fallback border and passes through the same nine-slice painter.",
+    "file": "cases/backgrounds-borders/border-image-source-families.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-unavailable-source-fallback",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "unavailable-source-fallback",
+    "description": "An unavailable border-image source falls back to the authored per-side border colors, widths, and radii instead of suppressing the border or painting a placeholder.",
+    "file": "cases/backgrounds-borders/border-image-unavailable-source-fallback.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-outset-number",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "outset-number-multiplier",
+    "description": "border-image shorthand outset 2 extends the image area by 2× the computed 8px physical border on every edge without changing layout. Catches implementations that parse the first slash but discard the second slash/outset component.",
+    "file": "cases/backgrounds-borders/border-image-outset-number.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-outset-em",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "outset-font-relative-length",
+    "description": "border-image outset .25em resolves against the element's 40px font size, extending the painted image area by 10px on every side without changing layout. Catches parsers that accept only absolute units and discard the entire border image for a valid font-relative CSS length.",
+    "file": "cases/backgrounds-borders/border-image-outset-em.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-repeat-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "repeat-horizontal-stretch-vertical",
+    "description": "border-image-repeat: repeat stretch tiles the top and bottom edge slices at their proportional width, centered with clipped partial end tiles, while the side slices remain stretched. Catches parsers that reject the repeat keyword and render no image, or render every edge as one stretched patch.",
+    "file": "cases/backgrounds-borders/border-image-repeat-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-round-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "round-horizontal-stretch-vertical",
+    "description": "border-image-repeat: round stretch resizes each proportional top and bottom edge tile horizontally until exactly six whole tiles fit, while side slices remain stretched. Catches implementations that tile at the unrounded size or stretch the whole edge once.",
+    "file": "cases/backgrounds-borders/border-image-round-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-space-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "space-horizontal-stretch-vertical",
+    "description": "border-image-repeat: space stretch keeps five whole proportional top and bottom edge tiles and equalizes the surplus before, between, and after them, while side slices remain stretched. Catches background-repeat-style edge-flush spacing or partial edge tiles.",
+    "file": "cases/backgrounds-borders/border-image-space-horizontal.html",
+    "reference_file": "references/backgrounds-borders/border-image-space-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
   },
   {
     "id": "border-style-3d-bevels",
@@ -553,27 +652,21 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-repeat-space-round",
     "category": "backgrounds-borders",
     "feature": "background-repeat",
     "subfeature": "space-round",
-    "description": "background-repeat: space round distributes columns and rounds row tile height; catches parsers that treat unsupported repeat keywords as ordinary repeat.",
+    "description": "background-repeat: space distributes four 40px columns with 8px gaps while round scales 24px images into three 26.666px rows.",
     "file": "cases/backgrounds-borders/background-repeat-space-round.html",
     "kind": "feature",
-    "expected_support": "unsupported",
+    "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-position-edge-offsets",
@@ -587,10 +680,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-size-auto-length",
@@ -605,10 +695,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-clip-text-gradient",
@@ -618,15 +705,16 @@
     "description": "background-clip:text clips a gradient background to glyph shapes; catches engines that map text to border-box or leave transparent text invisible.",
     "file": "cases/backgrounds-borders/background-clip-text-gradient.html",
     "kind": "feature",
-    "expected_support": "unsupported",
+    "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Backgrounds 4 defines background-clip:text by the text geometry, not a text-edge sampling grid or PDF representation. Chromium's PDF turns the matched ParitySans outlines into a 196x83 soft-mask image; Ironpress retains the same outline geometry as a vector text clip. The gradient interior and glyph positions agree, but the two valid edge-coverage strategies cannot be a unique pixel oracle."
+    },
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-shadow-elliptical-radius",
@@ -645,10 +733,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-origin-border-box",
@@ -663,10 +748,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-image-image-set",
@@ -681,10 +763,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-attachment-fixed-viewport",
@@ -698,10 +777,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-attachment-local-scroll-canvas",
@@ -716,10 +792,7 @@
       "probe-fill-box",
       "probe-color-swatch",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "body-background-canvas-propagation",
@@ -733,10 +806,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "html-background-suppresses-body-canvas",
@@ -754,10 +824,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-clip-content-box-color",
@@ -772,10 +839,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-clip-padding-box-dashed-gradient",
@@ -790,17 +854,14 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-clip-padding-box-elliptical-radius",
     "category": "backgrounds-borders",
     "feature": "background-clip",
     "subfeature": "padding-box-elliptical-radius",
-    "description": "background-clip:padding-box follows elliptical rounded corners; catches scalar radius clipping that leaks the background into wrong corner arcs.",
+    "description": "background-clip:padding-box follows the elliptical inner border curve beneath a translucent solid border; catches red background bleed into the border band.",
     "file": "cases/backgrounds-borders/background-clip-padding-box-elliptical-radius.html",
     "kind": "interaction",
     "interaction_of": [
@@ -812,10 +873,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-origin-list-matching",
@@ -831,10 +889,7 @@
       "probe-border-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-clip-list-matching",
@@ -849,10 +904,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-repeat-repeat-x-no-repeat-y",
@@ -867,10 +919,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-position-xy-longhands",
@@ -885,10 +934,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-image-none-layer-list",
@@ -903,10 +949,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-shorthand-visual-box-single",
@@ -922,10 +965,7 @@
       "probe-border-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-shorthand-origin-clip-pair",
@@ -941,10 +981,7 @@
       "probe-border-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-shorthand-multiple-layers-color",
@@ -959,10 +996,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-shorthand-reset-longhands",
@@ -978,10 +1012,7 @@
       "probe-border-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-blend-mode-multiply-image",
@@ -996,10 +1027,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-blend-mode-list-matching",
@@ -1014,10 +1042,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-layer-order-raster-gradient",
@@ -1036,10 +1061,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-style-four-value-shorthand",
@@ -1054,10 +1076,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-width-four-value-shorthand",
@@ -1072,10 +1091,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "border-color-four-value-shorthand",
@@ -1084,16 +1100,14 @@
     "subfeature": "four-value-shorthand",
     "description": "border-color four-value shorthand assigns a distinct color to each side; catches single-color shorthand parsing.",
     "file": "cases/backgrounds-borders/border-color-four-value-shorthand.html",
+    "reference_file": "references/backgrounds-borders/border-color-four-value-shorthand.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-shadow-inset-elliptical-radius",
@@ -1112,10 +1126,7 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "background-image-nonuniform-radius-clip",
@@ -1135,10 +1146,7 @@
       "probe-border-box",
       "probe-image-render",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-shadow-spread-nonuniform-radius",
@@ -1157,9 +1165,71 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "background-invalid-repeat-preserves-no-repeat",
+    "category": "backgrounds-borders",
+    "feature": "background-repeat",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A later invalid background-repeat declaration is discarded, so the earlier no-repeat value keeps the sized gradient in the first tile only.",
+    "file": "cases/backgrounds-borders/background-invalid-repeat-preserves-no-repeat.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-logical-cascade-writing-modes",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "logical-physical-cascade-writing-modes",
+    "description": "Logical border sides and radii share declaration order with physical longhands and map through horizontal LTR, horizontal RTL, vertical-lr, and sideways-lr writing modes.",
+    "file": "cases/backgrounds-borders/border-logical-cascade-writing-modes.html",
+    "reference_file": "references/backgrounds-borders/border-logical-cascade-writing-modes.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-image-intrinsic-overlap-reset",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "intrinsic-svg-overlap-global-scaling-reset",
+    "description": "Border images use SVG concrete object sizing, preserve overlapping source slices, scale all destination widths with one global factor, and reset every border-image longhand through the border shorthand.",
+    "file": "cases/backgrounds-borders/border-image-intrinsic-overlap-reset.html",
+    "reference_file": "references/backgrounds-borders/border-image-intrinsic-overlap-reset.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-collapsed-table-applicability",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "collapsed-table-image-radius-applicability",
+    "description": "Collapsed table cells ignore border-image and border-radius while their ordinary borders remain in collapsed-border conflict resolution; the collapsed table radius also has no effect.",
+    "file": "cases/backgrounds-borders/border-collapsed-table-applicability.html",
+    "reference_file": "references/backgrounds-borders/border-collapsed-table-applicability.html",
+    "kind": "interaction",
+    "interaction_of": ["border-image", "border-radius", "tables"],
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-image-fill-axis-repeat",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "center-fill-independent-axis-repeat",
+    "description": "The preserved center slice paints above the background while horizontal and vertical border-image-repeat modes independently apply round, repeat, stretch, and space tiling.",
+    "file": "cases/backgrounds-borders/border-image-fill-axis-repeat.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
   }
 ]

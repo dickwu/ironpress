@@ -4,10 +4,20 @@
 <meta charset="utf-8">
 <title>font-stretch condensed</title>
 <style>
-  @page { size: 477px 94px; margin: 0; }
+  @page { size: 480px 144px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
+  @font-face {
+    font-family: StretchPick;
+    src: url('../../fonts/ParitySans.ttf') format('truetype');
+    font-stretch: normal;
+  }
+  @font-face {
+    font-family: StretchPick;
+    src: url('../../fonts/ParitySerif.ttf') format('truetype');
+    font-stretch: condensed;
+  }
   .region {
     width: 360px;
     margin: 20px;
@@ -15,18 +25,21 @@
     border: 2px solid #000000;
     background: #9bf6ff;
   }
-  .t {
-    font-family: ParitySans;
+  .row {
+    font-family: StretchPick;
     font-size: 30px;
     line-height: 1;
     color: #023047;
+  }
+  .condensed {
     font-stretch: condensed;
   }
 </style>
 </head>
 <body>
   <div class="region">
-    <div class="t">Condensed width</div>
+    <div class="row">Stretch pick</div>
+    <div class="row condensed">Stretch pick</div>
   </div>
 </body>
 </html>

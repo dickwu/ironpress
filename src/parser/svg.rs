@@ -1,6 +1,7 @@
 //! SVG parser — converts DOM SVG elements into an SvgTree for PDF rendering.
 
 use crate::parser::dom::{DomNode, ElementNode};
+use crate::types::Color;
 use std::collections::HashMap;
 
 /// Split a style declaration string on `;`, respecting quoted strings and
@@ -56,7 +57,7 @@ pub struct SvgTextContext {
     pub font_size: f32,
     pub font_bold: bool,
     pub font_italic: bool,
-    pub color: Option<(f32, f32, f32)>,
+    pub color: Option<Color>,
 }
 
 impl Default for SvgTextContext {
@@ -93,47 +94,6 @@ impl SvgTree {
     }
 }
 
-static SVG_DEFS_REGISTRY: std::sync::OnceLock<std::sync::Mutex<SvgDefs>> =
-    std::sync::OnceLock::new();
-
-fn remember_svg_defs(defs: &SvgDefs) {
-    if defs.gradients.is_empty()
-        && defs.radial_gradients.is_empty()
-        && defs.clip_paths.is_empty()
-        && defs.masks.is_empty()
-    {
-        return;
-    }
-    let registry = SVG_DEFS_REGISTRY.get_or_init(|| std::sync::Mutex::new(SvgDefs::default()));
-    if let Ok(mut stored) = registry.lock() {
-        stored.gradients.extend(
-            defs.gradients
-                .iter()
-                .map(|(id, val)| (id.clone(), val.clone())),
-        );
-        stored.radial_gradients.extend(
-            defs.radial_gradients
-                .iter()
-                .map(|(id, val)| (id.clone(), val.clone())),
-        );
-        stored.clip_paths.extend(
-            defs.clip_paths
-                .iter()
-                .map(|(id, val)| (id.clone(), val.clone())),
-        );
-        stored
-            .masks
-            .extend(defs.masks.iter().map(|(id, val)| (id.clone(), val.clone())));
-    }
-}
-
-pub(crate) fn collected_svg_defs_snapshot() -> SvgDefs {
-    SVG_DEFS_REGISTRY
-        .get()
-        .and_then(|registry| registry.lock().ok().map(|defs| defs.clone()))
-        .unwrap_or_default()
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ViewBox {
     pub min_x: f32,
@@ -148,6 +108,15 @@ pub struct SvgDefs {
     pub radial_gradients: std::collections::HashMap<String, SvgRadialGradient>,
     pub clip_paths: std::collections::HashMap<String, SvgClipPath>,
     pub masks: std::collections::HashMap<String, SvgMask>,
+}
+
+impl SvgDefs {
+    fn append(&mut self, defs: Self) {
+        self.gradients.extend(defs.gradients);
+        self.radial_gradients.extend(defs.radial_gradients);
+        self.clip_paths.extend(defs.clip_paths);
+        self.masks.extend(defs.masks);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -183,7 +152,7 @@ pub enum SvgGradientUnits {
 #[derive(Debug, Clone, Copy)]
 pub struct SvgGradientStop {
     pub offset: f32,
-    pub color: (f32, f32, f32),
+    pub color: Color,
     pub opacity: f32,
 }
 
@@ -316,13 +285,13 @@ pub enum SvgPaint {
     CurrentColor,
     /// `url(#id)` paint server reference.
     Url(String),
-    /// An explicit sRGB color (0.0-1.0 per channel).
-    Color((f32, f32, f32)),
+    /// An explicit sRGB color.
+    Color(Color),
 }
 
 #[derive(Debug, Clone)]
 pub struct SvgStyle {
-    pub color: Option<(f32, f32, f32)>,
+    pub color: Option<Color>,
     pub fill: SvgPaint,
     pub stroke: SvgPaint,
     pub clip_path: Option<String>,
@@ -421,12 +390,26 @@ pub fn parse_svg_from_element(el: &ElementNode) -> Option<SvgTree> {
 
 /// Parse an SVG tree from raw SVG markup.
 pub fn parse_svg_from_string(svg_text: &str) -> Option<SvgTree> {
+    parse_svg_from_string_with_viewport(svg_text, None)
+}
+
+/// Parse standalone SVG markup for a concrete viewport supplied by its host.
+pub(crate) fn parse_svg_from_string_with_viewport(
+    svg_text: &str,
+    viewport: Option<(f32, f32)>,
+) -> Option<SvgTree> {
     let nodes = crate::parser::html::parse_html(svg_text).ok()?;
     nodes.iter().find_map(|node| {
         if let DomNode::Element(el) = node {
             (el.tag == crate::parser::dom::HtmlTag::Svg)
                 .then_some(el)
-                .and_then(parse_svg_from_element)
+                .and_then(|element| {
+                    parse_svg_from_element_with_ctx_and_viewport(
+                        element,
+                        SvgTextContext::default(),
+                        viewport,
+                    )
+                })
                 .map(|tree| tree.with_source_markup(svg_text))
         } else {
             None
@@ -473,7 +456,6 @@ pub fn parse_svg_from_element_with_ctx_and_viewport(
 
     let defs_raw = collect_svg_defs(&el.children);
     let defs = parse_svg_defs(&defs_raw);
-    remember_svg_defs(&defs);
 
     let root_style = parse_svg_style(el);
     let root_transform = el
@@ -607,6 +589,30 @@ fn parse_svg_defs(defs_raw: &HashMap<String, ElementNode>) -> SvgDefs {
             _ => {}
         }
     }
+    defs
+}
+
+/// Collect fragment-addressable SVG resources owned by one HTML document.
+///
+/// This walk is independent of box generation: an inline SVG used only as a
+/// `<defs>` container may be `display: none` or otherwise produce no painted
+/// layout element, but its fragment identifiers still belong to this document.
+pub(crate) fn collect_document_svg_defs(nodes: &[DomNode]) -> SvgDefs {
+    fn collect(nodes: &[DomNode], document_defs: &mut SvgDefs) {
+        for node in nodes {
+            let DomNode::Element(element) = node else {
+                continue;
+            };
+            if element.raw_tag_name.eq_ignore_ascii_case("svg") {
+                document_defs.append(parse_svg_defs(&collect_svg_defs(&element.children)));
+            } else {
+                collect(&element.children, document_defs);
+            }
+        }
+    }
+
+    let mut defs = SvgDefs::default();
+    collect(nodes, &mut defs);
     defs
 }
 
@@ -1087,14 +1093,14 @@ fn parse_svg_clip_rule(raw: &str) -> SvgClipRule {
 
 /// Resolve a CSS `filter: url(#id)` reference (css-filter-effects-1 §3) against
 /// an SVG `<filter>` `ElementNode`, reading its `feColorMatrix` primitives and
-/// mapping each to the equivalent [`ColorFilterOp`] so the existing color-math
+/// mapping each to the equivalent [`FilterOperation`] so the existing color-math
 /// (src/layout/images.rs `apply_one_filter`) can apply it.
 ///
 /// Supported primitives (SVG filter-effects §15.9 feColorMatrix):
 /// - `type="saturate"`  → `Saturate(values)`   (default amount 1)
-/// - `type="matrix"`    → decoded to the closest [`ColorFilterOp`] when the
+/// - `type="matrix"`    → decoded to the closest [`FilterOperation`] when the
 ///   20-value matrix is a recognizable luminance/identity form; otherwise the
-///   raw matrix is applied verbatim via [`ColorFilterOp`] is not possible, so it
+///   raw matrix is applied verbatim via [`FilterOperation`] is not possible, so it
 ///   is skipped.
 /// - `type="luminanceToAlpha"` is skipped (alpha-only; no RGB color change).
 ///
@@ -1107,8 +1113,8 @@ fn parse_svg_clip_rule(raw: &str) -> SvgClipRule {
 /// `<filter>` or contains no understood primitive.
 pub fn filter_element_color_ops(
     filter_el: &ElementNode,
-) -> (Vec<crate::style::computed::ColorFilterOp>, bool) {
-    use crate::style::computed::ColorFilterOp;
+) -> (Vec<crate::style::computed::FilterOperation>, bool) {
+    use crate::style::computed::FilterOperation;
     let mut ops = Vec::new();
     if !filter_el.raw_tag_name.eq_ignore_ascii_case("filter") {
         return (ops, true);
@@ -1118,7 +1124,8 @@ pub fn filter_element_color_ops(
     // below too; the most specific wins for the primitive that supplies the op.
     let filter_space_srgb = color_interpolation_filters_is_srgb(filter_el);
     let mut use_linear_rgb = !filter_space_srgb;
-    let mut flood_color: Option<(f32, f32, f32, f32)> = None;
+    let filter_current_color = parse_svg_style(filter_el).color.unwrap_or(Color::BLACK);
+    let mut flood_color: Option<crate::types::Color> = None;
     let element_children: Vec<&ElementNode> = filter_el
         .children
         .iter()
@@ -1128,6 +1135,10 @@ pub fn filter_element_color_ops(
         })
         .collect();
     for (idx, el) in element_children.iter().enumerate() {
+        // SVG `color` is inherited. Resolve paint-like `currentColor` values at
+        // the primitive's used-value boundary, using a local override when one
+        // exists and otherwise the filter's inherited foreground.
+        let current_color = parse_svg_style(el).color.unwrap_or(filter_current_color);
         // A primitive may override the filter's color space; an explicit sRGB on
         // any contributing primitive disables linearRGB for the whole recolor
         // (we apply ops as a single composite, so the box uses one space).
@@ -1135,26 +1146,19 @@ pub fn filter_element_color_ops(
             use_linear_rgb = false;
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feFlood") {
-            flood_color = Some(svg_flood_color(el));
+            flood_color = Some(svg_flood_color(el, current_color));
             continue;
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feGaussianBlur") {
             let std_dev = attr_f32(el, "stdDeviation");
             if std_dev > 0.0 {
-                ops.push(ColorFilterOp::Blur(std_dev * 0.75));
+                ops.push(FilterOperation::Blur(std_dev * 0.75));
             }
             continue;
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feDropShadow") {
-            let mut color = svg_flood_color(el);
-            if let Some(opacity) = el
-                .attributes
-                .get("flood-opacity")
-                .and_then(|v| v.trim().parse::<f32>().ok())
-            {
-                color.3 *= opacity.clamp(0.0, 1.0);
-            }
-            ops.push(ColorFilterOp::DropShadow(
+            let color = svg_flood_color(el, current_color);
+            ops.push(FilterOperation::DropShadow(
                 crate::style::computed::DropShadow {
                     dx: attr_f32(el, "dx") * 0.75,
                     dy: attr_f32(el, "dy") * 0.75,
@@ -1168,7 +1172,7 @@ pub fn filter_element_color_ops(
             let keep_source = element_children
                 .get(idx + 1)
                 .is_some_and(|next| next.raw_tag_name.eq_ignore_ascii_case("feMerge"));
-            ops.push(ColorFilterOp::Offset {
+            ops.push(FilterOperation::Offset {
                 dx: attr_f32(el, "dx") * 0.75,
                 dy: attr_f32(el, "dy") * 0.75,
                 keep_source,
@@ -1192,7 +1196,7 @@ pub fn filter_element_color_ops(
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(0.0);
             if radius > 0.0 {
-                ops.push(ColorFilterOp::MorphologyDilate(radius * 0.75));
+                ops.push(FilterOperation::MorphologyDilate(radius * 0.75));
             }
             continue;
         }
@@ -1201,17 +1205,18 @@ pub fn filter_element_color_ops(
                 .attributes
                 .get("mode")
                 .is_some_and(|v| v.eq_ignore_ascii_case("multiply"))
-            && let Some((r, g, b, a)) = flood_color
+            && let Some(color) = flood_color
         {
-            ops.push(ColorFilterOp::Flood {
-                color: (r, g, b, a),
+            ops.push(FilterOperation::Flood {
+                color,
                 region_x: filter_region_attr(filter_el, "x", -0.10),
                 region_y: filter_region_attr(filter_el, "y", -0.10),
                 region_width: filter_region_attr(filter_el, "width", 1.20),
                 region_height: filter_region_attr(filter_el, "height", 1.20),
             });
+            let (r, g, b, _) = color.to_f32_rgba();
             let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
-            ops.push(ColorFilterOp::Matrix([
+            ops.push(FilterOperation::Matrix([
                 r, 0.0, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 0.0,
                 1.0, 0.0,
             ]));
@@ -1222,10 +1227,11 @@ pub fn filter_element_color_ops(
                 .attributes
                 .get("operator")
                 .is_some_and(|v| v.eq_ignore_ascii_case("in"))
-            && let Some((r, g, b, a)) = flood_color
+            && let Some(color) = flood_color
         {
+            let (r, g, b, a) = color.to_f32_rgba();
             let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
-            ops.push(ColorFilterOp::Matrix([
+            ops.push(FilterOperation::Matrix([
                 0.0, 0.0, 0.0, 0.0, r, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0,
                 a, 0.0,
             ]));
@@ -1233,7 +1239,7 @@ pub fn filter_element_color_ops(
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feComponentTransfer") {
             if let Some(matrix) = component_transfer_matrix(el) {
-                ops.push(ColorFilterOp::Matrix(matrix));
+                ops.push(FilterOperation::Matrix(matrix));
             }
             continue;
         }
@@ -1254,7 +1260,7 @@ pub fn filter_element_color_ops(
                     .and_then(|t| t.parse::<f32>().ok())
                     .unwrap_or(1.0)
                     .max(0.0);
-                ops.push(ColorFilterOp::Saturate(amount));
+                ops.push(FilterOperation::Saturate(amount));
             }
             // hueRotate: a single value in degrees (default 0).
             "huerotate" => {
@@ -1262,10 +1268,10 @@ pub fn filter_element_color_ops(
                     .and_then(|v| v.split_whitespace().next())
                     .and_then(|t| t.parse::<f32>().ok())
                     .unwrap_or(0.0);
-                ops.push(ColorFilterOp::HueRotate(deg));
+                ops.push(FilterOperation::HueRotate(deg));
             }
             // matrix: 20 values. Recognize the common saturate/grayscale form
-            // so we can route it through the existing ColorFilterOp math.
+            // so we can route it through the existing FilterOperation math.
             "matrix" => {
                 if let Some(v) = values
                     && let Some(op) = color_matrix_to_op(v)
@@ -1274,7 +1280,7 @@ pub fn filter_element_color_ops(
                 }
             }
             "luminancetoalpha" => {
-                ops.push(ColorFilterOp::Matrix([
+                ops.push(FilterOperation::Matrix([
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.2125, 0.7154, 0.0721, 0.0, 0.0,
                 ]));
@@ -1310,11 +1316,11 @@ fn color_interpolation_filters_is_srgb(el: &ElementNode) -> bool {
 }
 
 /// Decode a 20-value SVG `feColorMatrix type="matrix"` (filter-effects §15.9)
-/// into a [`ColorFilterOp`] when it matches a recognizable luminance-blend form
+/// into a [`FilterOperation`] when it matches a recognizable luminance-blend form
 /// (identity, grayscale, or saturate). Returns `None` for matrices that cannot
 /// be expressed as one of the existing ops (e.g. arbitrary channel mixes).
-fn color_matrix_to_op(values: &str) -> Option<crate::style::computed::ColorFilterOp> {
-    use crate::style::computed::ColorFilterOp;
+fn color_matrix_to_op(values: &str) -> Option<crate::style::computed::FilterOperation> {
+    use crate::style::computed::FilterOperation;
     let m: Vec<f32> = values
         .split(|c: char| c.is_whitespace() || c == ',')
         .filter(|s| !s.is_empty())
@@ -1347,27 +1353,39 @@ fn color_matrix_to_op(values: &str) -> Option<crate::style::computed::ColorFilte
         && approx(m[14], 0.0)
         && approx(m[19], 0.0);
     if saturate_ok {
-        return Some(ColorFilterOp::Saturate(s.max(0.0)));
+        return Some(FilterOperation::Saturate(s.max(0.0)));
     }
-    Some(ColorFilterOp::Matrix(matrix))
+    Some(FilterOperation::Matrix(matrix))
 }
 
-fn svg_flood_color(el: &ElementNode) -> (f32, f32, f32, f32) {
-    let mut color = el
-        .attributes
-        .get("flood-color")
-        .and_then(|v| crate::parser::css::parse_color(v))
-        .and_then(|v| match v {
-            crate::parser::css::CssValue::Color(c) => Some(c.to_f32_rgba()),
+fn svg_flood_color(el: &ElementNode, current_color: Color) -> Color {
+    let parse_specified = |raw: &str| {
+        crate::parser::css::parse_color(raw).and_then(|value| match value {
+            crate::parser::css::CssValue::Color(color) => Some(color),
             _ => None,
         })
-        .unwrap_or((0.0, 0.0, 0.0, 1.0));
-    if let Some(opacity) = el
+    };
+    let mut specified = el
+        .attributes
+        .get("flood-color")
+        .and_then(|raw| parse_specified(raw));
+    if let Some(color) = style_property_value(el, "flood-color").and_then(parse_specified) {
+        specified = Some(color);
+    }
+    let mut color = specified
+        .map(|color| color.resolve(current_color))
+        .unwrap_or(Color::BLACK);
+    let mut opacity = el
         .attributes
         .get("flood-opacity")
-        .and_then(|v| v.trim().parse::<f32>().ok())
+        .and_then(|value| value.trim().parse::<f32>().ok());
+    if let Some(style_opacity) =
+        style_property_value(el, "flood-opacity").and_then(|value| value.trim().parse::<f32>().ok())
     {
-        color.3 *= opacity.clamp(0.0, 1.0);
+        opacity = Some(style_opacity);
+    }
+    if let Some(opacity) = opacity {
+        color.a *= opacity.clamp(0.0, 1.0);
     }
     color
 }
@@ -1674,7 +1692,7 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
         parse_svg_color(val).map(SvgPaint::Color)
     }
 
-    fn parse_svg_color_property(val: &str) -> Option<Option<(f32, f32, f32)>> {
+    fn parse_svg_color_property(val: &str) -> Option<Option<Color>> {
         let val = val.trim();
         if val.eq_ignore_ascii_case("inherit") {
             return Some(None);
@@ -1948,96 +1966,41 @@ fn collect_text_content(el: &ElementNode) -> String {
     text
 }
 
-/// Parse common SVG colors: named, hex (#rgb / #rrggbb), rgb(r,g,b), or "none".
-pub fn parse_svg_color(val: &str) -> Option<(f32, f32, f32)> {
-    let val = val.trim();
-    if val.eq_ignore_ascii_case("none") {
-        return None;
+/// Parse an absolute SVG color through the canonical CSS color parser.
+///
+/// Paint-specific keywords such as `none` and `currentColor` are represented by
+/// [`SvgPaint`] before this function is called. Keeping absolute color syntax in
+/// one parser prevents SVG and CSS from accepting subtly different color sets.
+pub fn parse_svg_color(val: &str) -> Option<Color> {
+    match crate::parser::css::parse_color(val)? {
+        crate::parser::css::CssValue::Color(crate::parser::css::SpecifiedColor::Absolute(
+            color,
+        )) => Some(color),
+        _ => None,
     }
-
-    if val.eq_ignore_ascii_case("black") {
-        return Some((0.0, 0.0, 0.0));
-    }
-    if val.eq_ignore_ascii_case("white") {
-        return Some((1.0, 1.0, 1.0));
-    }
-    if val.eq_ignore_ascii_case("red") {
-        return Some((1.0, 0.0, 0.0));
-    }
-    if val.eq_ignore_ascii_case("green") {
-        return Some((0.0, 128.0 / 255.0, 0.0));
-    }
-    if val.eq_ignore_ascii_case("blue") {
-        return Some((0.0, 0.0, 1.0));
-    }
-    if val.eq_ignore_ascii_case("yellow") {
-        return Some((1.0, 1.0, 0.0));
-    }
-    if val.eq_ignore_ascii_case("cyan") {
-        return Some((0.0, 1.0, 1.0));
-    }
-    if val.eq_ignore_ascii_case("magenta") {
-        return Some((1.0, 0.0, 1.0));
-    }
-    if val.eq_ignore_ascii_case("gray") || val.eq_ignore_ascii_case("grey") {
-        return Some((128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0));
-    }
-    if val.eq_ignore_ascii_case("orange") {
-        return Some((1.0, 165.0 / 255.0, 0.0));
-    }
-
-    // Hex colors
-    if let Some(hex) = val.strip_prefix('#') {
-        return parse_hex_color(hex);
-    }
-
-    // rgb(r, g, b)
-    if let Some(inner) = val.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
-        let mut parts = inner.split(',');
-        let r = parts.next()?.trim().parse::<f32>().ok()?;
-        let g = parts.next()?.trim().parse::<f32>().ok()?;
-        let b = parts.next()?.trim().parse::<f32>().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        return Some((r / 255.0, g / 255.0, b / 255.0));
-    }
-
-    None
 }
 
-/// Parse a hex color string (without the #).
-fn parse_hex_color(hex: &str) -> Option<(f32, f32, f32)> {
-    fn hex_digit(c: char) -> Option<u8> {
-        c.to_digit(16).map(|d| d as u8)
+#[derive(Debug, Clone, Copy, Default)]
+enum SmoothControl {
+    #[default]
+    None,
+    Cubic(f32, f32),
+    Quadratic(f32, f32),
+}
+
+impl SmoothControl {
+    fn cubic(self, current: (f32, f32)) -> (f32, f32) {
+        match self {
+            Self::Cubic(x, y) => (2.0 * current.0 - x, 2.0 * current.1 - y),
+            _ => current,
+        }
     }
 
-    match hex.len() {
-        3 => {
-            let mut chars = hex.chars();
-            let r = hex_digit(chars.next()?)?;
-            let g = hex_digit(chars.next()?)?;
-            let b = hex_digit(chars.next()?)?;
-            if chars.next().is_some() {
-                return None;
-            }
-            Some((
-                (r * 17) as f32 / 255.0,
-                (g * 17) as f32 / 255.0,
-                (b * 17) as f32 / 255.0,
-            ))
+    fn quadratic(self, current: (f32, f32)) -> (f32, f32) {
+        match self {
+            Self::Quadratic(x, y) => (2.0 * current.0 - x, 2.0 * current.1 - y),
+            _ => current,
         }
-        6 => {
-            let mut chars = hex.chars();
-            let r = (hex_digit(chars.next()?)? << 4) | hex_digit(chars.next()?)?;
-            let g = (hex_digit(chars.next()?)? << 4) | hex_digit(chars.next()?)?;
-            let b = (hex_digit(chars.next()?)? << 4) | hex_digit(chars.next()?)?;
-            if chars.next().is_some() {
-                return None;
-            }
-            Some((r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0))
-        }
-        _ => None,
     }
 }
 
@@ -2047,8 +2010,8 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
     let mut commands = Vec::new();
     let mut cur_x: f32 = 0.0;
     let mut cur_y: f32 = 0.0;
-    let mut last_ctrl_x: f32 = 0.0;
-    let mut last_ctrl_y: f32 = 0.0;
+    let mut subpath_start = (0.0, 0.0);
+    let mut smooth_control = SmoothControl::None;
     let mut last_cmd: char = ' ';
 
     let tokens = tokenize_path(d);
@@ -2073,25 +2036,27 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
         };
 
+        // Smooth controls are eligible for exactly one following segment. A
+        // curve branch below installs the control that its successor may use;
+        // every other command leaves the state cleared.
+        let preceding_control = std::mem::take(&mut smooth_control);
         match cmd_char {
             'M' => {
                 if let Some((x, y)) = read_pair(&tokens, &mut i) {
                     cur_x = x;
                     cur_y = y;
+                    subpath_start = (x, y);
                     commands.push(PathCommand::MoveTo(cur_x, cur_y));
                     last_cmd = 'M';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'm' => {
                 if let Some((dx, dy)) = read_pair(&tokens, &mut i) {
                     cur_x += dx;
                     cur_y += dy;
+                    subpath_start = (cur_x, cur_y);
                     commands.push(PathCommand::MoveTo(cur_x, cur_y));
                     last_cmd = 'm';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'L' => {
@@ -2100,8 +2065,6 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_y = y;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'L';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'l' => {
@@ -2110,8 +2073,6 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_y += dy;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'l';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'H' => {
@@ -2119,8 +2080,6 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_x = x;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'H';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'h' => {
@@ -2128,8 +2087,6 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_x += dx;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'h';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'V' => {
@@ -2137,8 +2094,6 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_y = y;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'V';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'v' => {
@@ -2146,15 +2101,12 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     cur_y += dy;
                     commands.push(PathCommand::LineTo(cur_x, cur_y));
                     last_cmd = 'v';
-                    last_ctrl_x = cur_x;
-                    last_ctrl_y = cur_y;
                 }
             }
             'C' => {
                 if let Some((x1, y1, x2, y2, x, y)) = read_six(&tokens, &mut i) {
                     commands.push(PathCommand::CubicTo(x1, y1, x2, y2, x, y));
-                    last_ctrl_x = x2;
-                    last_ctrl_y = y2;
+                    smooth_control = SmoothControl::Cubic(x2, y2);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'C';
@@ -2169,8 +2121,7 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     let x = cur_x + dx;
                     let y = cur_y + dy;
                     commands.push(PathCommand::CubicTo(x1, y1, x2, y2, x, y));
-                    last_ctrl_x = x2;
-                    last_ctrl_y = y2;
+                    smooth_control = SmoothControl::Cubic(x2, y2);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'c';
@@ -2178,12 +2129,9 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
             'S' => {
                 if let Some((x2, y2, x, y)) = read_four(&tokens, &mut i) {
-                    // Reflect previous control point
-                    let x1 = 2.0 * cur_x - last_ctrl_x;
-                    let y1 = 2.0 * cur_y - last_ctrl_y;
+                    let (x1, y1) = preceding_control.cubic((cur_x, cur_y));
                     commands.push(PathCommand::CubicTo(x1, y1, x2, y2, x, y));
-                    last_ctrl_x = x2;
-                    last_ctrl_y = y2;
+                    smooth_control = SmoothControl::Cubic(x2, y2);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'S';
@@ -2191,15 +2139,13 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
             's' => {
                 if let Some((dx2, dy2, dx, dy)) = read_four(&tokens, &mut i) {
-                    let x1 = 2.0 * cur_x - last_ctrl_x;
-                    let y1 = 2.0 * cur_y - last_ctrl_y;
+                    let (x1, y1) = preceding_control.cubic((cur_x, cur_y));
                     let x2 = cur_x + dx2;
                     let y2 = cur_y + dy2;
                     let x = cur_x + dx;
                     let y = cur_y + dy;
                     commands.push(PathCommand::CubicTo(x1, y1, x2, y2, x, y));
-                    last_ctrl_x = x2;
-                    last_ctrl_y = y2;
+                    smooth_control = SmoothControl::Cubic(x2, y2);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 's';
@@ -2208,8 +2154,7 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             'Q' => {
                 if let Some((x1, y1, x, y)) = read_four(&tokens, &mut i) {
                     commands.push(PathCommand::QuadTo(x1, y1, x, y));
-                    last_ctrl_x = x1;
-                    last_ctrl_y = y1;
+                    smooth_control = SmoothControl::Quadratic(x1, y1);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'Q';
@@ -2222,8 +2167,7 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                     let x = cur_x + dx;
                     let y = cur_y + dy;
                     commands.push(PathCommand::QuadTo(x1, y1, x, y));
-                    last_ctrl_x = x1;
-                    last_ctrl_y = y1;
+                    smooth_control = SmoothControl::Quadratic(x1, y1);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'q';
@@ -2231,11 +2175,9 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
             'T' => {
                 if let Some((x, y)) = read_pair(&tokens, &mut i) {
-                    let x1 = 2.0 * cur_x - last_ctrl_x;
-                    let y1 = 2.0 * cur_y - last_ctrl_y;
+                    let (x1, y1) = preceding_control.quadratic((cur_x, cur_y));
                     commands.push(PathCommand::QuadTo(x1, y1, x, y));
-                    last_ctrl_x = x1;
-                    last_ctrl_y = y1;
+                    smooth_control = SmoothControl::Quadratic(x1, y1);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'T';
@@ -2243,13 +2185,11 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
             't' => {
                 if let Some((dx, dy)) = read_pair(&tokens, &mut i) {
-                    let x1 = 2.0 * cur_x - last_ctrl_x;
-                    let y1 = 2.0 * cur_y - last_ctrl_y;
+                    let (x1, y1) = preceding_control.quadratic((cur_x, cur_y));
                     let x = cur_x + dx;
                     let y = cur_y + dy;
                     commands.push(PathCommand::QuadTo(x1, y1, x, y));
-                    last_ctrl_x = x1;
-                    last_ctrl_y = y1;
+                    smooth_control = SmoothControl::Quadratic(x1, y1);
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 't';
@@ -2259,25 +2199,17 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                 if let Some((rx, ry, x_axis_rotation, large_arc, sweep, x, y)) =
                     read_arc(&tokens, &mut i)
                 {
-                    let segments = arc_endpoint_to_cubics(ArcEndpoint {
-                        start: SvgPoint { x: cur_x, y: cur_y },
-                        end: SvgPoint { x, y },
-                        radii: SvgPoint { x: rx, y: ry },
-                        x_axis_rotation,
-                        large_arc,
-                        sweep,
-                    });
-                    if segments.is_empty() {
-                        commands.push(PathCommand::LineTo(x, y));
-                        last_ctrl_x = x;
-                        last_ctrl_y = y;
-                    } else {
-                        for (x1, y1, x2, y2, px, py) in segments {
-                            commands.push(PathCommand::CubicTo(x1, y1, x2, y2, px, py));
-                            last_ctrl_x = x2;
-                            last_ctrl_y = y2;
-                        }
-                    }
+                    append_arc(
+                        &mut commands,
+                        ArcEndpoint::new(
+                            (cur_x, cur_y),
+                            (x, y),
+                            (rx, ry),
+                            x_axis_rotation,
+                            large_arc,
+                            sweep,
+                        ),
+                    );
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'A';
@@ -2289,25 +2221,17 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
                 {
                     let x = cur_x + dx;
                     let y = cur_y + dy;
-                    let segments = arc_endpoint_to_cubics(ArcEndpoint {
-                        start: SvgPoint { x: cur_x, y: cur_y },
-                        end: SvgPoint { x, y },
-                        radii: SvgPoint { x: rx, y: ry },
-                        x_axis_rotation,
-                        large_arc,
-                        sweep,
-                    });
-                    if segments.is_empty() {
-                        commands.push(PathCommand::LineTo(x, y));
-                        last_ctrl_x = x;
-                        last_ctrl_y = y;
-                    } else {
-                        for (x1, y1, x2, y2, px, py) in segments {
-                            commands.push(PathCommand::CubicTo(x1, y1, x2, y2, px, py));
-                            last_ctrl_x = x2;
-                            last_ctrl_y = y2;
-                        }
-                    }
+                    append_arc(
+                        &mut commands,
+                        ArcEndpoint::new(
+                            (cur_x, cur_y),
+                            (x, y),
+                            (rx, ry),
+                            x_axis_rotation,
+                            large_arc,
+                            sweep,
+                        ),
+                    );
                     cur_x = x;
                     cur_y = y;
                     last_cmd = 'a';
@@ -2315,6 +2239,7 @@ pub fn parse_path_data(d: &str) -> Vec<PathCommand> {
             }
             'Z' | 'z' => {
                 commands.push(PathCommand::ClosePath);
+                (cur_x, cur_y) = subpath_start;
                 last_cmd = 'Z';
             }
             _ => {
@@ -2435,46 +2360,117 @@ fn read_arc(tokens: &[String], i: &mut usize) -> Option<(f32, f32, f32, bool, bo
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SvgPoint {
-    x: f32,
-    y: f32,
+struct ArcPoint {
+    x: f64,
+    y: f64,
+}
+
+impl ArcPoint {
+    fn from_f32((x, y): (f32, f32)) -> Self {
+        Self {
+            x: f64::from(x),
+            y: f64::from(y),
+        }
+    }
+
+    fn as_f32(self) -> (f32, f32) {
+        (self.x as f32, self.y as f32)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ArcEndpoint {
-    start: SvgPoint,
-    end: SvgPoint,
-    radii: SvgPoint,
-    x_axis_rotation: f32,
+    start: ArcPoint,
+    end: ArcPoint,
+    radii: ArcPoint,
+    x_axis_rotation: f64,
     large_arc: bool,
     sweep: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ArcTransform {
-    cos_phi: f32,
-    sin_phi: f32,
-    radii: SvgPoint,
-    center: SvgPoint,
+impl ArcEndpoint {
+    fn new(
+        start: (f32, f32),
+        end: (f32, f32),
+        radii: (f32, f32),
+        x_axis_rotation: f32,
+        large_arc: bool,
+        sweep: bool,
+    ) -> Self {
+        Self {
+            start: ArcPoint::from_f32(start),
+            end: ArcPoint::from_f32(end),
+            radii: ArcPoint::from_f32(radii),
+            x_axis_rotation: f64::from(x_axis_rotation),
+            large_arc,
+            sweep,
+        }
+    }
 }
 
-fn arc_endpoint_to_cubics(arc: ArcEndpoint) -> Vec<(f32, f32, f32, f32, f32, f32)> {
-    let mut radii = SvgPoint {
+#[derive(Debug, Clone, Copy)]
+struct ArcTransform {
+    cos_phi: f64,
+    sin_phi: f64,
+    radii: ArcPoint,
+    center: ArcPoint,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CubicArcSegment {
+    control_1: ArcPoint,
+    control_2: ArcPoint,
+    end: ArcPoint,
+}
+
+enum ConvertedArc {
+    Omit,
+    Line,
+    Cubics(Box<[CubicArcSegment]>),
+}
+
+fn append_arc(commands: &mut Vec<PathCommand>, arc: ArcEndpoint) {
+    let end = arc.end.as_f32();
+    match convert_arc(arc) {
+        ConvertedArc::Omit => {}
+        ConvertedArc::Line => {
+            commands.push(PathCommand::LineTo(end.0, end.1));
+        }
+        ConvertedArc::Cubics(segments) => {
+            for segment in &segments {
+                let control_1 = segment.control_1.as_f32();
+                let control_2 = segment.control_2.as_f32();
+                let segment_end = segment.end.as_f32();
+                commands.push(PathCommand::CubicTo(
+                    control_1.0,
+                    control_1.1,
+                    control_2.0,
+                    control_2.1,
+                    segment_end.0,
+                    segment_end.1,
+                ));
+            }
+        }
+    }
+}
+
+fn convert_arc(arc: ArcEndpoint) -> ConvertedArc {
+    if arc.start.x == arc.end.x && arc.start.y == arc.end.y {
+        return ConvertedArc::Omit;
+    }
+
+    let mut radii = ArcPoint {
         x: arc.radii.x.abs(),
         y: arc.radii.y.abs(),
     };
-    if radii.x <= f32::EPSILON
-        || radii.y <= f32::EPSILON
-        || ((arc.start.x - arc.end.x).abs() <= f32::EPSILON
-            && (arc.start.y - arc.end.y).abs() <= f32::EPSILON)
-    {
-        return Vec::new();
+    if radii.x == 0.0 || radii.y == 0.0 {
+        return ConvertedArc::Line;
     }
 
     let phi = arc
         .x_axis_rotation
         .to_radians()
-        .rem_euclid(std::f32::consts::TAU);
+        .rem_euclid(std::f64::consts::TAU);
     let cos_phi = phi.cos();
     let sin_phi = phi.sin();
     let dx2 = (arc.start.x - arc.end.x) * 0.5;
@@ -2496,8 +2492,8 @@ fn arc_endpoint_to_cubics(arc: ArcEndpoint) -> Vec<(f32, f32, f32, f32, f32, f32
 
     let numerator = (rx_sq * ry_sq) - (rx_sq * y1p_sq) - (ry_sq * x1p_sq);
     let denominator = (rx_sq * y1p_sq) + (ry_sq * x1p_sq);
-    if denominator.abs() <= f32::EPSILON {
-        return Vec::new();
+    if denominator == 0.0 {
+        return ConvertedArc::Line;
     }
     let sign = if arc.large_arc == arc.sweep {
         -1.0
@@ -2508,7 +2504,7 @@ fn arc_endpoint_to_cubics(arc: ArcEndpoint) -> Vec<(f32, f32, f32, f32, f32, f32
     let cxp = coeff * ((radii.x * y1p) / radii.y);
     let cyp = coeff * (-(radii.y * x1p) / radii.x);
 
-    let center = SvgPoint {
+    let center = ArcPoint {
         x: cos_phi * cxp - sin_phi * cyp + (arc.start.x + arc.end.x) * 0.5,
         y: sin_phi * cxp + cos_phi * cyp + (arc.start.y + arc.end.y) * 0.5,
     };
@@ -2525,19 +2521,19 @@ fn arc_endpoint_to_cubics(arc: ArcEndpoint) -> Vec<(f32, f32, f32, f32, f32, f32
         ((-x1p - cxp) / radii.x, (-y1p - cyp) / radii.y),
     );
     if !arc.sweep && delta_theta > 0.0 {
-        delta_theta -= std::f32::consts::TAU;
+        delta_theta -= std::f64::consts::TAU;
     } else if arc.sweep && delta_theta < 0.0 {
-        delta_theta += std::f32::consts::TAU;
+        delta_theta += std::f64::consts::TAU;
     }
 
-    let segments = (delta_theta.abs() / (std::f32::consts::FRAC_PI_2))
+    let segments = (delta_theta.abs() / std::f64::consts::FRAC_PI_2)
         .ceil()
         .max(1.0) as usize;
-    let step = delta_theta / segments as f32;
+    let step = delta_theta / segments as f64;
     let mut curves = Vec::with_capacity(segments);
 
     for segment_idx in 0..segments {
-        let start_theta = theta1 + segment_idx as f32 * step;
+        let start_theta = theta1 + segment_idx as f64 * step;
         let end_theta = start_theta + step;
         let alpha = (4.0 / 3.0) * ((end_theta - start_theta) * 0.25).tan();
 
@@ -2546,33 +2542,41 @@ fn arc_endpoint_to_cubics(arc: ArcEndpoint) -> Vec<(f32, f32, f32, f32, f32, f32
 
         let c1 = map_arc_point(
             transform,
-            SvgPoint {
+            ArcPoint {
                 x: cos_start - alpha * sin_start,
                 y: sin_start + alpha * cos_start,
             },
         );
         let c2 = map_arc_point(
             transform,
-            SvgPoint {
+            ArcPoint {
                 x: cos_end + alpha * sin_end,
                 y: sin_end - alpha * cos_end,
             },
         );
-        let p2 = map_arc_point(
-            transform,
-            SvgPoint {
-                x: cos_end,
-                y: sin_end,
-            },
-        );
-        curves.push((c1.x, c1.y, c2.x, c2.y, p2.x, p2.y));
+        let end = if segment_idx + 1 == segments {
+            arc.end
+        } else {
+            map_arc_point(
+                transform,
+                ArcPoint {
+                    x: cos_end,
+                    y: sin_end,
+                },
+            )
+        };
+        curves.push(CubicArcSegment {
+            control_1: c1,
+            control_2: c2,
+            end,
+        });
     }
 
-    curves
+    ConvertedArc::Cubics(curves.into_boxed_slice())
 }
 
-fn map_arc_point(transform: ArcTransform, unit_point: SvgPoint) -> SvgPoint {
-    SvgPoint {
+fn map_arc_point(transform: ArcTransform, unit_point: ArcPoint) -> ArcPoint {
+    ArcPoint {
         x: transform.center.x + transform.cos_phi * transform.radii.x * unit_point.x
             - transform.sin_phi * transform.radii.y * unit_point.y,
         y: transform.center.y
@@ -2581,8 +2585,8 @@ fn map_arc_point(transform: ArcTransform, unit_point: SvgPoint) -> SvgPoint {
     }
 }
 
-fn unit_vector_angle(u: (f32, f32), v: (f32, f32)) -> f32 {
-    let dot = (u.0 * v.0 + u.1 * v.1).clamp(-1.0, 1.0);
+fn unit_vector_angle(u: (f64, f64), v: (f64, f64)) -> f64 {
+    let dot = u.0 * v.0 + u.1 * v.1;
     let cross = u.0 * v.1 - u.1 * v.0;
     cross.atan2(dot)
 }
@@ -2755,13 +2759,7 @@ mod tests {
     #[test]
     fn parse_svg_color_hex() {
         let color = parse_svg_color("#ff0000");
-        assert_eq!(color, Some((1.0, 0.0, 0.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named() {
-        let color = parse_svg_color("red");
-        assert_eq!(color, Some((1.0, 0.0, 0.0)));
+        assert_eq!(color, Some(Color::rgb(255, 0, 0)));
     }
 
     #[test]
@@ -2774,7 +2772,7 @@ mod tests {
     fn parse_svg_style_unparseable_style_fill_does_not_override_attribute() {
         let el = make_el("rect", vec![("fill", "red"), ("style", "fill: ???;")]);
         let style = parse_svg_style(&el);
-        assert_eq!(style.fill, SvgPaint::Color((1.0, 0.0, 0.0)));
+        assert_eq!(style.fill, SvgPaint::Color(Color::rgb(255, 0, 0)));
     }
 
     #[test]
@@ -2798,7 +2796,7 @@ mod tests {
             vec![("stroke", "blue"), ("style", "stroke: not-a-color;")],
         );
         let style = parse_svg_style(&el);
-        assert_eq!(style.stroke, SvgPaint::Color((0.0, 0.0, 1.0)));
+        assert_eq!(style.stroke, SvgPaint::Color(Color::rgb(0, 0, 255)));
     }
 
     #[test]
@@ -2917,7 +2915,7 @@ mod tests {
         }
     }
 
-    // ── filter: url(#id) -> feColorMatrix -> ColorFilterOp ─────────────
+    // ── filter: url(#id) -> feColorMatrix -> FilterOperation ─────────────
 
     fn filter_with(child: ElementNode) -> ElementNode {
         let mut f = make_el("filter", vec![("id", "f")]);
@@ -2927,13 +2925,13 @@ mod tests {
 
     #[test]
     fn fecolormatrix_saturate_maps_to_op_and_defaults_to_linear_rgb() {
-        use crate::style::computed::ColorFilterOp;
+        use crate::style::computed::FilterOperation;
         let f = filter_with(make_el(
             "feColorMatrix",
             vec![("type", "saturate"), ("values", "0")],
         ));
         let (ops, linear) = filter_element_color_ops(&f);
-        assert_eq!(ops, vec![ColorFilterOp::Saturate(0.0)]);
+        assert_eq!(ops, vec![FilterOperation::Saturate(0.0)]);
         // SVG <filter> default color space is linearRGB.
         assert!(linear);
     }
@@ -2948,8 +2946,38 @@ mod tests {
     }
 
     #[test]
+    fn filter_flood_current_color_resolves_from_filter_foreground() {
+        use crate::style::computed::FilterOperation;
+        let mut filter = filter_with(make_el(
+            "feDropShadow",
+            vec![("flood-color", "currentColor"), ("flood-opacity", "0.5")],
+        ));
+        filter.attributes.insert("color".into(), "red".into());
+
+        let (ops, _) = filter_element_color_ops(&filter);
+        assert!(matches!(
+            ops.as_slice(),
+            [FilterOperation::DropShadow(shadow)]
+                if shadow.color == crate::types::Color::from_srgb(1.0, 0.0, 0.0, 0.5)
+        ));
+    }
+
+    #[test]
+    fn svg_flood_keeps_fractional_rgb_precision_until_the_filter_backend() {
+        let flood = make_el("feFlood", vec![("flood-color", "rgb(80% 20% 10%)")]);
+
+        let color = svg_flood_color(&flood, Color::BLACK);
+
+        let (r, g, b, a) = color.to_f32_rgba();
+        assert!((r - 0.8).abs() < 0.000_001);
+        assert!((g - 0.2).abs() < 0.000_001);
+        assert!((b - 0.1).abs() < 0.000_001);
+        assert_eq!(a, 1.0);
+    }
+
+    #[test]
     fn fecolormatrix_matrix_form_decodes_to_saturate() {
-        use crate::style::computed::ColorFilterOp;
+        use crate::style::computed::FilterOperation;
         // The 20-value saturate(0) matrix == grayscale luminance blend.
         let m = "0.213 0.715 0.072 0 0 \
                  0.213 0.715 0.072 0 0 \
@@ -2960,7 +2988,7 @@ mod tests {
             vec![("type", "matrix"), ("values", m)],
         ));
         let (ops, _) = filter_element_color_ops(&f);
-        assert!(matches!(ops.as_slice(), [ColorFilterOp::Saturate(s)] if s.abs() < 1e-3));
+        assert!(matches!(ops.as_slice(), [FilterOperation::Saturate(s)] if s.abs() < 1e-3));
     }
 
     #[test]
@@ -3055,34 +3083,33 @@ mod tests {
     #[test]
     fn parse_svg_color_hex_3_char() {
         let c = parse_svg_color("#f00").unwrap();
-        assert_eq!(c, (1.0, 0.0, 0.0));
+        assert_eq!(c, Color::rgb(255, 0, 0));
     }
 
     #[test]
     fn parse_svg_color_hex_3_char_white() {
         let c = parse_svg_color("#fff").unwrap();
-        assert_eq!(c, (1.0, 1.0, 1.0));
+        assert_eq!(c, Color::WHITE);
     }
 
     #[test]
-    fn parse_svg_color_hex_invalid_length() {
-        assert!(parse_svg_color("#abcd").is_none());
+    fn parse_svg_color_hex_4_char_rgba() {
+        assert_eq!(
+            parse_svg_color("#abcd"),
+            Some(Color::rgba8(0xaa, 0xbb, 0xcc, 0xdd))
+        );
     }
 
     #[test]
     fn parse_svg_color_rgb_func() {
         let c = parse_svg_color("rgb(255, 0, 128)").unwrap();
-        assert!((c.0 - 1.0).abs() < 0.01);
-        assert!((c.1 - 0.0).abs() < 0.01);
-        assert!((c.2 - 128.0 / 255.0).abs() < 0.01);
+        assert_eq!(c, Color::rgb(255, 0, 128));
     }
 
     #[test]
     fn parse_svg_color_rgb_func_with_spaces() {
         let c = parse_svg_color("rgb( 0 , 128 , 255 )").unwrap();
-        assert!((c.0 - 0.0).abs() < 0.01);
-        assert!((c.1 - 128.0 / 255.0).abs() < 0.01);
-        assert!((c.2 - 1.0).abs() < 0.01);
+        assert_eq!(c, Color::rgb(0, 128, 255));
     }
 
     #[test]
@@ -3097,58 +3124,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_svg_color_named_black() {
-        assert_eq!(parse_svg_color("black"), Some((0.0, 0.0, 0.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_white() {
-        assert_eq!(parse_svg_color("white"), Some((1.0, 1.0, 1.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_green() {
-        assert_eq!(parse_svg_color("green"), Some((0.0, 128.0 / 255.0, 0.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_blue() {
-        assert_eq!(parse_svg_color("blue"), Some((0.0, 0.0, 1.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_yellow() {
-        assert_eq!(parse_svg_color("yellow"), Some((1.0, 1.0, 0.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_cyan() {
-        assert_eq!(parse_svg_color("cyan"), Some((0.0, 1.0, 1.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_magenta() {
-        assert_eq!(parse_svg_color("magenta"), Some((1.0, 0.0, 1.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_named_gray() {
-        let expected = (128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
-        assert_eq!(parse_svg_color("gray"), Some(expected));
-        assert_eq!(parse_svg_color("grey"), Some(expected));
-    }
-
-    #[test]
-    fn parse_svg_color_named_orange() {
-        assert_eq!(parse_svg_color("orange"), Some((1.0, 165.0 / 255.0, 0.0)));
-    }
-
-    #[test]
-    fn parse_svg_color_unknown_name() {
-        assert!(parse_svg_color("papayawhip").is_none());
-    }
-
-    #[test]
     fn parse_svg_color_none_case_insensitive() {
         assert_eq!(parse_svg_color("None"), None);
         assert_eq!(parse_svg_color("NONE"), None);
@@ -3156,7 +3131,7 @@ mod tests {
 
     #[test]
     fn parse_svg_color_with_leading_trailing_spaces() {
-        assert_eq!(parse_svg_color("  red  "), Some((1.0, 0.0, 0.0)));
+        assert_eq!(parse_svg_color("  red  "), Some(Color::rgb(255, 0, 0)));
     }
 
     // ── parse_points edge cases ────────────────────────────────────────
@@ -3277,6 +3252,124 @@ mod tests {
         // t reflected: (2*10-5, 2*10-10) = (15, 10)
         // t relative endpoint: (10+10, 10+0) = (20, 10)
         assert_eq!(cmds[2], PathCommand::QuadTo(15.0, 10.0, 20.0, 10.0));
+    }
+
+    #[derive(Clone, Copy)]
+    struct SmoothPredecessor {
+        command: &'static str,
+        suffix: &'static str,
+        current: (f32, f32),
+        cubic_control: Option<(f32, f32)>,
+        quadratic_control: Option<(f32, f32)>,
+    }
+
+    impl SmoothPredecessor {
+        const fn none(command: &'static str, suffix: &'static str, current: (f32, f32)) -> Self {
+            Self {
+                command,
+                suffix,
+                current,
+                cubic_control: None,
+                quadratic_control: None,
+            }
+        }
+
+        const fn cubic(command: &'static str, suffix: &'static str, control: (f32, f32)) -> Self {
+            Self {
+                command,
+                suffix,
+                current: (20.0, 20.0),
+                cubic_control: Some(control),
+                quadratic_control: None,
+            }
+        }
+
+        const fn quadratic(
+            command: &'static str,
+            suffix: &'static str,
+            control: (f32, f32),
+        ) -> Self {
+            Self {
+                command,
+                suffix,
+                current: (20.0, 20.0),
+                cubic_control: None,
+                quadratic_control: Some(control),
+            }
+        }
+    }
+
+    fn smooth_predecessors() -> [SmoothPredecessor; 20] {
+        use SmoothPredecessor as P;
+
+        [
+            P::none("M", "M 20 20", (20.0, 20.0)),
+            P::none("m", "m 17 17", (20.0, 20.0)),
+            P::none("L", "L 20 20", (20.0, 20.0)),
+            P::none("l", "l 17 17", (20.0, 20.0)),
+            P::none("H", "H 20", (20.0, 3.0)),
+            P::none("h", "h 17", (20.0, 3.0)),
+            P::none("V", "V 20", (3.0, 20.0)),
+            P::none("v", "v 17", (3.0, 20.0)),
+            P::cubic("C", "C 10 10 18 19 20 20", (18.0, 19.0)),
+            P::cubic("c", "c 7 7 15 16 17 17", (18.0, 19.0)),
+            P::cubic("S", "S 18 19 20 20", (18.0, 19.0)),
+            P::cubic("s", "s 15 16 17 17", (18.0, 19.0)),
+            P::quadratic("Q", "Q 18 19 20 20", (18.0, 19.0)),
+            P::quadratic("q", "q 15 16 17 17", (18.0, 19.0)),
+            P::quadratic("T", "T 20 20", (5.0, 5.0)),
+            P::quadratic("t", "t 17 17", (5.0, 5.0)),
+            P::none("A", "A 10 10 0 0 1 20 20", (20.0, 20.0)),
+            P::none("a", "a 10 10 0 0 1 17 17", (20.0, 20.0)),
+            P::none("Z", "Z", (0.0, 0.0)),
+            P::none("z", "z", (0.0, 0.0)),
+        ]
+    }
+
+    fn reflected(current: (f32, f32), control: Option<(f32, f32)>) -> (f32, f32) {
+        control.map_or(current, |control| {
+            (2.0 * current.0 - control.0, 2.0 * current.1 - control.1)
+        })
+    }
+
+    #[test]
+    fn smooth_cubic_reflects_only_cubic_predecessors() {
+        const CUBIC_SEED: &str = "M 0 0 C 1 1 2 2 3 3";
+
+        for predecessor in smooth_predecessors() {
+            let expected = reflected(predecessor.current, predecessor.cubic_control);
+            for target in ["S 30 30 40 40", "s 10 10 20 20"] {
+                let path = format!("{CUBIC_SEED} {} {target}", predecessor.suffix);
+                let Some(PathCommand::CubicTo(x, y, ..)) = parse_path_data(&path).last().cloned()
+                else {
+                    panic!(
+                        "{target} after {} did not produce a cubic",
+                        predecessor.command
+                    );
+                };
+                assert_eq!((x, y), expected, "{target} after {}", predecessor.command);
+            }
+        }
+    }
+
+    #[test]
+    fn smooth_quadratic_reflects_only_quadratic_predecessors() {
+        const QUADRATIC_SEED: &str = "M 0 0 Q 1 1 3 3";
+
+        for predecessor in smooth_predecessors() {
+            let expected = reflected(predecessor.current, predecessor.quadratic_control);
+            for target in ["T 30 30", "t 10 10"] {
+                let path = format!("{QUADRATIC_SEED} {} {target}", predecessor.suffix);
+                let Some(PathCommand::QuadTo(x, y, ..)) = parse_path_data(&path).last().cloned()
+                else {
+                    panic!(
+                        "{target} after {} did not produce a quadratic",
+                        predecessor.command
+                    );
+                };
+                assert_eq!((x, y), expected, "{target} after {}", predecessor.command);
+            }
+        }
     }
 
     #[test]
@@ -3634,8 +3727,8 @@ mod tests {
             ],
         );
         let style = parse_svg_style(&el);
-        assert_eq!(style.fill, SvgPaint::Color((1.0, 0.0, 0.0)));
-        assert_eq!(style.stroke, SvgPaint::Color((0.0, 0.0, 1.0)));
+        assert_eq!(style.fill, SvgPaint::Color(Color::rgb(255, 0, 0)));
+        assert_eq!(style.stroke, SvgPaint::Color(Color::rgb(0, 0, 255)));
         assert_eq!(style.stroke_width, Some(2.5));
         assert!((style.opacity - 0.5).abs() < 0.001);
     }
@@ -3651,14 +3744,14 @@ mod tests {
     fn parse_style_color_inherited_property() {
         let el = make_el("g", vec![("style", "color: red;")]);
         let style = parse_svg_style(&el);
-        assert_eq!(style.color, Some((1.0, 0.0, 0.0)));
+        assert_eq!(style.color, Some(Color::rgb(255, 0, 0)));
     }
 
     #[test]
     fn parse_style_invalid_color_does_not_override_attribute() {
         let el = make_el("g", vec![("color", "red"), ("style", "color: ???;")]);
         let style = parse_svg_style(&el);
-        assert_eq!(style.color, Some((1.0, 0.0, 0.0)));
+        assert_eq!(style.color, Some(Color::rgb(255, 0, 0)));
     }
 
     #[test]
@@ -3678,8 +3771,8 @@ mod tests {
             )],
         );
         let style = parse_svg_style(&el);
-        assert_eq!(style.fill, SvgPaint::Color((0.0, 1.0, 0.0)));
-        assert_eq!(style.stroke, SvgPaint::Color((0.0, 0.0, 1.0)));
+        assert_eq!(style.fill, SvgPaint::Color(Color::rgb(0, 255, 0)));
+        assert_eq!(style.stroke, SvgPaint::Color(Color::rgb(0, 0, 255)));
         assert_eq!(style.stroke_width, Some(3.0));
         assert!((style.opacity - 0.25).abs() < 0.001);
     }
@@ -3842,7 +3935,7 @@ mod tests {
                     transform,
                     Some(SvgTransform::Matrix(1.0, 0.0, 0.0, 1.0, 5.0, 6.0))
                 ));
-                assert!(matches!(style.fill, SvgPaint::Color((1.0, 0.0, 0.0))));
+                assert_eq!(style.fill, SvgPaint::Color(Color::rgb(255, 0, 0)));
                 assert_eq!(children.len(), 1);
             }
             other => panic!("expected wrapped root group, got {other:?}"),
@@ -4592,7 +4685,6 @@ mod tests {
 
     #[test]
     fn parse_path_arc_zero_radii_becomes_lineto() {
-        // rx=0 causes arc_endpoint_to_cubics to return empty → becomes LineTo
         let cmds = parse_path_data("M 0 0 A 0 0 0 0 1 10 10");
         assert_eq!(cmds.len(), 2);
         assert_eq!(cmds[0], PathCommand::MoveTo(0.0, 0.0));
@@ -4600,12 +4692,34 @@ mod tests {
     }
 
     #[test]
-    fn parse_path_arc_same_start_end_becomes_lineto() {
-        // start == end causes arc_endpoint_to_cubics to return empty → becomes LineTo
+    fn parse_path_arc_same_start_end_is_omitted() {
         let cmds = parse_path_data("M 10 10 A 5 5 0 0 1 10 10");
-        assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0], PathCommand::MoveTo(10.0, 10.0));
-        assert_eq!(cmds[1], PathCommand::LineTo(10.0, 10.0));
+        assert_eq!(cmds, [PathCommand::MoveTo(10.0, 10.0)]);
+    }
+
+    #[test]
+    fn parse_path_arc_tiny_positive_radii_are_not_zero() {
+        let cmds = parse_path_data("M 0 0 A .00000001 .00000001 0 0 1 .00000001 0");
+        assert!(
+            cmds.iter()
+                .any(|command| matches!(command, PathCommand::CubicTo(..))),
+            "positive authored radii must not be replaced by a line"
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|command| matches!(command, PathCommand::LineTo(..)))
+        );
+    }
+
+    #[test]
+    fn parse_path_arc_one_ulp_endpoint_delta_is_not_omitted() {
+        let end = f32::from_bits(1.0f32.to_bits() + 1);
+        let cmds = parse_path_data(&format!("M 1 1 A 1 1 0 0 1 {end} 1"));
+        assert!(
+            cmds.iter()
+                .any(|command| matches!(command, PathCommand::CubicTo(..)))
+        );
     }
 
     #[test]
@@ -4961,7 +5075,7 @@ mod tests {
         let el = make_el("rect", vec![("style", "fill: url(#grad); stroke: red;")]);
         let style = parse_svg_style(&el);
         assert!(matches!(style.fill, SvgPaint::Url(ref id) if id == "grad"));
-        assert!(matches!(style.stroke, SvgPaint::Color((1.0, 0.0, 0.0))));
+        assert_eq!(style.stroke, SvgPaint::Color(Color::rgb(255, 0, 0)));
     }
 
     #[test]
@@ -5073,7 +5187,7 @@ mod tests {
     #[test]
     fn svg_style_is_default_false_when_fill_set() {
         let mut style = SvgStyle::default();
-        style.fill = SvgPaint::Color((1.0, 0.0, 0.0));
+        style.fill = SvgPaint::Color(Color::rgb(255, 0, 0));
         assert!(!svg_style_is_default(&style));
     }
 
@@ -5087,7 +5201,7 @@ mod tests {
     #[test]
     fn svg_style_is_default_false_when_color_set() {
         let mut style = SvgStyle::default();
-        style.color = Some((0.0, 0.0, 0.0));
+        style.color = Some(Color::BLACK);
         assert!(!svg_style_is_default(&style));
     }
 
@@ -5384,13 +5498,13 @@ mod tests {
             font_size: 14.0,
             font_bold: true,
             font_italic: false,
-            color: Some((1.0, 0.0, 0.0)),
+            color: Some(Color::rgb(255, 0, 0)),
         };
         let tree = parse_svg_from_element_with_ctx(&svg, ctx.clone()).unwrap();
         assert_eq!(tree.text_ctx.font_family, "Courier");
         assert_eq!(tree.text_ctx.font_size, 14.0);
         assert!(tree.text_ctx.font_bold);
-        assert_eq!(tree.text_ctx.color, Some((1.0, 0.0, 0.0)));
+        assert_eq!(tree.text_ctx.color, Some(Color::rgb(255, 0, 0)));
     }
 
     // ── nested SVG without viewBox, x/y offset ────────────────────────

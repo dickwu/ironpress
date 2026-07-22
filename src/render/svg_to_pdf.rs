@@ -5,12 +5,15 @@ use crate::parser::svg::{
     SvgPaint, SvgRadialGradient, SvgStyle, SvgTextAnchor, SvgTextContext, SvgTransform, SvgTree,
 };
 use crate::render::pdf::encode_pdf_text;
-use crate::render::shading::{ShadingEntry, push_axial_shading, push_radial_shading};
+use crate::render::shading::{
+    PdfGradientStops, ShadingEntry, push_axial_shading, push_radial_shading,
+};
 use crate::render::svg_geometry::{
     SvgPlacement, SvgPlacementRequest, SvgViewportBox, compute_raster_placement,
     compute_svg_placement,
 };
 use crate::style::computed::{FontFamily, parse_font_stack};
+use crate::types::Color;
 use std::fmt::Write as _;
 
 pub(crate) trait SvgImageObjectSink {
@@ -168,7 +171,7 @@ pub(crate) fn render_svg_tree_with_resources(
     // SVG initial values: fill=black, stroke=none, stroke-width=1.
     let root_style = ResolvedStyle {
         color: tree.text_ctx.color,
-        fill: SvgPaint::Color((0.0, 0.0, 0.0)),
+        fill: SvgPaint::Color(Color::BLACK),
         stroke: SvgPaint::None,
         clip_path: None,
         clip_rule: SvgClipRule::NonZero,
@@ -193,7 +196,7 @@ pub(crate) fn render_svg_tree_with_resources(
 
 #[derive(Debug, Clone)]
 struct ResolvedStyle {
-    color: Option<(f32, f32, f32)>,
+    color: Option<Color>,
     fill: SvgPaint,
     stroke: SvgPaint,
     clip_path: Option<String>,
@@ -317,11 +320,11 @@ fn resolve_style(parent: ResolvedStyle, local: &SvgStyle) -> ResolvedStyle {
     }
 }
 
-fn paint_to_rgb(paint: &SvgPaint, color: Option<(f32, f32, f32)>) -> Option<(f32, f32, f32)> {
+fn paint_to_rgb(paint: &SvgPaint, color: Option<Color>) -> Option<(f32, f32, f32)> {
     match paint {
         SvgPaint::None => None,
-        SvgPaint::Color(c) => Some(*c),
-        SvgPaint::CurrentColor => Some(color.unwrap_or((0.0, 0.0, 0.0))),
+        SvgPaint::Color(color) => Some(color.to_f32_rgb()),
+        SvgPaint::CurrentColor => Some(color.unwrap_or(Color::BLACK).to_f32_rgb()),
         SvgPaint::Url(_) => None,
         SvgPaint::Unspecified => None,
     }
@@ -410,19 +413,12 @@ fn render_node(
                 out.push_str("Q\n");
             }
         }
-        SvgNode::Rect { .. }
-        | SvgNode::Circle { .. }
-        | SvgNode::Ellipse { .. }
-        | SvgNode::Polygon { .. }
-        | SvgNode::Path { .. } => {
-            let style = match node {
-                SvgNode::Rect { style, .. }
-                | SvgNode::Circle { style, .. }
-                | SvgNode::Ellipse { style, .. }
-                | SvgNode::Polygon { style, .. }
-                | SvgNode::Path { style, .. } => resolve_style(inherited, style),
-                _ => unreachable!(),
-            };
+        SvgNode::Rect { style, .. }
+        | SvgNode::Circle { style, .. }
+        | SvgNode::Ellipse { style, .. }
+        | SvgNode::Polygon { style, .. }
+        | SvgNode::Path { style, .. } => {
+            let style = resolve_style(inherited, style);
             let Some(path) = shape_path_string(node) else {
                 return;
             };
@@ -510,13 +506,8 @@ fn render_node(
                 out.push_str("Q\n");
             }
         }
-        SvgNode::Line { .. } | SvgNode::Polyline { .. } => {
-            let style = match node {
-                SvgNode::Line { style, .. } | SvgNode::Polyline { style, .. } => {
-                    resolve_style(inherited, style)
-                }
-                _ => unreachable!(),
-            };
+        SvgNode::Line { style, .. } | SvgNode::Polyline { style, .. } => {
+            let style = resolve_style(inherited, style);
             let Some(path) = shape_path_string(node) else {
                 return;
             };
@@ -941,11 +932,19 @@ fn paint_svg_linear_gradient_fill(
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
 ) {
-    let stops: Vec<(f32, (f32, f32, f32))> = gradient
-        .stops
-        .iter()
-        .map(|stop| (stop.offset, stop.color))
-        .collect();
+    let Ok(stops) = PdfGradientStops::unit(
+        gradient
+            .stops
+            .iter()
+            .map(|stop| (stop.offset, stop.color.to_f32_rgb())),
+    ) else {
+        // This vector renderer has no shape-level raster fallback yet. Fail
+        // closed instead of registering a malformed PDF stitching function.
+        out.push_str("% ironpress: SVG gradient requires raster fallback\n");
+        out.push_str(path);
+        out.push_str("n\n");
+        return;
+    };
     let name = push_axial_shading(shadings, shading_counter, coords, stops);
 
     // Canonical "fill a shape with a shading" idiom: build the path *inside* the
@@ -1008,11 +1007,19 @@ fn paint_svg_radial_gradient_fill(
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
 ) {
-    let stops: Vec<(f32, (f32, f32, f32))> = gradient
-        .stops
-        .iter()
-        .map(|stop| (stop.offset, stop.color))
-        .collect();
+    let Ok(stops) = PdfGradientStops::unit(
+        gradient
+            .stops
+            .iter()
+            .map(|stop| (stop.offset, stop.color.to_f32_rgb())),
+    ) else {
+        // This vector renderer has no shape-level raster fallback yet. Fail
+        // closed instead of registering a malformed PDF stitching function.
+        out.push_str("% ironpress: SVG gradient requires raster fallback\n");
+        out.push_str(path);
+        out.push_str("n\n");
+        return;
+    };
     let name = push_radial_shading(shadings, shading_counter, coords, stops);
 
     // Canonical "fill a shape with a shading" idiom: build the path *inside* the
@@ -1524,11 +1531,11 @@ fn emit_custom_svg_text(
             out.push(' ');
         }
         first = false;
-        let gid = custom
-            .prepared
-            .map_or(glyph.glyph_id, |p| p.pdf_glyph_id(glyph.glyph_id));
         out.push('<');
-        out.push_str(&crate::render::pdf::encode_pdf_hex_glyph(gid));
+        out.push_str(&custom.prepared.map_or_else(
+            || crate::render::pdf::encode_pdf_hex_glyph(glyph.glyph_id),
+            |prepared| prepared.encode_glyph(glyph.glyph_id),
+        ));
         out.push('>');
         // Fold the shaper advance/kern delta into the TJ array so positioning
         // matches the shaped widths (Identity-H ignores the embedded /W when a
@@ -1536,10 +1543,7 @@ fn emit_custom_svg_text(
         let nominal = custom.font.glyph_width_scaled(glyph.glyph_id, size);
         let advance_adjustment = glyph.x_advance - nominal;
         let tj_adjustment = -(advance_adjustment * 1000.0 / size.max(f32::EPSILON));
-        if tj_adjustment.abs() > 0.001 {
-            out.push(' ');
-            out.push_str(&format!("{tj_adjustment:.4}"));
-        }
+        crate::render::pdf::append_pdf_tj_adjustment(out, tj_adjustment);
     }
     out.push_str("] TJ\n");
     out.push_str("ET\n");
@@ -1770,6 +1774,31 @@ fn render_svg_image_tree(
     out: &mut String,
     resources: &mut SvgPdfResources<'_>,
 ) {
+    render_svg_tree_for_request(tree, request, out, resources);
+}
+
+/// Render a standalone SVG CSS image into its concrete object viewport.
+pub(crate) fn render_svg_tree_in_viewport(
+    tree: &SvgTree,
+    width: f32,
+    height: f32,
+    out: &mut String,
+    resources: &mut SvgPdfResources<'_>,
+) {
+    render_svg_tree_for_request(
+        tree,
+        SvgPlacementRequest::from_rect(0.0, 0.0, width, height, tree.preserve_aspect_ratio),
+        out,
+        resources,
+    );
+}
+
+fn render_svg_tree_for_request(
+    tree: &SvgTree,
+    request: SvgPlacementRequest,
+    out: &mut String,
+    resources: &mut SvgPdfResources<'_>,
+) {
     let Some(placement) = compute_svg_placement(tree, request) else {
         return;
     };
@@ -1949,7 +1978,7 @@ mod tests {
     fn style_fill(r: f32, g: f32, b: f32) -> SvgStyle {
         SvgStyle {
             color: None,
-            fill: SvgPaint::Color((r, g, b)),
+            fill: SvgPaint::Color(Color::from_srgb(r, g, b, 1.0)),
             stroke: SvgPaint::Unspecified,
             clip_path: None,
             clip_rule: SvgClipRule::NonZero,
@@ -1965,7 +1994,7 @@ mod tests {
         SvgStyle {
             color: None,
             fill: SvgPaint::None,
-            stroke: SvgPaint::Color((r, g, b)),
+            stroke: SvgPaint::Color(Color::from_srgb(r, g, b, 1.0)),
             clip_path: None,
             clip_rule: SvgClipRule::NonZero,
             stroke_width: Some(w),
@@ -1979,8 +2008,8 @@ mod tests {
     fn style_fill_and_stroke() -> SvgStyle {
         SvgStyle {
             color: None,
-            fill: SvgPaint::Color((1.0, 0.0, 0.0)),
-            stroke: SvgPaint::Color((0.0, 0.0, 1.0)),
+            fill: SvgPaint::Color(Color::rgb(255, 0, 0)),
+            stroke: SvgPaint::Color(Color::rgb(0, 0, 255)),
             clip_path: None,
             clip_rule: SvgClipRule::NonZero,
             stroke_width: Some(2.0),
@@ -2104,12 +2133,12 @@ mod tests {
                 stops: vec![
                     SvgGradientStop {
                         offset: 0.0,
-                        color: (1.0, 0.0, 0.0),
+                        color: Color::rgb(255, 0, 0),
                         opacity: 1.0,
                     },
                     SvgGradientStop {
                         offset: 1.0,
-                        color: (0.0, 0.0, 1.0),
+                        color: Color::rgb(0, 0, 255),
                         opacity: 1.0,
                     },
                 ],
@@ -2151,12 +2180,12 @@ mod tests {
                 stops: vec![
                     SvgGradientStop {
                         offset: 0.0,
-                        color: (1.0, 0.0, 0.0),
+                        color: Color::rgb(255, 0, 0),
                         opacity: 1.0,
                     },
                     SvgGradientStop {
                         offset: 1.0,
-                        color: (0.0, 0.0, 1.0),
+                        color: Color::rgb(0, 0, 255),
                         opacity: 1.0,
                     },
                 ],
@@ -2197,12 +2226,12 @@ mod tests {
                 stops: vec![
                     SvgGradientStop {
                         offset: 0.0,
-                        color: (1.0, 0.0, 0.0),
+                        color: Color::rgb(255, 0, 0),
                         opacity: 1.0,
                     },
                     SvgGradientStop {
                         offset: 1.0,
-                        color: (0.0, 0.0, 1.0),
+                        color: Color::rgb(0, 0, 255),
                         opacity: 1.0,
                     },
                 ],
@@ -2843,7 +2872,7 @@ mod tests {
             }],
             style: SvgStyle {
                 color: None,
-                fill: SvgPaint::Color((1.0, 0.0, 0.0)),
+                fill: SvgPaint::Color(Color::rgb(255, 0, 0)),
                 stroke: SvgPaint::Unspecified,
                 clip_path: None,
                 stroke_width: None,
@@ -3258,8 +3287,8 @@ mod tests {
             ry: 0.0,
             style: SvgStyle {
                 color: None,
-                fill: SvgPaint::Color((1.0, 0.0, 0.0)),
-                stroke: SvgPaint::Color((0.0, 0.0, 0.0)),
+                fill: SvgPaint::Color(Color::rgb(255, 0, 0)),
+                stroke: SvgPaint::Color(Color::BLACK),
                 clip_path: None,
                 clip_rule: SvgClipRule::NonZero,
                 stroke_width: Some(0.0),
@@ -3348,7 +3377,7 @@ mod tests {
                 },
             }],
             text_ctx: SvgTextContext {
-                color: Some((1.0, 0.0, 0.0)),
+                color: Some(Color::rgb(255, 0, 0)),
                 ..SvgTextContext::default()
             },
             source_markup: None,
@@ -3391,7 +3420,7 @@ mod tests {
                 style: SvgStyle {
                     color: None,
                     fill: SvgPaint::None,
-                    stroke: SvgPaint::Color((1.0, 0.0, 0.0)),
+                    stroke: SvgPaint::Color(Color::rgb(255, 0, 0)),
                     clip_path: None,
                     clip_rule: SvgClipRule::NonZero,
                     stroke_width: Some(1.5),
@@ -3449,7 +3478,7 @@ mod tests {
                 style: SvgStyle::default(),
             }],
             text_ctx: SvgTextContext {
-                color: Some((1.0, 0.0, 0.0)),
+                color: Some(Color::rgb(255, 0, 0)),
                 ..SvgTextContext::default()
             },
             source_markup: None,
@@ -3486,7 +3515,7 @@ mod tests {
                 content: "Hello".to_string(),
                 style: SvgStyle {
                     color: None,
-                    fill: SvgPaint::Color((0.0, 0.0, 0.0)),
+                    fill: SvgPaint::Color(Color::BLACK),
                     stroke: SvgPaint::Unspecified,
                     clip_path: None,
                     clip_rule: SvgClipRule::NonZero,
@@ -3535,7 +3564,7 @@ mod tests {
                 content: "Hello".to_string(),
                 style: SvgStyle {
                     color: None,
-                    fill: SvgPaint::Color((0.0, 0.0, 0.0)),
+                    fill: SvgPaint::Color(Color::BLACK),
                     stroke: SvgPaint::Unspecified,
                     clip_path: None,
                     clip_rule: SvgClipRule::NonZero,
@@ -3641,7 +3670,7 @@ mod tests {
                 },
             }],
             text_ctx: SvgTextContext {
-                color: Some((0.0, 0.5, 1.0)),
+                color: Some(Color::from_srgb(0.0, 0.5, 1.0, 1.0)),
                 ..SvgTextContext::default()
             },
             source_markup: None,
@@ -3664,7 +3693,7 @@ mod tests {
             children: vec![SvgNode::Group {
                 transform: None,
                 style: SvgStyle {
-                    color: Some((1.0, 0.0, 0.0)),
+                    color: Some(Color::rgb(255, 0, 0)),
                     ..SvgStyle::default()
                 },
                 children: vec![SvgNode::Text {
@@ -3686,7 +3715,7 @@ mod tests {
                 }],
             }],
             text_ctx: SvgTextContext {
-                color: Some((0.0, 0.5, 1.0)),
+                color: Some(Color::from_srgb(0.0, 0.5, 1.0, 1.0)),
                 ..SvgTextContext::default()
             },
             source_markup: None,
@@ -3721,7 +3750,7 @@ mod tests {
                 style: SvgStyle::default(),
             }],
             text_ctx: SvgTextContext {
-                color: Some((1.0, 0.0, 0.0)),
+                color: Some(Color::rgb(255, 0, 0)),
                 ..SvgTextContext::default()
             },
             source_markup: None,

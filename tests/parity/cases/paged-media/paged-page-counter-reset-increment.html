@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>page counter reset and increment</title><style>
+@page{size:160px 104px;margin:20px 0 0 0;counter-reset:page 7;counter-increment:page 2;@top-center{content:"R" counter(page)}}
+html{font-family:ParitySans;line-height:1.5}
+*{margin:0;box-sizing:border-box}
+.block{height:40px}.block+.block{break-before:page}.a{background:#6d28d9}.b{background:#f97316}
+</style></head><body><div class="block a"></div><div class="block b"></div></body></html>

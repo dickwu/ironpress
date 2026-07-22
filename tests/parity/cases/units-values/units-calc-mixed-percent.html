@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>calc mixed percent and px</title>
 <style>
-  @page { size: 477px 160px; margin: 0; }
+  @page { size: 480px 160px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
@@ -14,7 +14,8 @@
     background: #cfd8e3;
     border: 2px solid #11305f;
   }
-  /* calc(50% - 40px) of 400px = 200 - 40 = 160px wide; 160px - 60px = 100px tall */
+  /* Percentages use the parent's 396x156px content box: 198 - 40 = 158px
+     wide, and 156 - 60 = 96px tall. */
   .child {
     width: calc(50% - 40px);
     height: calc(100% - 60px);

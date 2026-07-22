@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border-image outset em</title>
+<style>
+@page{size:240px 144px;margin:0}
+html{font-family:ParitySans;line-height:1.5}
+*{margin:0;box-sizing:border-box}
+html,body{background:#ffffff}
+body{padding:32px}
+.box{
+  width:144px;
+  height:64px;
+  font-size:40px;
+  border:8px solid transparent;
+  background:#f1faee;
+  border-image:linear-gradient(135deg,#e63946 0%,#f1faee 50%,#457b9d 100%) 1 / 1 / .25em;
+}
+</style>
+</head>
+<body>
+<div class="box"></div>
+</body>
+</html>

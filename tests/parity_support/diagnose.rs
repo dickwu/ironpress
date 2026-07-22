@@ -2,18 +2,15 @@
 //! comparator. ADDITIVE — it reads the tally/regions/aligned pixels the verdict
 //! already produced and never changes a verdict.
 //!
-//! The output is one `Diagnosis` per scored fixture: a primary `ErrorClass`, a
-//! human `headline` (a pure rule table keyed on the primary class + magnitude
-//! signature, §2.3), all magnitudes in CSS px / 0..255 ΔRGB / ΔE (never raw
-//! device px, §2.1), and a per-region breakdown. `compute_attribution` (kept
-//! verbatim below) composes with it: a CONFOUNDED fixture's headline is prefixed
-//! `via {dep}: …` so the report names the real culprit, not the surface feature
+//! The output is one `Diagnosis` per scored fixture: a directly observed primary
+//! class, a human headline, 0..255 ΔRGB / ΔE magnitudes, and a per-region
+//! breakdown. `compute_dependency_context`
+//! below) reports failing dependencies separately without rewriting the measured
+//! PDF-difference diagnosis or claiming a cause that the harness did not prove.
 //! (honors the MEMORY.md failure-mode-attribution rule).
 //!
-//! Sub-classifier coverage (spec §2.2):
-//!   - GeometrySize vs GeometryShift, AaOnly, ColorValue — implemented FULLY
-//!     (cheap, robust; from `edge_delta_css` symmetry / the AA-only signal /
-//!     the region modal ΔRGB+ΔE).
+//! Sub-classifier coverage:
+//!   - Missing/Extra follow same-coordinate paper/content facts.
 //!   - ColorSpace (gamma/sRGB-linear fit) and AlphaCompositing (α solve) —
 //!     BEST-EFFORT: sampled from the aligned cand/ref pixels of the dominant
 //!     ColorErr region. When the fit is inconclusive we fall back to ColorValue
@@ -25,8 +22,8 @@ use std::collections::BTreeMap;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 
-use super::compare::{ClassMap, ClassTally, DiffRegion, PixelClass};
-use super::config::{G_COLOR_PCT, G_EDGE_CSS, G_EXTRA_PCT, G_MISSING_PCT, G_SHIFT_CSS};
+use super::compare::{ClassMap, ClassTally, CoverageEvidence, DiffRegion, PixelClass, RegionSet};
+use super::config::CSS_PX;
 use super::report::{FixtureResult, Status};
 
 // ===========================================================================
@@ -35,27 +32,22 @@ use super::report::{FixtureResult, Status};
 // goldens can lock the shape.
 // ===========================================================================
 
-/// The kind of defect a region/fixture exhibits. Serialized as its name so the
-/// report reads as text (e.g. `"GeometrySize"`).
+/// The kind of directly observed defect a region/fixture exhibits.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum ErrorClass {
     /// Reference paints, candidate is blank (feature absent / clipped).
     Missing,
     /// Candidate paints where the reference is blank.
     Extra,
-    /// Asymmetric box-extent error (one/two sides) — a size bug (box-sizing).
-    GeometrySize,
-    /// All four sides displaced equally — a residual translation beyond calibration.
-    GeometryShift,
     /// Flat recolour / wrong colour value (within sRGB).
+    #[default]
     ColorValue,
+    /// Antialiasing coverage differences on a shared outline.
+    AntialiasCoverage,
     /// Gradient/blend drift consistent with an sRGB-vs-linear (gamma) mismatch.
     ColorSpace,
     /// Opacity not composited (an α∈(0,1) explains ref while cand is opaque).
     AlphaCompositing,
-    /// The only non-Match pixels are shared-edge AA — a measurement ceiling.
-    #[default]
-    AaOnly,
 }
 
 impl ErrorClass {
@@ -63,72 +55,85 @@ impl ErrorClass {
         match self {
             ErrorClass::Missing => "Missing",
             ErrorClass::Extra => "Extra",
-            ErrorClass::GeometrySize => "GeometrySize",
-            ErrorClass::GeometryShift => "GeometryShift",
             ErrorClass::ColorValue => "ColorValue",
+            ErrorClass::AntialiasCoverage => "AntialiasCoverage",
             ErrorClass::ColorSpace => "ColorSpace",
             ErrorClass::AlphaCompositing => "AlphaCompositing",
-            ErrorClass::AaOnly => "AaOnly",
         }
     }
 }
 
-/// All defect magnitudes for one fixture, in fixture-facing units: CSS px /
-/// 0..255 signed ΔRGB / ΔE2000 — never raw device px (§2.1).
+/// Direct same-coordinate defect magnitudes for one fixture.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct Magnitude {
-    /// Per-side box-extent delta [L, R, T, B], CSS px.
-    pub(crate) edge_delta_css: [f64; 4],
     /// % of REF content area that is Missing.
     pub(crate) missing_area_pct: f64,
     /// % of CAND content area that is Extra.
     pub(crate) extra_area_pct: f64,
     /// Modal (median) signed per-channel cand−ref over ColorErr px (0..255).
-    pub(crate) modal_drgb: [i16; 3],
+    pub(crate) modal_drgba: [i16; 4],
     /// Area-weighted mean ΔE2000 over ColorErr regions.
     pub(crate) delta_e: f64,
     /// Recovered compositing α∈(0,1) when AlphaCompositing was diagnosed.
     pub(crate) recovered_alpha: Option<f64>,
-    /// Residual whole-frame translation [dx, dy], CSS px.
-    pub(crate) residual_shift_css: [f64; 2],
     /// A short tag for a detected colour-space fit (e.g. `"sRGB↔linear"`), if any.
     pub(crate) colorspace: Option<String>,
 }
 
-/// One diff region's diagnosis (top-N by area, worst-first). Magnitudes mirror
-/// `Magnitude` at region scope. `selector` is Tier-2 (layout sidecar) and stays
-/// `None` for now (spec §3.4 Tier 1).
+/// One diff region's diagnosis (worst-first). Magnitudes mirror `Magnitude` at
+/// region scope.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct RegionDiag {
     pub(crate) class: String,
     pub(crate) bbox_css: [f64; 4],
     pub(crate) area_pct: f64,
-    pub(crate) edge_delta_css: [f64; 4],
-    pub(crate) modal_drgb: [i16; 3],
+    pub(crate) modal_drgba: [i16; 4],
     pub(crate) delta_e: f64,
     pub(crate) recovered_alpha: Option<f64>,
-    pub(crate) shift_css: [f64; 2],
-    pub(crate) selector: Option<String>,
     pub(crate) headline: String,
 }
 
+/// Complete component census for one dominant raster class. The bounded
+/// `region_examples` list is presentation detail; this aggregate is the semantic
+/// record and includes every one-pixel component.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub(crate) struct RegionClassSummary {
+    pub(crate) class: String,
+    pub(crate) region_count: u64,
+    pub(crate) total_pixels: u64,
+    pub(crate) total_area_pct: f64,
+    pub(crate) union_bbox_css: [f64; 4],
+    pub(crate) largest_region_pixels: u32,
+    pub(crate) largest_region_area_pct: f64,
+    pub(crate) max_delta_e: f64,
+}
+
 /// The full diagnosis for one fixture (§2.1). `primary_class`/`secondary` are
-/// `ErrorClass` names; `headline` is the human reason (§2.3, possibly attribution-
-/// prefixed); `confidence` is the fraction of real-diff px in the primary class.
+/// `ErrorClass` names; `headline` is the measured human reason (§2.3);
+/// `confidence` is the fraction of real-diff px in the primary class.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct Diagnosis {
     pub(crate) primary_class: String,
     pub(crate) secondary: Vec<String>,
     pub(crate) headline: String,
     pub(crate) magnitude: Magnitude,
-    pub(crate) regions: Vec<RegionDiag>,
-    pub(crate) residual_shift_css: [f64; 2],
+    /// Total connected components represented by `region_classes`.
+    pub(crate) region_count: u64,
+    /// Lossless per-raster-class aggregate over every connected component.
+    pub(crate) region_classes: Vec<RegionClassSummary>,
+    /// Bounded, worst-first examples for visual detail. Never use its length as
+    /// the semantic region count; `region_count` is authoritative.
+    pub(crate) region_examples: Vec<RegionDiag>,
     pub(crate) confidence: f64,
+    /// Exact number of unequal RGBA pixels in the complete compared page.
+    /// This is evidence for the report, never a pass threshold.
+    #[serde(default)]
+    pub(crate) different_pixels: u64,
+    /// Why a non-identical comparison passed. This makes the fixed visibility
+    /// policy auditable without changing the raw difference evidence.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) visual_pass_basis: String,
 }
-
-/// Top-N regions surfaced per fixture (worst-first; the rest are summarised by
-/// the aggregate magnitude only).
-const MAX_REGION_DIAGS: usize = 6;
 
 // ===========================================================================
 // diagnose() — the entry point (spec §2.2 sub-classifiers + §2.3 headline)
@@ -139,45 +144,38 @@ const MAX_REGION_DIAGS: usize = 6;
 /// colour-space / alpha sub-classifiers need). Pure: no I/O, no mutation of inputs.
 pub(crate) fn diagnose(
     tally: &ClassTally,
-    regions: &[DiffRegion],
+    regions: &RegionSet,
     cm: &ClassMap,
     cand: &RgbaImage,
     reference: &RgbaImage,
 ) -> Diagnosis {
-    // Real-diff pixel census across the whole frame — the basis for AaOnly and
-    // for `confidence` (fraction of real-diff px in the primary class).
+    // Non-match pixel census for `confidence` (fraction in the primary class).
     let census = Census::of(cm);
 
-    // --- AaOnly: the cheap measurement-ceiling case ----------------------
-    // The fixture differs ONLY in shared-edge anti-aliasing — a cross-rasterizer
-    // ceiling, not a bug (e.g. a text baseline). Read it as AaOnly so it never
-    // reports a scary class. This requires BOTH: no real-diff pixels at all, AND
-    // the geometry/coverage/colour signals all within their PASS bounds (so a real
-    // size/shift bug carrying zero ColorErr/Missing/Extra pixels — which is
-    // impossible by construction, the bbox delta has no pixels — cannot be
-    // laundered, and a genuinely clean render with stray AA reads correctly).
-    let geometry_quiet = tally.edge_max_css <= G_EDGE_CSS.0 && tally.shift_max_css <= G_SHIFT_CSS.0;
-    let coverage_quiet = tally.missing_pct <= G_MISSING_PCT.0 && tally.extra_pct <= G_EXTRA_PCT.0;
-    let color_quiet = tally.color_pct <= G_COLOR_PCT.0;
-    if census.real == 0 && geometry_quiet && coverage_quiet && color_quiet {
-        return aa_only_diagnosis(tally);
+    if census.real == 0 {
+        return exact_match_diagnosis(tally);
     }
 
-    // --- Per-region diagnosis (worst-first, top-N) -----------------------
+    // --- Bounded representative diagnosis (worst-first) ------------------
     let mut region_diags: Vec<(ErrorClass, RegionDiag, u32)> = Vec::new();
-    for r in regions.iter() {
-        let (class, alpha) = classify_region(r, tally, cand, reference);
+    for r in &regions.examples {
+        let (class, alpha) = classify_region(r, cand, reference);
         let rd = region_diag(r, class, alpha, tally);
         region_diags.push((class, rd, r.area_px));
     }
 
     // --- Elect the primary class -----------------------------------------
-    // The dominant region (largest area) drives the primary class; ties already
-    // resolved by `segment`'s worst-first ordering. If there are no surviving
-    // regions (sub-speck diffs only) fall back to the strongest aggregate signal.
-    let (primary, primary_region) = match region_diags.first() {
-        Some((c, rd, _)) => (*c, Some(rd.clone())),
-        None => (elect_from_tally(tally, &census), None),
+    // A direct visible Missing/Extra component outranks colour drift. The
+    // visibility helper reads the same exact-class component census as the
+    // verdict, so the report labels the paint-presence defect that actually
+    // failed the fixed policy. Below that global floor, the largest region
+    // remains the most useful diagnosis.
+    let (primary, primary_region) = match visible_presence_primary(tally, regions) {
+        Some(primary) => (primary, None),
+        None => match region_diags.first() {
+            Some((c, rd, _)) => (*c, Some(rd.clone())),
+            None => (elect_from_tally(tally, &census), None),
+        },
     };
 
     // Secondary classes: every OTHER region class that is above its PASS bound,
@@ -200,8 +198,7 @@ pub(crate) fn diagnose(
         (primary_px as f64 / census.real as f64).clamp(0.0, 1.0)
     };
 
-    // Aggregate magnitude (§2.1): CSS px / ΔRGB / ΔE / α — straight from the tally
-    // plus whatever the primary region recovered (colourspace / alpha).
+    // Aggregate same-coordinate ΔRGB / ΔE / α magnitudes.
     let recovered_alpha = primary_region.as_ref().and_then(|r| r.recovered_alpha);
     let colorspace = primary_region.as_ref().and_then(|r| {
         if r.class == ErrorClass::ColorSpace.as_str() {
@@ -210,26 +207,36 @@ pub(crate) fn diagnose(
             None
         }
     });
-    let residual_shift_css = whole_frame_shift(primary, tally, regions);
     let magnitude = Magnitude {
-        edge_delta_css: tally.edge_delta_css,
         missing_area_pct: tally.missing_pct,
         extra_area_pct: tally.extra_pct,
-        modal_drgb: tally.modal_drgb,
+        modal_drgba: tally.modal_drgba,
         delta_e: tally.color_de,
         recovered_alpha,
-        residual_shift_css,
         colorspace,
     };
 
     // Headline (§2.3) for the whole fixture, keyed on the primary class + its
     // magnitude signature. Region headlines are filled per-region above.
-    let headline = headline_for(primary, &magnitude, tally, &census);
+    let headline = headline_for(primary, &magnitude, tally);
 
-    let regions_out: Vec<RegionDiag> = region_diags
+    let region_examples: Vec<RegionDiag> = region_diags
         .into_iter()
-        .take(MAX_REGION_DIAGS)
-        .map(|(_, rd, _)| rd)
+        .map(|(_, region, _)| region)
+        .collect();
+    let region_classes = regions
+        .aggregates
+        .iter()
+        .map(|aggregate| RegionClassSummary {
+            class: aggregate.class.as_str().to_string(),
+            region_count: aggregate.region_count,
+            total_pixels: aggregate.total_area_px,
+            total_area_pct: aggregate.total_area_pct,
+            union_bbox_css: aggregate.union_bbox_css,
+            largest_region_pixels: aggregate.largest_area_px,
+            largest_region_area_pct: aggregate.largest_area_pct,
+            max_delta_e: aggregate.max_delta_e,
+        })
         .collect();
 
     Diagnosis {
@@ -237,27 +244,21 @@ pub(crate) fn diagnose(
         secondary,
         headline,
         magnitude,
-        regions: regions_out,
-        residual_shift_css,
+        region_count: regions.total_count,
+        region_classes,
+        region_examples,
         confidence,
+        different_pixels: tally.different_px,
+        ..Default::default()
     }
 }
 
-/// The AaOnly diagnosis: differences confined to glyph AA edges (§2.3 last row).
-fn aa_only_diagnosis(tally: &ClassTally) -> Diagnosis {
-    let magnitude = Magnitude {
-        edge_delta_css: tally.edge_delta_css,
-        ..Magnitude::default()
-    };
+/// A clean diagnosis exists only when every compared pixel is byte-identical.
+fn exact_match_diagnosis(_tally: &ClassTally) -> Diagnosis {
     Diagnosis {
-        primary_class: ErrorClass::AaOnly.as_str().to_string(),
-        secondary: Vec::new(),
-        headline: "differences confined to glyph AA edges — measurement ceiling, not a bug"
-            .to_string(),
-        magnitude,
-        regions: Vec::new(),
-        residual_shift_css: [0.0, 0.0],
+        headline: "exact pixel match".to_string(),
         confidence: 1.0,
+        ..Default::default()
     }
 }
 
@@ -265,40 +266,22 @@ fn aa_only_diagnosis(tally: &ClassTally) -> Diagnosis {
 // Region-level classification (the per-region ErrorClass + its RegionDiag)
 // ---------------------------------------------------------------------------
 
-/// Map a `DiffRegion` to its `ErrorClass` (§2.2). Missing/Extra follow the
-/// region's dominant pixel class directly. A GeomShift-dominant region (a
-/// displaced boundary) is split SIZE vs SHIFT from the fixture's per-side extent
-/// SYMMETRY — an asymmetric extent (one/two sides) is a box-size error even though
-/// its pixels read as a shifted boundary, whereas an all-four-equal extent is a
-/// true translation. A ColorErr-dominant region is refined into
-/// ColorValue / ColorSpace / AlphaCompositing by sampling its pixels.
+/// Map a region from its directly observed dominant class. Color mismatches may
+/// receive an additional same-coordinate color/alpha description.
 fn classify_region(
     r: &DiffRegion,
-    tally: &ClassTally,
     cand: &RgbaImage,
     reference: &RgbaImage,
 ) -> (ErrorClass, Option<f64>) {
-    match r.dominant {
+    match r.class {
         PixelClass::Missing => (ErrorClass::Missing, None),
         PixelClass::Extra => (ErrorClass::Extra, None),
-        PixelClass::GeomShift => (
-            geometry_signature(tally).unwrap_or(ErrorClass::GeometryShift),
-            None,
-        ),
-        // A ColorErr-DOMINANT region whose ColorErr is entirely on the structural
-        // boundary (interior_color_px ~0) is NOT a fill recolour — it is a
-        // shifted/resized element's correct-colour fill abutting a different
-        // background (the §1-B "fill recolour ΔRGB…" misattribution: the interiors
-        // were byte-identical). When such a region also carries a real geometry
-        // signal, name the geometry, not a phantom colour (review §1-B / F9).
-        PixelClass::ColorErr if r.interior_color_px == 0 => match geometry_signature(tally) {
-            Some(geo) => (geo, None),
-            None => refine_color(r, cand, reference),
-        },
+        PixelClass::ColorErr if r.coverage.shared_color_ramp => {
+            (ErrorClass::AntialiasCoverage, None)
+        }
         PixelClass::ColorErr => refine_color(r, cand, reference),
-        // Match/AaEdge never dominate a real-diff region; treat as a colour value
-        // fallback if one ever appears so the diagnosis stays total.
-        PixelClass::Match | PixelClass::AaEdge => (ErrorClass::ColorValue, None),
+        // Match never dominates a non-match region; keep the mapping total.
+        PixelClass::Match => (ErrorClass::ColorValue, None),
     }
 }
 
@@ -313,15 +296,9 @@ fn refine_color(
     // AlphaCompositing — BEST-EFFORT and DELIBERATELY NON-CLASS-CHANGING here. A
     // uniform α∈(0,1) explaining ref≈α·cand+(1−α)·white is recovered as an
     // INFORMATIONAL magnitude (carried on `recovered_alpha`), but it does NOT
-    // override the ColorValue class: from per-pixel modal colours alone a moved
-    // SOLID box over a lighter SOLID background is pixel-indistinguishable from an
-    // uncomposited opacity (both are "solid ink vs the same hue lightened"), so
-    // firing the class produced layout false-positives on the real suite (e.g.
-    // block-margin-* ) while MISSING the genuine alpha fixtures (opacity-half,
-    // color-rgba-alpha — those have mixed glyph+fill content, not a clean modal
-    // pair). The honest result is ColorValue + a recovered_alpha hint; a
-    // spatially-coherent α solver (Tier 2, with the layout sidecar) can promote
-    // the class later. Documented best-effort per the C4 brief.
+    // override the ColorValue class: a modal colour pair alone does not establish
+    // compositing as the cause. The result is ColorValue plus a recovered-alpha
+    // hint; spatially coherent evidence could promote the class later.
     let alpha = recover_alpha(r, cand, reference);
     // ColorSpace (gamma/sRGB-linear) fit over the region's ColorErr pixels.
     if fit_colorspace(r, cand, reference) {
@@ -341,24 +318,13 @@ fn region_diag(
         class: class.as_str().to_string(),
         bbox_css: r.bbox_css,
         area_pct: r.area_pct,
-        // A region carries the fixture's per-side extent delta only when it is the
-        // geometry-defining region; otherwise the bbox tells the local story and
-        // the per-side delta stays zeroed (it is a whole-fixture quantity).
-        edge_delta_css: if matches!(class, ErrorClass::GeometrySize | ErrorClass::GeometryShift) {
-            tally.edge_delta_css
-        } else {
-            [0.0; 4]
-        },
-        modal_drgb: r.modal_drgb,
+        modal_drgba: r.modal_drgba,
         delta_e: r.delta_e,
         recovered_alpha,
-        shift_css: [r.shift_css.0, r.shift_css.1],
-        selector: None,
         headline: String::new(),
     };
     // A region-scoped magnitude for its own headline.
     let mag = Magnitude {
-        edge_delta_css: rd.edge_delta_css,
         missing_area_pct: if class == ErrorClass::Missing {
             r.area_pct
         } else {
@@ -369,67 +335,17 @@ fn region_diag(
         } else {
             0.0
         },
-        modal_drgb: rd.modal_drgb,
+        modal_drgba: rd.modal_drgba,
         delta_e: rd.delta_e,
         recovered_alpha: rd.recovered_alpha,
-        residual_shift_css: rd.shift_css,
         colorspace: if class == ErrorClass::ColorSpace {
             Some("sRGB↔linear".to_string())
         } else {
             None
         },
     };
-    let census = Census::default(); // region headlines do not need the census
-    rd.headline = headline_for(class, &mag, tally, &census);
+    rd.headline = headline_for(class, &mag, tally);
     rd
-}
-
-// ---------------------------------------------------------------------------
-// GeometrySize vs GeometryShift (spec §2.2) — cheap, from edge symmetry.
-// ---------------------------------------------------------------------------
-
-/// Decide whether a geometry defect (above the PASS edge bound) reads as a SIZE
-/// error (asymmetric: one/two sides) or a SHIFT (all four sides ~equal & opposite-
-/// signed-by-pair, i.e. a pure translation). Returns `None` when the extent signal
-/// is within the PASS bound (no geometry defect to name).
-fn geometry_signature(tally: &ClassTally) -> Option<ErrorClass> {
-    let d = tally.edge_delta_css;
-    if tally.edge_max_css <= G_EDGE_CSS.0 && tally.shift_max_css <= G_SHIFT_CSS.0 {
-        return None;
-    }
-    // Translation signature: ref−cand on opposite sides moves the SAME direction
-    // in image space, so L≈R and T≈B in signed value, and all magnitudes ~equal.
-    // (For a +dx,+dy translation of the candidate, every side's ref−cand delta is
-    // the SAME signed value.) Size signature: at least one side dominates while
-    // its opposite is ~0 (e.g. a box too tall only at the bottom).
-    let mag = |v: f64| v.abs();
-    let max = d.iter().cloned().fold(0.0_f64, |m, v| m.max(mag(v)));
-    if max < f64::EPSILON {
-        // Pure residual shift with no extent delta (whole-frame translation that
-        // did not change the bbox corners measurably) — read as a shift.
-        return Some(ErrorClass::GeometryShift);
-    }
-    // All four sides within 20% of the max AND the same sign on each axis pair =>
-    // translation. Otherwise the asymmetry says size.
-    let near = |a: f64, b: f64| (a - b).abs() <= 0.2 * max + 0.05;
-    let all_equal = near(d[0], d[1]) && near(d[2], d[3]) && near(d[0], d[2]);
-    if all_equal && d.iter().all(|v| mag(*v) > 0.4 * max) {
-        Some(ErrorClass::GeometryShift)
-    } else {
-        Some(ErrorClass::GeometrySize)
-    }
-}
-
-/// The side name carrying the dominant asymmetric extent delta (for the headline).
-fn dominant_side(edge_delta_css: [f64; 4]) -> (&'static str, f64) {
-    let names = ["left", "right", "top", "bottom"];
-    let mut best = (names[0], edge_delta_css[0]);
-    for i in 1..4 {
-        if edge_delta_css[i].abs() > best.1.abs() {
-            best = (names[i], edge_delta_css[i]);
-        }
-    }
-    best
 }
 
 // ---------------------------------------------------------------------------
@@ -446,9 +362,8 @@ fn recover_alpha(r: &DiffRegion, cand: &RgbaImage, reference: &RgbaImage) -> Opt
     let (top, bot, top_share, bot_share) = region_modal_colors(r, cand, reference)?;
     // Uniformity gate (the key false-positive guard): true uncomposited opacity is
     // a SOLID opaque ink (candidate) versus the SAME ink blended over paper
-    // (reference) — BOTH sides are near-uniform. A moved/recoloured box instead
-    // overlaps several background tones, so neither modal colour dominates. Require
-    // both sides to be strongly modal so a layout/recolour region cannot pass.
+    // (reference) — BOTH sides are near-uniform. Require both sides to be strongly
+    // modal before surfacing this informational fit.
     if top_share < 0.85 || bot_share < 0.85 {
         return None;
     }
@@ -578,7 +493,7 @@ fn region_modal_colors(
     let modal = |sel: SampleSelector| -> ([u8; 3], f64) {
         let mut counts: BTreeMap<[u8; 3], u32> = BTreeMap::new();
         for s in &samples {
-            // Quantise to 8-step buckets so AA fringe doesn't fragment the mode.
+            // Quantise to 8-step buckets so small boundary-tone variation does not fragment the mode.
             let q = sel(s).map(|c| (c / 8) * 8 + 4);
             *counts.entry(q).or_insert(0) += 1;
         }
@@ -606,7 +521,6 @@ fn sample_region_pairs(
     reference: &RgbaImage,
     cap: usize,
 ) -> Vec<([u8; 4], [u8; 4])> {
-    use super::config::CSS_PX;
     let (w, h) = cand.dimensions();
     let x0 = ((r.bbox_css[0] * CSS_PX).floor().max(0.0)) as u32;
     let y0 = ((r.bbox_css[1] * CSS_PX).floor().max(0.0)) as u32;
@@ -632,12 +546,9 @@ fn sample_region_pairs(
 // Primary election & whole-frame helpers
 // ---------------------------------------------------------------------------
 
-/// When no region survived the speck filter, pick the primary class from the
-/// strongest aggregate tally signal (so a thin-but-real defect still names itself).
+/// When no component exists, pick the primary class from the strongest aggregate
+/// tally signal so a thin-but-real defect still names itself.
 fn elect_from_tally(tally: &ClassTally, census: &Census) -> ErrorClass {
-    if let Some(geo) = geometry_signature(tally) {
-        return geo;
-    }
     if tally.missing_pct >= tally.extra_pct && tally.missing_pct > 0.0 {
         return ErrorClass::Missing;
     }
@@ -647,50 +558,30 @@ fn elect_from_tally(tally: &ClassTally, census: &Census) -> ErrorClass {
     if tally.color_pct > 0.0 || census.color > 0 {
         return ErrorClass::ColorValue;
     }
-    ErrorClass::AaOnly
+    ErrorClass::ColorValue
 }
 
-/// Whole-frame residual translation (CSS px): the largest translation among the
-/// regions flagged `is_translation`, reported as a signed [dx, dy].
-///
-/// When the primary class is GeometryShift but NO region carried a measured
-/// translation peak (the shift came from the symmetric bbox-EXTENT signal, not a
-/// per-region `best_local_shift`), fall back to the symmetric per-side extent delta
-/// (review #19) so the reported magnitude AGREES with the headline (which already
-/// uses that fallback) instead of disagreeing at [0,0].
-fn whole_frame_shift(primary: ErrorClass, tally: &ClassTally, regions: &[DiffRegion]) -> [f64; 2] {
-    let mut best = (0.0_f64, [0.0, 0.0]);
-    for r in regions {
-        if r.is_translation {
-            let mag = (r.shift_css.0 * r.shift_css.0 + r.shift_css.1 * r.shift_css.1).sqrt();
-            if mag > best.0 {
-                best = (mag, [r.shift_css.0, r.shift_css.1]);
-            }
-        }
+/// Direct paint-presence class that crosses the same global visual floor used
+/// by the verdict. Prefer the larger area; a tie deterministically reports the
+/// missing reference paint before extra candidate paint.
+fn visible_presence_primary(tally: &ClassTally, regions: &RegionSet) -> Option<ErrorClass> {
+    match super::compare::visibility::visible_presence_class(tally, regions) {
+        Some(PixelClass::Missing) => Some(ErrorClass::Missing),
+        Some(PixelClass::Extra) => Some(ErrorClass::Extra),
+        Some(PixelClass::Match | PixelClass::ColorErr) | None => None,
     }
-    if best.0 == 0.0 && primary == ErrorClass::GeometryShift {
-        // A pure translation moves all four sides by the same signed extent delta;
-        // use that (L for x, T for y) so the magnitude matches the headline fallback.
-        let d = tally.edge_delta_css;
-        if d.iter().any(|v| v.abs() > 1e-6) {
-            return [d[0], d[2]];
-        }
-    }
-    best.1
 }
 
 // ---------------------------------------------------------------------------
-// Pixel-class census (for AaOnly + confidence)
+// Pixel-class census for confidence
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct Census {
     color: u64,
-    geom: u64,
     missing: u64,
     extra: u64,
-    aa: u64,
-    /// ColorErr+GeomShift+Missing+Extra (Match/AaEdge excluded).
+    /// ColorErr+Missing+Extra (only exact Match excluded).
     real: u64,
 }
 
@@ -700,30 +591,25 @@ impl Census {
         for px in &cm.px {
             match px {
                 PixelClass::ColorErr => c.color += 1,
-                PixelClass::GeomShift => c.geom += 1,
                 PixelClass::Missing => c.missing += 1,
                 PixelClass::Extra => c.extra += 1,
-                PixelClass::AaEdge => c.aa += 1,
                 PixelClass::Match => {}
             }
         }
-        c.real = c.color + c.geom + c.missing + c.extra;
+        c.real = c.color + c.missing + c.extra;
         c
     }
 
     /// Real-diff pixel count attributable to an ErrorClass (for `confidence`).
-    /// Colour-family classes all draw from ColorErr px; a shift from GeomShift; a
-    /// size error is a whole-extent property so all real-diff px are "in" it.
+    /// Colour-family classes all draw from same-coordinate ColorErr pixels.
     fn count_of(&self, class: ErrorClass) -> u64 {
         match class {
             ErrorClass::Missing => self.missing,
             ErrorClass::Extra => self.extra,
-            ErrorClass::GeometryShift => self.geom,
-            ErrorClass::GeometrySize => self.real,
-            ErrorClass::ColorValue | ErrorClass::ColorSpace | ErrorClass::AlphaCompositing => {
-                self.color
-            }
-            ErrorClass::AaOnly => self.aa,
+            ErrorClass::ColorValue
+            | ErrorClass::AntialiasCoverage
+            | ErrorClass::ColorSpace
+            | ErrorClass::AlphaCompositing => self.color,
         }
     }
 }
@@ -732,26 +618,33 @@ impl Census {
 // Headline rule table (spec §2.3) — a PURE function of (class, magnitude).
 // ===========================================================================
 
+fn display_measure(value: f64) -> String {
+    let magnitude = value.abs();
+    if magnitude == 0.0 {
+        "0".to_string()
+    } else if magnitude < 0.01 {
+        format!("{magnitude:.6}")
+    } else if magnitude < 0.1 {
+        format!("{magnitude:.2}")
+    } else {
+        format!("{magnitude:.1}")
+    }
+}
+
 /// Human reason for a (class, magnitude) pair (§2.3). Pure: same inputs => same
 /// string. The fixture-level and region-level headlines both go through here.
-fn headline_for(
-    primary: ErrorClass,
-    mag: &Magnitude,
-    tally: &ClassTally,
-    census: &Census,
-) -> String {
+fn headline_for(primary: ErrorClass, mag: &Magnitude, tally: &ClassTally) -> String {
     match primary {
         ErrorClass::Missing => {
-            if mag.missing_area_pct >= 50.0 || tally.missing_pct >= 50.0 {
-                "feature not rendered — candidate blank where Chrome paints".to_string()
+            let pct = if mag.missing_area_pct > 0.0 {
+                mag.missing_area_pct
             } else {
-                let pct = if mag.missing_area_pct > 0.0 {
-                    mag.missing_area_pct
-                } else {
-                    tally.missing_pct
-                };
-                format!("content clipped/truncated ({pct:.1}% missing)")
-            }
+                tally.missing_pct
+            };
+            format!(
+                "candidate lacks paint present in reference ({}%)",
+                display_measure(pct)
+            )
         }
         ErrorClass::Extra => {
             let pct = if mag.extra_area_pct > 0.0 {
@@ -759,53 +652,30 @@ fn headline_for(
             } else {
                 tally.extra_pct
             };
-            format!("extra paint where Chrome is blank ({pct:.1}%)")
-        }
-        ErrorClass::GeometrySize => {
-            let (side, delta) = dominant_side(mag.edge_delta_css);
-            let sign = if delta >= 0.0 { "+" } else { "−" };
-            // Only NAME box-sizing when the signature actually matches it (review
-            // #13): a content-box-vs-border-box mismatch grows BOTH the right and
-            // bottom edges by a similar positive amount (the box is wider AND taller
-            // by ~the border+padding). For any other asymmetric extent (one side, an
-            // opposite-edge shift, a single-axis difference) we report the observed
-            // signal WITHOUT asserting a single CSS cause.
-            let d = mag.edge_delta_css; // [L, R, T, B]
-            let right = d[1];
-            let bottom = d[3];
-            let border_box_pattern = right > 0.4
-                && bottom > 0.4
-                && (right - bottom).abs() <= 0.25 * right.max(bottom)
-                && d[0].abs() < 0.4
-                && d[2].abs() < 0.4;
-            if border_box_pattern {
-                format!(
-                    "box +{right:.1}px right / +{bottom:.1}px bottom — box-sizing:border-box likely not applied"
-                )
-            } else {
-                format!(
-                    "box {sign}{:.1}px on {side} edge (size/box-model mismatch)",
-                    delta.abs()
-                )
-            }
-        }
-        ErrorClass::GeometryShift => {
-            let (dx, dy) = (mag.residual_shift_css[0], mag.residual_shift_css[1]);
-            if dx.abs() < 1e-6 && dy.abs() < 1e-6 {
-                // No per-region translation peak; use the symmetric extent delta.
-                let m = mag
-                    .edge_delta_css
-                    .iter()
-                    .cloned()
-                    .fold(0.0_f64, |a, v| a.max(v.abs()));
-                format!("content shifted ~{m:.1}px beyond page-origin calibration")
-            } else {
-                format!("content shifted ({dx:.1},{dy:.1})px beyond page-origin calibration")
-            }
+            format!(
+                "candidate adds paint absent from reference ({}%)",
+                display_measure(pct)
+            )
         }
         ErrorClass::ColorValue => {
-            let cand_hex = drgb_to_note(mag.modal_drgb);
-            format!("fill recolour {cand_hex} (ΔE {:.1})", mag.delta_e)
+            let [dr, dg, db, da] = mag.modal_drgba;
+            if [dr, dg, db] == [0, 0, 0] && da != 0 {
+                format!("alpha channel differs (ΔA {})", signed_channel(da))
+            } else if mag.modal_drgba == [0, 0, 0, 0] {
+                // Per-channel medians can all be zero even though individual
+                // pixels differ. Do not print the self-contradictory
+                // "recolour ΔRGB(+0,+0,+0)" headline in that case.
+                format!("fill colour differs (ΔE {})", display_measure(mag.delta_e))
+            } else {
+                let channel_delta = drgba_to_note(mag.modal_drgba);
+                format!(
+                    "fill recolour {channel_delta} (ΔE {})",
+                    display_measure(mag.delta_e)
+                )
+            }
+        }
+        ErrorClass::AntialiasCoverage => {
+            "antialiasing coverage residue on a shared outline".to_string()
         }
         ErrorClass::ColorSpace => {
             "color-space mismatch (sRGB vs linear) — gradient/blend drift".to_string()
@@ -814,78 +684,65 @@ fn headline_for(
             let a = mag.recovered_alpha.unwrap_or(0.0);
             format!("opacity not composited (got α≈1.0, expected α≈{a:.2})")
         }
-        ErrorClass::AaOnly => {
-            let _ = census;
-            "differences confined to glyph AA edges — measurement ceiling, not a bug".to_string()
-        }
     }
 }
 
 /// Compact textual note for a modal ΔRGB triple (the per-channel cand−ref delta).
 /// Reads as a signed RGB delta so the headline is self-describing without needing
 /// the absolute hexes (which the aggregate tally does not retain).
-fn drgb_to_note(d: [i16; 3]) -> String {
-    let s = |v: i16| {
-        if v >= 0 {
-            format!("+{v}")
-        } else {
-            format!("{v}")
-        }
-    };
-    format!("ΔRGB({},{},{})", s(d[0]), s(d[1]), s(d[2]))
+fn signed_channel(value: i16) -> String {
+    if value >= 0 {
+        format!("+{value}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn drgba_to_note(delta: [i16; 4]) -> String {
+    let [r, g, b, a] = delta.map(signed_channel);
+    if delta[3] == 0 {
+        format!("ΔRGB({r},{g},{b})")
+    } else {
+        format!("ΔRGBA({r},{g},{b},{a})")
+    }
 }
 
 // ===========================================================================
-// Attribution composition (spec §2.3) — KEEP compute_attribution verbatim, and
-// prefix CONFOUNDED fixtures' diagnosis headlines with `via {dep}: …`.
+// Dependency context (diagnostic only; never causal attribution).
 // ===========================================================================
 
-/// For every non-PASS fixture, set `attribution`:
-///   CONFOUNDED: <probe feature>  -> a depended substrate id is itself non-PASS
-///   REAL                          -> all deps PASS (the target feature is wrong)
-/// PASS fixtures get "" (no attribution).
-///
-/// Composition with diagnosis: a CONFOUNDED fixture's `diagnosis.headline` is
-/// prefixed `via {dep}: …` so the report names the real culprit, not the surface
-/// feature it renders through (honors the MEMORY.md failure-mode-attribution rule).
-pub(crate) fn compute_attribution(results: &mut [FixtureResult]) {
+/// Record every declared dependency that also fails. This is correlation for
+/// prioritization, not proof that the dependency caused this fixture's own diff.
+/// The measured diagnosis remains unchanged.
+pub(crate) fn compute_dependency_context(results: &mut [FixtureResult]) {
     // id -> (status, feature) snapshot before mutation.
     let mut snap: BTreeMap<String, (Status, String)> = BTreeMap::new();
     for r in results.iter() {
         snap.insert(r.id.clone(), (r.status, r.feature.clone()));
     }
     for r in results.iter_mut() {
-        if r.status == Status::Pass {
-            r.attribution.clear();
+        if !r.status.is_failure() {
+            r.dependency_context.clear();
             continue;
         }
-        // Find the first non-PASS dependency (probe or base).
-        let mut culprit: Option<(String, String)> = None; // (label, dep id)
+        let mut failing = Vec::new();
         for d in r.depends_on.iter().chain(r.base_ids.iter()) {
-            if let Some((st, feat)) = snap.get(d) {
-                if *st != Status::Pass {
-                    culprit = Some((format!("{feat} (`{d}`)"), d.clone()));
-                    break;
-                }
+            if let Some((st, feat)) = snap.get(d)
+                && st.is_failure()
+            {
+                failing.push(format!("{feat} (`{d}`)"));
             }
         }
-        r.attribution = match &culprit {
-            Some((c, _)) => format!("CONFOUNDED: {c}"),
-            None => "REAL".to_string(),
+        r.dependency_context = if failing.is_empty() {
+            String::new()
+        } else {
+            format!("DECLARED DEPENDENCIES ALSO FAILING: {}", failing.join(", "))
         };
-        // Prefix the diagnosis headline for confounded fixtures so the human
-        // reason leads with the upstream culprit, never the surface feature.
-        if let (Some((_, dep)), Some(diag)) = (&culprit, r.diagnosis.as_mut()) {
-            if !diag.headline.starts_with("via ") {
-                diag.headline = format!("via {dep}: {}", diag.headline);
-            }
-        }
     }
 }
 
 // ===========================================================================
-// Unit tests for diagnose() (spec deliverable): synthetic tallies/regions for
-// the cheap-and-full sub-classifiers (size-vs-shift, AaOnly, colour value).
+// Unit tests for directly observed color/presence diagnosis.
 // ===========================================================================
 
 #[cfg(test)]
@@ -894,7 +751,7 @@ mod tests {
     use image::{ImageBuffer, Rgba, RgbaImage};
 
     /// A trivial 1x1 class map of a single class — enough for the census-driven
-    /// branches (AaOnly / confidence) that don't sample region pixels.
+    /// branches (exact-match / confidence) that don't sample region pixels.
     fn class_map(w: u32, h: u32, fill: PixelClass) -> ClassMap {
         ClassMap {
             w,
@@ -910,140 +767,68 @@ mod tests {
     /// A tally with everything quiet (all gates within PASS) except the fields the
     /// caller sets — the common base for the synthetic cases.
     fn quiet_tally() -> ClassTally {
-        ClassTally {
-            color_pct: 0.0,
-            missing_pct: 0.0,
-            extra_pct: 0.0,
-            edge_max_css: 0.0,
-            edge_delta_css: [0.0; 4],
-            shift_max_css: 0.0,
-            aa_pct: 0.0,
-            color_de: 0.0,
-            interior_color_pct: 0.0,
-            interior_color_de: 0.0,
-            modal_drgb: [0, 0, 0],
-            total_px: 0,
-        }
+        ClassTally::default()
     }
 
     /// A region with the given dominant class + magnitude knobs.
-    fn region(dominant: PixelClass, area_pct: f64, de: f64, drgb: [i16; 3]) -> DiffRegion {
+    fn region(class: PixelClass, area_pct: f64, de: f64, drgba: [i16; 4]) -> DiffRegion {
         DiffRegion {
             bbox_css: [0.0, 0.0, 1.0, 1.0],
-            dominant,
+            class,
             area_px: 100,
+            longest_span_px: 10,
             area_pct,
-            fill_ratio: 1.0,
-            modal_drgb: drgb,
+            modal_drgba: drgba,
             delta_e: de,
-            interior_color_px: if dominant == PixelClass::ColorErr {
+            interior_color_px: if class == PixelClass::ColorErr {
                 100
             } else {
                 0
             },
-            shift_css: (0.0, 0.0),
-            is_translation: false,
+            coverage: CoverageEvidence::default(),
+            large_color_component_is_balanced: false,
+            max_direct_delta_e: 0.0,
         }
     }
 
+    fn region_set(regions: impl IntoIterator<Item = DiffRegion>) -> RegionSet {
+        let mut set = RegionSet::default();
+        for region in regions {
+            set.record(region);
+        }
+        set
+    }
+
     #[test]
-    fn diagnose_aa_only_reads_as_measurement_ceiling() {
-        // Only AaEdge pixels, everything else quiet -> AaOnly headline (not scary).
-        let cm = class_map(4, 4, PixelClass::AaEdge);
+    fn diagnose_identical_pixels_reads_as_exact_match() {
+        let cm = class_map(4, 4, PixelClass::Match);
         let tally = quiet_tally();
-        let d = diagnose(&tally, &[], &cm, &white(4, 4), &white(4, 4));
-        assert_eq!(d.primary_class, "AaOnly", "AA-only frame must read AaOnly");
-        assert!(
-            d.headline.contains("measurement ceiling"),
-            "headline must name the measurement ceiling, got: {}",
-            d.headline
+        let d = diagnose(
+            &tally,
+            &RegionSet::default(),
+            &cm,
+            &white(4, 4),
+            &white(4, 4),
         );
-        assert!(d.regions.is_empty(), "AaOnly has no real-diff regions");
+        assert!(d.primary_class.is_empty());
+        assert_eq!(d.headline, "exact pixel match");
+        assert_eq!(d.region_count, 0);
+        assert!(d.region_examples.is_empty());
     }
 
     #[test]
-    fn diagnose_geometry_size_names_box_sizing_only_on_the_border_box_signature() {
-        // (a) The genuine box-sizing signature: BOTH right and bottom grew by ~the
-        // same positive amount (content-box vs border-box) -> GeometrySize, and the
-        // headline NAMES box-sizing (review #13: box-sizing is asserted only when the
-        // delta pattern matches it).
-        let cm = class_map(8, 8, PixelClass::GeomShift);
-        let mut tally = quiet_tally();
-        tally.edge_delta_css = [0.0, 4.0, 0.0, 4.0]; // right + bottom, equal
-        tally.edge_max_css = 4.0;
-        let d = diagnose(&tally, &[], &cm, &white(8, 8), &white(8, 8));
-        assert_eq!(
-            d.primary_class, "GeometrySize",
-            "asymmetric extent => GeometrySize"
-        );
-        assert!(
-            d.headline.contains("box-sizing") && d.headline.contains("4.0px"),
-            "border-box signature must name box-sizing + magnitude, got: {}",
-            d.headline
-        );
-
-        // (b) A bottom-ONLY extent is a size error but NOT the box-sizing pattern, so
-        // the headline must describe the side WITHOUT asserting box-sizing (review #13:
-        // the old code hard-coded box-sizing for EVERY asymmetric delta).
-        let mut tally2 = quiet_tally();
-        tally2.edge_delta_css = [0.0, 0.0, 0.0, 4.0]; // bottom only
-        tally2.edge_max_css = 4.0;
-        let d2 = diagnose(&tally2, &[], &cm, &white(8, 8), &white(8, 8));
-        assert_eq!(
-            d2.primary_class, "GeometrySize",
-            "asymmetric extent => GeometrySize"
-        );
-        assert!(
-            d2.headline.contains("bottom") && d2.headline.contains("4.0px"),
-            "headline must name the bottom edge + magnitude, got: {}",
-            d2.headline
-        );
-        assert!(
-            !d2.headline.contains("box-sizing"),
-            "a bottom-only delta must NOT assert box-sizing, got: {}",
-            d2.headline
-        );
-    }
-
-    #[test]
-    fn diagnose_geometry_shift_reads_all_four_equal_as_translation() {
-        // All four sides moved the SAME signed amount (a pure translation) and the
-        // extent is beyond the PASS bound -> GeometryShift, not GeometrySize.
-        let cm = class_map(8, 8, PixelClass::GeomShift);
-        let mut tally = quiet_tally();
-        tally.edge_delta_css = [1.6, 1.6, 1.6, 1.6];
-        tally.edge_max_css = 1.6;
-        let d = diagnose(&tally, &[], &cm, &white(8, 8), &white(8, 8));
-        assert_eq!(
-            d.primary_class, "GeometryShift",
-            "equal four-side delta => GeometryShift"
-        );
-        assert!(
-            d.headline.contains("beyond page-origin calibration"),
-            "shift headline must mention calibration, got: {}",
-            d.headline
-        );
-    }
-
-    #[test]
-    fn diagnose_color_value_reports_drgb_and_delta_e() {
+    fn diagnose_color_value_reports_drgba_and_delta_e() {
         // A ColorErr-dominant region with a flat modal ΔRGB + ΔE ~3.5 (the
         // #cc0000-vs-#dd0000 band) -> ColorValue with the ΔE in the headline.
         let cm = class_map(6, 6, PixelClass::ColorErr);
         let mut tally = quiet_tally();
         tally.color_pct = 100.0;
         tally.color_de = 3.5;
-        tally.modal_drgb = [-17, 0, 0]; // cand darker red than ref
+        tally.modal_drgba = [-17, 0, 0, 0]; // cand darker red than ref
         // White images: the colour sub-classifiers sample no differing pixels, so
         // AlphaCompositing/ColorSpace stay None and we land on ColorValue.
-        let r = region(PixelClass::ColorErr, 80.0, 3.5, [-17, 0, 0]);
-        let d = diagnose(
-            &tally,
-            std::slice::from_ref(&r),
-            &cm,
-            &white(6, 6),
-            &white(6, 6),
-        );
+        let r = region(PixelClass::ColorErr, 80.0, 3.5, [-17, 0, 0, 0]);
+        let d = diagnose(&tally, &region_set([r]), &cm, &white(6, 6), &white(6, 6));
         assert_eq!(
             d.primary_class, "ColorValue",
             "a flat recolour => ColorValue"
@@ -1062,6 +847,64 @@ mod tests {
             (d.confidence - 1.0).abs() < 1e-9,
             "all real-diff px are ColorErr => confidence 1.0"
         );
+    }
+
+    #[test]
+    fn diagnose_color_value_does_not_claim_a_zero_rgb_recolour() {
+        let tally = quiet_tally();
+        let magnitude = Magnitude {
+            modal_drgba: [0, 0, 0, 0],
+            delta_e: 0.4,
+            ..Magnitude::default()
+        };
+        let headline = headline_for(ErrorClass::ColorValue, &magnitude, &tally);
+        assert_eq!(headline, "fill colour differs (ΔE 0.4)");
+        assert!(!headline.contains("ΔRGB(+0,+0,+0)"));
+    }
+
+    #[test]
+    fn diagnose_shared_outline_coverage_never_claims_a_color_space_mismatch() {
+        let cm = class_map(6, 6, PixelClass::ColorErr);
+        let mut tally = quiet_tally();
+        tally.color_pct = 2.0;
+        tally.color_de = 12.0;
+        let mut r = region(PixelClass::ColorErr, 2.0, 12.0, [16, 16, 16, 0]);
+        r.coverage.shared_color_ramp = true;
+
+        let diagnosis = diagnose(&tally, &region_set([r]), &cm, &white(6, 6), &white(6, 6));
+        assert_eq!(diagnosis.primary_class, "AntialiasCoverage");
+        assert!(diagnosis.headline.contains("shared outline"));
+        assert!(diagnosis.magnitude.colorspace.is_none());
+    }
+
+    #[test]
+    fn diagnose_visible_extra_paint_outranks_a_mixed_region_colour_class() {
+        // The representative colour component and a separate visible Extra
+        // component must make the report lead with Extra rather than colour.
+        let mut cm = class_map(20, 20, PixelClass::ColorErr);
+        cm.px[..100].fill(PixelClass::Extra);
+        let mut tally = quiet_tally();
+        tally.extra_px = 100;
+        tally.extra_pct = 5.0;
+        tally.color_pct = 50.0;
+        tally.color_de = 3.0;
+        let color_region = region(PixelClass::ColorErr, 90.0, 3.0, [-10, 0, 0, 0]);
+        let extra_region = region(PixelClass::Extra, 10.0, 0.0, [0, 0, 0, 0]);
+
+        let d = diagnose(
+            &tally,
+            &region_set([color_region, extra_region]),
+            &cm,
+            &white(20, 20),
+            &white(20, 20),
+        );
+
+        assert_eq!(d.primary_class, "Extra");
+        assert_eq!(
+            d.headline,
+            "candidate adds paint absent from reference (5.0%)"
+        );
+        assert!(d.secondary.contains(&"ColorValue".to_string()));
     }
 
     #[test]
@@ -1097,17 +940,18 @@ mod tests {
         use super::super::config::CSS_PX;
         let r = DiffRegion {
             bbox_css: [0.0, 0.0, (w - 1) as f64 / CSS_PX, (h - 1) as f64 / CSS_PX],
-            dominant: PixelClass::ColorErr,
+            class: PixelClass::ColorErr,
             area_px: w * h,
+            longest_span_px: w.max(h),
             area_pct: 90.0,
-            fill_ratio: 1.0,
-            modal_drgb: [0, 0, 0],
+            modal_drgba: [0, 0, 0, 0],
             delta_e: 8.0,
             interior_color_px: w * h,
-            shift_css: (0.0, 0.0),
-            is_translation: false,
+            coverage: CoverageEvidence::default(),
+            large_color_component_is_balanced: false,
+            max_direct_delta_e: 0.0,
         };
-        let d = diagnose(&tally, std::slice::from_ref(&r), &cm, &cand, &reference);
+        let d = diagnose(&tally, &region_set([r]), &cm, &cand, &reference);
         assert_eq!(
             d.primary_class, "ColorSpace",
             "a gamma ramp must read ColorSpace"
@@ -1125,8 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnose_confounded_headline_is_prefixed_with_the_culprit() {
-        // compute_attribution prefixes a CONFOUNDED fixture's diagnosis headline.
+    fn failing_dependencies_are_context_not_a_rewritten_cause() {
         let mut target = FixtureResult {
             id: "target".into(),
             category: "c".into(),
@@ -1136,22 +979,21 @@ mod tests {
             base_ids: Vec::new(),
             status: Status::Fail,
             diff_pct: 50.0,
-            weight: 1.0,
             description: String::new(),
             note: String::new(),
             kind: "feature".into(),
             depends_on: vec!["probe-x".into()],
             expected_support: "implemented".into(),
             oracle: "chrome".into(),
-            attribution: String::new(),
+            reference: Default::default(),
+            dependency_context: String::new(),
             html_sha256: String::new(),
+            raster: Default::default(),
             diagnosis: Some(Diagnosis {
                 primary_class: "Missing".into(),
-                headline: "feature not rendered — candidate blank where Chrome paints".into(),
+                headline: "candidate lacks paint present in reference (100.0%)".into(),
                 ..Diagnosis::default()
             }),
-            sub_verdicts: Vec::new(),
-            disagreements: Vec::new(),
         };
         let probe = FixtureResult {
             id: "probe-x".into(),
@@ -1162,32 +1004,27 @@ mod tests {
             base_ids: Vec::new(),
             status: Status::Fail, // the substrate is itself broken
             diff_pct: 90.0,
-            weight: 1.0,
             description: String::new(),
             note: String::new(),
             kind: "probe".into(),
             depends_on: Vec::new(),
             expected_support: "implemented".into(),
             oracle: "chrome".into(),
-            attribution: String::new(),
+            reference: Default::default(),
+            dependency_context: String::new(),
             html_sha256: String::new(),
+            raster: Default::default(),
             diagnosis: None,
-            sub_verdicts: Vec::new(),
-            disagreements: Vec::new(),
         };
         let mut results = vec![target.clone(), probe];
-        compute_attribution(&mut results);
+        compute_dependency_context(&mut results);
         let t = &results[0];
-        assert!(
-            t.attribution.starts_with("CONFOUNDED"),
-            "target must be CONFOUNDED, got {}",
-            t.attribution
+        assert_eq!(
+            t.dependency_context,
+            "DECLARED DEPENDENCIES ALSO FAILING: probe (`probe-x`)"
         );
         let h = &t.diagnosis.as_ref().unwrap().headline;
-        assert!(
-            h.starts_with("via probe-x: "),
-            "confounded headline must be prefixed, got: {h}"
-        );
+        assert_eq!(h, "candidate lacks paint present in reference (100.0%)");
         let _ = &mut target;
     }
 }

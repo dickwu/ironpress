@@ -1,7 +1,7 @@
 use super::{
-    CalcOp, CalcToken, CssValue, parse_border_spacing_component, parse_calc_expression,
-    parse_clamp_expression, parse_color, parse_length, parse_property_value, parse_var_function,
-    tokenize_calc,
+    CalcOp, CalcToken, CssValue, SpecifiedColor, parse_border_spacing_component,
+    parse_calc_expression, parse_clamp_expression, parse_color, parse_length, parse_property_value,
+    parse_var_function, tokenize_calc,
 };
 
 #[test]
@@ -62,6 +62,36 @@ fn parse_length_units() {
         parse_length("5ch"),
         Some(CssValue::Ch(v)) if (v - 5.0).abs() < 0.01
     ));
+}
+
+#[test]
+fn border_radius_grammar_is_transactional() {
+    for valid in ["0", "7px", "7px 8pt 9% 1rem", "7px 8px / 3px 4px"] {
+        assert!(
+            parse_property_value("border-radius", valid).is_some(),
+            "valid shorthand was rejected: {valid}"
+        );
+    }
+    for invalid in [
+        "9",
+        "7px nope",
+        "1px 2px 3px 4px 5px",
+        "1px / 2px / 3px",
+        "1px /",
+    ] {
+        assert!(
+            parse_property_value("border-radius", invalid).is_none(),
+            "invalid shorthand survived: {invalid}"
+        );
+    }
+
+    assert!(parse_property_value("border-top-left-radius", "2px 3px").is_some());
+    for invalid in ["5", "2px 3px 4px", "2px / 3px", "2px nope"] {
+        assert!(
+            parse_property_value("border-top-left-radius", invalid).is_none(),
+            "invalid longhand survived: {invalid}"
+        );
+    }
 }
 
 #[test]
@@ -178,33 +208,154 @@ fn parse_keyword_values_case_insensitively() {
 }
 
 #[test]
+fn footnote_formatting_keywords_reject_invalid_values() {
+    for (property, valid, invalid) in [
+        ("footnote-display", "inline", "sideways"),
+        ("footnote-policy", "line", "paragraph"),
+    ] {
+        assert!(parse_property_value(property, valid).is_some());
+        assert!(
+            parse_property_value(property, invalid).is_none(),
+            "invalid {property} keyword was accepted: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn parse_color_variants() {
-    assert!(matches!(parse_color("red"), Some(CssValue::Color(c)) if c.r == 255 && c.g == 0));
-    assert!(matches!(parse_color("#ff0000"), Some(CssValue::Color(c)) if c.r == 255));
-    assert!(matches!(parse_color("#f00"), Some(CssValue::Color(c)) if c.r == 255));
     assert!(
-        matches!(parse_color("rgb(10, 20, 30)"), Some(CssValue::Color(c)) if c.r == 10 && c.g == 20 && c.b == 30)
+        matches!(parse_color("red"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 255.0 && c.g == 0.0)
+    );
+    assert!(
+        matches!(parse_color("#ff0000"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 255.0)
+    );
+    assert!(
+        matches!(parse_color("#f00"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 255.0)
+    );
+    assert!(
+        matches!(parse_color("rgb(10, 20, 30)"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 10.0 && c.g == 20.0 && c.b == 30.0)
+    );
+}
+
+#[test]
+fn parse_rgb_percentage_preserves_fractional_channels() {
+    let Some(CssValue::Color(SpecifiedColor::Absolute(color))) = parse_color("rgb(80% 20% 10%)")
+    else {
+        panic!("percentage rgb() should parse");
+    };
+    assert_eq!(
+        (color.r, color.g, color.b, color.a),
+        (204.0, 51.0, 25.5, 255.0)
+    );
+}
+
+#[test]
+fn parse_modern_rgb_number_one_is_one_of_255() {
+    let Some(CssValue::Color(SpecifiedColor::Absolute(color))) = parse_color("rgb(1 0 0)") else {
+        panic!("modern numeric rgb() should parse");
+    };
+    assert_eq!((color.r, color.g, color.b), (1.0, 0.0, 0.0));
+}
+
+#[test]
+fn parse_modern_and_legacy_rgb_alpha_remain_continuous_in_the_css_parser() {
+    for source in ["rgb(239 68 68 / 0.05)", "rgba(239, 68, 68, 0.05)"] {
+        let Some(CssValue::Color(SpecifiedColor::Absolute(color))) = parse_color(source) else {
+            panic!("{source} should parse");
+        };
+        assert_eq!((color.r, color.g, color.b), (239.0, 68.0, 68.0));
+        assert_eq!(color.a, 12.75, "{source} quantized alpha during parsing");
+    }
+}
+
+#[test]
+fn parse_hsl_and_hwb_preserve_continuous_channels_and_alpha() {
+    let Some(CssValue::Color(SpecifiedColor::Absolute(hsl))) =
+        parse_color("hsl(280 60% 45% / 0.5)")
+    else {
+        panic!("modern hsl() should parse");
+    };
+    let (r, g, b, alpha) = hsl.to_f32_rgba();
+    assert!((r - 0.54).abs() < 1e-6);
+    assert!((g - 0.18).abs() < 1e-6);
+    assert!((b - 0.72).abs() < 1e-6);
+    assert_eq!(alpha, 0.5);
+
+    let Some(CssValue::Color(SpecifiedColor::Absolute(hwb))) = parse_color("hwb(30 0% 0% / 50%)")
+    else {
+        panic!("hwb() should parse");
+    };
+    assert_eq!(hwb.to_f32_rgba(), (1.0, 0.5, 0.0, 0.5));
+
+    assert!(
+        parse_color("hsl(280 0.6 0.45)").is_none(),
+        "HSL saturation and lightness require percentages"
+    );
+    assert!(
+        parse_color("hwb(30 0 0)").is_none(),
+        "HWB whiteness and blackness require percentages"
+    );
+}
+
+#[test]
+fn parse_legacy_rgb_requires_a_single_channel_type_and_preserves_fractional_channels() {
+    let Some(CssValue::Color(SpecifiedColor::Absolute(color))) = parse_color("rgb(10%, 20%, 30%)")
+    else {
+        panic!("legacy percentage rgb() should parse");
+    };
+    assert_eq!((color.r, color.g, color.b), (25.5, 51.0, 76.5));
+
+    let Some(CssValue::Color(SpecifiedColor::Absolute(fractional))) =
+        parse_color("rgb(1.5, 2.25, 3.75)")
+    else {
+        panic!("legacy fractional-number rgb() should parse");
+    };
+    assert_eq!(
+        (fractional.r, fractional.g, fractional.b),
+        (1.5, 2.25, 3.75)
+    );
+    assert!(parse_color("rgb(10%, 20, 30%)").is_none());
+}
+
+#[test]
+fn parse_color_srgb_preserves_fractional_channels() {
+    let Some(CssValue::Color(SpecifiedColor::Absolute(color))) =
+        parse_color("color(srgb 0.1 0.2 0.3 / 0.125)")
+    else {
+        panic!("color(srgb) should parse");
+    };
+    assert_eq!(
+        (color.r, color.g, color.b, color.a),
+        (25.5, 51.0, 76.5, 31.875)
     );
 }
 
 #[test]
 fn parse_color_named_keywords_are_case_insensitive() {
-    assert!(matches!(parse_color("Blue"), Some(CssValue::Color(c)) if c.b == 255));
-    assert!(matches!(parse_color("NAVY"), Some(CssValue::Color(c)) if c.b == 128));
+    assert!(
+        matches!(parse_color("Blue"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.b == 255.0)
+    );
+    assert!(
+        matches!(parse_color("NAVY"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.b == 128.0)
+    );
     assert!(matches!(
         parse_color("Aqua"),
-        Some(CssValue::Color(c)) if c.g == 255 && c.b == 255
+        Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.g == 255.0 && c.b == 255.0
     ));
     assert!(matches!(
         parse_color("fuchsia"),
-        Some(CssValue::Color(c)) if c.r == 255 && c.b == 255
+        Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 255.0 && c.b == 255.0
     ));
-    assert!(matches!(parse_color("Lime"), Some(CssValue::Color(c)) if c.g == 255));
+    assert!(
+        matches!(parse_color("Lime"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.g == 255.0)
+    );
 }
 
 #[test]
 fn parse_color_transparent_preserves_alpha() {
-    assert!(matches!(parse_color("transparent"), Some(CssValue::Color(c)) if c.a == 0));
+    assert!(
+        matches!(parse_color("transparent"), Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.a == 0.0)
+    );
 }
 
 #[test]
@@ -214,9 +365,9 @@ fn parse_color_invalid_inputs() {
     assert!(parse_color("rgb(1,2)").is_none());
 }
 
-/// BUG P2-1: rgba() background-color must be parsed and pre-composited.
-/// Previously `parse_color` did not handle `rgba(...)` at all, so any
-/// `background-color: rgba(...)` preserves the original RGB values and alpha.
+/// BUG P2-1: rgba() background-color must be parsed without losing alpha.
+/// Previously `parse_color` did not handle `rgba(...)` at all, so such a
+/// background color was dropped instead of retaining its RGB and alpha.
 #[test]
 fn parse_color_rgba_preserves_rgb_and_alpha() {
     // rgba(239, 68, 68, 0.05) should store the raw RGB values and alpha.
@@ -225,12 +376,12 @@ fn parse_color_rgba_preserves_rgb_and_alpha() {
         color.is_some(),
         "rgba() should be parsed as a Color, not None"
     );
-    if let Some(CssValue::Color(c)) = color {
-        assert_eq!(c.r, 239, "r should be preserved as-is");
-        assert_eq!(c.g, 68, "g should be preserved as-is");
-        assert_eq!(c.b, 68, "b should be preserved as-is");
-        // alpha 0.05 * 255 = 12.75, rounds to 13
-        assert_eq!(c.a, 13, "alpha 0.05 should be stored as 13/255");
+    if let Some(CssValue::Color(SpecifiedColor::Absolute(c))) = color {
+        assert_eq!(c.r, 239.0, "r should be preserved as-is");
+        assert_eq!(c.g, 68.0, "g should be preserved as-is");
+        assert_eq!(c.b, 68.0, "b should be preserved as-is");
+        // Keep 0.05 * 255 = 12.75 until a backend requests an 8-bit pixel.
+        assert_eq!(c.a, 12.75, "alpha 0.05 was quantized during parsing");
     }
 }
 
@@ -240,7 +391,10 @@ fn parse_color_rgba_fully_opaque() {
     let c_rgba = parse_color("rgba(0, 128, 255, 1.0)");
     let c_rgb = parse_color("rgb(0, 128, 255)");
     match (c_rgba, c_rgb) {
-        (Some(CssValue::Color(a)), Some(CssValue::Color(b))) => {
+        (
+            Some(CssValue::Color(SpecifiedColor::Absolute(a))),
+            Some(CssValue::Color(SpecifiedColor::Absolute(b))),
+        ) => {
             assert_eq!(a.r, b.r);
             assert_eq!(a.g, b.g);
             assert_eq!(a.b, b.b);
@@ -253,11 +407,11 @@ fn parse_color_rgba_fully_opaque() {
 fn parse_color_rgba_fully_transparent() {
     // rgba(0, 0, 0, 0.0) should store RGB as-is with alpha = 0.
     let color = parse_color("rgba(0, 0, 0, 0.0)");
-    if let Some(CssValue::Color(c)) = color {
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
-        assert_eq!(c.a, 0, "alpha 0.0 should be stored as 0");
+    if let Some(CssValue::Color(SpecifiedColor::Absolute(c))) = color {
+        assert_eq!(c.r, 0.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 0.0);
+        assert_eq!(c.a, 0.0, "alpha 0.0 should be stored as 0");
     } else {
         panic!("rgba(0,0,0,0) should parse to a Color");
     }

@@ -12,11 +12,76 @@ pub fn parse_stylesheet(css: &str) -> Vec<CssRule> {
 /// Parse a CSS stylesheet with page-aware media query evaluation.
 pub fn parse_stylesheet_with_context(css: &str, ctx: Option<MediaContext>) -> Vec<CssRule> {
     let preprocessed = preprocess_media_queries_with_context(css, ctx);
-    parse_stylesheet_rules_with_lightning(&preprocessed).unwrap_or_else(|| {
+    let mut rules = parse_stylesheet_rules_with_lightning(&preprocessed).unwrap_or_else(|| {
         let mut rules = Vec::new();
         parse_rules_from(&preprocessed, &mut rules);
         rules
-    })
+    });
+    rules.retain(|rule| rule.counter_style_name().is_none());
+    rules.extend(extract_counter_style_rules(&preprocessed));
+    rules
+}
+
+fn extract_counter_style_rules(css: &str) -> Vec<CssRule> {
+    let mut rules = Vec::new();
+    let mut remaining = css;
+
+    while let Some(at_pos) = remaining.to_ascii_lowercase().find("@counter-style") {
+        let Some(after_at) = remaining.get(at_pos + "@counter-style".len()..) else {
+            break;
+        };
+        let Some(brace_pos) = after_at.find('{') else {
+            break;
+        };
+        let name = after_at[..brace_pos].trim();
+        let Some(after_brace) = after_at.get(brace_pos + 1..) else {
+            break;
+        };
+        let Some(close_pos) = matching_rule_close(after_brace) else {
+            break;
+        };
+        let declarations = parse_inline_style(&after_brace[..close_pos]);
+        if !name.is_empty() && !declarations.properties.is_empty() {
+            rules.push(CssRule {
+                selector: format!("@counter-style {}", name.to_ascii_lowercase()),
+                declarations,
+                pseudo_element: None,
+            });
+        }
+        remaining = &after_brace[close_pos + 1..];
+    }
+
+    rules
+}
+
+fn matching_rule_close(body: &str) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut quote = None;
+    let mut escape = false;
+    for (index, ch) in body.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote.is_some() && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '{') => depth += 1,
+            (None, '}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_rules_from(css: &str, rules: &mut Vec<CssRule>) {
@@ -50,12 +115,14 @@ fn parse_rules_from(css: &str, rules: &mut Vec<CssRule>) {
     }
 }
 
-/// Extract `::before` or `::after` from a selector.
+/// Extract a supported pseudo-element from a selector.
 pub(crate) fn extract_pseudo_element(selector: &str) -> (String, Option<PseudoElement>) {
     for (suffix, pseudo_element) in [
         ("::before", PseudoElement::Before),
         ("::after", PseudoElement::After),
         ("::marker", PseudoElement::Marker),
+        ("::footnote-call", PseudoElement::FootnoteCall),
+        ("::footnote-marker", PseudoElement::FootnoteMarker),
         ("::first-line", PseudoElement::FirstLine),
         ("::first-letter", PseudoElement::FirstLetter),
         (":before", PseudoElement::Before),
@@ -92,6 +159,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_stylesheet_keeps_counter_styles_in_document_rules() {
+        let rules = parse_stylesheet(
+            "@counter-style shared { system: cyclic; symbols: 'A'; } \
+             ol { list-style-type: shared; }",
+        );
+        let counter_styles: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule.selector == "@counter-style shared")
+            .collect();
+
+        assert_eq!(counter_styles.len(), 1);
+        assert!(counter_styles[0].declarations.get("symbols").is_some());
+    }
+
+    #[test]
     fn parse_stylesheet_class_and_id_rules() {
         let rules = parse_stylesheet(".highlight { font-weight: bold } #main { color: blue }");
         assert_eq!(rules.len(), 2);
@@ -125,10 +207,20 @@ mod tests {
     fn parse_pseudo_elements() {
         let before = parse_stylesheet(r#"p::before { content: "Hello" }"#);
         let after = parse_stylesheet(r#"p:after { content: "!" }"#);
+        let footnote_call = parse_stylesheet(r#"aside::footnote-call { content: "[1]" }"#);
+        let footnote_marker = parse_stylesheet(r#"aside::footnote-marker { content: "1. " }"#);
         assert_eq!(before[0].pseudo_element, Some(PseudoElement::Before));
         assert_eq!(before[0].selector, "p");
         assert_eq!(after[0].pseudo_element, Some(PseudoElement::After));
         assert_eq!(after[0].selector, "p");
+        assert_eq!(
+            footnote_call[0].pseudo_element,
+            Some(PseudoElement::FootnoteCall)
+        );
+        assert_eq!(
+            footnote_marker[0].pseudo_element,
+            Some(PseudoElement::FootnoteMarker)
+        );
     }
 
     #[test]
@@ -158,6 +250,14 @@ mod tests {
         assert_eq!(rules[0].selector, "h1");
         assert_eq!(rules[1].selector, "h2");
         assert_eq!(rules[2].selector, "h3");
+    }
+
+    #[test]
+    fn parse_stylesheet_preserves_child_combinator_semantics() {
+        let rules = parse_stylesheet(".node { width: 126px } .node > .node { width: 106px }");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].selector, ".node");
+        assert_eq!(rules[1].selector, ".node > .node");
     }
 
     #[test]

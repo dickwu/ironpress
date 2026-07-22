@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rounded mixed border styles</title>
+<style>
+  @page { size: 256px 160px; margin: 0; }
+  html, body { background: #ffffff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  .box {
+    width: 208px;
+    height: 128px;
+    margin: 16px 24px;
+    background: #fff8e1;
+    border-width: 12px;
+    border-color: #263238 #00695c #4527a0 #ad1457;
+    border-style: solid dashed dotted double;
+    border-radius: 40px 24px 48px 32px / 32px 44px 24px 40px;
+  }
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

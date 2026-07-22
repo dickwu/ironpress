@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>spec reference for sliced border image and shadow</title>
+<style>
+  @page { size: 320px 240px; margin: 0; }
+  html, body { background: #ffffff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* CSS Break 3 §5.4.1 joins the two fragment border boxes into one
+     240px + 88px composite decoration box. Each page below is a literal
+     full-canvas slice of that independently constructed box. */
+  .page {
+    position: relative;
+    width: 320px;
+    height: 240px;
+    overflow: hidden;
+    break-after: page;
+  }
+  .page:last-child { break-after: auto; }
+  .composite {
+    position: absolute;
+    left: 16px;
+    top: var(--composite-top);
+    width: 240px;
+    height: 328px;
+  }
+  .shadow {
+    border-radius: 24px;
+    box-shadow: 12px 10px 0 rgba(16, 24, 40, 0.55);
+  }
+  .background {
+    background: linear-gradient(to bottom, #fff0a8, #83e8e1);
+  }
+  .edge { position: absolute; }
+  .edge.left,
+  .edge.right {
+    top: 0;
+    width: 12px;
+    height: 328px;
+    background: linear-gradient(to bottom, #d90429, #3a0ca3);
+  }
+  .edge.left { left: 0; }
+  .edge.right { right: 0; }
+  .edge.top,
+  .edge.bottom {
+    left: 0;
+    width: 240px;
+    height: 12px;
+  }
+  .edge.top { top: 0; background: #d90429; }
+  .edge.bottom { bottom: 0; background: #3a0ca3; }
+  .row {
+    position: absolute;
+    left: 40px;
+    width: 192px;
+    height: 64px;
+  }
+  .a { top: 24px; background: #ff6b6b; }
+  .b { top: 88px; background: #4d96ff; }
+  .c { top: 152px; background: #6bcb77; }
+  .continuation { top: 0; background: #ffd93d; }
+</style>
+</head>
+<body>
+  <div class="page" style="--composite-top: 0px">
+    <div class="composite shadow"></div>
+    <div class="composite background"></div>
+    <div class="composite">
+      <div class="edge left"></div><div class="edge right"></div>
+      <div class="edge top"></div><div class="edge bottom"></div>
+    </div>
+    <div class="row a"></div><div class="row b"></div><div class="row c"></div>
+  </div>
+  <div class="page" style="--composite-top: -240px">
+    <div class="composite shadow"></div>
+    <div class="composite background"></div>
+    <div class="composite">
+      <div class="edge left"></div><div class="edge right"></div>
+      <div class="edge top"></div><div class="edge bottom"></div>
+    </div>
+    <div class="row continuation"></div>
+  </div>
+</body>
+</html>

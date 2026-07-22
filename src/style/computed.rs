@@ -1,25 +1,27 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use crate::parser::css::{
-    CalcOp, CssRule, CssValue, SelectorContext, StyleMap, parse_length,
-    selector_matches_with_context, specificity,
+    BackgroundLayerSource, CalcOp, CalcToken, CssRule, CssValue, FontStretch, SelectorContext,
+    SpecifiedColor, StyleMap, parse_length, parse_property_value, selector_matches_with_context,
+    specificity, split_radius_components,
 };
 use crate::parser::dom::HtmlTag;
 use crate::style::defaults::default_style;
-use crate::types::{Color, EdgeSizes};
+use crate::style::font_metrics::FontMetrics;
+use crate::style::html_cascade::html_cascade_layers;
+use crate::style::raster_quality::{RasterQuality, background_raster_dimensions};
+use crate::types::{
+    Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Size,
+};
+use crate::util::{MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};
 
-/// Sentinel color used to mark a property whose value was the CSS
-/// `currentColor` keyword. The cascade can't resolve `currentColor` while a
-/// property is being parsed (the element's final `color` may still change in a
-/// later cascade layer), so the keyword is parsed to this unique sentinel and a
-/// post-pass at the end of `compute_style_with_context` replaces every
-/// occurrence with the element's computed `color`. The RGBA value is chosen to
-/// be effectively unauthorable so it can't collide with a real color.
-const CURRENT_COLOR_SENTINEL: Color = Color {
-    r: 1,
-    g: 2,
-    b: 3,
-    a: 254,
+#[cfg(test)]
+use crate::util::{AxisRepeatMode, AxisRepeatPattern};
+
+mod borders;
+mod gradient_geometry;
+pub use gradient_geometry::{
+    ConicGradient, RadialExtent, RadialGradient, RadialPoint, RadialPos, RadialShape, RadialVector,
 };
 
 /// CSS display property.
@@ -44,6 +46,21 @@ pub enum Display {
     TableColumn,
     TableCaption,
     None,
+}
+
+impl Display {
+    /// CSS Display 3 blockification for boxes taken out of normal flow.
+    /// Preserve the inner layout mode while replacing an inline outer display
+    /// with its block-level counterpart.
+    pub(crate) const fn blockified(self) -> Self {
+        match self {
+            Self::Inline | Self::InlineBlock => Self::Block,
+            Self::InlineFlex => Self::Flex,
+            Self::InlineGrid => Self::Grid,
+            Self::InlineTable => Self::Table,
+            other => other,
+        }
+    }
 }
 
 /// CSS flex-direction property.
@@ -156,8 +173,8 @@ pub enum GridTrack {
 ///   matches the implicit `<name>-start` / `<name>-end` lines that
 ///   `grid-template-areas` generates for a named area.
 /// - `Span(n)`: span `n` tracks from the opposite (definite) edge (§8.3).
-/// - `SpanNamed(name)`: span until the next line named `name`. Approximated as a
-///   1-track span (the named line vocabulary rarely repeats in print fixtures).
+/// - `SpanNamed { count, name }`: span until the `count`th line carrying
+///   `name` in the search direction (§8.3).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum GridLine {
     #[default]
@@ -165,7 +182,10 @@ pub enum GridLine {
     Line(i32),
     Named(String),
     Span(usize),
-    SpanNamed(String),
+    SpanNamed {
+        count: usize,
+        name: String,
+    },
 }
 
 /// CSS Grid box-alignment keyword (justify-items / align-items per item axis).
@@ -191,16 +211,184 @@ pub enum ShapeBox {
     Content,
 }
 
-/// A CSS `<length-percentage>` stored as points or percentage.
+/// A CSS `<length-percentage>` as an affine value over its eventual percentage
+/// basis. Keeping both terms avoids resolving `calc(25% - 10px)` against the
+/// wrong box before layout knows the correct basis.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LengthPercent {
-    pub value: f32,
-    pub is_percent: bool,
+    length: f32,
+    percent: f32,
+}
+
+impl LengthPercent {
+    pub const ZERO: Self = Self::length(0.0);
+
+    pub const fn length(length: f32) -> Self {
+        Self {
+            length,
+            percent: 0.0,
+        }
+    }
+
+    pub const fn percent(percent: f32) -> Self {
+        Self {
+            length: 0.0,
+            percent,
+        }
+    }
+
+    pub const fn from_terms(length: f32, percent: f32) -> Self {
+        Self { length, percent }
+    }
+
+    pub fn resolve(self, basis: f32) -> f32 {
+        self.length + basis * self.percent / 100.0
+    }
+
+    pub const fn is_absolute(self) -> bool {
+        self.percent == 0.0
+    }
+
+    pub const fn absolute_length(self) -> Option<f32> {
+        if self.is_absolute() {
+            Some(self.length)
+        } else {
+            None
+        }
+    }
+}
+
+impl std::ops::Add for LengthPercent {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self::from_terms(self.length + rhs.length, self.percent + rhs.percent)
+    }
+}
+
+impl std::ops::Sub for LengthPercent {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Self::from_terms(self.length - rhs.length, self.percent - rhs.percent)
+    }
 }
 
 impl From<(f32, bool)> for LengthPercent {
     fn from((value, is_percent): (f32, bool)) -> Self {
-        Self { value, is_percent }
+        if is_percent {
+            Self::percent(value)
+        } else {
+            Self::length(value)
+        }
+    }
+}
+
+/// One unresolved border-radius axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpecifiedRadiusValue {
+    /// Absolute length in points.
+    Length(f32),
+    /// Percentage resolved against the matching border-box axis.
+    Percentage(f32),
+}
+
+impl Default for SpecifiedRadiusValue {
+    fn default() -> Self {
+        Self::Length(0.0)
+    }
+}
+
+impl SpecifiedRadiusValue {
+    fn resolve(self, basis: f32) -> f32 {
+        match self {
+            Self::Length(value) => value,
+            Self::Percentage(value) => basis * value / 100.0,
+        }
+    }
+
+    fn is_zero(self) -> bool {
+        match self {
+            Self::Length(value) | Self::Percentage(value) => value == 0.0,
+        }
+    }
+}
+
+/// Unresolved horizontal and vertical radii for one corner.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpecifiedCornerRadius {
+    pub x: SpecifiedRadiusValue,
+    pub y: SpecifiedRadiusValue,
+}
+
+impl SpecifiedCornerRadius {
+    pub const fn new(x: SpecifiedRadiusValue, y: SpecifiedRadiusValue) -> Self {
+        Self { x, y }
+    }
+
+    pub const fn circular(value: SpecifiedRadiusValue) -> Self {
+        Self::new(value, value)
+    }
+
+    fn resolve(self, width: f32, height: f32) -> CornerRadius {
+        CornerRadius::new(self.x.resolve(width), self.y.resolve(height))
+    }
+
+    fn is_zero(self) -> bool {
+        self.x.is_zero() || self.y.is_zero()
+    }
+}
+
+/// The four unresolved border radii of a box, in CSS clockwise order.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpecifiedCornerRadii {
+    pub top_left: SpecifiedCornerRadius,
+    pub top_right: SpecifiedCornerRadius,
+    pub bottom_right: SpecifiedCornerRadius,
+    pub bottom_left: SpecifiedCornerRadius,
+}
+
+impl SpecifiedCornerRadii {
+    pub const ZERO: Self = Self::uniform(SpecifiedCornerRadius::circular(
+        SpecifiedRadiusValue::Length(0.0),
+    ));
+
+    pub const fn new(
+        top_left: SpecifiedCornerRadius,
+        top_right: SpecifiedCornerRadius,
+        bottom_right: SpecifiedCornerRadius,
+        bottom_left: SpecifiedCornerRadius,
+    ) -> Self {
+        Self {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        }
+    }
+
+    pub const fn uniform(radius: SpecifiedCornerRadius) -> Self {
+        Self::new(radius, radius, radius, radius)
+    }
+
+    pub const fn circular(value: SpecifiedRadiusValue) -> Self {
+        Self::uniform(SpecifiedCornerRadius::circular(value))
+    }
+
+    fn resolve(self, width: f32, height: f32) -> CornerRadii {
+        CornerRadii::new(
+            self.top_left.resolve(width, height),
+            self.top_right.resolve(width, height),
+            self.bottom_right.resolve(width, height),
+            self.bottom_left.resolve(width, height),
+        )
+    }
+
+    fn is_zero(self) -> bool {
+        self.top_left.is_zero()
+            && self.top_right.is_zero()
+            && self.bottom_right.is_zero()
+            && self.bottom_left.is_zero()
     }
 }
 
@@ -245,8 +433,7 @@ pub enum ClipPath {
         right: LengthPercent,
         bottom: LengthPercent,
         left: LengthPercent,
-        radii_x: [f32; 4],
-        radii_y: [f32; 4],
+        radii: CornerRadii,
         geometry_box: ShapeBox,
     },
     /// `polygon(x y, ...)` — vertices, each coord (value, is_percent).
@@ -266,8 +453,7 @@ pub enum ClipPath {
         y: LengthPercent,
         width: LengthPercent,
         height: LengthPercent,
-        radii_x: [f32; 4],
-        radii_y: [f32; 4],
+        radii: CornerRadii,
         geometry_box: ShapeBox,
     },
     /// `url(#id)` fragment reference. Resolution needs document SVG defs.
@@ -324,6 +510,17 @@ pub struct MaskLayer {
     pub composite: MaskComposite,
 }
 
+impl MaskLayer {
+    /// Whether this layer is the initial single-image paint, with no tile or
+    /// box overrides. Renderers may use an equivalent whole-border-box path.
+    pub(crate) fn uses_initial_paint_area(&self) -> bool {
+        self.layer_box.is_initial()
+            && self.origin == ShapeBox::Border
+            && self.clip == ShapeBox::Border
+            && self.composite == MaskComposite::Add
+    }
+}
+
 /// CSS `mask-mode` (css-masking-1 §3.4): how the mask layer's pixels are turned
 /// into mask coverage values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -346,6 +543,52 @@ pub enum TextAlign {
     Center,
     Right,
     Justify,
+}
+
+/// A `text-indent` value before layout has established the block's inner
+/// inline size. Percentages are deliberately retained here: CSS Text resolves
+/// them against the block container's own inner size, not its containing block.
+#[derive(Debug, Clone)]
+pub enum TextIndent {
+    Length(f32),
+    Percentage(f32),
+    /// A `calc()` expression whose non-percentage terms were normalized while
+    /// computing style. Its percentage terms remain deferred until layout.
+    Calc(Vec<CalcToken>),
+    /// `clamp()` compares used values, so each arm retains its own deferred
+    /// percentage terms until the block's inner inline size is known.
+    Clamp {
+        min: Box<Self>,
+        preferred: Box<Self>,
+        max: Box<Self>,
+    },
+}
+
+impl Default for TextIndent {
+    fn default() -> Self {
+        Self::Length(0.0)
+    }
+}
+
+impl TextIndent {
+    pub(crate) fn resolve(&self, inner_inline_size: f32) -> f32 {
+        match self {
+            Self::Length(length) => *length,
+            Self::Percentage(percentage) => inner_inline_size * percentage / 100.0,
+            Self::Calc(tokens) => {
+                crate::style::resolve::resolve_calc(tokens, inner_inline_size, 0.0, 0.0, 0.0, 0.0)
+            }
+            Self::Clamp {
+                min,
+                preferred,
+                max,
+            } => min.resolve(inner_inline_size).max(
+                preferred
+                    .resolve(inner_inline_size)
+                    .min(max.resolve(inner_inline_size)),
+            ),
+        }
+    }
 }
 
 /// Font weight.
@@ -398,17 +641,99 @@ impl FontWeight {
     }
 }
 
-pub(crate) const FONT_RUN_MARK_SYNTHETIC_WEIGHT_900: f32 = -91_001.0;
-pub(crate) const FONT_RUN_MARK_SUPPRESSED_SYNTHETIC_WEIGHT: f32 = -91_002.0;
-pub(crate) const FONT_RUN_MARK_SYNTHETIC_SMALL_CAPS: f32 = -91_003.0;
-pub(crate) const FONT_RUN_MARK_SYNTHETIC_WEIGHT_700: f32 = -91_004.0;
-
 /// Font style.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FontStyle {
     #[default]
     Normal,
     Italic,
+    Oblique(f32),
+}
+
+impl FontStyle {
+    pub const DEFAULT_OBLIQUE_ANGLE_DEGREES: f32 = 14.0;
+
+    pub(crate) const fn is_slanted(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+
+    /// Synthetic glyph shear for an upright face selected by this style.
+    /// Italic has no authored angle, so it retains the browser-compatible
+    /// conventional 0.25 shear. Oblique preserves the specified CSS angle.
+    pub(crate) fn synthetic_shear(self) -> Option<f32> {
+        match self {
+            Self::Normal => None,
+            Self::Italic => Some(0.25),
+            Self::Oblique(degrees) => Some(degrees.to_radians().tan()),
+        }
+    }
+
+    fn from_css(value: &str) -> Option<Self> {
+        let mut tokens = value.split_whitespace();
+        match tokens.next()? {
+            "normal" if tokens.next().is_none() => Some(Self::Normal),
+            "italic" if tokens.next().is_none() => Some(Self::Italic),
+            "left" if tokens.next().is_none() => {
+                Some(Self::Oblique(Self::DEFAULT_OBLIQUE_ANGLE_DEGREES))
+            }
+            "right" if tokens.next().is_none() => {
+                Some(Self::Oblique(-Self::DEFAULT_OBLIQUE_ANGLE_DEGREES))
+            }
+            "oblique" => match (tokens.next(), tokens.next()) {
+                (None, None) => Some(Self::Oblique(Self::DEFAULT_OBLIQUE_ANGLE_DEGREES)),
+                (Some(angle), None) => parse_angle_deg(angle)
+                    .filter(|angle| angle.is_finite() && (-90.0..=90.0).contains(angle))
+                    .map(|angle| Self::Oblique(angle as f32)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+/// The inherited `font-size-adjust` used-value rule.
+///
+/// CSS Fonts keeps `font-size` as a computed value and adjusts only the size
+/// used to shape each selected font. Keeping that distinction explicit avoids
+/// leaking a glyph-scale adjustment into `em` lengths, line-height, or the
+/// containing block's inherited font geometry.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FontSizeAdjust {
+    /// The requested x-height / computed-font-size aspect. `None` represents
+    /// the initial `none` value; zero is a valid requested aspect.
+    ex_height: Option<f32>,
+}
+
+impl FontSizeAdjust {
+    pub const fn none() -> Self {
+        Self { ex_height: None }
+    }
+
+    pub const fn ex_height(aspect: f32) -> Self {
+        Self {
+            ex_height: Some(aspect),
+        }
+    }
+
+    pub const fn target_ex_height(self) -> Option<f32> {
+        self.ex_height
+    }
+
+    /// Resolve the CSS Fonts used font size for one selected face.
+    pub fn used_font_size(self, computed_font_size: f32, actual_aspect: f32) -> f32 {
+        let Some(target_aspect) = self.target_ex_height() else {
+            return computed_font_size;
+        };
+        if !computed_font_size.is_finite()
+            || !target_aspect.is_finite()
+            || !actual_aspect.is_finite()
+            || target_aspect < 0.0
+            || actual_aspect <= 0.0
+        {
+            return computed_font_size;
+        }
+        computed_font_size * target_aspect / actual_aspect
+    }
 }
 
 /// Font family.
@@ -554,6 +879,93 @@ pub enum Float {
     Footnote,
 }
 
+/// CSS Generated Content for Paged Media footnote presentation.
+///
+/// These properties form one non-inherited formatting group: both describe how
+/// a `float: footnote` is collected and placed at the page footnote area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FootnoteFormatting {
+    pub display: FootnoteDisplay,
+    pub policy: FootnotePolicy,
+}
+
+impl FootnoteFormatting {
+    pub const fn display_keyword(self) -> &'static str {
+        self.display.keyword()
+    }
+
+    pub const fn policy_keyword(self) -> &'static str {
+        self.policy.keyword()
+    }
+
+    pub fn from_keywords(display: &str, policy: &str) -> Option<Self> {
+        Some(Self {
+            display: FootnoteDisplay::from_keyword(display)?,
+            policy: FootnotePolicy::from_keyword(policy)?,
+        })
+    }
+}
+
+/// CSS GCPM `footnote-display`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FootnoteDisplay {
+    #[default]
+    Block,
+    Inline,
+    Compact,
+}
+
+impl FootnoteDisplay {
+    pub const fn is_inline_layout(self) -> bool {
+        matches!(self, Self::Inline | Self::Compact)
+    }
+
+    const fn keyword(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Inline => "inline",
+            Self::Compact => "compact",
+        }
+    }
+
+    fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "block" => Some(Self::Block),
+            "inline" => Some(Self::Inline),
+            "compact" => Some(Self::Compact),
+            _ => None,
+        }
+    }
+}
+
+/// CSS GCPM `footnote-policy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FootnotePolicy {
+    #[default]
+    Auto,
+    Line,
+    Block,
+}
+
+impl FootnotePolicy {
+    const fn keyword(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Line => "line",
+            Self::Block => "block",
+        }
+    }
+
+    fn from_keyword(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "line" => Some(Self::Line),
+            "block" => Some(Self::Block),
+            _ => None,
+        }
+    }
+}
+
 /// CSS clear property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Clear {
@@ -584,7 +996,74 @@ pub enum Position {
     #[default]
     Static,
     Relative,
+    Sticky,
     Absolute,
+    Fixed,
+}
+
+impl Position {
+    /// Whether the box participates in its parent's normal flow.
+    pub const fn is_in_flow(self) -> bool {
+        matches!(self, Self::Static | Self::Relative | Self::Sticky)
+    }
+
+    /// Whether the box uses the absolute-positioning layout model.
+    pub const fn is_absolute(self) -> bool {
+        matches!(self, Self::Absolute | Self::Fixed)
+    }
+
+    /// Whether inset resolution visually offsets an in-flow box.
+    pub const fn is_relative(self) -> bool {
+        matches!(self, Self::Relative | Self::Sticky)
+    }
+
+    pub const fn is_positioned(self) -> bool {
+        !matches!(self, Self::Static)
+    }
+
+    /// Fixed and sticky boxes form stacking contexts even when `z-index` is
+    /// `auto` (CSS Positioned Layout 3 section 2.2).
+    pub const fn establishes_stacking_context(self) -> bool {
+        matches!(self, Self::Fixed | Self::Sticky)
+    }
+}
+
+/// Computed CSS `z-index` value.
+///
+/// `auto` and the integer zero share a used stack level, but they do not have
+/// the same stacking-context semantics. Preserving that distinction at the
+/// style boundary prevents later paint code from guessing whether a zero was
+/// authored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZIndex {
+    #[default]
+    Auto,
+    Integer(i32),
+}
+
+impl ZIndex {
+    pub const fn integer(value: i32) -> Self {
+        Self::Integer(value)
+    }
+
+    pub const fn value(self) -> i32 {
+        match self {
+            Self::Auto => 0,
+            Self::Integer(value) => value,
+        }
+    }
+
+    pub const fn is_auto(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    pub const fn is_negative(self) -> bool {
+        self.value() < 0
+    }
+
+    pub const fn is_positive(self) -> bool {
+        self.value() > 0
+    }
 }
 
 fn parse_running_position_name(raw: &str) -> Option<String> {
@@ -615,8 +1094,6 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
-    /// Internal marker for `isolation:isolate` when no actual blend mode applies.
-    Isolate,
     BackgroundList {
         modes: [u8; 8],
         len: u8,
@@ -681,7 +1158,6 @@ impl BlendMode {
             BlendMode::Saturation => Some("Saturation"),
             BlendMode::Color => Some("Color"),
             BlendMode::Luminosity => Some("Luminosity"),
-            BlendMode::Isolate => None,
             BlendMode::BackgroundList { modes, len } if len > 0 => {
                 Self::from_code(modes[0]).pdf_name()
             }
@@ -729,6 +1205,20 @@ impl BlendMode {
             15 => BlendMode::Luminosity,
             _ => BlendMode::Normal,
         }
+    }
+}
+
+/// Whether an element isolates its stacking group from outside blending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Isolation {
+    #[default]
+    Auto,
+    Isolate,
+}
+
+impl Isolation {
+    pub const fn isolates(self) -> bool {
+        matches!(self, Self::Isolate)
     }
 }
 
@@ -826,21 +1316,142 @@ pub enum Visibility {
 }
 
 /// CSS transform value.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CssVector {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl CssVector {
+    pub const ZERO: Self = Self::splat(0.0);
+
+    pub const fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    pub const fn splat(value: f64) -> Self {
+        Self::new(value, value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CssAffineMatrix {
+    pub x_axis: CssVector,
+    pub y_axis: CssVector,
+    pub translation: CssVector,
+}
+
+impl CssAffineMatrix {
+    pub const IDENTITY: Self = Self::from_components(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+
+    pub const fn new(x_axis: CssVector, y_axis: CssVector, translation: CssVector) -> Self {
+        Self {
+            x_axis,
+            y_axis,
+            translation,
+        }
+    }
+
+    pub const fn from_components(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
+        Self::new(
+            CssVector::new(a, b),
+            CssVector::new(c, d),
+            CssVector::new(e, f),
+        )
+    }
+
+    pub const fn components(self) -> [f64; 6] {
+        [
+            self.x_axis.x,
+            self.x_axis.y,
+            self.y_axis.x,
+            self.y_axis.y,
+            self.translation.x,
+            self.translation.y,
+        ]
+    }
+}
+
+impl Default for CssAffineMatrix {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CssMatrix3d([f64; 16]);
+
+impl CssMatrix3d {
+    pub const fn new(components: [f64; 16]) -> Self {
+        Self(components)
+    }
+}
+
+impl std::ops::Index<usize> for CssMatrix3d {
+    type Output = f64;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for CssMatrix3d {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PercentageAxes {
+    pub x: bool,
+    pub y: bool,
+}
+
+impl PercentageAxes {
+    pub const fn new(x: bool, y: bool) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ParametricAffineMatrix {
+    pub constant: CssAffineMatrix,
+    pub width_translation: CssVector,
+    pub height_translation: CssVector,
+}
+
+impl ParametricAffineMatrix {
+    pub fn resolve(self, box_size: CssVector) -> CssAffineMatrix {
+        CssAffineMatrix::new(
+            self.constant.x_axis,
+            self.constant.y_axis,
+            CssVector::new(
+                self.constant.translation.x
+                    + self.width_translation.x * box_size.x
+                    + self.height_translation.x * box_size.y,
+                self.constant.translation.y
+                    + self.width_translation.y * box_size.x
+                    + self.height_translation.y * box_size.y,
+            ),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Transform {
     /// Rotate by the given angle in degrees.
-    Rotate(f32),
-    /// Scale by (sx, sy).
-    Scale(f32, f32),
+    Rotate(f64),
+    /// Skew angles around the CSS X/Y axes, in degrees.
+    Skew(CssVector),
+    /// Scale along the CSS X/Y axes.
+    Scale(CssVector),
     /// Translate by (tx, ty). When the corresponding `*_pct` flag is set the
     /// value is a percentage (0..100) resolved against the element's OWN
     /// border-box width (tx) / height (ty) at render time; otherwise it is an
     /// absolute length in pt.
     Translate {
-        tx: f32,
-        ty: f32,
-        tx_pct: bool,
-        ty_pct: bool,
+        offset: CssVector,
+        percentages: PercentageAxes,
     },
     /// Pre-composed affine matrix `(a, b, c, d, e, f)` for chained transforms.
     ///
@@ -849,31 +1460,19 @@ pub enum Transform {
     /// percentage `translate()` components that appear anywhere in the chain.
     /// At render time the effective translation is
     /// `e + e_w*w + e_h*h` / `f + f_w*w + f_h*h`.
-    Matrix(f32, f32, f32, f32, f32, f32),
+    Matrix(CssAffineMatrix),
     /// CSS 3D matrix in the column-major order used by `matrix3d()`.
-    Matrix3d([f32; 16]),
+    Matrix3d(CssMatrix3d),
     /// Child 3D transform projected through a parent `perspective` property.
     Project3d {
-        matrix: [f32; 16],
-        perspective: f32,
-        perspective_origin_x: f32,
-        perspective_origin_y: f32,
+        matrix: CssMatrix3d,
+        perspective: f64,
+        perspective_origin: CssVector,
     },
     /// Composed matrix carrying percentage-translate coefficients (see above).
     /// Only emitted when a chained transform contains a `%` translate; plain
     /// chains collapse to [`Transform::Matrix`].
-    MatrixPct {
-        a: f32,
-        b: f32,
-        c: f32,
-        d: f32,
-        e: f32,
-        f: f32,
-        e_w: f32,
-        e_h: f32,
-        f_w: f32,
-        f_h: f32,
-    },
+    MatrixPct(ParametricAffineMatrix),
 }
 
 impl Transform {
@@ -882,56 +1481,63 @@ impl Transform {
     /// components resolve against `w`/`h` here. The returned matrix is in CSS
     /// (y-down) convention; the renderer applies the y-flip + origin
     /// conjugation.
-    pub fn to_css_matrix(self, w: f32, h: f32) -> [f32; 6] {
+    pub fn to_css_matrix(self, box_size: CssVector) -> CssAffineMatrix {
         match self {
             Transform::Rotate(deg) => {
-                let rad = deg * std::f32::consts::PI / 180.0;
+                let rad = deg.to_radians();
                 let (c, s) = (rad.cos(), rad.sin());
-                [c, s, -s, c, 0.0, 0.0]
+                CssAffineMatrix::from_components(c, s, -s, c, 0.0, 0.0)
             }
-            Transform::Scale(sx, sy) => [sx, 0.0, 0.0, sy, 0.0, 0.0],
+            Transform::Skew(angles) => CssAffineMatrix::from_components(
+                1.0,
+                angles.y.to_radians().tan(),
+                angles.x.to_radians().tan(),
+                1.0,
+                0.0,
+                0.0,
+            ),
+            Transform::Scale(scale) => {
+                CssAffineMatrix::from_components(scale.x, 0.0, 0.0, scale.y, 0.0, 0.0)
+            }
             Transform::Translate {
-                tx,
-                ty,
-                tx_pct,
-                ty_pct,
+                offset,
+                percentages,
             } => {
-                let ex = if tx_pct { tx / 100.0 * w } else { tx };
-                let ey = if ty_pct { ty / 100.0 * h } else { ty };
-                [1.0, 0.0, 0.0, 1.0, ex, ey]
+                let resolved = CssVector::new(
+                    if percentages.x {
+                        offset.x / 100.0 * box_size.x
+                    } else {
+                        offset.x
+                    },
+                    if percentages.y {
+                        offset.y / 100.0 * box_size.y
+                    } else {
+                        offset.y
+                    },
+                );
+                CssAffineMatrix::new(CssVector::new(1.0, 0.0), CssVector::new(0.0, 1.0), resolved)
             }
-            Transform::Matrix(a, b, c, d, e, f) => [a, b, c, d, e, f],
+            Transform::Matrix(matrix) => matrix,
             Transform::Matrix3d(m) => matrix3d_affine_projection(&m),
             Transform::Project3d { matrix, .. } => matrix3d_affine_projection(&matrix),
-            Transform::MatrixPct {
-                a,
-                b,
-                c,
-                d,
-                e,
-                f,
-                e_w,
-                e_h,
-                f_w,
-                f_h,
-            } => [a, b, c, d, e + e_w * w + e_h * h, f + f_w * w + f_h * h],
+            Transform::MatrixPct(matrix) => matrix.resolve(box_size),
         }
     }
 }
 
-fn matrix3d_affine_projection(m: &[f32; 16]) -> [f32; 6] {
+fn matrix3d_affine_projection(m: &CssMatrix3d) -> CssAffineMatrix {
     let w0 = m[15];
     if w0 == 0.0 {
-        return [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        return CssAffineMatrix::IDENTITY;
     }
-    [
+    CssAffineMatrix::from_components(
         m[0] / w0,
         m[1] / w0,
         m[4] / w0,
         m[5] / w0,
         m[12] / w0,
         m[13] / w0,
-    ]
+    )
 }
 
 /// CSS `transform-origin`: the pivot point for an element's transform.
@@ -950,9 +1556,12 @@ pub struct TransformOrigin {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransformBox {
-    #[default]
     BorderBox,
     ContentBox,
+    FillBox,
+    StrokeBox,
+    #[default]
+    ViewBox,
 }
 
 impl Default for TransformOrigin {
@@ -1006,6 +1615,67 @@ pub enum IntrinsicWidthKeyword {
     FitContent,
 }
 
+/// The computed `flex-basis` value. A percentage component remains unresolved
+/// until flex layout has the container's inner main size.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FlexBasis {
+    #[default]
+    Auto,
+    Definite(LengthPercent),
+    Clamp {
+        min: LengthPercent,
+        preferred: LengthPercent,
+        max: LengthPercent,
+    },
+    Content(IntrinsicWidthKeyword),
+}
+
+impl FlexBasis {
+    pub fn resolve(self, basis: f32) -> Option<f32> {
+        match self {
+            Self::Definite(value) => Some(value.resolve(basis).max(0.0)),
+            Self::Clamp {
+                min,
+                preferred,
+                max,
+            } => {
+                // CSS `clamp()` gives the minimum precedence when it exceeds
+                // the maximum. `f32::clamp` panics for that valid CSS shape.
+                let min = min.resolve(basis);
+                let preferred = preferred.resolve(basis);
+                let max = max.resolve(basis);
+                Some(preferred.min(max).max(min).max(0.0))
+            }
+            Self::Auto | Self::Content(_) => None,
+        }
+    }
+
+    pub fn definite_length(self) -> Option<f32> {
+        match self {
+            Self::Definite(value) => value.absolute_length(),
+            Self::Clamp {
+                min,
+                preferred,
+                max,
+            } if min.is_absolute() && preferred.is_absolute() && max.is_absolute() => {
+                self.resolve(0.0)
+            }
+            Self::Auto | Self::Clamp { .. } | Self::Content(_) => None,
+        }
+    }
+
+    pub const fn content_keyword(self) -> Option<IntrinsicWidthKeyword> {
+        match self {
+            Self::Content(keyword) => Some(keyword),
+            Self::Auto | Self::Definite(_) | Self::Clamp { .. } => None,
+        }
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.definite_length() == Some(0.0)
+    }
+}
+
 /// CSS text-transform property.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TextTransform {
@@ -1025,6 +1695,78 @@ pub enum FontVariantCaps {
     Normal,
     /// `small-caps`: lowercase letters render as smaller uppercase forms.
     SmallCaps,
+}
+
+/// CSS `font-variant-position` (css-fonts-4 §6.12).
+///
+/// The feature changes glyph selection and positioning while the computed
+/// `font-size` and inherited `line-height` remain those of the originating
+/// inline box.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FontVariantPosition {
+    #[default]
+    Normal,
+    Sub,
+    Super,
+}
+
+impl FontVariantPosition {
+    /// The bundled text path has no OpenType `subs`/`sups` shaping yet. This
+    /// is the conventional fallback glyph scale used until the feature can be
+    /// selected from the font directly.
+    pub const fn glyph_scale(self) -> f32 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Sub | Self::Super => 0.8,
+        }
+    }
+}
+
+/// CSS `text-emphasis-position` (css-text-decor-4 §3.4).
+///
+/// The two keywords are a contextual pair: one selects the annotation side of
+/// the base text and the other its inline preference. Keeping the legal pairs
+/// together prevents the painter and line-box code from independently
+/// interpreting loose booleans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisPosition {
+    #[default]
+    OverRight,
+    OverLeft,
+    UnderRight,
+    UnderLeft,
+}
+
+impl TextEmphasisPosition {
+    pub(crate) const fn is_under(self) -> bool {
+        matches!(self, Self::UnderRight | Self::UnderLeft)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        let mut side = None;
+        let mut inline = None;
+        for token in value.split_whitespace() {
+            let slot = match token {
+                "over" => &mut side,
+                "under" => &mut side,
+                "right" => &mut inline,
+                "left" => &mut inline,
+                _ => return None,
+            };
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(token);
+        }
+
+        match (side.unwrap_or("over"), inline.unwrap_or("right")) {
+            ("over", "right") => Some(Self::OverRight),
+            ("over", "left") => Some(Self::OverLeft),
+            ("under", "right") => Some(Self::UnderRight),
+            ("under", "left") => Some(Self::UnderLeft),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1073,12 +1815,7 @@ pub enum VerticalAlign {
     TextBottom,
 }
 
-/// CSS `writing-mode` property (css-writing-modes-4 §3.1). Inherited; initial
-/// is `horizontal-tb`. Only the two horizontally/vertically-flowing modes the
-/// engine renders are modelled: the default top-to-bottom horizontal mode and
-/// `vertical-rl` (vertical text, columns laid right-to-left). Latin glyphs in
-/// `vertical-rl` are set sideways (rotated 90° clockwise) per the default
-/// `text-orientation: mixed`.
+/// CSS `writing-mode` property (css-writing-modes-4 §3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WritingMode {
     /// `horizontal-tb` — the default: inline progresses left-to-right, block
@@ -1088,17 +1825,690 @@ pub enum WritingMode {
     /// `vertical-rl` — inline progresses top-to-bottom, block (columns)
     /// progresses right-to-left.
     VerticalRl,
+    /// `vertical-lr` — inline progresses top-to-bottom, block progresses
+    /// left-to-right.
+    VerticalLr,
+    /// `sideways-rl` — sideways inline content with right-to-left block flow.
+    SidewaysRl,
+    /// `sideways-lr` — sideways inline content with left-to-right block flow
+    /// and bottom-to-top inline progression.
+    SidewaysLr,
 }
 
-/// A color stop in a gradient.
-#[derive(Debug, Clone, Copy)]
-pub struct GradientStop {
+impl WritingMode {
+    /// Whether the inline axis is vertical.
+    pub const fn is_vertical(self) -> bool {
+        !matches!(self, Self::HorizontalTb)
+    }
+
+    /// Whether the block axis progresses physically left-to-right.
+    pub const fn is_vertical_lr(self) -> bool {
+        matches!(self, Self::VerticalLr | Self::SidewaysLr)
+    }
+
+    /// Whether vertical columns progress physically right-to-left.
+    pub const fn block_axis_reversed(self) -> bool {
+        matches!(self, Self::VerticalRl | Self::SidewaysRl)
+    }
+}
+
+/// CSS `text-combine-upright` (css-writing-modes-4 §9.1).
+///
+/// The property inherits. It only changes glyph composition in vertical writing
+/// modes: a qualifying run is composed horizontally inside one em square.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCombineUpright {
+    #[default]
+    None,
+    All,
+    Digits(u8),
+}
+
+impl TextCombineUpright {
+    pub const fn is_active(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        let mut tokens = value.split_ascii_whitespace();
+        match (tokens.next()?, tokens.next(), tokens.next()) {
+            (token, None, None) if token.eq_ignore_ascii_case("none") => Some(Self::None),
+            (token, None, None) if token.eq_ignore_ascii_case("all") => Some(Self::All),
+            (token, None, None) if token.eq_ignore_ascii_case("digits") => Some(Self::Digits(2)),
+            (token, Some(limit), None) if token.eq_ignore_ascii_case("digits") => limit
+                .parse::<u8>()
+                .ok()
+                .filter(|limit| (2..=4).contains(limit))
+                .map(Self::Digits),
+            _ => None,
+        }
+    }
+}
+
+/// One unresolved affine position on a gradient line.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GradientPosition {
+    pub fraction: f32,
+    pub length: f32,
+}
+
+impl GradientPosition {
+    pub const ZERO: Self = Self::new(0.0, 0.0);
+
+    pub const fn new(fraction: f32, length: f32) -> Self {
+        Self { fraction, length }
+    }
+
+    pub const fn fraction(value: f32) -> Self {
+        Self::new(value, 0.0)
+    }
+
+    pub const fn length(value: f32) -> Self {
+        Self::new(0.0, value)
+    }
+
+    fn resolve(self, basis: f32, length_scale: f32) -> Option<f32> {
+        let value = self.fraction + self.length * length_scale / basis;
+        value.is_finite().then_some(value)
+    }
+}
+
+impl std::ops::Add for GradientPosition {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.fraction + rhs.fraction, self.length + rhs.length)
+    }
+}
+
+impl std::ops::AddAssign for GradientPosition {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl std::ops::Sub for GradientPosition {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.fraction - rhs.fraction, self.length - rhs.length)
+    }
+}
+
+impl std::ops::SubAssign for GradientPosition {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl std::ops::Mul<f32> for GradientPosition {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self::new(self.fraction * rhs, self.length * rhs)
+    }
+}
+
+/// The authored form which controls the default gradient interpolation space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientColorProvenance {
+    LegacySrgb,
+    Modern,
+    CurrentColor,
+}
+
+/// A computed color together with the source distinction CSS still needs.
+///
+/// `Color` is currently the engine's bounded sRGB storage. Provenance preserves
+/// Auto's legacy-vs-modern interpolation choice, but it cannot recover modern
+/// channels clipped by the shared color parser; true wide-gamut interpolation
+/// requires widening that shared value model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientColor {
     pub color: Color,
-    /// Fractional position in the gradient (0.0 to 1.0).
-    pub position: f32,
-    /// Absolute offset, in points, added at paint time against the gradient line
-    /// or radius. This preserves length/calc() stops until the basis is known.
-    pub position_length: f32,
+    pub provenance: GradientColorProvenance,
+}
+
+impl GradientColor {
+    pub const fn new(color: Color, provenance: GradientColorProvenance) -> Self {
+        Self { color, provenance }
+    }
+
+    fn uses_legacy_srgb_interpolation(self) -> bool {
+        self.provenance == GradientColorProvenance::LegacySrgb
+    }
+}
+
+/// A color stop in a gradient. Omitted positions stay omitted until the
+/// concrete gradient line is known; a transition hint belongs to the segment
+/// immediately after the stop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub color: GradientColor,
+    pub position: Option<GradientPosition>,
+    pub hint_after: Option<GradientPosition>,
+}
+
+impl GradientStop {
+    pub const fn new(color: GradientColor, position: Option<GradientPosition>) -> Self {
+        Self {
+            color,
+            position,
+            hint_after: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GradientInterpolation {
+    #[default]
+    Auto,
+    Srgb,
+    Oklab,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GradientRepeat {
+    #[default]
+    Clamp,
+    Repeat,
+}
+
+impl GradientRepeat {
+    pub const fn is_repeating(self) -> bool {
+        matches!(self, Self::Repeat)
+    }
+}
+
+/// Color, interpolation, and repetition semantics shared by every gradient
+/// geometry.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GradientRamp {
+    pub stops: Vec<GradientStop>,
+    pub interpolation: GradientInterpolation,
+    pub repeat: GradientRepeat,
+}
+
+impl GradientRamp {
+    pub(crate) fn resolve(&self, basis: f32) -> Option<ResolvedGradientRamp> {
+        self.resolve_scaled(basis, 1.0)
+    }
+
+    pub(crate) fn resolve_scaled(
+        &self,
+        basis: f32,
+        length_scale: f32,
+    ) -> Option<ResolvedGradientRamp> {
+        if self.stops.is_empty() || !basis.is_finite() || basis <= 0.0 || !length_scale.is_finite()
+        {
+            return None;
+        }
+
+        let mut positions = Vec::with_capacity(self.stops.len());
+        let mut hints = Vec::with_capacity(self.stops.len());
+        for (index, stop) in self.stops.iter().enumerate() {
+            if ![
+                stop.color.color.r,
+                stop.color.color.g,
+                stop.color.color.b,
+                stop.color.color.a,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+                || (index + 1 == self.stops.len() && stop.hint_after.is_some())
+            {
+                return None;
+            }
+            positions.push(match stop.position {
+                Some(position) => Some(position.resolve(basis, length_scale)?),
+                None => None,
+            });
+            hints.push(match stop.hint_after {
+                Some(position) => Some(position.resolve(basis, length_scale)?),
+                None => None,
+            });
+        }
+
+        positions[0].get_or_insert(0.0);
+        if positions.len() > 1 {
+            positions.last_mut()?.get_or_insert(1.0);
+        }
+
+        #[derive(Clone, Copy)]
+        enum FixupItem {
+            Stop(usize),
+            Hint(usize),
+        }
+        let mut items = Vec::with_capacity(positions.len() * 2 - 1);
+        for index in 0..positions.len() {
+            items.push((FixupItem::Stop(index), positions[index]));
+            if hints[index].is_some() {
+                items.push((FixupItem::Hint(index), hints[index]));
+            }
+        }
+
+        // Positioned stops and hints are one ordered source stream. Clamp its
+        // specified items first, then distribute each omitted run between the
+        // surrounding specified items. Hints therefore correctly bound an
+        // adjacent run instead of being moved backward after distribution.
+        let mut previous = None;
+        for (_, position) in &mut items {
+            if let Some(value) = position {
+                if let Some(previous) = previous
+                    && *value < previous
+                {
+                    *value = previous;
+                }
+                previous = Some(*value);
+            }
+        }
+
+        let mut index = 1;
+        while index + 1 < items.len() {
+            if items[index].1.is_some() {
+                index += 1;
+                continue;
+            }
+            let left = index - 1;
+            let mut right = index + 1;
+            while items[right].1.is_none() {
+                right += 1;
+            }
+            let start = items[left].1?;
+            let end = items[right].1?;
+            let span = (right - left) as f32;
+            for (offset, (_, position)) in items[index..right].iter_mut().enumerate() {
+                *position = Some(start + (end - start) * (offset + 1) as f32 / span);
+            }
+            index = right;
+        }
+
+        for (item, position) in items {
+            match item {
+                FixupItem::Stop(index) => positions[index] = position,
+                FixupItem::Hint(index) => hints[index] = position,
+            }
+        }
+        let positions = positions.into_iter().collect::<Option<Vec<_>>>()?;
+        let stops = self
+            .stops
+            .iter()
+            .zip(positions)
+            .zip(hints)
+            .map(|((stop, position), hint_after)| ResolvedGradientStop {
+                color: stop.color,
+                position,
+                hint_after,
+            })
+            .collect();
+        let interpolation = match self.interpolation {
+            GradientInterpolation::Auto
+                if self
+                    .stops
+                    .iter()
+                    .all(|stop| stop.color.uses_legacy_srgb_interpolation()) =>
+            {
+                GradientInterpolation::Srgb
+            }
+            GradientInterpolation::Auto => GradientInterpolation::Oklab,
+            explicit => explicit,
+        };
+        Some(ResolvedGradientRamp {
+            stops,
+            interpolation,
+            repeat: self.repeat,
+        })
+    }
+}
+
+/// A gradient stop after fixup against one concrete line or radius.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ResolvedGradientStop {
+    pub(crate) color: GradientColor,
+    pub(crate) position: f32,
+    pub(crate) hint_after: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ResolvedGradientHint {
+    AtStart,
+    AtEnd,
+    Exponent(f32),
+}
+
+impl ResolvedGradientHint {
+    fn map_progress(self, progress: f32) -> f32 {
+        match self {
+            Self::AtStart => {
+                if progress <= 0.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            Self::AtEnd => {
+                if progress < 1.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            Self::Exponent(exponent) => progress.powf(exponent),
+        }
+    }
+}
+
+/// One exact fixed-up segment for PDF/native-backend capability decisions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ResolvedGradientSegment {
+    pub(crate) lower: ResolvedGradientStop,
+    pub(crate) upper: ResolvedGradientStop,
+    pub(crate) interpolation: GradientInterpolation,
+    pub(crate) hint: Option<ResolvedGradientHint>,
+}
+
+/// One fixed-up ramp shared by every gradient sampling path.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ResolvedGradientRamp {
+    stops: Box<[ResolvedGradientStop]>,
+    interpolation: GradientInterpolation,
+    repeat: GradientRepeat,
+}
+
+impl ResolvedGradientRamp {
+    pub(crate) fn stops(&self) -> &[ResolvedGradientStop] {
+        &self.stops
+    }
+
+    pub(crate) const fn repeat(&self) -> GradientRepeat {
+        self.repeat
+    }
+
+    pub(crate) fn segments(&self) -> impl ExactSizeIterator<Item = ResolvedGradientSegment> + '_ {
+        self.stops.windows(2).map(|pair| {
+            let lower = pair[0];
+            let upper = pair[1];
+            ResolvedGradientSegment {
+                lower,
+                upper,
+                interpolation: self.segment_interpolation(lower, upper),
+                hint: Self::segment_hint(lower, upper),
+            }
+        })
+    }
+
+    /// Return an exact SVG stop representation only for the subset whose CSS
+    /// interpolation semantics SVG can preserve without approximation.
+    pub(crate) fn svg_unit_interval_stops(&self) -> Option<Vec<ResolvedGradientStop>> {
+        if self.repeat.is_repeating()
+            || self.stops.iter().any(|stop| stop.hint_after.is_some())
+            || self.uniform_opacity().is_none()
+            || self.stops.windows(2).any(|pair| {
+                self.segment_interpolation(pair[0], pair[1]) != GradientInterpolation::Srgb
+            })
+        {
+            return None;
+        }
+        self.fixed_unit_interval_stops()
+    }
+
+    /// Fixed-up stops clipped to the visible unit interval. Backends decide
+    /// separately whether their interpolation primitive matches CSS exactly or
+    /// intentionally mirrors a lower-level print backend representation.
+    pub(crate) fn fixed_unit_interval_stops(&self) -> Option<Vec<ResolvedGradientStop>> {
+        if self.repeat.is_repeating() || self.stops.iter().any(|stop| stop.hint_after.is_some()) {
+            return None;
+        }
+        let mut visible = Vec::with_capacity(self.stops.len() + 2);
+        if !self.stops.iter().any(|stop| stop.position == 0.0) {
+            visible.push(ResolvedGradientStop {
+                color: GradientColor::new(
+                    Self::color(self.sample(0.0)),
+                    GradientColorProvenance::LegacySrgb,
+                ),
+                position: 0.0,
+                hint_after: None,
+            });
+        }
+        visible.extend(
+            self.stops
+                .iter()
+                .copied()
+                .filter(|stop| (0.0..=1.0).contains(&stop.position)),
+        );
+        if !self.stops.iter().any(|stop| stop.position == 1.0) {
+            visible.push(ResolvedGradientStop {
+                color: GradientColor::new(
+                    Self::color(self.sample(1.0)),
+                    GradientColorProvenance::LegacySrgb,
+                ),
+                position: 1.0,
+                hint_after: None,
+            });
+        }
+        Some(visible)
+    }
+
+    pub(crate) fn is_opaque(&self) -> bool {
+        self.stops.iter().all(|stop| stop.color.color.a == 255.0)
+    }
+
+    pub(crate) fn uniform_opacity(&self) -> Option<f32> {
+        let opacity = self.stops.first()?.color.color.a;
+        self.stops
+            .iter()
+            .all(|stop| stop.color.color.a == opacity)
+            .then(|| (opacity / 255.0).clamp(0.0, 1.0))
+    }
+
+    pub(crate) fn sample(&self, mut t: f32) -> (f32, f32, f32, f32) {
+        if !t.is_finite() {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        if self.repeat.is_repeating() {
+            let first = self.stops[0].position;
+            let last = self.stops[self.stops.len() - 1].position;
+            let period = last - first;
+            if period == 0.0 {
+                return self.weighted_average();
+            }
+            if !period.is_finite() || period < 0.0 {
+                return (0.0, 0.0, 0.0, 0.0);
+            }
+            t = first + (t - first).rem_euclid(period);
+        }
+
+        if t < self.stops[0].position {
+            return Self::rgba(self.stops[0].color.color);
+        }
+        let last = self.stops[self.stops.len() - 1];
+        if t >= last.position {
+            return Self::rgba(last.color.color);
+        }
+
+        let upper_index = self.stops.partition_point(|stop| stop.position <= t);
+        let lower = self.stops[upper_index - 1];
+        if lower.position == t {
+            return Self::rgba(lower.color.color);
+        }
+        let upper = self.stops[upper_index];
+        let mut progress = (t - lower.position) / (upper.position - lower.position);
+        if let Some(hint) = Self::segment_hint(lower, upper) {
+            progress = hint.map_progress(progress);
+        }
+        self.interpolate(lower, upper, progress)
+    }
+
+    fn segment_hint(
+        lower: ResolvedGradientStop,
+        upper: ResolvedGradientStop,
+    ) -> Option<ResolvedGradientHint> {
+        let hint = lower.hint_after?;
+        let span = upper.position - lower.position;
+        if span <= 0.0 {
+            return None;
+        }
+        let hint = (hint - lower.position) / span;
+        Some(if hint <= 0.0 {
+            ResolvedGradientHint::AtStart
+        } else if hint >= 1.0 {
+            ResolvedGradientHint::AtEnd
+        } else {
+            ResolvedGradientHint::Exponent(0.5_f32.ln() / hint.ln())
+        })
+    }
+
+    pub(crate) fn segment_interpolation(
+        &self,
+        _lower: ResolvedGradientStop,
+        _upper: ResolvedGradientStop,
+    ) -> GradientInterpolation {
+        debug_assert_ne!(self.interpolation, GradientInterpolation::Auto);
+        self.interpolation
+    }
+
+    fn interpolate(
+        &self,
+        lower: ResolvedGradientStop,
+        upper: ResolvedGradientStop,
+        progress: f32,
+    ) -> (f32, f32, f32, f32) {
+        let lower_rgba = Self::rgba(lower.color.color);
+        let upper_rgba = Self::rgba(upper.color.color);
+        match self.segment_interpolation(lower, upper) {
+            GradientInterpolation::Srgb | GradientInterpolation::Auto => {
+                Self::interpolate_premultiplied(lower_rgba, upper_rgba, progress)
+            }
+            GradientInterpolation::Oklab => {
+                let lower = Self::srgb_to_oklab(lower_rgba);
+                let upper = Self::srgb_to_oklab(upper_rgba);
+                Self::oklab_to_srgb(Self::interpolate_premultiplied(lower, upper, progress))
+            }
+        }
+    }
+
+    fn interpolate_premultiplied(
+        lower: (f32, f32, f32, f32),
+        upper: (f32, f32, f32, f32),
+        progress: f32,
+    ) -> (f32, f32, f32, f32) {
+        let lower = Self::premultiply(lower);
+        let upper = Self::premultiply(upper);
+        Self::unpremultiply((
+            lower.0 + (upper.0 - lower.0) * progress,
+            lower.1 + (upper.1 - lower.1) * progress,
+            lower.2 + (upper.2 - lower.2) * progress,
+            lower.3 + (upper.3 - lower.3) * progress,
+        ))
+    }
+
+    fn srgb_to_oklab((r, g, b, a): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        let linear = |value: f32| {
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (r, g, b) = (linear(r), linear(g), linear(b));
+        let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+        let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+        let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+        (
+            0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+            1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+            0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+            a,
+        )
+    }
+
+    fn oklab_to_srgb((l, a, b, alpha): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+        let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+        let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+        let (l, m, s) = (l_.powi(3), m_.powi(3), s_.powi(3));
+        let encode = |value: f32| {
+            let magnitude = value.abs();
+            if magnitude <= 0.003_130_8 {
+                12.92 * value
+            } else {
+                value.signum() * (1.055 * magnitude.powf(1.0 / 2.4) - 0.055)
+            }
+        };
+        (
+            encode(4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s),
+            encode(-1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s),
+            encode(-0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s),
+            alpha,
+        )
+    }
+
+    /// Average already-sampled colors in premultiplied sRGBA. Used by raster
+    /// antialiasing so transparent samples cannot darken neighboring colors.
+    pub(crate) fn average_samples(
+        samples: impl IntoIterator<Item = (f32, f32, f32, f32)>,
+    ) -> (f32, f32, f32, f32) {
+        let mut sum = (0.0, 0.0, 0.0, 0.0);
+        let mut count = 0_u32;
+        for sample in samples {
+            let sample = Self::premultiply(sample);
+            sum.0 += sample.0;
+            sum.1 += sample.1;
+            sum.2 += sample.2;
+            sum.3 += sample.3;
+            count += 1;
+        }
+        if count == 0 {
+            return sum;
+        }
+        let scale = 1.0 / count as f32;
+        Self::unpremultiply((sum.0 * scale, sum.1 * scale, sum.2 * scale, sum.3 * scale))
+    }
+
+    pub(crate) fn weighted_average(&self) -> (f32, f32, f32, f32) {
+        let [single] = self.stops.as_ref() else {
+            let period = self.stops[self.stops.len() - 1].position - self.stops[0].position;
+            let equal_segment = 1.0 / (self.stops.len() - 1) as f32;
+            let mut average = (0.0, 0.0, 0.0, 0.0);
+            for pair in self.stops.windows(2) {
+                let segment = if period > 0.0 {
+                    (pair[1].position - pair[0].position) / period
+                } else {
+                    equal_segment
+                };
+                let weight = segment * 0.5;
+                for stop in pair {
+                    let color = Self::premultiply(Self::rgba(stop.color.color));
+                    average.0 += color.0 * weight;
+                    average.1 += color.1 * weight;
+                    average.2 += color.2 * weight;
+                    average.3 += color.3 * weight;
+                }
+            }
+            return Self::unpremultiply(average);
+        };
+        Self::rgba(single.color.color)
+    }
+
+    fn rgba(color: Color) -> (f32, f32, f32, f32) {
+        color.to_f32_rgba()
+    }
+
+    fn color((r, g, b, a): (f32, f32, f32, f32)) -> Color {
+        Color::from_srgb(r, g, b, a)
+    }
+
+    fn premultiply((r, g, b, a): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        (r * a, g * a, b * a, a)
+    }
+
+    fn unpremultiply((r, g, b, a): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        if a > 0.0 {
+            (r / a, g / a, b / a, a)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        }
+    }
 }
 
 /// Per-layer painting parameters for a gradient background layer. Populated
@@ -1117,8 +2527,336 @@ pub struct GradientLayerBox {
     pub origin: Option<BackgroundOrigin>,
     pub clip: Option<BackgroundClip>,
     pub attachment: Option<BackgroundAttachment>,
-    pub border_image: bool,
     pub paint_above_raster: bool,
+}
+
+impl GradientLayerBox {
+    pub(crate) const fn is_initial(self) -> bool {
+        self.size.is_none()
+            && self.position.is_none()
+            && self.repeat.is_none()
+            && self.origin.is_none()
+            && self.clip.is_none()
+            && self.attachment.is_none()
+            && !self.paint_above_raster
+    }
+
+    /// Fill omitted per-layer values from the owning background without
+    /// overwriting values authored specifically for this image layer.
+    pub(crate) fn with_fallback(mut self, fallback: Self) -> Self {
+        if self.size.is_none() {
+            self.size = fallback.size;
+        }
+        if self.position.is_none() {
+            self.position = fallback.position;
+        }
+        if self.repeat.is_none() {
+            self.repeat = fallback.repeat;
+        }
+        if self.origin.is_none() {
+            self.origin = fallback.origin;
+        }
+        if self.clip.is_none() {
+            self.clip = fallback.clip;
+        }
+        if self.attachment.is_none() {
+            self.attachment = fallback.attachment;
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageSliceValue {
+    Number(f32),
+    Percentage(f32),
+}
+
+impl BorderImageSliceValue {
+    fn resolve(self, extent: f32, number_scale: f32) -> f32 {
+        match self {
+            Self::Number(value) => value * number_scale,
+            Self::Percentage(value) => extent * value / 100.0,
+        }
+        .max(0.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderImageSlices {
+    pub top: BorderImageSliceValue,
+    pub right: BorderImageSliceValue,
+    pub bottom: BorderImageSliceValue,
+    pub left: BorderImageSliceValue,
+    pub fill: bool,
+}
+
+impl BorderImageSlices {
+    pub const fn uniform(value: BorderImageSliceValue) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+            fill: false,
+        }
+    }
+
+    pub fn resolve(self, width: f32, height: f32, number_scale: f32) -> EdgeSizes {
+        EdgeSizes::new(
+            self.top.resolve(height, number_scale),
+            self.right.resolve(width, number_scale),
+            self.bottom.resolve(height, number_scale),
+            self.left.resolve(width, number_scale),
+        )
+        .clamp_to_extents(width, height)
+    }
+}
+
+impl Default for BorderImageSlices {
+    fn default() -> Self {
+        Self::uniform(BorderImageSliceValue::Percentage(100.0))
+    }
+}
+
+/// One used-value component of `border-image-width`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageWidth {
+    /// A multiple of the corresponding computed physical border width.
+    Number(f32),
+    /// A `<length-percentage>` resolved against the corresponding
+    /// border-image-area dimension.
+    LengthPercent(LengthPercent),
+    /// A `clamp()` of values resolved against the corresponding
+    /// border-image-area dimension.
+    Clamp {
+        min: LengthPercent,
+        preferred: LengthPercent,
+        max: LengthPercent,
+    },
+    /// The source image's natural slice size, or the physical border width
+    /// when the source has no natural dimension (as for CSS gradients).
+    Auto,
+}
+
+impl BorderImageWidth {
+    fn resolve(self, border_width: f32, area_extent: f32, natural_slice: Option<f32>) -> f32 {
+        match self {
+            Self::Number(value) => value * border_width,
+            Self::LengthPercent(value) => value.resolve(area_extent),
+            Self::Clamp {
+                min,
+                preferred,
+                max,
+            } => preferred
+                .resolve(area_extent)
+                .min(max.resolve(area_extent))
+                .max(min.resolve(area_extent)),
+            Self::Auto => natural_slice.unwrap_or(border_width),
+        }
+        .max(0.0)
+    }
+}
+
+/// Four `border-image-width` values, in CSS top/right/bottom/left order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderImageWidths {
+    pub top: BorderImageWidth,
+    pub right: BorderImageWidth,
+    pub bottom: BorderImageWidth,
+    pub left: BorderImageWidth,
+}
+
+impl BorderImageWidths {
+    pub const fn uniform(value: BorderImageWidth) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    /// Resolve CSS border-image destination offsets for one border-image area.
+    pub fn resolve(
+        self,
+        border: EdgeSizes,
+        area_width: f32,
+        area_height: f32,
+        natural_slices: Option<EdgeSizes>,
+    ) -> EdgeSizes {
+        let natural = natural_slices.unwrap_or(EdgeSizes::ZERO);
+        EdgeSizes::new(
+            self.top
+                .resolve(border.top, area_height, natural_slices.map(|_| natural.top)),
+            self.right.resolve(
+                border.right,
+                area_width,
+                natural_slices.map(|_| natural.right),
+            ),
+            self.bottom.resolve(
+                border.bottom,
+                area_height,
+                natural_slices.map(|_| natural.bottom),
+            ),
+            self.left.resolve(
+                border.left,
+                area_width,
+                natural_slices.map(|_| natural.left),
+            ),
+        )
+        .scale_to_fit_within(area_width, area_height)
+    }
+}
+
+impl Default for BorderImageWidths {
+    fn default() -> Self {
+        Self::uniform(BorderImageWidth::Number(1.0))
+    }
+}
+
+/// One used-value component of `border-image-outset`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageOutset {
+    /// A multiple of the corresponding computed physical border width.
+    Number(f32),
+    /// A resolved CSS length in PDF points.
+    Length(f32),
+}
+
+impl BorderImageOutset {
+    fn resolve(self, border_width: f32) -> f32 {
+        match self {
+            Self::Number(value) => value * border_width,
+            Self::Length(value) => value,
+        }
+    }
+}
+
+/// Four `border-image-outset` values, in CSS top/right/bottom/left order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderImageOutsets {
+    pub top: BorderImageOutset,
+    pub right: BorderImageOutset,
+    pub bottom: BorderImageOutset,
+    pub left: BorderImageOutset,
+}
+
+impl BorderImageOutsets {
+    pub const fn uniform(value: BorderImageOutset) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    /// Resolve the expansion from the border box to the border-image area.
+    pub fn resolve(self, border: EdgeSizes) -> EdgeSizes {
+        EdgeSizes::new(
+            self.top.resolve(border.top),
+            self.right.resolve(border.right),
+            self.bottom.resolve(border.bottom),
+            self.left.resolve(border.left),
+        )
+    }
+}
+
+impl Default for BorderImageOutsets {
+    fn default() -> Self {
+        Self::uniform(BorderImageOutset::Number(0.0))
+    }
+}
+
+/// One axis of CSS `border-image-repeat`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BorderImageRepeatMode {
+    /// Scale one image to fill its border-image region.
+    #[default]
+    Stretch,
+    /// Center and tile the image, clipping partial end tiles.
+    Repeat,
+    /// Resize the image along the axis so a whole number of tiles fit.
+    Round,
+    /// Keep whole tiles and distribute surplus space around them.
+    Space,
+}
+
+/// CSS `border-image-repeat`'s horizontal and vertical tiling modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorderImageRepeats {
+    pub horizontal: BorderImageRepeatMode,
+    pub vertical: BorderImageRepeatMode,
+}
+
+impl BorderImageRepeats {
+    pub const fn uniform(mode: BorderImageRepeatMode) -> Self {
+        Self {
+            horizontal: mode,
+            vertical: mode,
+        }
+    }
+}
+
+impl Default for BorderImageRepeats {
+    fn default() -> Self {
+        Self::uniform(BorderImageRepeatMode::Stretch)
+    }
+}
+
+/// The geometry portion of one CSS `border-image` shorthand.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BorderImage {
+    pub slices: BorderImageSlices,
+    pub widths: BorderImageWidths,
+    pub outsets: BorderImageOutsets,
+    pub repeats: BorderImageRepeats,
+}
+
+/// A resolved CSS border image and its nine-slice geometry.
+///
+/// A border image is a box decoration, not a background layer. Keeping it in a
+/// dedicated structure prevents `border-image` from replacing an unrelated
+/// `background-image` gradient in the computed style.
+#[derive(Debug, Clone)]
+pub struct BorderImagePaint {
+    pub source: BorderImageSource,
+    pub geometry: BorderImage,
+}
+
+/// Independently cascaded `border-image-*` longhands.
+///
+/// Geometry remains computed even while the source is `none`, so an inherited
+/// longhand or a later source declaration cannot lose its specified value.
+#[derive(Debug, Clone, Default)]
+pub struct BorderImageProperties {
+    pub source: Option<BorderImageSource>,
+    pub geometry: BorderImage,
+}
+
+impl BorderImageProperties {
+    /// Materialize the paint-only representation when a source exists.
+    pub fn paint(&self) -> Option<BorderImagePaint> {
+        Some(BorderImagePaint {
+            source: self.source.clone()?,
+            geometry: self.geometry,
+        })
+    }
+
+    /// Whether this border image has a source that requires a paint owner.
+    pub const fn has_source(&self) -> bool {
+        self.source.is_some()
+    }
+}
+
+/// CSS image sources supported by the border-image paint pipeline.
+#[derive(Debug, Clone)]
+pub enum BorderImageSource {
+    LinearGradient(LinearGradient),
+    RadialGradient(RadialGradient),
+    ConicGradient(ConicGradient),
+    Url(String),
 }
 
 /// A CSS linear gradient.
@@ -1126,111 +2864,7 @@ pub struct GradientLayerBox {
 pub struct LinearGradient {
     /// Angle in degrees (0 = to top, 90 = to right, 180 = to bottom, 270 = to left).
     pub angle: f32,
-    /// Color stops (at least 2).
-    pub stops: Vec<GradientStop>,
-    /// `true` for `repeating-linear-gradient(...)`: the stop pattern tiles to
-    /// fill the gradient line instead of clamping the end colors.
-    pub repeating: bool,
-    /// Per-layer size/position/repeat when this gradient is one of several
-    /// comma-separated background layers.
-    pub layer_box: GradientLayerBox,
-}
-
-/// A position component of a radial gradient's center, resolvable against the
-/// painted box at render time.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RadialPos {
-    /// Fraction of the box extent (0..1), e.g. from a keyword or percentage.
-    Fraction(f32),
-    /// Absolute offset in points from the box's start edge (left/top).
-    Points(f32),
-    /// Absolute offset in points from the box's end edge (right/bottom).
-    EndOffset(f32),
-}
-
-impl RadialPos {
-    /// Resolve to an offset in points given the box extent (in points) along
-    /// this axis.
-    pub fn resolve(self, extent: f32) -> f32 {
-        match self {
-            RadialPos::Fraction(f) => extent * f,
-            RadialPos::Points(p) => p,
-            RadialPos::EndOffset(p) => extent - p,
-        }
-    }
-}
-
-/// The ending shape of a CSS radial gradient.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RadialShape {
-    /// `circle` — a single radius along both axes.
-    Circle,
-    /// `ellipse` — independent horizontal/vertical radii. This is the CSS
-    /// default when no shape keyword is given.
-    #[default]
-    Ellipse,
-}
-
-/// The size/extent of a CSS radial gradient's ending shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RadialExtent {
-    /// Ending shape meets the box side(s) closest to the center.
-    ClosestSide,
-    /// Ending shape passes through the box corner closest to the center.
-    ClosestCorner,
-    /// Ending shape meets the box side(s) farthest from the center.
-    FarthestSide,
-    /// Ending shape passes through the box corner farthest from the center.
-    /// The CSS default when no extent keyword or explicit size is given.
-    #[default]
-    FarthestCorner,
-}
-
-/// A CSS radial gradient.
-#[derive(Debug, Clone)]
-pub struct RadialGradient {
-    /// Color stops (at least 2).
-    pub stops: Vec<GradientStop>,
-    /// Center position parsed from `at <pos>`, as `(x, y)` measured from the
-    /// box's left/top edges (CSS top-down). Defaults to box center.
-    pub center: (RadialPos, RadialPos),
-    /// Ending shape (circle vs ellipse). Determines how the unspecified extent
-    /// (`farthest-corner`) is resolved into radii at render time.
-    pub shape: RadialShape,
-    /// Extent keyword controlling how the ending shape is sized when no explicit
-    /// radius/radii are given. Defaults to `farthest-corner`.
-    pub extent: RadialExtent,
-    /// Explicit circular radius in points (e.g. `circle 60px` → 45pt). When
-    /// `None`, the `extent` is used. Only meaningful for `RadialShape::Circle`.
-    pub radius: Option<f32>,
-    /// Explicit elliptical radii `(rx, ry)` in points (e.g. `ellipse 100px 50px`).
-    /// `%` components are stored as a fraction of the box width/height resolved at
-    /// render time via `RadialPos`. When `None`, the `extent` is used.
-    pub radii: Option<(RadialPos, RadialPos)>,
-    /// `true` for `repeating-radial-gradient(...)`: the stop pattern tiles along
-    /// the gradient ray instead of clamping the end colors.
-    pub repeating: bool,
-    /// Per-layer size/position/repeat when this gradient is one of several
-    /// comma-separated background layers.
-    pub layer_box: GradientLayerBox,
-}
-
-/// A CSS conic gradient. PDF has no native conic shading, so this is rendered as
-/// a fine sector fan (one filled wedge per small angular step) clipped to the
-/// box at paint time.
-#[derive(Debug, Clone)]
-pub struct ConicGradient {
-    /// Starting angle in degrees, clockwise from 12 o'clock (CSS `from <angle>`).
-    pub from_angle: f32,
-    /// Center position as `(x, y)` measured from the box's left/top edges (CSS
-    /// top-down). Defaults to box center.
-    pub center: (RadialPos, RadialPos),
-    /// Angular color stops, positions normalized to a fraction of a full turn
-    /// (0.0..=1.0, where 1.0 = 360deg). Always at least 2, sorted ascending.
-    pub stops: Vec<GradientStop>,
-    /// `true` for `repeating-conic-gradient(...)`: the stop pattern tiles around
-    /// the full sweep instead of spanning a single turn.
-    pub repeating: bool,
+    pub ramp: GradientRamp,
     /// Per-layer size/position/repeat when this gradient is one of several
     /// comma-separated background layers.
     pub layer_box: GradientLayerBox,
@@ -1436,6 +3070,12 @@ pub(crate) const LEADER_PLACEHOLDER_START: &str = "\u{1d}ip-leader:";
 pub(crate) const LEADER_PLACEHOLDER_END: &str = "\u{1d}";
 
 /// CSS box-shadow value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorSource {
+    Absolute,
+    CurrentColor,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub struct BoxShadow {
@@ -1444,112 +3084,118 @@ pub struct BoxShadow {
     pub blur: f32,
     pub spread: f32,
     pub color: Color,
+    /// Retained only because `text-shadow` is inherited: a child must rebind an
+    /// inherited `currentColor` shadow to its own foreground color. Box shadows
+    /// are non-inherited but share this compact storage type.
+    pub(crate) color_source: ColorSource,
     pub inset: bool,
 }
 
 /// Border line style.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
 pub enum BorderStyle {
-    #[default]
     Solid,
     Dashed,
     Dotted,
     /// Two parallel solid rules separated by a gap (CSS `double`). Each rule and
     /// the gap take roughly one third of the border width.
     Double,
-    None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BorderBevelKind {
     Groove,
     Ridge,
     Inset,
     Outset,
+    Hidden,
+    #[default]
+    None,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct BorderBevelSides {
-    pub top: Option<BorderBevelKind>,
-    pub right: Option<BorderBevelKind>,
-    pub bottom: Option<BorderBevelKind>,
-    pub left: Option<BorderBevelKind>,
-}
-
-impl BorderBevelSides {
-    fn uniform(kind: Option<BorderBevelKind>) -> Self {
-        Self {
-            top: kind,
-            right: kind,
-            bottom: kind,
-            left: kind,
-        }
+impl BorderStyle {
+    pub(crate) const fn paints(self) -> bool {
+        !matches!(self, Self::None | Self::Hidden)
     }
 }
 
 /// A single border side with width, color, and style.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct BorderSide {
     pub width: f32,
-    pub color: Option<Color>,
+    /// The computed border color. Keeping `currentColor` symbolic is required
+    /// for explicit inheritance: a child inheriting `currentColor` binds it to
+    /// the child's foreground color, not the parent's used RGB value.
+    pub color: SpecifiedColor,
     pub style: BorderStyle,
 }
 
-/// Per-side border specification.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BorderSides {
-    pub top: BorderSide,
-    pub right: BorderSide,
-    pub bottom: BorderSide,
-    pub left: BorderSide,
-}
-
-#[allow(dead_code)]
-impl BorderSides {
-    pub fn uniform(width: f32, color: Option<Color>) -> Self {
-        let side = BorderSide {
-            width,
-            color,
-            style: BorderStyle::Solid,
-        };
+impl Default for BorderSide {
+    fn default() -> Self {
         Self {
-            top: side,
-            right: side,
-            bottom: side,
-            left: side,
+            // `medium` is the initial specified width. A `none` or `hidden`
+            // style makes its computed/used width zero through `used_width`,
+            // without losing the initial width needed when only border-style
+            // is authored later in the cascade.
+            width: MEDIUM_RULE_WIDTH_PT,
+            color: SpecifiedColor::CurrentColor,
+            style: BorderStyle::None,
         }
     }
-    pub fn uniform_styled(width: f32, color: Option<Color>, style: BorderStyle) -> Self {
-        let side = BorderSide {
+}
+
+impl BorderSide {
+    pub const fn new(width: f32, color: SpecifiedColor, style: BorderStyle) -> Self {
+        Self {
             width,
             color,
             style,
-        };
-        Self {
-            top: side,
-            right: side,
-            bottom: side,
-            left: side,
         }
     }
-    pub fn has_any(&self) -> bool {
-        self.top.width > 0.0
-            || self.right.width > 0.0
-            || self.bottom.width > 0.0
-            || self.left.width > 0.0
+
+    pub const fn solid(width: f32, color: SpecifiedColor) -> Self {
+        Self::new(width, color, BorderStyle::Solid)
     }
+
+    pub const fn used_width(self) -> f32 {
+        if self.style.paints() { self.width } else { 0.0 }
+    }
+
+    pub const fn paints(self) -> bool {
+        self.used_width() > 0.0
+    }
+}
+
+/// Per-side border specification.
+pub type BorderSides = PhysicalEdges<BorderSide>;
+
+#[allow(dead_code)]
+impl PhysicalEdges<BorderSide> {
+    /// Whether at least one side paints a non-zero border.
+    pub fn has_any(&self) -> bool {
+        self.top.paints() || self.right.paints() || self.bottom.paints() || self.left.paints()
+    }
+    /// Largest used border width across all physical sides.
     pub fn max_width(&self) -> f32 {
         self.top
-            .width
-            .max(self.right.width)
-            .max(self.bottom.width)
-            .max(self.left.width)
+            .used_width()
+            .max(self.right.used_width())
+            .max(self.bottom.used_width())
+            .max(self.left.used_width())
     }
+    /// Sum of the used left and right border widths.
     pub fn horizontal_width(&self) -> f32 {
-        self.left.width + self.right.width
+        self.left.used_width() + self.right.used_width()
     }
+    /// Sum of the used top and bottom border widths.
     pub fn vertical_width(&self) -> f32 {
-        self.top.width + self.bottom.width
+        self.top.used_width() + self.bottom.used_width()
+    }
+    /// Resolved physical widths as one box-model edge group.
+    pub fn widths(&self) -> EdgeSizes {
+        EdgeSizes::new(
+            self.top.used_width(),
+            self.right.used_width(),
+            self.bottom.used_width(),
+            self.left.used_width(),
+        )
     }
 }
 
@@ -1576,8 +3222,8 @@ pub struct PercentageInsets {
 /// `break-after`. `Auto` is the initial value (a class-A break opportunity with
 /// no forced break and no avoidance). The forced values (`page`/`left`/`right`/
 /// `recto`/`verso`) always start a new page; the sided ones additionally force
-/// the following content onto a left/right (verso/recto) page. `Avoid` is a
-/// discretionary hint (currently a no-op in pagination).
+/// the following content onto a left/right (verso/recto) page. `Avoid` keeps
+/// its class-A boundary so pagination can retain an adjacent fitting group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BreakValue {
     #[default]
@@ -1624,12 +3270,17 @@ impl BreakValue {
 
 #[derive(Debug, Clone)]
 pub struct ComputedStyle {
+    /// Conversion-owned raster policy, propagated with the style-resolution
+    /// context. It is not a CSS property and never changes box geometry.
+    pub(crate) raster_quality: RasterQuality,
     pub font_size: f32,
     pub root_font_size: f32,
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
+    pub font_stretch: FontStretch,
+    pub font_size_adjust: FontSizeAdjust,
     pub font_family: FontFamily,
     pub font_stack: FontStack,
     pub color: Color,
@@ -1656,8 +3307,9 @@ pub struct ComputedStyle {
     /// `horizontal-tb`. Inherited automatically via the `parent.clone()` model
     /// in `compute_style_with_context` (never reset in the non-inherited block).
     pub writing_mode: WritingMode,
-    pub writing_mode_vertical_lr: bool,
     pub text_orientation_upright: bool,
+    /// CSS `text-combine-upright` (css-writing-modes-4 §9.1). Inherited.
+    pub text_combine_upright: TextCombineUpright,
     /// CSS `unicode-bidi: bidi-override` (or `isolate-override`). When set, the
     /// element's inline content is reordered strictly in sequence according to
     /// `direction`, overriding the characters' intrinsic bidi classes
@@ -1697,7 +3349,7 @@ pub struct ComputedStyle {
     /// initial `auto` value (the default page). Not inherited.
     pub page_name: Option<String>,
     pub border: BorderSides,
-    pub(crate) border_bevel: BorderBevelSides,
+    pub border_image: BorderImageProperties,
     pub display: Display,
     pub width: Option<f32>,
     /// css-sizing-3 § 5.1 intrinsic `width` keyword (`min-content` / `max-content`
@@ -1725,9 +3377,10 @@ pub struct ComputedStyle {
     /// CSS `background-blend-mode`: how the element's background layers blend
     /// with each other and the background color.
     pub background_blend_mode: BlendMode,
-    /// CSS `isolation: isolate`.
-    pub isolation_isolate: bool,
+    pub isolation: Isolation,
     pub float: Float,
+    /// CSS GCPM `footnote-display` and `footnote-policy`. Not inherited.
+    pub footnote: FootnoteFormatting,
     pub clear: Clear,
     /// CSS `box-decoration-break`: how borders/padding/margin/background are
     /// applied across a fragmentation break. Not inherited.
@@ -1774,16 +3427,9 @@ pub struct ComputedStyle {
     pub align_content: AlignContent,
     pub flex_grow: f32,
     pub flex_shrink: f32,
-    pub flex_basis: Option<f32>,
-    /// `flex-basis` expressed as a percentage of the container's inner main
-    /// size (0..1 fraction). Resolved at flex-layout time; takes precedence
-    /// over `flex_basis` when set.
-    pub flex_basis_pct: Option<f32>,
-    /// `flex-basis: content` — size the item's flex base to its (max-)content
-    /// size, ignoring any `width`. Distinct from `auto` (which falls back to
-    /// `width`). When set, `flex_basis`/`flex_basis_pct` are both `None`.
-    pub flex_basis_content: bool,
-    pub flex_basis_keyword: Option<IntrinsicWidthKeyword>,
+    /// `flex-basis` retains length and percentage components until flex layout
+    /// establishes the container's inner main-axis basis.
+    pub flex_basis: FlexBasis,
     pub gap: f32,
     pub overflow: Overflow,
     /// Per-axis computed overflow (after the CSS Overflow 3 inter-axis coercion).
@@ -1851,30 +3497,8 @@ pub struct ComputedStyle {
     pub grid_justify_self: Option<GridAlign>,
     pub grid_align_self: Option<GridAlign>,
     pub grid_gap: f32,
-    pub border_radius: f32,
-    /// Percentage-based border-radius (e.g. 50% for circles). Resolved in layout.
-    pub border_radius_pct: Option<f32>,
-    /// Per-corner border radii in points, order [top-left, top-right,
-    /// bottom-right, bottom-left]. When all four equal `border_radius` the box is
-    /// uniformly rounded; differing values express the 1-4 value `border-radius`
-    /// shorthand and the per-corner longhands. Resolved against `border_radius`
-    /// in layout when zero.
-    pub border_radii: [f32; 4],
-    /// Per-corner VERTICAL border radii in points (same corner order). CSS
-    /// allows elliptical corners with distinct horizontal/vertical radii (the
-    /// `Rx / Ry` slash syntax, or `border-radius: 50%` on a non-square box where
-    /// the horizontal radius is width-relative and the vertical radius is
-    /// height-relative). `border_radii` holds the horizontal radii; this holds
-    /// the matching vertical radii. Equal to `border_radii` for circular corners,
-    /// so the renderer falls back to its circular-arc path unless they differ.
-    pub border_radii_y: [f32; 4],
-    /// Per-corner percentage radii (same corner order). Resolved in layout
-    /// against the box dimensions, mirroring `border_radius_pct`.
-    pub border_radii_pct: [Option<f32>; 4],
-    /// Per-corner VERTICAL percentage radii (same corner order), resolved in
-    /// layout against the box HEIGHT (horizontal `border_radii_pct` resolve
-    /// against width). Used for elliptical corners from percentage values.
-    pub border_radii_y_pct: [Option<f32>; 4],
+    /// Border radii remain specified until layout knows the element's own box.
+    pub border_radii: SpecifiedCornerRadii,
     pub outline_width: f32,
     pub outline_color: Option<Color>,
     /// CSS `outline-offset`: gap (in points) between the border edge and the
@@ -1884,6 +3508,8 @@ pub struct ComputedStyle {
     pub text_transform: TextTransform,
     /// CSS `font-variant-caps` / `font-variant: small-caps` (css-fonts-4 §6.5).
     pub font_variant_caps: FontVariantCaps,
+    /// CSS `font-variant-position` / `font-variant: sub|super`.
+    pub font_variant_position: FontVariantPosition,
     /// Whether standard/contextual ligatures are enabled (css-fonts-3 §6.4 /
     /// css-fonts-4 §6.11). Defaults to `true`; set to `false` by
     /// `font-feature-settings: "liga" 0` (and `clig`/`dlig` off) to suppress
@@ -1895,7 +3521,10 @@ pub struct ComputedStyle {
     pub font_synthesis_small_caps: bool,
     pub initial_letter: f32,
     pub text_emphasis_mark: bool,
-    pub text_indent: f32,
+    pub text_emphasis_position: TextEmphasisPosition,
+    pub text_emphasis_color: Color,
+    pub(crate) text_emphasis_color_source: ColorSource,
+    pub text_indent: TextIndent,
     pub white_space: WhiteSpace,
     pub letter_spacing: f32,
     pub word_spacing: f32,
@@ -1928,8 +3557,7 @@ pub struct ComputedStyle {
     pub background_origin: BackgroundOrigin,
     pub background_clip: BackgroundClip,
     pub background_attachment: BackgroundAttachment,
-    /// CSS z-index (0 = auto).
-    pub z_index: i32,
+    pub z_index: ZIndex,
     /// CSS custom properties inherited from ancestors.
     pub custom_properties: HashMap<String, String>,
     pub list_style_type: ListStyleType,
@@ -1974,24 +3602,18 @@ pub struct ComputedStyle {
     /// Percentage `row-gap` (as a fraction). Resolved late against the flex
     /// container's OWN content-box block size (height).
     pub row_gap_pct: Option<f32>,
-    pub blur_radius: f32,
-    /// CSS `filter` color functions (grayscale/brightness/.../hue-rotate),
-    /// applied in order to a replaced image's pixels. `blur(...)` stays in
-    /// `blur_radius`; this holds the non-blur ops.
-    pub color_filters: Vec<ColorFilterOp>,
-    /// CSS `filter: url(#id)` reference id (css-filter-effects-1 §3), recording
-    /// the fragment that names an SVG `<filter>` element. Resolved during layout
-    /// (where the DOM is available) into `color_filters` by reading the filter's
-    /// `feColorMatrix` primitives. `None` when no `url()` filter is referenced.
-    pub filter_url_id: Option<String>,
-    /// CSS `filter: drop-shadow(dx dy blur color)`. `None` when no drop-shadow is
-    /// present. Offsets/blur are in points; color is straight-alpha RGBA.
-    pub drop_shadow: Option<DropShadow>,
+    /// Computed CSS filter operations and their mandatory stacking-context
+    /// boundary. Keeping these together prevents identity filters from being
+    /// optimized into `filter: none`.
+    pub filter: FilterEffects,
     /// CSS `object-fit` for replaced elements (how the content fits its box).
     pub object_fit: ObjectFit,
     /// CSS `object-position` as horizontal/vertical fractions of the free space
     /// (0.0 = start/left/top, 0.5 = center, 1.0 = end/right/bottom).
     pub object_position: ObjectPosition,
+    /// CSS `image-rendering`, carried through source-image and filter-raster
+    /// painting so each scaling preference has one semantic owner.
+    pub image_rendering: ImageRendering,
 }
 
 /// CSS `object-fit` for replaced elements.
@@ -2008,6 +3630,38 @@ pub enum ObjectFit {
     None,
     /// Use the smaller of `None` and `Contain`.
     ScaleDown,
+}
+
+/// Sampling preference for replaced raster content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageRendering {
+    /// UA-default interpolation behaviour.
+    #[default]
+    Auto,
+    /// Prefer color-smoothing while scaling photographic content.
+    Smooth,
+    /// Like [`Self::Smooth`], with a higher-quality preference when resources
+    /// require a trade-off.
+    HighQuality,
+    /// Preserve a source pixel grid at its nearest integer scale, then smooth
+    /// only the remainder required to reach the exact target size.
+    Pixelated,
+    /// Preserve contrast and avoid introducing blended source colours.
+    CrispEdges,
+}
+
+impl ImageRendering {
+    pub(crate) const fn is_pixelated(self) -> bool {
+        matches!(self, Self::Pixelated)
+    }
+
+    pub(crate) const fn preserves_source_edges(self) -> bool {
+        matches!(self, Self::Pixelated | Self::CrispEdges)
+    }
+
+    pub(crate) const fn requests_smooth_pdf_interpolation(self) -> bool {
+        matches!(self, Self::Smooth | Self::HighQuality)
+    }
 }
 
 /// A single `object-position` axis component (css-images-3 §5.5 / css-backgrounds
@@ -2062,13 +3716,13 @@ pub struct DropShadow {
     pub dx: f32,
     pub dy: f32,
     pub blur: f32,
-    pub color: (f32, f32, f32, f32),
+    pub color: Color,
 }
 
 /// A single CSS `filter` color function. Amounts are resolved fractions
 /// (`100%`/`1.0` -> 1.0); hue-rotate is in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ColorFilterOp {
+pub enum FilterOperation {
     Grayscale(f32),
     Sepia(f32),
     Invert(f32),
@@ -2076,9 +3730,10 @@ pub enum ColorFilterOp {
     Contrast(f32),
     Saturate(f32),
     HueRotate(f32),
+    Opacity(f32),
     Matrix([f32; 20]),
     Flood {
-        color: (f32, f32, f32, f32),
+        color: Color,
         region_x: f32,
         region_y: f32,
         region_width: f32,
@@ -2098,15 +3753,78 @@ pub enum ColorFilterOp {
     MorphologyDilate(f32),
 }
 
+impl FilterOperation {
+    /// Whether this operation leaves every input pixel unchanged.
+    ///
+    /// This deliberately says nothing about CSS stacking semantics: a
+    /// non-`none` filter still establishes a stacking context even when every
+    /// operation in its list is visually an identity.
+    pub(crate) fn is_visual_identity(&self) -> bool {
+        const EPSILON: f32 = 1e-6;
+        match self {
+            Self::Grayscale(amount)
+            | Self::Sepia(amount)
+            | Self::Invert(amount)
+            | Self::Blur(amount)
+            | Self::MorphologyDilate(amount) => amount.abs() <= EPSILON,
+            Self::Brightness(amount)
+            | Self::Contrast(amount)
+            | Self::Saturate(amount)
+            | Self::Opacity(amount) => (*amount - 1.0).abs() <= EPSILON,
+            Self::HueRotate(degrees) => degrees.rem_euclid(360.0).abs() <= EPSILON,
+            Self::Matrix(values) => {
+                const IDENTITY: [f32; 20] = [
+                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                ];
+                values
+                    .iter()
+                    .zip(IDENTITY)
+                    .all(|(value, identity)| (*value - identity).abs() <= EPSILON)
+            }
+            Self::Flood { .. } | Self::Offset { .. } | Self::DropShadow(_) => false,
+        }
+    }
+
+    /// Whether this operation needs the already-composited filter source rather
+    /// than independently recoloured paint primitives. CSS filter functions and
+    /// SVG colour matrices operate on `SourceGraphic`, including the alpha
+    /// coverage created where descendants overlap.
+    pub(crate) fn requires_group_rasterization(&self) -> bool {
+        !self.is_visual_identity()
+    }
+}
+
+/// The computed effect of the CSS `filter` property.
+///
+/// A non-`none` filter establishes a stacking context even when every function
+/// is visually an identity (for example `brightness(1)`). Keep that semantic
+/// fact with the filter operations so an optimization cannot accidentally
+/// discard the required compositing boundary.
+#[derive(Debug, Clone, Default)]
+pub struct FilterEffects {
+    /// True exactly when the computed `filter` value is not `none`.
+    pub establishes_stacking_context: bool,
+    /// Filter operations in CSS source order. Geometry and colour functions
+    /// intentionally share this one representation: a second blur or shadow
+    /// slot would lose ordering and could be applied twice.
+    pub operations: Vec<FilterOperation>,
+    /// Fragment identifier from `url(#filter)` pending SVG filter resolution.
+    pub url_id: Option<String>,
+}
+
 impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
+            raster_quality: RasterQuality::default(),
             font_size: 12.0,
             root_font_size: 12.0,
             viewport_width: 595.28,
             viewport_height: 841.89,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
+            font_stretch: FontStretch::default(),
+            font_size_adjust: FontSizeAdjust::default(),
             font_family: FontFamily::TimesRoman,
             font_stack: FontStack::default(),
             color: Color::BLACK,
@@ -2124,8 +3842,8 @@ impl Default for ComputedStyle {
             text_wrap_mode_nowrap: false,
             direction_rtl: false,
             writing_mode: WritingMode::HorizontalTb,
-            writing_mode_vertical_lr: false,
             text_orientation_upright: false,
+            text_combine_upright: TextCombineUpright::None,
             bidi_override: false,
             bidi_plaintext: false,
             text_decoration_underline: false,
@@ -2144,7 +3862,7 @@ impl Default for ComputedStyle {
             break_inside_avoid: false,
             page_name: None,
             border: BorderSides::default(),
-            border_bevel: BorderBevelSides::default(),
+            border_image: BorderImageProperties::default(),
             display: Display::Block,
             width: None,
             width_keyword: None,
@@ -2161,8 +3879,9 @@ impl Default for ComputedStyle {
             opacity: 1.0,
             mix_blend_mode: BlendMode::default(),
             background_blend_mode: BlendMode::default(),
-            isolation_isolate: false,
+            isolation: Isolation::Auto,
             float: Float::None,
+            footnote: FootnoteFormatting::default(),
             clear: Clear::None,
             box_decoration_break: BoxDecorationBreak::Slice,
             orphans: 2,
@@ -2185,10 +3904,7 @@ impl Default for ComputedStyle {
             align_content: AlignContent::Stretch,
             flex_grow: 0.0,
             flex_shrink: 1.0,
-            flex_basis: None,
-            flex_basis_pct: None,
-            flex_basis_content: false,
-            flex_basis_keyword: None,
+            flex_basis: FlexBasis::Auto,
             gap: 0.0,
             overflow: Overflow::Visible,
             overflow_x: Overflow::Visible,
@@ -2198,7 +3914,7 @@ impl Default for ComputedStyle {
             transform_origin: TransformOrigin::default(),
             perspective: None,
             perspective_origin: TransformOrigin::default(),
-            transform_box: TransformBox::BorderBox,
+            transform_box: TransformBox::default(),
             clip_path: None,
             mask_image: None,
             mask_mode: MaskMode::default(),
@@ -2223,18 +3939,14 @@ impl Default for ComputedStyle {
             grid_justify_self: None,
             grid_align_self: None,
             grid_gap: 0.0,
-            border_radius: 0.0,
-            border_radius_pct: None,
-            border_radii: [0.0; 4],
-            border_radii_y: [0.0; 4],
-            border_radii_pct: [None; 4],
-            border_radii_y_pct: [None; 4],
+            border_radii: SpecifiedCornerRadii::ZERO,
             outline_width: 0.0,
             outline_color: None,
             outline_offset: 0.0,
             box_sizing: BoxSizing::ContentBox,
             text_transform: TextTransform::None,
             font_variant_caps: FontVariantCaps::Normal,
+            font_variant_position: FontVariantPosition::Normal,
             ligatures_enabled: true,
             font_kerning_enabled: true,
             font_synthesis_weight: true,
@@ -2242,7 +3954,10 @@ impl Default for ComputedStyle {
             font_synthesis_small_caps: true,
             initial_letter: 0.0,
             text_emphasis_mark: false,
-            text_indent: 0.0,
+            text_emphasis_position: TextEmphasisPosition::default(),
+            text_emphasis_color: Color::BLACK,
+            text_emphasis_color_source: ColorSource::CurrentColor,
+            text_indent: TextIndent::default(),
             white_space: WhiteSpace::Normal,
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -2268,7 +3983,7 @@ impl Default for ComputedStyle {
             background_origin: BackgroundOrigin::Padding,
             background_clip: BackgroundClip::Border,
             background_attachment: BackgroundAttachment::Scroll,
-            z_index: 0,
+            z_index: ZIndex::default(),
             custom_properties: HashMap::new(),
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
@@ -2289,17 +4004,37 @@ impl Default for ComputedStyle {
             row_gap: 0.0,
             column_gap_pct: None,
             row_gap_pct: None,
-            blur_radius: 0.0,
-            color_filters: Vec::new(),
-            filter_url_id: None,
-            drop_shadow: None,
+            filter: FilterEffects::default(),
             object_fit: ObjectFit::default(),
             object_position: ObjectPosition::default(),
+            image_rendering: ImageRendering::default(),
         }
     }
 }
 
 impl ComputedStyle {
+    /// Start a style-resolution tree with one conversion-owned raster policy.
+    pub(crate) fn with_raster_quality(raster_quality: RasterQuality) -> Self {
+        Self {
+            raster_quality: raster_quality.normalized(),
+            ..Self::default()
+        }
+    }
+
+    /// Resolve the specified corner radii against a border-box size and hand
+    /// layout one owning geometry value. Percentage radii are axis-relative:
+    /// horizontal values use width and vertical values use height.
+    pub(crate) fn resolve_corner_radii(&self, width: f32, height: f32) -> CornerRadii {
+        self.border_radii.resolve(width, height)
+    }
+
+    /// Whether the box needs a border paint owner. A length-valued
+    /// `border-image-width` can paint even when every ordinary used border
+    /// width is zero.
+    pub(crate) fn has_border_decoration(&self) -> bool {
+        self.border_image.has_source() || self.border.has_any()
+    }
+
     fn clear_background_images(&mut self) {
         self.background_gradient = None;
         self.background_radial_gradient = None;
@@ -2308,7 +4043,7 @@ impl ComputedStyle {
         self.background_svg = None;
     }
 
-    fn reset_background(&mut self) {
+    pub(crate) fn reset_background(&mut self) {
         self.background_color = None;
         self.clear_background_images();
         self.background_size = BackgroundSize::Auto;
@@ -2386,7 +4121,152 @@ pub fn compute_style_with_context(
     attributes: &HashMap<String, String>,
     selector_ctx: &SelectorContext,
 ) -> ComputedStyle {
+    compute_style_with_context_with_font_metrics(
+        tag,
+        inline_style,
+        parent,
+        rules,
+        tag_name,
+        classes,
+        id,
+        attributes,
+        selector_ctx,
+        FontMetrics::default(),
+    )
+}
+
+/// Compute a style with the loaded-font metrics used by layout.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_style_with_context_with_font_metrics(
+    tag: HtmlTag,
+    inline_style: Option<&str>,
+    parent: &ComputedStyle,
+    rules: &[CssRule],
+    tag_name: &str,
+    classes: &[&str],
+    id: Option<&str>,
+    attributes: &HashMap<String, String>,
+    selector_ctx: &SelectorContext,
+    font_metrics: FontMetrics<'_>,
+) -> ComputedStyle {
+    compute_style_with_context_and_percentage_basis_with_font_metrics(
+        tag,
+        inline_style,
+        parent,
+        rules,
+        tag_name,
+        classes,
+        id,
+        attributes,
+        selector_ctx,
+        PercentageBasis::default(),
+        font_metrics,
+    )
+}
+
+/// Content-box dimensions used only to resolve descendant percentages.
+///
+/// They remain separate from [`ComputedStyle`], whose parent value must stay
+/// available for inheritance. In particular, `width: inherit` uses the
+/// cascade parent while `calc(50% - 1px)` uses the containing block's content
+/// width.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PercentageBasis {
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+impl PercentageBasis {
+    pub(crate) const fn new(width: Option<f32>, height: Option<f32>) -> Self {
+        Self { width, height }
+    }
+
+    fn width_or_parent(self, parent: &ComputedStyle) -> Option<f32> {
+        self.width.or(parent.width)
+    }
+
+    fn height_or_parent(self, parent: &ComputedStyle) -> Option<f32> {
+        self.height.or(parent.height)
+    }
+}
+
+/// Compute a style with the actual containing-block content dimensions for
+/// percentage resolution, without altering the cascade parent.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_style_with_context_and_percentage_basis(
+    tag: HtmlTag,
+    inline_style: Option<&str>,
+    parent: &ComputedStyle,
+    rules: &[CssRule],
+    tag_name: &str,
+    classes: &[&str],
+    id: Option<&str>,
+    attributes: &HashMap<String, String>,
+    selector_ctx: &SelectorContext,
+    percentage_basis: PercentageBasis,
+) -> ComputedStyle {
+    compute_style_with_context_and_percentage_basis_with_font_metrics(
+        tag,
+        inline_style,
+        parent,
+        rules,
+        tag_name,
+        classes,
+        id,
+        attributes,
+        selector_ctx,
+        percentage_basis,
+        FontMetrics::default(),
+    )
+}
+
+/// Compute a style with a loaded-font context for `ex` and `ch` resolution.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_style_with_context_and_percentage_basis_with_font_metrics(
+    tag: HtmlTag,
+    inline_style: Option<&str>,
+    parent: &ComputedStyle,
+    rules: &[CssRule],
+    tag_name: &str,
+    classes: &[&str],
+    id: Option<&str>,
+    attributes: &HashMap<String, String>,
+    selector_ctx: &SelectorContext,
+    percentage_basis: PercentageBasis,
+    font_metrics: FontMetrics<'_>,
+) -> ComputedStyle {
+    compute_style_with_context_and_percentage_basis_impl(
+        tag,
+        inline_style,
+        parent,
+        rules,
+        tag_name,
+        classes,
+        id,
+        attributes,
+        selector_ctx,
+        percentage_basis,
+        font_metrics,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_style_with_context_and_percentage_basis_impl(
+    tag: HtmlTag,
+    inline_style: Option<&str>,
+    parent: &ComputedStyle,
+    rules: &[CssRule],
+    tag_name: &str,
+    classes: &[&str],
+    id: Option<&str>,
+    attributes: &HashMap<String, String>,
+    selector_ctx: &SelectorContext,
+    percentage_basis: PercentageBasis,
+    font_metrics: FontMetrics<'_>,
+) -> ComputedStyle {
     let mut style = parent.clone();
+    let html_layers = html_cascade_layers(tag, attributes, selector_ctx);
 
     // Set default display based on tag
     style.display = if tag.is_inline() {
@@ -2410,7 +4290,7 @@ pub fn compute_style_with_context(
 
     // Border does not inherit in CSS — reset for all elements
     style.border = BorderSides::default();
-    style.border_bevel = BorderBevelSides::default();
+    style.border_image = BorderImageProperties::default();
 
     // Reset non-inherited sizing and opacity properties
     style.width = None;
@@ -2426,11 +4306,12 @@ pub fn compute_style_with_context(
     style.margin_top_auto = false;
     style.margin_bottom_auto = false;
     style.opacity = 1.0;
-    style.isolation_isolate = false;
+    style.isolation = Isolation::Auto;
     // `unicode-bidi` is not inherited; initial is `normal`.
     style.bidi_override = false;
     style.bidi_plaintext = false;
     style.float = Float::None;
+    style.footnote = FootnoteFormatting::default();
     style.clear = Clear::None;
     style.position = Position::Static;
     style.running_name = None;
@@ -2449,10 +4330,7 @@ pub fn compute_style_with_context(
     style.align_content = AlignContent::Stretch;
     style.flex_grow = 0.0;
     style.flex_shrink = 1.0;
-    style.flex_basis = None;
-    style.flex_basis_pct = None;
-    style.flex_basis_content = false;
-    style.flex_basis_keyword = None;
+    style.flex_basis = FlexBasis::Auto;
     style.gap = 0.0;
     style.overflow = Overflow::Visible;
     style.overflow_x = Overflow::Visible;
@@ -2461,7 +4339,7 @@ pub fn compute_style_with_context(
     style.transform = None;
     style.perspective = None;
     style.perspective_origin = TransformOrigin::default();
-    style.transform_box = TransformBox::BorderBox;
+    style.transform_box = TransformBox::default();
     style.clip_path = None;
     style.mask_image = None;
     style.mask_mode = MaskMode::default();
@@ -2496,17 +4374,12 @@ pub fn compute_style_with_context(
     style.column_rule = BorderSide::default();
     style.column_span_all = false;
     style.column_fill_auto = false;
-    style.border_radius = 0.0;
-    style.border_radii = [0.0; 4];
-    style.border_radii_pct = [None; 4];
-    style.border_radii_y = [0.0; 4];
-    style.border_radii_y_pct = [None; 4];
+    style.border_radii = SpecifiedCornerRadii::ZERO;
     style.outline_width = 0.0;
     style.outline_color = None;
     style.outline_offset = 0.0;
     style.box_sizing = BoxSizing::ContentBox;
     style.initial_letter = 0.0;
-    style.text_indent = 0.0;
     style.vertical_align = VerticalAlign::Baseline;
     style.text_overflow = TextOverflow::Clip;
     // border_collapse, border_spacing and empty_cells are inherited; don't reset.
@@ -2520,14 +4393,11 @@ pub fn compute_style_with_context(
     style.content = Vec::new();
     style.counter_reset = Vec::new();
     style.counter_increment = Vec::new();
-    style.z_index = 0;
+    style.z_index = ZIndex::default();
     style.row_gap = 0.0;
     style.column_gap_pct = None;
     style.row_gap_pct = None;
-    style.blur_radius = 0.0;
-    style.color_filters.clear();
-    style.filter_url_id = None;
-    style.drop_shadow = None;
+    style.filter = FilterEffects::default();
     // `page` (CSS Paged Media 3 §3.4) is not inherited; initial is `auto`
     // (the default page → `None`).
     style.page_name = None;
@@ -2535,7 +4405,20 @@ pub fn compute_style_with_context(
 
     // Apply tag defaults
     let defaults = default_style(tag);
-    apply_style_map(&mut style, &defaults, parent);
+    apply_style_map_with_percentage_basis(
+        &mut style,
+        &defaults,
+        parent,
+        percentage_basis,
+        font_metrics,
+    );
+    apply_style_map_with_percentage_basis(
+        &mut style,
+        &html_layers.ua,
+        parent,
+        percentage_basis,
+        font_metrics,
+    );
 
     // Handle HTML dir attribute (inheritable, overrides CSS direction)
     if let Some(dir) = attributes.get("dir") {
@@ -2587,28 +4470,42 @@ pub fn compute_style_with_context(
     // interleaved into the cascade at the correct precedence tiers.
     let inline_map = inline_style.map(crate::parser::css::parse_inline_style);
 
+    // Select one specified winner per property before computing any values.
+    // Applying each rule directly to ComputedStyle leaked lower declarations
+    // through when a higher winning var() became invalid at computed-value time.
+    // A single cascaded map also lets every property see the final custom-property
+    // set and avoids cloning/applying a full filtered map per matched rule.
+    let mut cascaded = StyleMap::new();
+
     // Precedence order (lowest → highest), per css-cascade-4 §6.3 within the
-    // author origin:
-    //   1. author normal declarations (selectors), by specificity then source
-    //   2. inline normal declarations (style attribute beats any selector)
-    //   3. author important declarations (selectors), by specificity then source
-    //   4. inline important declarations (style attribute, important)
+    // author origin: presentational hints, selector normal, inline normal,
+    // selector important, inline important. `matched` is already stable-sorted
+    // by specificity/source order.
+    cascade_style_map_filtered(
+        &mut cascaded,
+        &html_layers.presentational_hints,
+        Importance::Normal,
+    );
     for (_, rule) in &matched {
-        apply_style_map_filtered(&mut style, &rule.declarations, parent, Importance::Normal);
+        cascade_style_map_filtered(&mut cascaded, &rule.declarations, Importance::Normal);
     }
     if let Some(inline) = &inline_map {
-        apply_style_map_filtered(&mut style, inline, parent, Importance::Normal);
+        cascade_style_map_filtered(&mut cascaded, inline, Importance::Normal);
     }
     for (_, rule) in &matched {
-        apply_style_map_filtered(
+        cascade_style_map_filtered(&mut cascaded, &rule.declarations, Importance::Important);
+    }
+    if let Some(inline) = &inline_map {
+        cascade_style_map_filtered(&mut cascaded, inline, Importance::Important);
+    }
+    if !cascaded.properties.is_empty() {
+        apply_style_map_with_percentage_basis(
             &mut style,
-            &rule.declarations,
+            &cascaded,
             parent,
-            Importance::Important,
+            percentage_basis,
+            font_metrics,
         );
-    }
-    if let Some(inline) = &inline_map {
-        apply_style_map_filtered(&mut style, inline, parent, Importance::Important);
     }
 
     // Now that the cascade is finalized, re-resolve em-based margins against
@@ -2629,105 +4526,43 @@ pub fn compute_style_with_context(
     }
     sync_line_height_from_absolute(&mut style);
 
-    if tag != HtmlTag::Img {
-        add_filter_drop_shadow_box_shadow(&mut style);
+    if style.position.is_absolute() || matches!(style.float, Float::Left | Float::Right) {
+        style.display = style.display.blockified();
     }
+
     resolve_custom_counter_style(&mut style.list_style_type, rules);
     resolve_custom_counter_styles_in_content(&mut style.content, rules);
 
-    // Resolve `currentColor`. Two cases collapse here, both needing the
-    // element's now-finalized `color`:
-    //   1. The legacy parser parks an explicit `currentColor` keyword as a
-    //      sentinel (the final `color` isn't known mid-cascade).
-    //   2. A visible border with no resolvable color token. Per CSS the initial
-    //      value of `border-color` is `currentColor`, and lightningcss strips
-    //      `currentColor` from `border`/`border-*` shorthands (it equals the
-    //      default), leaving the side with `color: None`. Such a side must paint
-    //      in the element's `color`, not the black fallback.
+    // Materialize used currentColor values only after the foreground color is
+    // final. Typed provenance remains on inherited text-shadow/emphasis values
+    // so descendants can rebind them to their own foreground color.
     resolve_current_color(&mut style);
-    apply_border_bevel_alpha(&mut style);
 
     style
 }
 
-/// Resolve `currentColor` into the element's finalized computed `color`.
-///
-/// Replaces both the `CURRENT_COLOR_SENTINEL` placeholder (explicit
-/// `currentColor` keyword) and the implicit `currentColor` default of a visible
-/// border side that has no resolved color.
 fn resolve_current_color(style: &mut ComputedStyle) {
-    let is_sentinel = |c: &Color| {
-        c.r == CURRENT_COLOR_SENTINEL.r
-            && c.g == CURRENT_COLOR_SENTINEL.g
-            && c.b == CURRENT_COLOR_SENTINEL.b
-            && c.a == CURRENT_COLOR_SENTINEL.a
-    };
     let resolved = style.color;
-    for side in [
-        &mut style.border.top,
-        &mut style.border.right,
-        &mut style.border.bottom,
-        &mut style.border.left,
-    ] {
-        let is_visible = side.width > 0.0 && side.style != BorderStyle::None;
-        match side.color {
-            Some(c) if is_sentinel(&c) => side.color = Some(resolved),
-            // A visible border with no color uses `currentColor` (CSS initial
-            // value of border-color).
-            None if is_visible => side.color = Some(resolved),
-            _ => {}
-        }
-    }
-    if matches!(style.outline_color, Some(c) if is_sentinel(&c)) {
-        style.outline_color = Some(resolved);
-    }
-    if matches!(style.background_color, Some(c) if is_sentinel(&c)) {
-        style.background_color = Some(resolved);
-    }
-    for shadow in style.box_shadow.iter_mut() {
-        if is_sentinel(&shadow.color) {
+    for shadow in &mut style.box_shadow {
+        if shadow.color_source == ColorSource::CurrentColor {
             shadow.color = resolved;
         }
     }
-    for shadow in style.text_shadow.iter_mut() {
-        if is_sentinel(&shadow.color) {
+    for shadow in &mut style.text_shadow {
+        if shadow.color_source == ColorSource::CurrentColor {
             shadow.color = resolved;
         }
     }
-    if let Some(shadow) = &mut style.drop_shadow
-        && drop_shadow_color_is_current_color(shadow.color)
-    {
-        shadow.color = resolved.to_f32_rgba();
+    if style.text_emphasis_color_source == ColorSource::CurrentColor {
+        style.text_emphasis_color = resolved;
     }
 }
 
-fn border_bevel_alpha(kind: BorderBevelKind) -> u8 {
-    match kind {
-        BorderBevelKind::Groove => 251,
-        BorderBevelKind::Ridge => 252,
-        BorderBevelKind::Inset => 253,
-        BorderBevelKind::Outset => 254,
+fn bind_specified_color(color: SpecifiedColor, current_color: Color) -> (Color, ColorSource) {
+    match color {
+        SpecifiedColor::Absolute(color) => (color, ColorSource::Absolute),
+        SpecifiedColor::CurrentColor => (current_color, ColorSource::CurrentColor),
     }
-}
-
-fn apply_border_bevel_alpha(style: &mut ComputedStyle) {
-    let markers = style.border_bevel;
-    let apply = |side: &mut BorderSide, marker: Option<BorderBevelKind>| {
-        if let Some(kind) = marker {
-            if side.width > 0.0
-                && side.style != BorderStyle::None
-                && let Some(mut color) = side.color
-            {
-                color.a = border_bevel_alpha(kind);
-                side.color = Some(color);
-                side.style = BorderStyle::Solid;
-            }
-        }
-    };
-    apply(&mut style.border.top, markers.top);
-    apply(&mut style.border.right, markers.right);
-    apply(&mut style.border.bottom, markers.bottom);
-    apply(&mut style.border.left, markers.left);
 }
 
 /// Compute the style for a `::before` or `::after` pseudo-element.
@@ -2736,6 +4571,7 @@ fn apply_border_bevel_alpha(style: &mut ComputedStyle) {
 /// element's computed style, resets non-inherited properties, then applies
 /// matching pseudo-element CSS rules.  `parent_style` is the fully computed
 /// style of the originating element.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn compute_pseudo_element_style(
     parent_style: &ComputedStyle,
@@ -2747,8 +4583,35 @@ pub fn compute_pseudo_element_style(
     selector_ctx: &SelectorContext,
     pseudo: crate::parser::css::PseudoElement,
 ) -> Option<ComputedStyle> {
-    // Collect all matching pseudo-element rules
-    let mut matched_declarations: Vec<&crate::parser::css::StyleMap> = Vec::new();
+    compute_pseudo_element_style_with_font_metrics(
+        parent_style,
+        rules,
+        tag_name,
+        classes,
+        id,
+        attributes,
+        selector_ctx,
+        pseudo,
+        FontMetrics::default(),
+    )
+}
+
+/// Compute a pseudo-element style with the document's loaded-font metrics.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_pseudo_element_style_with_font_metrics(
+    parent_style: &ComputedStyle,
+    rules: &[CssRule],
+    tag_name: &str,
+    classes: &[&str],
+    id: Option<&str>,
+    attributes: &HashMap<String, String>,
+    selector_ctx: &SelectorContext,
+    pseudo: crate::parser::css::PseudoElement,
+    font_metrics: FontMetrics<'_>,
+) -> Option<ComputedStyle> {
+    // Select pseudo-element declarations with the same specificity/source-order
+    // and importance cascade used for ordinary elements.
+    let mut matched: Vec<(u32, &CssRule)> = Vec::new();
     for rule in rules {
         if rule.pseudo_element == Some(pseudo)
             && selector_matches_with_context(
@@ -2760,13 +4623,41 @@ pub fn compute_pseudo_element_style(
                 selector_ctx,
             )
         {
-            matched_declarations.push(&rule.declarations);
+            matched.push((specificity(&rule.selector), rule));
         }
     }
 
-    if matched_declarations.is_empty() {
+    if matched.is_empty() {
         return None;
     }
+    matched.sort_by_key(|(specificity, _)| *specificity);
+    let mut cascaded = StyleMap::new();
+    for (_, rule) in &matched {
+        cascade_style_map_filtered(&mut cascaded, &rule.declarations, Importance::Normal);
+    }
+    for (_, rule) in &matched {
+        cascade_style_map_filtered(&mut cascaded, &rule.declarations, Importance::Important);
+    }
+
+    // Decorations propagate through inline descendants rather than inheriting.
+    // Keep the originating element's resolved decoration values together so a
+    // pseudo-element changing its text `color` cannot repaint that ancestor's
+    // underline. CSS Text Decoration 3 §2.3 requires the origin's decoration
+    // color to remain unchanged across differently colored descendants.
+    let propagated_decoration = (parent_style.text_decoration_underline
+        || parent_style.text_decoration_line_through
+        || parent_style.text_decoration_overline)
+        .then_some((
+            parent_style.text_decoration_underline,
+            parent_style.text_decoration_line_through,
+            parent_style.text_decoration_overline,
+            parent_style
+                .text_decoration_color
+                .unwrap_or(parent_style.color),
+            parent_style.text_decoration_style,
+            parent_style.text_decoration_thickness,
+            parent_style.text_underline_offset,
+        ));
 
     // Start from parent style (inherits inherited properties)
     let mut style = parent_style.clone();
@@ -2780,7 +4671,7 @@ pub fn compute_pseudo_element_style(
     style.padding = EdgeSizes::default();
     style.reset_background();
     style.border = BorderSides::default();
-    style.border_bevel = BorderBevelSides::default();
+    style.border_image = BorderImageProperties::default();
     style.width = None;
     style.width_keyword = None;
     style.height = None;
@@ -2798,6 +4689,7 @@ pub fn compute_pseudo_element_style(
     style.bidi_override = false;
     style.bidi_plaintext = false;
     style.float = Float::None;
+    style.footnote = FootnoteFormatting::default();
     style.clear = Clear::None;
     style.position = Position::Static;
     style.running_name = None;
@@ -2816,10 +4708,7 @@ pub fn compute_pseudo_element_style(
     style.align_content = AlignContent::Stretch;
     style.flex_grow = 0.0;
     style.flex_shrink = 1.0;
-    style.flex_basis = None;
-    style.flex_basis_pct = None;
-    style.flex_basis_content = false;
-    style.flex_basis_keyword = None;
+    style.flex_basis = FlexBasis::Auto;
     style.gap = 0.0;
     style.overflow = Overflow::Visible;
     style.overflow_x = Overflow::Visible;
@@ -2827,7 +4716,7 @@ pub fn compute_pseudo_element_style(
     style.transform = None;
     style.perspective = None;
     style.perspective_origin = TransformOrigin::default();
-    style.transform_box = TransformBox::BorderBox;
+    style.transform_box = TransformBox::default();
     style.clip_path = None;
     style.mask_image = None;
     style.mask_mode = MaskMode::default();
@@ -2862,50 +4751,70 @@ pub fn compute_pseudo_element_style(
     style.column_rule = BorderSide::default();
     style.column_span_all = false;
     style.column_fill_auto = false;
-    style.border_radius = 0.0;
-    style.border_radii = [0.0; 4];
-    style.border_radii_pct = [None; 4];
-    style.border_radii_y = [0.0; 4];
-    style.border_radii_y_pct = [None; 4];
+    style.border_radii = SpecifiedCornerRadii::ZERO;
     style.outline_width = 0.0;
     style.outline_color = None;
     style.outline_offset = 0.0;
     style.box_sizing = BoxSizing::ContentBox;
     style.initial_letter = 0.0;
-    style.text_indent = 0.0;
     style.vertical_align = VerticalAlign::Baseline;
     style.text_overflow = TextOverflow::Clip;
     style.content = Vec::new();
     style.counter_reset = Vec::new();
     style.counter_increment = Vec::new();
-    style.z_index = 0;
+    style.z_index = ZIndex::default();
     style.row_gap = 0.0;
     style.column_gap_pct = None;
     style.row_gap_pct = None;
-    style.blur_radius = 0.0;
-    style.color_filters.clear();
-    style.filter_url_id = None;
-    style.drop_shadow = None;
+    style.filter = FilterEffects::default();
     // Default display for pseudo-elements is inline
     style.display = Display::Inline;
 
-    // Apply matched pseudo-element declarations.
-    // Use parent_style as the "parent" for inherit resolution so that
-    // `background-image: inherit` copies from the originating element.
-    for declarations in &matched_declarations {
-        apply_style_map(&mut style, declarations, parent_style);
+    // CSS GCPM §2.6 gives the footnote call a UA `super` position. Set it
+    // before the author cascade so an explicit ::footnote-call declaration can
+    // override it, while a rule that only changes colour/content keeps the UA
+    // default.
+    if pseudo == crate::parser::css::PseudoElement::FootnoteCall {
+        style.font_variant_position = FontVariantPosition::Super;
+    }
+
+    // Apply the complete winner map once. This lets every currentColor consumer
+    // see the pseudo-element's final winning `color`, independent of declaration
+    // or rule order. `parent_style` remains the inheritance source.
+    apply_style_map_with_font_metrics(&mut style, &cascaded, parent_style, font_metrics);
+
+    if let Some((
+        underline,
+        line_through,
+        overline,
+        color,
+        decoration_style,
+        decoration_thickness,
+        underline_offset,
+    )) = propagated_decoration
+    {
+        // A descendant cannot remove or restyle a line which originated on its
+        // ancestor. Preserve the origin after the pseudo-element cascade.
+        style.text_decoration_underline |= underline;
+        style.text_decoration_line_through |= line_through;
+        style.text_decoration_overline |= overline;
+        style.text_decoration_color = Some(color);
+        style.text_decoration_style = decoration_style;
+        style.text_decoration_thickness = decoration_thickness;
+        style.text_underline_offset = underline_offset;
     }
 
     // `content: none`/`normal` suppress `::before`/`::after` generation (no box
-    // without content). `::marker`, however, always has a box — its content
-    // defaults to the list marker symbol — so author rules that only restyle it
-    // (e.g. `li::marker { color: … }`) must still apply even with empty content.
-    // `::first-line`/`::first-letter` never carry `content`; they restyle
-    // existing text, so they are likewise exempt from the empty-content check.
+    // without content). Generated markers and footnote pseudo-elements already
+    // have content supplied by their formatting models, so author rules that
+    // only restyle them must still apply. `::first-line`/`::first-letter` also
+    // restyle existing text and are exempt from the empty-content check.
     if style.content.is_empty()
         && !matches!(
             pseudo,
             crate::parser::css::PseudoElement::Marker
+                | crate::parser::css::PseudoElement::FootnoteCall
+                | crate::parser::css::PseudoElement::FootnoteMarker
                 | crate::parser::css::PseudoElement::FirstLine
                 | crate::parser::css::PseudoElement::FirstLetter
         )
@@ -2931,7 +4840,7 @@ pub fn compute_pseudo_element_style(
     resolve_custom_counter_style(&mut style.list_style_type, rules);
     resolve_custom_counter_styles_in_content(&mut style.content, rules);
 
-    // Resolve any `currentColor` sentinels against the pseudo-element's color.
+    // Refresh inherited currentColor provenance against the pseudo's final color.
     resolve_current_color(&mut style);
 
     Some(style)
@@ -2945,6 +4854,7 @@ fn is_inherited_property(property: &str) -> bool {
             | "font-size"
             | "font-weight"
             | "font-style"
+            | "font-stretch"
             | "font-family"
             | "font"
             | "line-height"
@@ -2954,6 +4864,9 @@ fn is_inherited_property(property: &str) -> bool {
             | "text-decoration-line"
             | "text-decoration-style"
             | "text-decoration-thickness"
+            | "text-shadow"
+            | "text-emphasis-color"
+            | "-webkit-text-emphasis-color"
             | "text-underline-offset"
             | "visibility"
             | "letter-spacing"
@@ -2962,6 +4875,7 @@ fn is_inherited_property(property: &str) -> bool {
             | "text-transform"
             | "font-variant"
             | "font-variant-caps"
+            | "font-variant-position"
             | "font-variant-ligatures"
             | "font-kerning"
             | "font-size-adjust"
@@ -2969,6 +4883,7 @@ fn is_inherited_property(property: &str) -> bool {
             | "font-feature-settings"
             | "text-emphasis"
             | "text-emphasis-position"
+            | "-webkit-text-emphasis-position"
             | "white-space"
             | "white-space-collapse"
             | "text-wrap-mode"
@@ -2996,6 +4911,14 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "font-size" => style.font_size = default.font_size,
         "font-weight" => style.font_weight = default.font_weight,
         "font-style" => style.font_style = default.font_style,
+        "font-stretch" => style.font_stretch = default.font_stretch,
+        "font-variant" => {
+            style.font_variant_caps = default.font_variant_caps;
+            style.font_variant_position = default.font_variant_position;
+        }
+        "font-variant-caps" => style.font_variant_caps = default.font_variant_caps,
+        "font-variant-position" => style.font_variant_position = default.font_variant_position,
+        "font-size-adjust" => style.font_size_adjust = default.font_size_adjust,
         "font-synthesis" => {
             style.font_synthesis_weight = default.font_synthesis_weight;
             style.font_synthesis_style = default.font_synthesis_style;
@@ -3020,9 +4943,19 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "text-decoration-thickness" => {
             style.text_decoration_thickness = default.text_decoration_thickness
         }
+        "text-decoration-color" => style.text_decoration_color = None,
+        "text-shadow" => style.text_shadow.clear(),
+        "text-emphasis-color" | "-webkit-text-emphasis-color" => {
+            style.text_emphasis_color = style.color;
+            style.text_emphasis_color_source = ColorSource::CurrentColor;
+        }
+        "text-emphasis-position" | "-webkit-text-emphasis-position" => {
+            style.text_emphasis_position = default.text_emphasis_position;
+        }
         "text-underline-offset" => style.text_underline_offset = default.text_underline_offset,
         "visibility" => style.visibility = default.visibility,
         "initial-letter" => style.initial_letter = default.initial_letter,
+        "text-indent" => style.text_indent = default.text_indent,
         "letter-spacing" => style.letter_spacing = default.letter_spacing,
         "word-spacing" => style.word_spacing = default.word_spacing,
         "tab-size" => style.tab_size = default.tab_size,
@@ -3076,7 +5009,7 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "opacity" => style.opacity = default.opacity,
         "mix-blend-mode" => style.mix_blend_mode = default.mix_blend_mode,
         "background-blend-mode" => style.background_blend_mode = default.background_blend_mode,
-        "isolation" => style.isolation_isolate = default.isolation_isolate,
+        "isolation" => style.isolation = default.isolation,
         "border-width" => {
             style.border.top.width = default.border.top.width;
             style.border.right.width = default.border.right.width;
@@ -3089,11 +5022,40 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
             style.border.bottom.color = default.border.bottom.color;
             style.border.left.color = default.border.left.color;
         }
+        "border-style" => {
+            style.border.top.style = default.border.top.style;
+            style.border.right.style = default.border.right.style;
+            style.border.bottom.style = default.border.bottom.style;
+            style.border.left.style = default.border.left.style;
+        }
+        "border-top-style" => style.border.top.style = default.border.top.style,
+        "border-right-style" => style.border.right.style = default.border.right.style,
+        "border-bottom-style" => style.border.bottom.style = default.border.bottom.style,
+        "border-left-style" => style.border.left.style = default.border.left.style,
+        "border-radius" => style.border_radii = default.border_radii,
+        "border-top-left-radius" => style.border_radii.top_left = default.border_radii.top_left,
+        "border-top-right-radius" => style.border_radii.top_right = default.border_radii.top_right,
+        "border-bottom-right-radius" => {
+            style.border_radii.bottom_right = default.border_radii.bottom_right
+        }
+        "border-bottom-left-radius" => {
+            style.border_radii.bottom_left = default.border_radii.bottom_left
+        }
+        "border-image-source" => style.border_image.source = None,
+        "border-image-slice" => style.border_image.geometry.slices = BorderImageSlices::default(),
+        "border-image-width" => style.border_image.geometry.widths = BorderImageWidths::default(),
+        "border-image-outset" => {
+            style.border_image.geometry.outsets = BorderImageOutsets::default()
+        }
+        "border-image-repeat" => {
+            style.border_image.geometry.repeats = BorderImageRepeats::default()
+        }
         "border" | "border-top" | "border-right" | "border-bottom" | "border-left" => {
             style.border = default.border;
-            style.border_bevel = default.border_bevel;
         }
         "float" => style.float = default.float,
+        "footnote-display" => style.footnote.display = default.footnote.display,
+        "footnote-policy" => style.footnote.policy = default.footnote.policy,
         "clear" => style.clear = default.clear,
         "box-decoration-break" => style.box_decoration_break = default.box_decoration_break,
         "orphans" => style.orphans = default.orphans,
@@ -3136,12 +5098,7 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "flex-wrap" => style.flex_wrap = default.flex_wrap,
         "flex-grow" => style.flex_grow = default.flex_grow,
         "flex-shrink" => style.flex_shrink = default.flex_shrink,
-        "flex-basis" => {
-            style.flex_basis = default.flex_basis;
-            style.flex_basis_pct = default.flex_basis_pct;
-            style.flex_basis_content = default.flex_basis_content;
-            style.flex_basis_keyword = default.flex_basis_keyword;
-        }
+        "flex-basis" => style.flex_basis = default.flex_basis,
         "gap" => style.gap = default.gap,
         "text-overflow" => style.text_overflow = default.text_overflow,
         "overflow-wrap" | "word-wrap" => style.overflow_wrap = default.overflow_wrap,
@@ -3162,10 +5119,11 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "background-origin" => style.background_origin = default.background_origin,
         "background-clip" => style.background_clip = default.background_clip,
         "background-attachment" => style.background_attachment = default.background_attachment,
-        "background-image" | "background-svg" => style.clear_background_images(),
+        "background-image" => style.clear_background_images(),
         "aspect-ratio" => style.aspect_ratio = default.aspect_ratio,
         "object-fit" => style.object_fit = default.object_fit,
         "object-position" => style.object_position = default.object_position,
+        "image-rendering" => style.image_rendering = default.image_rendering,
         "background" => style.reset_background(),
         "list-style-type" => style.list_style_type = default.list_style_type.clone(),
         "list-style-position" => style.list_style_position = default.list_style_position,
@@ -3191,16 +5149,14 @@ fn reset_to_initial(style: &mut ComputedStyle, property: &str) {
         "column-span" => style.column_span_all = default.column_span_all,
         "column-fill" => style.column_fill_auto = default.column_fill_auto,
         "filter" => {
-            style.blur_radius = default.blur_radius;
-            style.color_filters = default.color_filters.clone();
-            style.filter_url_id = default.filter_url_id.clone();
-            style.drop_shadow = default.drop_shadow;
+            style.filter = default.filter.clone();
         }
         _ => {}
     }
 }
 
 fn reset_all_to_initial(style: &mut ComputedStyle) {
+    let raster_quality = style.raster_quality;
     let root_font_size = style.root_font_size;
     let viewport_width = style.viewport_width;
     let viewport_height = style.viewport_height;
@@ -3211,6 +5167,7 @@ fn reset_all_to_initial(style: &mut ComputedStyle) {
 
     *style = ComputedStyle::default();
 
+    style.raster_quality = raster_quality;
     style.root_font_size = root_font_size;
     style.viewport_width = viewport_width;
     style.viewport_height = viewport_height;
@@ -3227,6 +5184,14 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "font-size" => style.font_size = parent.font_size,
         "font-weight" => style.font_weight = parent.font_weight,
         "font-style" => style.font_style = parent.font_style,
+        "font-stretch" => style.font_stretch = parent.font_stretch,
+        "font-variant" => {
+            style.font_variant_caps = parent.font_variant_caps;
+            style.font_variant_position = parent.font_variant_position;
+        }
+        "font-variant-caps" => style.font_variant_caps = parent.font_variant_caps,
+        "font-variant-position" => style.font_variant_position = parent.font_variant_position,
+        "font-size-adjust" => style.font_size_adjust = parent.font_size_adjust,
         "font-synthesis" => {
             style.font_synthesis_weight = parent.font_synthesis_weight;
             style.font_synthesis_style = parent.font_synthesis_style;
@@ -3251,9 +5216,19 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "text-decoration-thickness" => {
             style.text_decoration_thickness = parent.text_decoration_thickness
         }
+        "text-decoration-color" => style.text_decoration_color = parent.text_decoration_color,
+        "text-shadow" => style.text_shadow = parent.text_shadow.clone(),
+        "text-emphasis-color" | "-webkit-text-emphasis-color" => {
+            style.text_emphasis_color = parent.text_emphasis_color;
+            style.text_emphasis_color_source = parent.text_emphasis_color_source;
+        }
+        "text-emphasis-position" | "-webkit-text-emphasis-position" => {
+            style.text_emphasis_position = parent.text_emphasis_position;
+        }
         "text-underline-offset" => style.text_underline_offset = parent.text_underline_offset,
         "visibility" => style.visibility = parent.visibility,
         "initial-letter" => style.initial_letter = parent.initial_letter,
+        "text-indent" => style.text_indent = parent.text_indent.clone(),
         "letter-spacing" => style.letter_spacing = parent.letter_spacing,
         "word-spacing" => style.word_spacing = parent.word_spacing,
         "tab-size" => style.tab_size = parent.tab_size,
@@ -3307,7 +5282,7 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "opacity" => style.opacity = parent.opacity,
         "mix-blend-mode" => style.mix_blend_mode = parent.mix_blend_mode,
         "background-blend-mode" => style.background_blend_mode = parent.background_blend_mode,
-        "isolation" => style.isolation_isolate = parent.isolation_isolate,
+        "isolation" => style.isolation = parent.isolation,
         "border-width" => {
             style.border.top.width = parent.border.top.width;
             style.border.right.width = parent.border.right.width;
@@ -3320,11 +5295,44 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
             style.border.bottom.color = parent.border.bottom.color;
             style.border.left.color = parent.border.left.color;
         }
+        "border-style" => {
+            style.border.top.style = parent.border.top.style;
+            style.border.right.style = parent.border.right.style;
+            style.border.bottom.style = parent.border.bottom.style;
+            style.border.left.style = parent.border.left.style;
+        }
+        "border-top-style" => style.border.top.style = parent.border.top.style,
+        "border-right-style" => style.border.right.style = parent.border.right.style,
+        "border-bottom-style" => style.border.bottom.style = parent.border.bottom.style,
+        "border-left-style" => style.border.left.style = parent.border.left.style,
+        "border-radius" => style.border_radii = parent.border_radii,
+        "border-top-left-radius" => style.border_radii.top_left = parent.border_radii.top_left,
+        "border-top-right-radius" => style.border_radii.top_right = parent.border_radii.top_right,
+        "border-bottom-right-radius" => {
+            style.border_radii.bottom_right = parent.border_radii.bottom_right
+        }
+        "border-bottom-left-radius" => {
+            style.border_radii.bottom_left = parent.border_radii.bottom_left
+        }
+        "border-image-source" => style.border_image.source = parent.border_image.source.clone(),
+        "border-image-slice" => {
+            style.border_image.geometry.slices = parent.border_image.geometry.slices
+        }
+        "border-image-width" => {
+            style.border_image.geometry.widths = parent.border_image.geometry.widths
+        }
+        "border-image-outset" => {
+            style.border_image.geometry.outsets = parent.border_image.geometry.outsets
+        }
+        "border-image-repeat" => {
+            style.border_image.geometry.repeats = parent.border_image.geometry.repeats
+        }
         "border" | "border-top" | "border-right" | "border-bottom" | "border-left" => {
             style.border = parent.border;
-            style.border_bevel = parent.border_bevel;
         }
         "float" => style.float = parent.float,
+        "footnote-display" => style.footnote.display = parent.footnote.display,
+        "footnote-policy" => style.footnote.policy = parent.footnote.policy,
         "clear" => style.clear = parent.clear,
         "box-decoration-break" => style.box_decoration_break = parent.box_decoration_break,
         "orphans" => style.orphans = parent.orphans,
@@ -3367,12 +5375,7 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "flex-wrap" => style.flex_wrap = parent.flex_wrap,
         "flex-grow" => style.flex_grow = parent.flex_grow,
         "flex-shrink" => style.flex_shrink = parent.flex_shrink,
-        "flex-basis" => {
-            style.flex_basis = parent.flex_basis;
-            style.flex_basis_pct = parent.flex_basis_pct;
-            style.flex_basis_content = parent.flex_basis_content;
-            style.flex_basis_keyword = parent.flex_basis_keyword;
-        }
+        "flex-basis" => style.flex_basis = parent.flex_basis,
         "gap" => style.gap = parent.gap,
         "text-overflow" => style.text_overflow = parent.text_overflow,
         "overflow-wrap" | "word-wrap" => style.overflow_wrap = parent.overflow_wrap,
@@ -3393,17 +5396,11 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "background-origin" => style.background_origin = parent.background_origin,
         "background-clip" => style.background_clip = parent.background_clip,
         "background-attachment" => style.background_attachment = parent.background_attachment,
-        "background-image" | "background-svg" => style.inherit_background_image(parent),
-        "background-gradient" => style.background_gradient = parent.background_gradient.clone(),
-        "background-radial-gradient" => {
-            style.background_radial_gradient = parent.background_radial_gradient.clone()
-        }
-        "background-conic-gradient" => {
-            style.background_conic_gradient = parent.background_conic_gradient.clone()
-        }
+        "background-image" => style.inherit_background_image(parent),
         "aspect-ratio" => style.aspect_ratio = parent.aspect_ratio,
         "object-fit" => style.object_fit = parent.object_fit,
         "object-position" => style.object_position = parent.object_position,
+        "image-rendering" => style.image_rendering = parent.image_rendering,
         "background" => style.inherit_background(parent),
         "list-style-type" => style.list_style_type = parent.list_style_type.clone(),
         "list-style-position" => style.list_style_position = parent.list_style_position,
@@ -3416,10 +5413,7 @@ fn restore_from_parent(style: &mut ComputedStyle, property: &str, parent: &Compu
         "column-count" | "columns" => style.column_count = parent.column_count,
         "column-gap" => style.column_gap = parent.column_gap,
         "filter" => {
-            style.blur_radius = parent.blur_radius;
-            style.color_filters = parent.color_filters.clone();
-            style.filter_url_id = parent.filter_url_id.clone();
-            style.drop_shadow = parent.drop_shadow;
+            style.filter = parent.filter.clone();
         }
         _ => {}
     }
@@ -3431,11 +5425,59 @@ fn get_non_special<'a>(map: &'a StyleMap, key: &str) -> Option<&'a CssValue> {
     map.get(key).filter(|v| {
         if let CssValue::Keyword(k) = v {
             let lower = k.to_ascii_lowercase();
-            !matches!(lower.as_str(), "inherit" | "initial" | "unset")
+            !matches!(
+                lower.as_str(),
+                "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+            )
         } else {
             true
         }
     })
+}
+
+fn specified_color_from_value(
+    value: &CssValue,
+    custom_properties: &HashMap<String, String>,
+) -> Option<SpecifiedColor> {
+    match value {
+        CssValue::Color(color) => Some(*color),
+        CssValue::Var(_, _) => {
+            crate::style::resolve::try_resolve_var_to_color(value, custom_properties)
+        }
+        _ => None,
+    }
+}
+
+fn resolve_opacity(value: &CssValue, custom_properties: &HashMap<String, String>) -> Option<f32> {
+    match value {
+        CssValue::Number(value) | CssValue::Length(value) => Some(value.clamp(0.0, 1.0)),
+        CssValue::Percentage(value) => Some((value / 100.0).clamp(0.0, 1.0)),
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                custom_properties,
+            )?;
+            parse_opacity_token(&raw)
+        }
+        _ => None,
+    }
+}
+
+fn parse_opacity_token(raw: &str) -> Option<f32> {
+    let raw = raw.trim();
+    if let Some(percentage) = raw.strip_suffix('%') {
+        return percentage
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .map(|value| (value / 100.0).clamp(0.0, 1.0));
+    }
+    raw.parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 1.0))
 }
 
 /// Parse a `font-feature-settings` value (css-fonts-3 §6.4) and report whether
@@ -3490,7 +5532,7 @@ fn apply_text_decoration_line(style: &mut ComputedStyle, value: &str) {
     style.text_decoration_line_through = line_through;
 }
 
-fn color_in_text_emphasis_shorthand(value: &str) -> Option<Color> {
+fn color_in_text_emphasis_shorthand(value: &str) -> Option<SpecifiedColor> {
     if let Some(start) = value.find("rgb(").or_else(|| value.find("rgba("))
         && let Some(end) = value[start..].find(')')
     {
@@ -3513,6 +5555,7 @@ fn apply_font_shorthand(
     style: &mut ComputedStyle,
     value: &str,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) {
     let tokens: Vec<&str> = value.split_whitespace().collect();
     let Some(size_idx) = tokens.iter().position(|token| {
@@ -3525,19 +5568,40 @@ fn apply_font_shorthand(
     let inherited_font_weight = style.font_weight;
     style.font_style = FontStyle::Normal;
     style.font_weight = FontWeight::Normal;
+    style.font_stretch = FontStretch::default();
     style.line_height = f32::NAN;
     style.line_height_absolute = None;
 
-    for token in &tokens[..size_idx] {
-        let lower = token.to_ascii_lowercase();
+    let mut descriptor_index = 0;
+    while descriptor_index < size_idx {
+        let lower = tokens[descriptor_index].to_ascii_lowercase();
+        if let Some(stretch) = FontStretch::from_css(&lower) {
+            style.font_stretch = stretch;
+            descriptor_index += 1;
+            continue;
+        }
         match lower.as_str() {
-            "italic" | "oblique" => style.font_style = FontStyle::Italic,
+            "italic" => style.font_style = FontStyle::Italic,
+            "oblique" => {
+                let angle = tokens
+                    .get(descriptor_index + 1)
+                    .and_then(|angle| parse_angle_deg(angle))
+                    .filter(|angle| angle.is_finite() && (-90.0..=90.0).contains(angle));
+                style.font_style = FontStyle::Oblique(angle.map_or(
+                    FontStyle::DEFAULT_OBLIQUE_ANGLE_DEGREES,
+                    |angle| {
+                        descriptor_index += 1;
+                        angle as f32
+                    },
+                ));
+            }
             "bolder" => style.font_weight = inherited_font_weight.bolder(),
             "lighter" => style.font_weight = inherited_font_weight.lighter(),
-            "bold" | "normal" => apply_font_weight(style, &lower),
+            "bold" => apply_font_weight(style, &lower),
             value if value.parse::<u16>().is_ok() => apply_font_weight(style, value),
             _ => {}
         }
+        descriptor_index += 1;
     }
 
     let (size_raw, mut line_raw) = tokens[size_idx]
@@ -3548,9 +5612,9 @@ fn apply_font_shorthand(
         line_raw = tokens.get(family_start + 1).copied();
         family_start += 2;
     }
-    apply_font_size_token(style, size_raw, length_context);
+    apply_font_size_token(style, size_raw, length_context, font_metrics);
     if let Some(line) = line_raw {
-        apply_line_height_token(style, line, length_context);
+        apply_line_height_token(style, line, length_context, font_metrics);
     }
 
     let family = tokens[family_start..].join(" ");
@@ -3579,6 +5643,7 @@ fn apply_font_size_token(
     style: &mut ComputedStyle,
     token: &str,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) {
     if let Some(value) = parse_length(token) {
         match value {
@@ -3586,7 +5651,9 @@ fn apply_font_size_token(
             CssValue::Number(v) => style.font_size *= v,
             CssValue::Percentage(p) => style.font_size *= p / 100.0,
             other => {
-                if let Some(v) = resolve_css_length_for_style(&other, style, length_context) {
+                if let Some(v) =
+                    resolve_css_length_for_style(&other, style, length_context, font_metrics)
+                {
                     style.font_size = v;
                 }
             }
@@ -3598,6 +5665,7 @@ fn apply_line_height_token(
     style: &mut ComputedStyle,
     token: &str,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) {
     if token == "normal" {
         style.line_height = f32::NAN;
@@ -3620,7 +5688,9 @@ fn apply_line_height_token(
                 style.line_height = absolute / style.font_size;
             }
             other => {
-                if let Some(v) = resolve_css_length_for_style(&other, style, length_context) {
+                if let Some(v) =
+                    resolve_css_length_for_style(&other, style, length_context, font_metrics)
+                {
                     style.line_height_absolute = Some(v);
                     style.line_height = v / style.font_size;
                 }
@@ -3636,43 +5706,141 @@ pub(crate) enum Importance {
     Important,
 }
 
-/// Apply only the declarations of the given importance tier from `map`.
-///
-/// The cascade applies all normal declarations across matched rules first, then
-/// all important declarations on top (css-cascade-4 §6.3). Splitting a rule's
-/// declaration block by importance lets a low-specificity `!important` rule win
-/// over a high-specificity normal rule. Implemented by projecting `map` down to
-/// only the wanted-importance properties and delegating to `apply_style_map`.
-pub(crate) fn apply_style_map_filtered(
-    style: &mut ComputedStyle,
-    map: &StyleMap,
-    parent: &ComputedStyle,
-    want: Importance,
-) {
+fn cascade_style_map_filtered(target: &mut StyleMap, source: &StyleMap, want: Importance) {
     let want_important = want == Importance::Important;
-    // Fast path: if every property already matches the wanted tier, apply as-is.
-    if map
-        .properties
-        .keys()
-        .all(|k| map.is_important(k) == want_important)
-    {
-        if !map.properties.is_empty() {
-            apply_style_map(style, map, parent);
+    for property in &source.declaration_order {
+        if source.is_important(property) != want_important {
+            continue;
         }
-        return;
-    }
-    let mut filtered = StyleMap::new();
-    for (key, value) in &map.properties {
-        if map.is_important(key) == want_important {
-            filtered.set_with_importance(key, value.clone(), want_important);
+        let Some(value) = source.properties.get(property) else {
+            continue;
+        };
+
+        // All maps merged here belong to the author origin. `revert` therefore
+        // removes the author candidate and exposes the already-applied UA/tag
+        // default (or inherited value) when the final map is computed.
+        if matches!(
+            value,
+            CssValue::Keyword(keyword)
+                if matches!(keyword.to_ascii_lowercase().as_str(), "revert" | "revert-layer")
+        ) {
+            target.remove(property);
+            continue;
         }
+        target.set_with_importance(property, value.clone(), want_important);
     }
-    if !filtered.properties.is_empty() {
-        apply_style_map(style, &filtered, parent);
+}
+
+fn style_map_subset(map: &StyleMap, keys: &[String]) -> StyleMap {
+    let mut subset = StyleMap::new();
+    for key in keys {
+        let Some(value) = map.properties.get(key) else {
+            continue;
+        };
+        subset.set_with_importance(key, value.clone(), map.is_important(key));
+    }
+    subset
+}
+
+fn apply_all_keyword(style: &mut ComputedStyle, keyword: &str, parent: &ComputedStyle) {
+    match keyword.to_ascii_lowercase().as_str() {
+        "inherit" => {
+            // `all` deliberately excludes direction, unicode-bidi, and custom
+            // properties. Preserve those fields while inheriting every other
+            // longhand in one operation.
+            let direction_rtl = style.direction_rtl;
+            let bidi_override = style.bidi_override;
+            let bidi_plaintext = style.bidi_plaintext;
+            let custom_properties = std::mem::take(&mut style.custom_properties);
+            *style = parent.clone();
+            style.direction_rtl = direction_rtl;
+            style.bidi_override = bidi_override;
+            style.bidi_plaintext = bidi_plaintext;
+            style.custom_properties = custom_properties;
+        }
+        "initial" | "unset" => reset_all_to_initial(style),
+        _ => {}
     }
 }
 
 pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent: &ComputedStyle) {
+    apply_style_map_with_font_metrics(style, map, parent, FontMetrics::default());
+}
+
+/// Apply a declaration map with the document's loaded-font metrics available
+/// for `ex` and `ch` lengths.
+pub(crate) fn apply_style_map_with_font_metrics(
+    style: &mut ComputedStyle,
+    map: &StyleMap,
+    parent: &ComputedStyle,
+    font_metrics: FontMetrics<'_>,
+) {
+    apply_style_map_with_percentage_basis(
+        style,
+        map,
+        parent,
+        PercentageBasis::default(),
+        font_metrics,
+    );
+}
+
+fn apply_style_map_with_percentage_basis(
+    style: &mut ComputedStyle,
+    map: &StyleMap,
+    parent: &ComputedStyle,
+    percentage_basis: PercentageBasis,
+    font_metrics: FontMetrics<'_>,
+) {
+    // `all` is a shorthand for every longhand (except direction, unicode-bidi,
+    // and custom properties), so its source position relative to explicit
+    // declarations is semantically observable. StyleMap retains the accepted
+    // winners' order; apply the two sides independently around the winning `all`
+    // declaration instead of processing `all` in an unconditional pre-pass.
+    if let Some(all_index) = map
+        .declaration_order
+        .iter()
+        .position(|property| property == "all")
+        && let Some(CssValue::Keyword(keyword)) = map.get("all")
+    {
+        let before = style_map_subset(map, &map.declaration_order[..all_index]);
+        if !before.properties.is_empty() {
+            apply_style_map_with_percentage_basis(
+                style,
+                &before,
+                parent,
+                percentage_basis,
+                font_metrics,
+            );
+        }
+        apply_all_keyword(style, keyword, parent);
+        let after = style_map_subset(map, &map.declaration_order[all_index + 1..]);
+        if !after.properties.is_empty() {
+            apply_style_map_with_percentage_basis(
+                style,
+                &after,
+                parent,
+                percentage_basis,
+                font_metrics,
+            );
+        }
+        return;
+    }
+
+    // Custom properties participate in the cascade as token streams, but every
+    // ordinary property in this declaration set must see their final values
+    // regardless of textual order. Collect them before property grammar is
+    // evaluated (rather than halfway through this function).
+    for property in &map.declaration_order {
+        if !property.starts_with("--") {
+            continue;
+        }
+        if let Some(CssValue::Keyword(raw)) = map.get(property) {
+            style
+                .custom_properties
+                .insert(property.clone(), raw.clone());
+        }
+    }
+
     // `parent_width_known` tells us whether the `parent_width` we feed into
     // the length-resolution context is a real, layout-driven parent width
     // (Some) or a viewport-width fallback (None). For width-family percentage
@@ -3680,9 +5848,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // because the result silently diverges from the actual containing-block
     // width and clamps to available_width at layout time, yielding a full-
     // width element (e.g. a `width: 95%` inner bar looking 100% wide).
-    let parent_width_known = parent.width.is_some();
+    let parent_width = percentage_basis.width_or_parent(parent);
+    let parent_width_known = parent_width.is_some();
     let length_context = crate::style::resolve::LengthResolutionContext::new(
-        parent.width.unwrap_or(parent.viewport_width),
+        parent_width.unwrap_or(parent.viewport_width),
         style.font_size,
         parent.root_font_size,
         parent.viewport_width,
@@ -3691,27 +5860,23 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
 
     // Handle inherit, initial, unset keywords before normal property application
     for (prop, val) in &map.properties {
+        // Border shorthands, physical longhands, and logical longhands share
+        // one ordered cascade. Applying their CSS-wide keywords from this
+        // unordered map pass would destroy shorthand/longhand source order.
+        if borders::is_border_property(prop) {
+            continue;
+        }
         if let CssValue::Keyword(k) = val {
             let lower = k.to_ascii_lowercase();
             match lower.as_str() {
                 "inherit" => {
-                    if prop == "all" {
-                        *style = parent.clone();
-                    } else {
-                        restore_from_parent(style, prop, parent);
-                    }
+                    restore_from_parent(style, prop, parent);
                 }
                 "initial" => {
-                    if prop == "all" {
-                        reset_all_to_initial(style);
-                    } else {
-                        reset_to_initial(style, prop);
-                    }
+                    reset_to_initial(style, prop);
                 }
                 "unset" => {
-                    if prop == "all" {
-                        reset_all_to_initial(style);
-                    } else if is_inherited_property(prop) {
+                    if is_inherited_property(prop) {
                         restore_from_parent(style, prop, parent);
                     } else {
                         reset_to_initial(style, prop);
@@ -3722,8 +5887,17 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
+    // Resolve the winning foreground color before any property that may use
+    // `currentColor`. On the `color` property itself, currentColor's used value
+    // is the resolved inherited color (CSS Color 4 §4.1).
+    if let Some(value) = get_non_special(map, "color")
+        && let Some(color) = specified_color_from_value(value, &style.custom_properties)
+    {
+        style.color = color.resolve(parent.color);
+    }
+
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font") {
-        apply_font_shorthand(style, k, length_context);
+        apply_font_shorthand(style, k, length_context, font_metrics);
     }
 
     if let Some(CssValue::Length(v)) = get_non_special(map, "font-size") {
@@ -3740,11 +5914,11 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // is active (e.g. the font is not loaded). `style.font_size` currently holds
     // the inherited parent size, matching the `em`/`Number` branch above.
     if let Some(CssValue::Ex(v)) = get_non_special(map, "font-size") {
-        let ratio = crate::style::font_ctx::style_x_height_ratio(parent).unwrap_or(0.5);
+        let ratio = font_metrics.style_x_height_ratio(parent).unwrap_or(0.5);
         style.font_size *= *v * ratio;
     }
     if let Some(CssValue::Ch(v)) = get_non_special(map, "font-size") {
-        let ratio = crate::style::font_ctx::style_ch_ratio(parent).unwrap_or(0.5);
+        let ratio = font_metrics.style_ch_ratio(parent).unwrap_or(0.5);
         style.font_size *= *v * ratio;
     }
 
@@ -3752,12 +5926,16 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         apply_font_weight(style, k);
     }
 
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-style") {
-        style.font_style = if k == "italic" || k == "oblique" {
-            FontStyle::Italic
-        } else {
-            FontStyle::Normal
-        };
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-style")
+        && let Some(font_style) = FontStyle::from_css(k)
+    {
+        style.font_style = font_style;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-stretch")
+        && let Some(stretch) = FontStretch::from_css(k)
+    {
+        style.font_stretch = stretch;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-family") {
@@ -3766,100 +5944,90 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
 
     if let Some(value) = get_non_special(map, "font-size-adjust") {
-        let target_aspect = match value {
-            CssValue::Number(v) => Some(*v),
-            CssValue::Keyword(k) if k != "none" => k.trim().parse::<f32>().ok(),
-            _ => None,
-        };
-        if let Some(target_aspect) = target_aspect
-            && target_aspect.is_finite()
-            && target_aspect > 0.0
-        {
-            let actual_aspect =
-                crate::style::font_ctx::style_font_size_adjust_x_height_ratio(style).unwrap_or(0.5);
-            if actual_aspect > 0.0 {
-                style.font_size *= target_aspect / actual_aspect;
-                sync_line_height_from_absolute(style);
+        match value {
+            CssValue::Number(aspect) if aspect.is_finite() && *aspect >= 0.0 => {
+                style.font_size_adjust = FontSizeAdjust::ex_height(*aspect);
             }
+            CssValue::Keyword(keyword) if keyword == "none" => {
+                style.font_size_adjust = FontSizeAdjust::none();
+            }
+            _ => {}
         }
     }
 
-    if let Some(CssValue::Color(c)) = get_non_special(map, "color") {
-        style.color = *c;
+    if let Some(value) = get_non_special(map, "background-color")
+        && let Some(color) = specified_color_from_value(value, &style.custom_properties)
+    {
+        style.background_color = Some(color.resolve(style.color));
     }
 
-    if let Some(CssValue::Color(c)) = get_non_special(map, "background-color") {
-        style.background_color = Some(*c);
-    }
-
-    // Background-image layers. A single declaration may split into several keys
-    // (e.g. `background-image: url(...), linear-gradient(...)` becomes a raster
-    // `background-image` key AND a `background-gradient` key — see
-    // parser::css::inline). All such layers from the *same* declaration must
-    // coexist, but they collectively replace any background-image stack inherited
-    // from an earlier, lower-priority cascade layer. So clear the whole stack
-    // exactly once, up front, before setting any layer present in this map —
-    // rather than per-key, which would clobber a sibling layer from the same
-    // declaration. Full resets (`background:` shorthand, `background-image: none`,
-    // the per-element reset in compute_style_with_context, the initial/inherit
-    // paths) are handled elsewhere and remain unaffected.
-    let sets_image_layer = get_non_special(map, "background-gradient").is_some()
-        || get_non_special(map, "background-radial-gradient").is_some()
-        || get_non_special(map, "background-conic-gradient").is_some()
-        || get_non_special(map, "background-svg").is_some()
-        || get_non_special(map, "background-image").is_some();
-    if sets_image_layer {
+    // `background-image` is one atomic cascade value. The parser preserves the
+    // ordered source list here; legacy per-kind renderer fields are derived only
+    // after the cascade has selected that single winner.
+    if let Some(background_image) = get_non_special(map, "background-image") {
         style.clear_background_images();
-    }
-
-    // Linear gradient (from background or background-image)
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-gradient") {
-        if let Some(lg) = parse_linear_gradient(k) {
-            style.background_gradient = Some(lg);
-        }
-    }
-
-    // Radial gradient (from background or background-image)
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-radial-gradient") {
-        if let Some(rg) = parse_radial_gradient(k) {
-            style.background_radial_gradient = Some(rg);
-        }
-    }
-
-    // Conic gradient (from background or background-image)
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-conic-gradient") {
-        if let Some(cg) = parse_conic_gradient(k) {
-            style.background_conic_gradient = Some(cg);
-        }
-    }
-
-    // SVG background image (from data:image/svg+xml URI)
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-svg") {
-        if let Some(tree) = crate::parser::svg::parse_svg_from_string(k) {
-            style.background_svg = Some(tree);
-        }
-    }
-
-    // Raster background image. Read even when a gradient/svg layer is also
-    // present in this map so a raster + gradient pair from the same shorthand
-    // both paint (the up-front clear above already reset the prior stack).
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "background-image") {
-        let resolved = resolve_embedded_vars(k.trim(), &style.custom_properties);
-        let trimmed = resolved.trim();
-        if trimmed != "none" {
-            if let Some(svg_text) = crate::parser::css::extract_svg_data_uri(trimmed) {
-                if let Some(tree) = crate::parser::svg::parse_svg_from_string(&svg_text) {
-                    style.background_svg = Some(tree);
+        match background_image {
+            CssValue::BackgroundLayers(layers) => {
+                for layer in layers {
+                    match layer {
+                        BackgroundLayerSource::Raster(raw) if style.background_image.is_none() => {
+                            let resolved =
+                                resolve_embedded_vars(raw.trim(), &style.custom_properties);
+                            let trimmed = resolved.trim();
+                            if let Some(url) = extract_image_set_url(trimmed) {
+                                style.background_image = Some(url);
+                            } else {
+                                style.background_image = Some(trimmed.to_string());
+                            }
+                        }
+                        BackgroundLayerSource::Svg(svg) if style.background_svg.is_none() => {
+                            style.background_svg = crate::parser::svg::parse_svg_from_string(svg);
+                        }
+                        BackgroundLayerSource::Linear(raw)
+                            if style.background_gradient.is_none() =>
+                        {
+                            let raw = resolve_embedded_vars(raw, &style.custom_properties);
+                            style.background_gradient =
+                                parse_linear_gradient_for_color(&raw, style.color);
+                        }
+                        BackgroundLayerSource::Radial(raw)
+                            if style.background_radial_gradient.is_none() =>
+                        {
+                            let raw = resolve_embedded_vars(raw, &style.custom_properties);
+                            style.background_radial_gradient =
+                                parse_radial_gradient_for_color(&raw, style.color);
+                        }
+                        BackgroundLayerSource::Conic(raw)
+                            if style.background_conic_gradient.is_none() =>
+                        {
+                            let raw = resolve_embedded_vars(raw, &style.custom_properties);
+                            style.background_conic_gradient =
+                                parse_conic_gradient_for_color(&raw, style.color);
+                        }
+                        _ => {}
+                    }
                 }
-            } else if let Some(url) = extract_image_set_url(trimmed) {
-                style.background_image = Some(url);
-            } else if let Some(CssValue::Color(c)) = crate::parser::css::parse_color(trimmed) {
-                // `background: var(--c)` decomposes here; a resolved colour is a
-                // background-color, not an image URL.
-                style.background_color = Some(c);
-            } else {
-                style.background_image = Some(trimmed.to_string());
             }
+            // Values containing custom properties cannot always be typed until
+            // after substitution, so retain the computed-time fallback.
+            CssValue::Keyword(raw) => {
+                let resolved = resolve_embedded_vars(raw.trim(), &style.custom_properties);
+                let trimmed = resolved.trim();
+                if trimmed != "none" {
+                    if let Some(svg_text) = crate::parser::css::extract_svg_data_uri(trimmed) {
+                        style.background_svg = crate::parser::svg::parse_svg_from_string(&svg_text);
+                    } else if let Some(url) = extract_image_set_url(trimmed) {
+                        style.background_image = Some(url);
+                    } else if let Some(CssValue::Color(c)) =
+                        crate::parser::css::parse_color(trimmed)
+                    {
+                        style.background_color = Some(c.resolve(style.color));
+                    } else {
+                        style.background_image = Some(trimmed.to_string());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3987,8 +6155,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         };
     }
 
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration") {
-        apply_text_decoration_line(style, k);
+    if let Some(value) = get_non_special(map, "text-decoration")
+        && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
+    {
+        apply_text_decoration_line(style, &k);
         if k.split_whitespace().any(|t| t == "wavy") {
             style.text_decoration_style = TextDecorationStyle::Wavy;
         }
@@ -3996,6 +6166,9 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             if let Some(CssValue::Length(v)) = parse_length(token) {
                 style.text_decoration_thickness = Some(v);
             }
+        }
+        if let Some(color) = color_in_text_emphasis_shorthand(&k) {
+            style.text_decoration_color = Some(color.resolve(style.color));
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-decoration-line") {
@@ -4017,15 +6190,18 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
 
     // `text-decoration-color` longhand (css-text-decor-3 §2.2): an explicit line
     // colour distinct from the text `color`. Resolved like any colour value.
-    if let Some(CssValue::Color(c)) = get_non_special(map, "text-decoration-color") {
-        style.text_decoration_color = Some(*c);
+    if let Some(value) = get_non_special(map, "text-decoration-color")
+        && let Some(color) = specified_color_from_value(value, &style.custom_properties)
+    {
+        style.text_decoration_color = Some(color.resolve(style.color));
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "line-height") {
         if k == "normal" {
             style.line_height = f32::NAN;
             style.line_height_absolute = None;
-        } else if let Some(v) = resolve_raw_length_for_style(k, style, length_context) {
+        } else if let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
+        {
             style.line_height_absolute = Some(v);
             style.line_height = v / style.font_size;
         }
@@ -4053,7 +6229,7 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         | CssValue::Clamp(_, _, _)
         | CssValue::Var(_, _)),
     ) = get_non_special(map, "line-height")
-        && let Some(v) = resolve_css_length_for_style(value, style, length_context)
+        && let Some(v) = resolve_css_length_for_style(value, style, length_context, font_metrics)
     {
         style.line_height_absolute = Some(v);
         style.line_height = v / style.font_size;
@@ -4134,19 +6310,25 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    if let Some(CssValue::Length(v)) = get_non_special(map, "flex-grow") {
-        style.flex_grow = v.max(0.0);
+    if let Some(CssValue::Number(v) | CssValue::Length(v)) = get_non_special(map, "flex-grow")
+        && v.is_finite()
+        && *v >= 0.0
+    {
+        style.flex_grow = *v;
     }
-    if let Some(CssValue::Length(v)) = get_non_special(map, "flex-shrink") {
-        style.flex_shrink = v.max(0.0);
+    if let Some(CssValue::Number(v) | CssValue::Length(v)) = get_non_special(map, "flex-shrink")
+        && v.is_finite()
+        && *v >= 0.0
+    {
+        style.flex_shrink = *v;
     }
     if let Some(value) = get_non_special(map, "flex-basis") {
-        apply_flex_basis_value(style, value, length_context);
+        apply_flex_basis_value(style, value, length_context, font_metrics);
     }
 
     // flex shorthand: "flex: <grow>" or "flex: <grow> <shrink>" or "flex: <grow> <shrink> <basis>"
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "flex") {
-        apply_flex_shorthand(style, k, length_context);
+        apply_flex_shorthand(style, k, length_context, font_metrics);
     }
 
     // `gap: <row-gap> [<column-gap>]`. A single value sets both axes; the
@@ -4381,16 +6563,18 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // `mask` shorthand: parse the image plus its position/size/repeat/mode.
     // Longhands below override it when present, as usual in the cascade map.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask") {
-        if let Some(src) = parse_mask_shorthand(k, style.mask_mode) {
+        let k = resolve_embedded_vars(k, &style.custom_properties);
+        if let Some(src) = parse_mask_shorthand(&k, style.mask_mode, style.color) {
             style.mask_image = src;
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-image") {
-        if let Some(src) = parse_mask_image(k, style.mask_mode) {
+        let k = resolve_embedded_vars(k, &style.custom_properties);
+        if let Some(src) = parse_mask_image(&k, style.mask_mode, style.color) {
             style.mask_image = src;
         }
     }
-    apply_mask_longhands(map, style);
+    apply_mask_longhands(map, style, style.color);
 
     // Grid gap (shorthand sets both column and row gap)
     if let Some(CssValue::Length(v)) = get_non_special(map, "grid-gap") {
@@ -4454,85 +6638,15 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         };
     }
 
-    // `filter: opacity(<x>)` multiplies into the element's final opacity. The
-    // `opacity` property is parsed later, so remember the factor and fold it in
-    // after `style.opacity` is finalized to combine multiplicatively.
-    let mut filter_opacity = 1.0_f32;
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "filter") {
-        let (blur, ops, opacity, drop_shadow, url_id) = parse_filter(k);
-        if let Some(radius) = blur {
-            style.blur_radius = radius;
-        }
-        style.color_filters = ops;
-        style.filter_url_id = url_id;
-        style.drop_shadow = drop_shadow;
-        filter_opacity = opacity;
-    }
-
-    // Border shorthand: "1px solid black"
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border") {
-        let k = resolve_embedded_vars(k, &style.custom_properties);
-        let (w, c, bs, bevel) = parse_border_shorthand(&k, style.font_size);
-        style.border = BorderSides::uniform_styled(w, c, bs);
-        style.border_bevel = BorderBevelSides::uniform(bevel);
-    }
-
-    // Per-side border shorthands
-    for (prop, setter) in &[
-        (
-            "border-top",
-            (|s: &mut ComputedStyle, w, c, bs, bevel| {
-                s.border.top = BorderSide {
-                    width: w,
-                    color: c,
-                    style: bs,
-                };
-                s.border_bevel.top = bevel;
-            })
-                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-right",
-            (|s: &mut ComputedStyle, w, c, bs, bevel| {
-                s.border.right = BorderSide {
-                    width: w,
-                    color: c,
-                    style: bs,
-                };
-                s.border_bevel.right = bevel;
-            })
-                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-bottom",
-            (|s: &mut ComputedStyle, w, c, bs, bevel| {
-                s.border.bottom = BorderSide {
-                    width: w,
-                    color: c,
-                    style: bs,
-                };
-                s.border_bevel.bottom = bevel;
-            })
-                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-left",
-            (|s: &mut ComputedStyle, w, c, bs, bevel| {
-                s.border.left = BorderSide {
-                    width: w,
-                    color: c,
-                    style: bs,
-                };
-                s.border_bevel.left = bevel;
-            })
-                as fn(&mut ComputedStyle, f32, Option<Color>, BorderStyle, Option<BorderBevelKind>),
-        ),
-    ] {
-        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
-            let k = resolve_embedded_vars(k, &style.custom_properties);
-            let (w, c, bs, bevel) = parse_border_shorthand(&k, style.font_size);
-            setter(style, w, c, bs, bevel);
-        }
+    if let Some(value) = get_non_special(map, "filter")
+        && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
+    {
+        let parsed = parse_filter_for_color(&k, style.color);
+        style.filter = FilterEffects {
+            establishes_stacking_context: parsed.establishes_stacking_context,
+            operations: parsed.operations,
+            url_id: parsed.url_id,
+        };
     }
 
     if let Some(CssValue::Length(v)) = get_non_special(map, "width") {
@@ -4551,7 +6665,7 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // paths are untouched) and record the keyword for block layout to derive a
     // content-based width. `auto` and any other keyword leave the box as `auto`.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "width") {
-        if let Some(v) = resolve_raw_length_for_style(k, style, length_context) {
+        if let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics) {
             style.width = Some(v);
             style.width_keyword = None;
             style.percentage_sizing.width = None;
@@ -4573,35 +6687,35 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "height")
-        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
     {
         style.height = Some(v);
         style.percentage_sizing.height = None;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "max-width")
-        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
     {
         style.max_width = Some(v);
         style.percentage_sizing.max_width = None;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "min-width")
-        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
     {
         style.min_width = Some(v);
         style.percentage_sizing.min_width = None;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "min-height")
-        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
     {
         style.min_height = Some(v);
         style.percentage_sizing.min_height = None;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "max-height")
-        && let Some(v) = resolve_raw_length_for_style(k, style, length_context)
+        && let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
     {
         style.max_height = Some(v);
         style.percentage_sizing.max_height = None;
@@ -4676,18 +6790,11 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    if let Some(CssValue::Number(v)) = get_non_special(map, "opacity") {
-        style.opacity = v.clamp(0.0, 1.0);
+    if let Some(value) = get_non_special(map, "opacity")
+        && let Some(opacity) = resolve_opacity(value, &style.custom_properties)
+    {
+        style.opacity = opacity;
     }
-    if let Some(CssValue::Length(v)) = get_non_special(map, "opacity") {
-        // bare number parsed as Length
-        style.opacity = v.clamp(0.0, 1.0);
-    }
-    // Fold any `filter: opacity()` factor into the finalized opacity.
-    if filter_opacity != 1.0 {
-        style.opacity = (style.opacity * filter_opacity).clamp(0.0, 1.0);
-    }
-
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "mix-blend-mode") {
         style.mix_blend_mode = BlendMode::from_keyword(k);
     }
@@ -4695,152 +6802,11 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.background_blend_mode = BlendMode::from_background_value(k);
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "isolation") {
-        style.isolation_isolate = k.trim().eq_ignore_ascii_case("isolate");
-    }
-
-    // Uniform `border-width`. Absolute lengths (pt) apply directly; a font-relative
-    // width (em/ex/ch) arrives as CssValue::Number (an em factor) and resolves
-    // against the element's font-size, mirroring the margin path. Without this an
-    // em-unit border width is silently dropped (width = 0).
-    if let Some(w) = resolve_border_width(get_non_special(map, "border-width"), style.font_size) {
-        style.border.top.width = w;
-        style.border.right.width = w;
-        style.border.bottom.width = w;
-        style.border.left.width = w;
-    }
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-width")
-        && let Some(widths) = parse_border_width_shorthand_values(k, style, length_context)
-    {
-        style.border.top.width = widths[0];
-        style.border.right.width = widths[1];
-        style.border.bottom.width = widths[2];
-        style.border.left.width = widths[3];
-    }
-
-    if let Some(CssValue::Color(c)) = get_non_special(map, "border-color") {
-        style.border.top.color = Some(*c);
-        style.border.right.color = Some(*c);
-        style.border.bottom.color = Some(*c);
-        style.border.left.color = Some(*c);
-    }
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-color")
-        && let Some(colors) = parse_border_color_shorthand_values(k)
-    {
-        style.border.top.color = Some(colors[0]);
-        style.border.right.color = Some(colors[1]);
-        style.border.bottom.color = Some(colors[2]);
-        style.border.left.color = Some(colors[3]);
-    }
-
-    // Uniform `border-style` keyword applies the same line style to all four
-    // edges (e.g. `border-style: solid` paired with per-side `border-*-width`).
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-style") {
-        if let Some(styles) = parse_border_style_shorthand_values(k) {
-            style.border.top.style = styles[0].0;
-            style.border.right.style = styles[1].0;
-            style.border.bottom.style = styles[2].0;
-            style.border.left.style = styles[3].0;
-            style.border_bevel.top = styles[0].1;
-            style.border_bevel.right = styles[1].1;
-            style.border_bevel.bottom = styles[2].1;
-            style.border_bevel.left = styles[3].1;
+        style.isolation = if k.trim().eq_ignore_ascii_case("isolate") {
+            Isolation::Isolate
         } else {
-            let (bs, bevel) = parse_border_style_keyword_with_bevel(k);
-            style.border.top.style = bs;
-            style.border.right.style = bs;
-            style.border.bottom.style = bs;
-            style.border.left.style = bs;
-            style.border_bevel = BorderBevelSides::uniform(bevel);
-        }
-    }
-
-    // Per-side border longhands (`border-{side}-{width,style,color}`). These run
-    // after the `border` / `border-{side}` shorthands and the uniform
-    // `border-{width,color,style}` properties so an explicit longhand wins.
-    for (prop, setter) in &[
-        (
-            "border-top-width",
-            (|s: &mut ComputedStyle, w| s.border.top.width = w) as fn(&mut ComputedStyle, f32),
-        ),
-        (
-            "border-right-width",
-            (|s: &mut ComputedStyle, w| s.border.right.width = w) as fn(&mut ComputedStyle, f32),
-        ),
-        (
-            "border-bottom-width",
-            (|s: &mut ComputedStyle, w| s.border.bottom.width = w) as fn(&mut ComputedStyle, f32),
-        ),
-        (
-            "border-left-width",
-            (|s: &mut ComputedStyle, w| s.border.left.width = w) as fn(&mut ComputedStyle, f32),
-        ),
-    ] {
-        if let Some(w) = resolve_border_width(get_non_special(map, prop), style.font_size) {
-            setter(style, w);
-        }
-    }
-
-    for (prop, setter) in &[
-        (
-            "border-top-color",
-            (|s: &mut ComputedStyle, c| s.border.top.color = Some(c))
-                as fn(&mut ComputedStyle, Color),
-        ),
-        (
-            "border-right-color",
-            (|s: &mut ComputedStyle, c| s.border.right.color = Some(c))
-                as fn(&mut ComputedStyle, Color),
-        ),
-        (
-            "border-bottom-color",
-            (|s: &mut ComputedStyle, c| s.border.bottom.color = Some(c))
-                as fn(&mut ComputedStyle, Color),
-        ),
-        (
-            "border-left-color",
-            (|s: &mut ComputedStyle, c| s.border.left.color = Some(c))
-                as fn(&mut ComputedStyle, Color),
-        ),
-    ] {
-        if let Some(CssValue::Color(c)) = get_non_special(map, prop) {
-            setter(style, *c);
-        }
-    }
-
-    for (prop, setter) in &[
-        (
-            "border-top-style",
-            (|s: &mut ComputedStyle, bs, bevel| {
-                s.border.top.style = bs;
-                s.border_bevel.top = bevel;
-            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-right-style",
-            (|s: &mut ComputedStyle, bs, bevel| {
-                s.border.right.style = bs;
-                s.border_bevel.right = bevel;
-            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-bottom-style",
-            (|s: &mut ComputedStyle, bs, bevel| {
-                s.border.bottom.style = bs;
-                s.border_bevel.bottom = bevel;
-            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
-        ),
-        (
-            "border-left-style",
-            (|s: &mut ComputedStyle, bs, bevel| {
-                s.border.left.style = bs;
-                s.border_bevel.left = bevel;
-            }) as fn(&mut ComputedStyle, BorderStyle, Option<BorderBevelKind>),
-        ),
-    ] {
-        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
-            let (bs, bevel) = parse_border_style_keyword_with_bevel(k);
-            setter(style, bs, bevel);
-        }
+            Isolation::Auto
+        };
     }
 
     // Float
@@ -4851,6 +6817,18 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             "footnote" => Float::Footnote,
             _ => Float::None,
         };
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "footnote-display")
+        && let Some(display) = FootnoteDisplay::from_keyword(k)
+    {
+        style.footnote.display = display;
+    }
+
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "footnote-policy")
+        && let Some(policy) = FootnotePolicy::from_keyword(k)
+    {
+        style.footnote.policy = policy;
     }
 
     // Clear
@@ -4877,12 +6855,8 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.position = match k.as_str() {
             "relative" => Position::Relative,
             "absolute" => Position::Absolute,
-            // For a single-page, non-scrolling PDF the viewport == the page box,
-            // so `fixed` behaves like an absolute box anchored to the page
-            // content box (handled by the absolute-at-root path), and `sticky`
-            // degrades to its relative-until-threshold base position.
-            "fixed" => Position::Absolute,
-            "sticky" => Position::Relative,
+            "fixed" => Position::Fixed,
+            "sticky" => Position::Sticky,
             value => {
                 style.running_name = parse_running_position_name(value);
                 Position::Static
@@ -4948,10 +6922,13 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
 
     // Box-shadow: parse from keyword (stored as full shorthand string).
-    // A comma-separated list yields multiple stacked shadows.
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "box-shadow") {
-        let shadows = parse_box_shadow(k);
-        if !shadows.is_empty() {
+    // The comma-separated list is one declaration: if any component is
+    // invalid, the whole declaration is ignored rather than retaining a
+    // valid-looking prefix (CSS Backgrounds & Borders 3 §7.2).
+    if let Some(value) = get_non_special(map, "box-shadow")
+        && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
+    {
+        if let Some(shadows) = parse_box_shadow_for_color(&k, style.color) {
             style.box_shadow = shadows;
         }
     }
@@ -4959,11 +6936,13 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // CSS `text-shadow` (css-text-decor-3 §3). Like box-shadow but with no
     // `spread`/`inset` and the optional color may appear before or after the
     // offsets. `none` clears any inherited value.
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-shadow") {
+    if let Some(value) = get_non_special(map, "text-shadow")
+        && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
+    {
         if k.trim() == "none" {
             style.text_shadow = Vec::new();
         } else {
-            let shadows = parse_text_shadow(k);
+            let shadows = parse_text_shadow_for_color(&k, style.color);
             if !shadows.is_empty() {
                 style.text_shadow = shadows;
             }
@@ -4973,9 +6952,15 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // Multi-column layout
     if let Some(val) = get_non_special(map, "column-count") {
         match val {
-            CssValue::Length(n) => style.column_count = Some(*n as u32),
+            CssValue::Number(n) | CssValue::Length(n)
+                if n.is_finite() && *n >= 1.0 && n.fract() == 0.0 =>
+            {
+                style.column_count = Some(*n as u32);
+            }
             CssValue::Keyword(k) => {
-                if let Ok(n) = k.parse::<u32>() {
+                if let Ok(n) = k.parse::<u32>()
+                    && n >= 1
+                {
                     style.column_count = Some(n);
                 }
             }
@@ -5052,11 +7037,16 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     // `column-rule` shorthand and longhands. The rule is the vertical line drawn
     // in each column gap; width/style/color mirror a single border side.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-rule") {
-        style.column_rule = parse_column_rule_shorthand(k, style.font_size);
+        let k = resolve_embedded_vars(k, &style.custom_properties);
+        if let Some(rule) = parse_column_rule_shorthand(&k, style.font_size) {
+            style.column_rule = rule;
+        }
     }
     if let Some(val) = get_non_special(map, "column-rule-width") {
         if let CssValue::Length(w) = val {
-            style.column_rule.width = *w;
+            if *w >= 0.0 {
+                style.column_rule.width = *w;
+            }
         } else if let CssValue::Keyword(k) = val {
             // `thin` / `medium` / `thick` keyword widths, else a parsed length.
             match k.trim().to_ascii_lowercase().as_str() {
@@ -5064,7 +7054,9 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
                 "medium" => style.column_rule.width = MEDIUM_RULE_WIDTH_PT,
                 "thick" => style.column_rule.width = 3.75,
                 _ => {
-                    if let Some(CssValue::Length(w)) = parse_length(k) {
+                    if let Some(CssValue::Length(w)) = parse_length(k)
+                        && w >= 0.0
+                    {
                         style.column_rule.width = w;
                     }
                 }
@@ -5072,25 +7064,22 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-rule-style") {
-        style.column_rule.style = parse_border_style_keyword(k);
-        // A visible style with no explicit width uses the medium default
-        // (column-rule-width initial = medium) so the rule actually paints.
-        if style.column_rule.style != BorderStyle::None
-            && style.column_rule.width <= 0.0
-            && get_non_special(map, "column-rule-width").is_none()
-            && get_non_special(map, "column-rule").is_none()
-        {
-            style.column_rule.width = MEDIUM_RULE_WIDTH_PT;
+        if let Some(rule_style) = borders::parse_border_style(k) {
+            style.column_rule.style = rule_style;
+            // A visible style with no explicit width uses the medium default
+            // (column-rule-width initial = medium) so the rule actually paints.
+            if style.column_rule.style.paints()
+                && style.column_rule.width <= 0.0
+                && get_non_special(map, "column-rule-width").is_none()
+                && get_non_special(map, "column-rule").is_none()
+            {
+                style.column_rule.width = MEDIUM_RULE_WIDTH_PT;
+            }
         }
     }
     if let Some(val) = get_non_special(map, "column-rule-color") {
-        let c = match val {
-            CssValue::Color(c) => Some(*c),
-            CssValue::Keyword(k) => parse_border_color_token(k),
-            _ => None,
-        };
-        if c.is_some() {
-            style.column_rule.color = c;
+        if let Some(color) = specified_color_from_value(val, &style.custom_properties) {
+            style.column_rule.color = color;
         }
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "column-span") {
@@ -5232,10 +7221,16 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "transform-box") {
-        style.transform_box = match k.trim().to_ascii_lowercase().as_str() {
-            "content-box" => TransformBox::ContentBox,
-            _ => TransformBox::BorderBox,
-        };
+        if let Some(reference_box) = match k.trim().to_ascii_lowercase().as_str() {
+            "border-box" => Some(TransformBox::BorderBox),
+            "content-box" => Some(TransformBox::ContentBox),
+            "fill-box" => Some(TransformBox::FillBox),
+            "stroke-box" => Some(TransformBox::StrokeBox),
+            "view-box" => Some(TransformBox::ViewBox),
+            _ => None,
+        } {
+            style.transform_box = reference_box;
+        }
     }
 
     if let Some(value) = get_non_special(map, "perspective") {
@@ -5245,6 +7240,8 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             CssValue::Keyword(k) => {
                 parse_transform_length(k.trim(), style.font_size, style.root_font_size)
                     .and_then(|(v, is_pct)| (!is_pct && v > 0.0).then_some(v))
+                    .filter(|value| value.is_finite() && *value <= f64::from(f32::MAX))
+                    .map(|value| value as f32)
             }
             _ => style.perspective,
         };
@@ -5256,15 +7253,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    if style.transform_box == TransformBox::ContentBox
-        && style.transform_origin.x_fraction == 0.0
-        && style.transform_origin.y_fraction == 0.0
-    {
-        style.transform_origin.x_length += style.border.left.width + style.padding.left;
-        style.transform_origin.y_length += style.border.top.width + style.padding.top;
-        style.transform_box = TransformBox::BorderBox;
-    }
-
     if let (Some(Transform::Matrix3d(matrix)), Some(perspective)) =
         (style.transform, parent.perspective)
     {
@@ -5273,136 +7261,18 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         let (px, py) = parent.perspective_origin.resolve(parent_w, parent_h);
         style.transform = Some(Transform::Project3d {
             matrix,
-            perspective,
-            perspective_origin_x: px - style.left.unwrap_or(0.0),
-            perspective_origin_y: py - style.top.unwrap_or(0.0),
+            perspective: f64::from(perspective),
+            perspective_origin: CssVector::new(
+                f64::from(px - style.left.unwrap_or(0.0)),
+                f64::from(py - style.top.unwrap_or(0.0)),
+            ),
         });
-    }
-
-    // Border-radius shorthand: a single value keeps the fast uniform path; a
-    // multi-value or `/`-separated value expands into per-corner radii.
-    match get_non_special(map, "border-radius") {
-        Some(CssValue::Length(v)) => {
-            style.border_radius = *v;
-            style.border_radii = [*v; 4];
-            style.border_radii_y = [*v; 4];
-        }
-        Some(CssValue::Percentage(pct)) => {
-            // Percentage border-radius resolves per-axis in layout: the
-            // horizontal radius against the box width and the vertical against
-            // its height. On a square box `50%` is a circle; on a non-square box
-            // it is an ellipse. We seed both axes here and resolve in layout.
-            style.border_radius_pct = Some(*pct);
-            style.border_radii_pct = [Some(*pct); 4];
-            style.border_radii_y_pct = [Some(*pct); 4];
-        }
-        Some(CssValue::Keyword(k)) => {
-            let (radii, radii_pct, radii_y, radii_y_pct) = parse_border_radius_shorthand(k);
-            style.border_radii = radii;
-            style.border_radii_pct = radii_pct;
-            style.border_radii_y = radii_y;
-            style.border_radii_y_pct = radii_y_pct;
-            // Keep the legacy uniform field meaningful for the all-equal case so
-            // older single-radius code paths still round.
-            if radii.iter().all(|r| (*r - radii[0]).abs() < f32::EPSILON)
-                && radii_pct.iter().all(Option::is_none)
-            {
-                style.border_radius = radii[0];
-            }
-            if radii_pct.iter().all(|p| *p == radii_pct[0]) {
-                style.border_radius_pct = radii_pct[0];
-            }
-        }
-        // Non-percentage relative units (rem/vw/vh/calc/var) resolve against the
-        // length context now (they don't depend on the element's own box). A
-        // PERCENTAGE never reaches here — it is handled above as a layout-time
-        // hint so it can resolve per-axis against the element's own box.
-        Some(
-            other @ (CssValue::Rem(_)
-            | CssValue::Vw(_)
-            | CssValue::Vh(_)
-            | CssValue::Vmin(_)
-            | CssValue::Vmax(_)),
-        ) => {
-            if let Some(v) = crate::style::resolve::try_resolve_to_length_in_context(
-                other,
-                &style.custom_properties,
-                length_context,
-            ) {
-                style.border_radius = v;
-                style.border_radii = [v; 4];
-                style.border_radii_y = [v; 4];
-            }
-        }
-        Some(other @ (CssValue::Calc(_) | CssValue::Var(_, _))) => {
-            if let Some(v) = crate::style::resolve::try_resolve_to_length_in_context(
-                other,
-                &style.custom_properties,
-                length_context,
-            ) {
-                style.border_radius = v;
-                style.border_radii = [v; 4];
-                style.border_radii_y = [v; 4];
-            }
-        }
-        _ => {}
-    }
-
-    // Per-corner border-radius longhands override the shorthand for their corner.
-    for (prop, idx) in [
-        ("border-top-left-radius", 0usize),
-        ("border-top-right-radius", 1),
-        ("border-bottom-right-radius", 2),
-        ("border-bottom-left-radius", 3),
-    ] {
-        let assign = |radii: &mut [f32; 4], pct: &mut [Option<f32>; 4], tok: RadiusToken| match tok
-        {
-            RadiusToken::Len(v) => {
-                radii[idx] = v;
-                pct[idx] = None;
-            }
-            RadiusToken::Pct(p) => {
-                pct[idx] = Some(p);
-                radii[idx] = 0.0;
-            }
-        };
-        match get_non_special(map, prop) {
-            Some(CssValue::Length(v)) => {
-                style.border_radii[idx] = *v;
-                style.border_radii_pct[idx] = None;
-                style.border_radii_y[idx] = *v;
-                style.border_radii_y_pct[idx] = None;
-            }
-            Some(CssValue::Percentage(p)) => {
-                style.border_radii_pct[idx] = Some(*p);
-                style.border_radii[idx] = 0.0;
-                style.border_radii_y_pct[idx] = Some(*p);
-                style.border_radii_y[idx] = 0.0;
-            }
-            Some(CssValue::Keyword(k)) => {
-                // Corner longhand grammar: `<horizontal> [vertical]` — two
-                // space-separated tokens give an elliptical corner. A single
-                // token applies to both axes (circular).
-                let mut toks = k.split_whitespace();
-                let h = toks.next().and_then(parse_radius_token);
-                let v = toks.next().and_then(parse_radius_token);
-                if let Some(htok) = h {
-                    assign(&mut style.border_radii, &mut style.border_radii_pct, htok);
-                    let vtok = v.unwrap_or(htok);
-                    assign(
-                        &mut style.border_radii_y,
-                        &mut style.border_radii_y_pct,
-                        vtok,
-                    );
-                }
-            }
-            _ => {}
-        }
     }
 
     // Outline shorthand: "2px solid red" (with optional style keyword we ignore
     // for paint, since the renderer strokes a solid outline).
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "outline") {
+        let k = resolve_embedded_vars(k, &style.custom_properties);
         let parts: Vec<&str> = k.split_whitespace().collect();
         for part in &parts {
             if let Some(n) = part.strip_suffix("px") {
@@ -5417,7 +7287,7 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
         if let Some(last) = parts.last() {
             if let Some(c) = parse_border_color(last) {
-                style.outline_color = Some(c);
+                style.outline_color = Some(c.resolve(style.color));
             }
         }
     }
@@ -5426,8 +7296,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     if let Some(CssValue::Length(v)) = get_non_special(map, "outline-width") {
         style.outline_width = *v;
     }
-    if let Some(CssValue::Color(c)) = get_non_special(map, "outline-color") {
-        style.outline_color = Some(*c);
+    if let Some(value) = get_non_special(map, "outline-color")
+        && let Some(color) = specified_color_from_value(value, &style.custom_properties)
+    {
+        style.outline_color = Some(color.resolve(style.color));
     }
     // `outline-offset`: gap between border edge and outline (may be negative).
     if let Some(CssValue::Length(v)) = get_non_special(map, "outline-offset") {
@@ -5505,26 +7377,30 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         };
     }
 
-    // CSS `writing-mode` property (css-writing-modes-4 §3.1). Inherited (so it
-    // is never reset in the non-inherited block above; it rides the
-    // `parent.clone()` inheritance). Only `vertical-rl` changes behaviour; every
-    // other keyword (including the unsupported `vertical-lr`/`sideways-*`) falls
-    // back to the default horizontal mode.
+    // CSS `writing-mode` property (css-writing-modes-4 §3.1). Inherited, so it
+    // rides the parent style unless this element specifies another flow.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "writing-mode") {
-        style.writing_mode_vertical_lr = false;
         style.writing_mode = match k.as_str() {
             "vertical-rl" => WritingMode::VerticalRl,
-            "vertical-lr" => {
-                style.writing_mode_vertical_lr = true;
-                WritingMode::VerticalRl
-            }
-            "sideways-rl" => WritingMode::VerticalRl,
+            "vertical-lr" => WritingMode::VerticalLr,
+            "sideways-rl" => WritingMode::SidewaysRl,
+            "sideways-lr" => WritingMode::SidewaysLr,
             _ => WritingMode::HorizontalTb,
         };
     }
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "text-orientation") {
         style.text_orientation_upright = k == "upright";
     }
+    if let Some(CssValue::Keyword(value)) = get_non_special(map, "text-combine-upright")
+        && let Some(text_combine_upright) = TextCombineUpright::parse(value)
+    {
+        style.text_combine_upright = text_combine_upright;
+    }
+
+    // CSS Logical 1 §4.5 and CSS Cascade: physical and flow-relative border
+    // declarations are one logical property group. Resolve them in declaration
+    // order after writing mode, color, and font sizing are final.
+    borders::apply(style, map, parent, length_context, font_metrics);
 
     // CSS `unicode-bidi` property. Not inherited. `bidi-override` (and the
     // isolating `isolate-override`) force the box's inline content to be
@@ -5558,6 +7434,20 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         } else {
             FontVariantCaps::Normal
         };
+    }
+
+    let position_value = map
+        .get("font-variant-position")
+        .or_else(|| map.get("font-variant"));
+    if let Some(CssValue::Keyword(k)) = position_value {
+        let lower = k.to_ascii_lowercase();
+        if lower.split_whitespace().any(|token| token == "super") {
+            style.font_variant_position = FontVariantPosition::Super;
+        } else if lower.split_whitespace().any(|token| token == "sub") {
+            style.font_variant_position = FontVariantPosition::Sub;
+        } else if lower == "normal" {
+            style.font_variant_position = FontVariantPosition::Normal;
+        }
     }
 
     // font-feature-settings (css-fonts-3 §6.4): honour explicit ligature
@@ -5606,33 +7496,47 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.initial_letter = v.max(0.0);
     }
     for prop in ["text-emphasis", "-webkit-text-emphasis"] {
-        if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
+        if let Some(value) = get_non_special(map, prop)
+            && let Some(k) = resolved_raw_css_value(value, &style.custom_properties)
+        {
             style.text_emphasis_mark = k.split_whitespace().any(|t| matches!(t, "dot" | "filled"));
-            if style.text_emphasis_mark {
-                style.text_decoration_overline = true;
-            }
-            if let Some(c) = color_in_text_emphasis_shorthand(k) {
-                style.text_decoration_color = Some(c);
+            if let Some(c) = color_in_text_emphasis_shorthand(&k) {
+                let (color, source) = bind_specified_color(c, style.color);
+                style.text_emphasis_color = color;
+                style.text_emphasis_color_source = source;
             }
         }
     }
     for prop in ["text-emphasis-style", "-webkit-text-emphasis-style"] {
         if let Some(CssValue::Keyword(k)) = get_non_special(map, prop) {
             style.text_emphasis_mark = k.split_whitespace().any(|t| matches!(t, "dot" | "filled"));
-            if style.text_emphasis_mark {
-                style.text_decoration_overline = true;
-            }
+        }
+    }
+    for prop in ["text-emphasis-position", "-webkit-text-emphasis-position"] {
+        if let Some(value) = get_non_special(map, prop)
+            && let Some(raw) = resolved_raw_css_value(value, &style.custom_properties)
+            && let Some(position) = TextEmphasisPosition::parse(&raw)
+        {
+            style.text_emphasis_position = position;
         }
     }
     for prop in ["text-emphasis-color", "-webkit-text-emphasis-color"] {
-        if let Some(CssValue::Color(c)) = get_non_special(map, prop) {
-            style.text_decoration_color = Some(*c);
+        if let Some(value) = get_non_special(map, prop)
+            && let Some(c) = specified_color_from_value(value, &style.custom_properties)
+        {
+            let (color, source) = bind_specified_color(c, style.color);
+            style.text_emphasis_color = color;
+            style.text_emphasis_color_source = source;
         }
     }
 
-    // Text-indent
-    if let Some(CssValue::Length(v)) = get_non_special(map, "text-indent") {
-        style.text_indent = *v;
+    // `text-indent` percentages resolve during layout against this block's
+    // content box, so retain their specified percentage through inheritance.
+    if let Some(value) = get_non_special(map, "text-indent")
+        && let Some(text_indent) =
+            text_indent_from_css_value(value, style, length_context, font_metrics)
+    {
+        style.text_indent = text_indent;
     }
 
     // White-space
@@ -5658,11 +7562,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.text_wrap_mode_nowrap = true;
     }
 
-    // Letter-spacing
-    if let Some(CssValue::Length(v)) = get_non_special(map, "letter-spacing") {
-        style.letter_spacing = *v;
-    }
-
     // Tab-size (css-text-3 §6.3). A unitless `<number>` is a count of space
     // advances; a `<length>` is the tab-stop distance directly (stored as a
     // negative sentinel so the renderer can tell counts from absolute lengths).
@@ -5676,11 +7575,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             // space advance).
             style.tab_size = -(v.abs());
         }
-    }
-
-    // Word-spacing
-    if let Some(CssValue::Length(v)) = get_non_special(map, "word-spacing") {
-        style.word_spacing = *v;
     }
 
     // Vertical-align
@@ -5770,18 +7664,26 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             _ => CaptionSide::Top,
         };
     }
-    // Per-layer slot mapping for a comma-separated `background-image` list. Index
-    // i names the paint slot ("raster" / "gradient" / "none") that list position
-    // occupies, so the matching comma-separated `background-size` / `-position` /
-    // `-repeat` entry can be routed to the right slot.
-    let layer_slots: Vec<String> = get_non_special(map, "background-layer-slots")
-        .and_then(|v| match v {
-            CssValue::Keyword(k) => Some(k.split(',').map(|s| s.trim().to_string()).collect()),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let raster_layer_index = layer_slots.iter().position(|s| s == "raster");
-    let gradient_layer_index = layer_slots.iter().position(|s| s == "gradient");
+    // Route comma-separated longhand entries using the winning image list
+    // itself. Slot metadata is derived state, not a separate cascade property.
+    let image_layers = match get_non_special(map, "background-image") {
+        Some(CssValue::BackgroundLayers(layers)) => layers.as_slice(),
+        _ => &[],
+    };
+    let raster_layer_index = image_layers.iter().position(|source| {
+        matches!(
+            source,
+            BackgroundLayerSource::Raster(_) | BackgroundLayerSource::Svg(_)
+        )
+    });
+    let gradient_layer_index = image_layers.iter().position(|source| {
+        matches!(
+            source,
+            BackgroundLayerSource::Linear(_)
+                | BackgroundLayerSource::Radial(_)
+                | BackgroundLayerSource::Conic(_)
+        )
+    });
 
     // For the raster slot the single `background_*` fields are used directly; when
     // it is a non-first layer in a multi-layer list, route its comma-separated
@@ -5852,11 +7754,38 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "border-image")
-        && let Some(gradient) = parse_border_image_gradient(k)
-    {
-        style.background_gradient = Some(gradient);
-        style.background_clip = BackgroundClip::Padding;
+    if let Some(value) = get_non_special(map, "border-image-source") {
+        style.border_image.source = resolved_raw_css_value(value, &style.custom_properties)
+            .filter(|source| !source.trim().eq_ignore_ascii_case("none"))
+            .and_then(|source| parse_border_image_source(&source, style.color));
+    }
+    if let Some(value) = get_non_special(map, "border-image-slice") {
+        style.border_image.geometry.slices =
+            resolved_raw_css_value(value, &style.custom_properties)
+                .and_then(|value| parse_border_image_slices(&value))
+                .unwrap_or_default();
+    }
+    if let Some(value) = get_non_special(map, "border-image-width") {
+        style.border_image.geometry.widths =
+            resolved_raw_css_value(value, &style.custom_properties)
+                .and_then(|value| {
+                    parse_border_image_widths(&value, style, length_context, font_metrics)
+                })
+                .unwrap_or_default();
+    }
+    if let Some(value) = get_non_special(map, "border-image-outset") {
+        style.border_image.geometry.outsets =
+            resolved_raw_css_value(value, &style.custom_properties)
+                .and_then(|value| {
+                    parse_border_image_outsets(&value, style, length_context, font_metrics)
+                })
+                .unwrap_or_default();
+    }
+    if let Some(value) = get_non_special(map, "border-image-repeat") {
+        style.border_image.geometry.repeats =
+            resolved_raw_css_value(value, &style.custom_properties)
+                .and_then(|value| parse_border_image_repeats(&value))
+                .unwrap_or_default();
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "aspect-ratio") {
@@ -5878,10 +7807,20 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             style.object_position = pos;
         }
     }
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "image-rendering") {
+        style.image_rendering = match k.to_ascii_lowercase().as_str() {
+            "smooth" => ImageRendering::Smooth,
+            "high-quality" => ImageRendering::HighQuality,
+            "pixelated" => ImageRendering::Pixelated,
+            "crisp-edges" | "optimizespeed" => ImageRendering::CrispEdges,
+            "optimizequality" => ImageRendering::Smooth,
+            _ => ImageRendering::Auto,
+        };
+    }
 
     // z-index
     if let Some(CssValue::Number(v)) = get_non_special(map, "z-index") {
-        style.z_index = *v as i32;
+        style.z_index = ZIndex::integer(*v as i32);
     }
 
     // orphans / widows (css-break-3 §3.4): positive <integer>, initial 2,
@@ -5897,15 +7836,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         let n = *v as i32;
         if n >= 1 {
             style.widows = n.min(u8::MAX as i32) as u8;
-        }
-    }
-
-    // Collect custom properties (--*) into style.custom_properties
-    for (prop, val) in &map.properties {
-        if prop.starts_with("--") {
-            if let CssValue::Keyword(raw) = val {
-                style.custom_properties.insert(prop.clone(), raw.clone());
-            }
         }
     }
 
@@ -5954,14 +7884,10 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         // percentage resolves against the element's OWN border box (horizontal
         // radii against its width, vertical against its height) per CSS
         // Backgrounds §5.1 — NOT against the parent/containing-block width. The
-        // dedicated `border-radius` match above keeps the percentage as a hint
-        // (`border_radii_pct` / `border_radii_y_pct`) and the block/flex layout
-        // resolves it per-axis once the element's box is known. Eagerly resolving
-        // it here against `parent_width` produced circular (and on non-square
-        // boxes, wrong-sized) corners.
-        ("text-indent", |s, v| s.text_indent = v),
+        // dedicated `border-radius` match above keeps percentages in the
+        // specified corner structure. Layout resolves each axis once the
+        // element's own box is known.
         ("letter-spacing", |s, v| s.letter_spacing = v),
-        ("word-spacing", |s, v| s.word_spacing = v),
         ("border-spacing", |s, v| {
             s.border_spacing = v;
             s.border_spacing_vertical = v;
@@ -5973,11 +7899,7 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
     ];
     for &(prop_name, setter) in inline_length_props {
         if let Some(val) = get_non_special(map, prop_name) {
-            if matches!(
-                (prop_name, val),
-                ("text-indent", CssValue::Percentage(_))
-                    | ("word-spacing", CssValue::Percentage(_))
-            ) {
+            if matches!((prop_name, val), ("word-spacing", CssValue::Percentage(_))) {
                 continue;
             }
             // For width/max-width/min-width percentages, only pre-resolve when
@@ -6001,13 +7923,16 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
                 | CssValue::Calc(_)
                 | CssValue::Clamp(_, _, _)
                 | CssValue::Var(_, _) => {
-                    if let Some(resolved) = resolve_css_length_for_style(val, style, length_context)
+                    if let Some(resolved) =
+                        resolve_css_length_for_style(val, style, length_context, font_metrics)
                     {
                         setter(style, resolved);
                     }
                 }
                 CssValue::Keyword(k) => {
-                    if let Some(resolved) = resolve_raw_length_for_style(k, style, length_context) {
+                    if let Some(resolved) =
+                        resolve_raw_length_for_style(k, style, length_context, font_metrics)
+                    {
                         setter(style, resolved);
                     }
                 }
@@ -6016,12 +7941,18 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    if let Some(CssValue::Percentage(v)) = get_non_special(map, "text-indent") {
-        let basis = style.width.unwrap_or(length_context.parent_width);
-        style.text_indent = basis * *v / 100.0;
+    if let Some(value) = get_non_special(map, "letter-spacing")
+        && let Some(letter_spacing) =
+            letter_spacing_from_css_value(value, style, length_context, font_metrics)
+    {
+        style.letter_spacing = letter_spacing;
     }
-    if let Some(CssValue::Percentage(v)) = get_non_special(map, "word-spacing") {
-        style.word_spacing = style.font_size * *v / 100.0;
+
+    if let Some(value) = get_non_special(map, "word-spacing")
+        && let Some(word_spacing) =
+            word_spacing_from_css_value(value, style, length_context, font_metrics)
+    {
+        style.word_spacing = word_spacing;
     }
 
     if let Some(CssValue::Percentage(v)) = get_non_special(map, "width") {
@@ -6040,7 +7971,9 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.percentage_insets.right = Some(*v);
     }
 
-    let resolved_parent_height = parent.height.filter(|height| *height > 0.0);
+    let resolved_parent_height = percentage_basis
+        .height_or_parent(parent)
+        .filter(|height| *height > 0.0);
     let resolve_block_percentage =
         |percent: f32| resolved_parent_height.map(|height| height * percent / 100.0);
 
@@ -6241,32 +8174,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         }
     }
 
-    // Resolve var() for color properties
-    if let Some(val @ CssValue::Var(_, _)) = get_non_special(map, "color") {
-        if let Some(c) =
-            crate::style::resolve::try_resolve_var_to_color(val, &style.custom_properties)
-        {
-            style.color = c;
-        }
-    }
-    if let Some(val @ CssValue::Var(_, _)) = get_non_special(map, "background-color") {
-        if let Some(c) =
-            crate::style::resolve::try_resolve_var_to_color(val, &style.custom_properties)
-        {
-            style.background_color = Some(c);
-        }
-    }
-    if let Some(val @ CssValue::Var(_, _)) = get_non_special(map, "border-color") {
-        if let Some(c) =
-            crate::style::resolve::try_resolve_var_to_color(val, &style.custom_properties)
-        {
-            style.border.top.color = Some(c);
-            style.border.right.color = Some(c);
-            style.border.bottom.color = Some(c);
-            style.border.left.color = Some(c);
-        }
-    }
-
     // Resolve var() for keyword properties
     if let Some(val @ CssValue::Var(_, _)) = get_non_special(map, "display") {
         if let Some(kw) =
@@ -6285,8 +8192,8 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
             style.position = match kw.as_str() {
                 "relative" => Position::Relative,
                 "absolute" => Position::Absolute,
-                "fixed" => Position::Absolute,
-                "sticky" => Position::Relative,
+                "fixed" => Position::Fixed,
+                "sticky" => Position::Sticky,
                 value => {
                     style.running_name = parse_running_position_name(value);
                     Position::Static
@@ -6364,7 +8271,6 @@ pub(crate) fn apply_style_map(style: &mut ComputedStyle, map: &StyleMap, parent:
         style.counter_set = parse_counter_directive(k, 0);
     }
     synthesize_simple_multi_background_svg(map, style);
-    synthesize_repeating_linear_background_raster(map, style);
 }
 
 fn parse_list_style_type(k: &str) -> ListStyleType {
@@ -6410,21 +8316,11 @@ fn resolve_custom_counter_styles_in_content(items: &mut [ContentItem], rules: &[
 }
 
 fn find_counter_style(name: &str, rules: &[CssRule]) -> Option<CounterStyle> {
-    let selector = format!("@counter-style {}", name.to_ascii_lowercase());
-    rules
-        .iter()
-        .rev()
-        .find_map(|rule| {
-            if rule.selector.trim().to_ascii_lowercase() == selector {
-                parse_counter_style_rule(&rule.declarations)
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            CssRule::registered_counter_style_declarations(name)
-                .and_then(|declarations| parse_counter_style_rule(&declarations))
-        })
+    rules.iter().rev().find_map(|rule| {
+        rule.counter_style_name()
+            .filter(|rule_name| rule_name.trim().eq_ignore_ascii_case(name))
+            .and_then(|_| parse_counter_style_rule(&rule.declarations))
+    })
 }
 
 fn counter_style_keyword(map: &StyleMap, property: &str) -> Option<String> {
@@ -6968,96 +8864,100 @@ fn parse_filter_blur(val: &str) -> Option<f32> {
     }
 }
 
-/// Parse a full CSS `filter` value into (blur_radius, ordered color ops,
-/// opacity multiplier, drop-shadow, url-reference id). Recognizes
-/// blur/grayscale/sepia/invert/brightness/contrast/saturate/hue-rotate/
-/// opacity/drop-shadow and `url(#id)` (css-filter-effects-1 §3); invalid or
-/// unknown functions invalidate the whole list. `none` clears. The opacity multiplier is the product
-/// of all `opacity()` functions (1.0 when none are present) and is intended to
-/// be folded into the element's final `style.opacity`. The url id (if any) is
-/// resolved later, during layout, where the DOM `<filter>` is reachable.
-fn parse_filter(
-    val: &str,
-) -> (
-    Option<f32>,
-    Vec<ColorFilterOp>,
-    f32,
-    Option<DropShadow>,
-    Option<String>,
-) {
+/// Parsed CSS filter-list state. Operations stay in source order; an SVG URL
+/// remains unresolved until layout has access to the document definitions.
+struct ParsedFilterList {
+    operations: Vec<FilterOperation>,
+    url_id: Option<String>,
+    establishes_stacking_context: bool,
+}
+
+impl ParsedFilterList {
+    fn none() -> Self {
+        Self {
+            operations: Vec::new(),
+            url_id: None,
+            establishes_stacking_context: false,
+        }
+    }
+}
+
+/// Parse a full CSS `filter` value into one ordered operation stream.
+/// Unknown or malformed functions invalidate the complete list; `none` clears
+/// both paint and stacking behavior.
+fn parse_filter_for_color(val: &str, current_color: Color) -> ParsedFilterList {
     let raw = val.trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
-        return (Some(0.0), Vec::new(), 1.0, None, None);
+        return ParsedFilterList::none();
     }
-    let mut blur = None;
     let mut ops = Vec::new();
-    let mut opacity = 1.0_f32;
-    let mut drop_shadow = None;
     let mut url_id = None;
     let mut rest = raw;
     while !rest.trim().is_empty() {
         rest = rest.trim_start();
         let Some(open) = rest.find('(') else {
-            return (Some(0.0), Vec::new(), 1.0, None, None);
+            return ParsedFilterList::none();
         };
         if rest[..open].trim().is_empty() {
-            return (Some(0.0), Vec::new(), 1.0, None, None);
+            return ParsedFilterList::none();
         }
         let name = rest[..open].trim().to_ascii_lowercase();
-        let Some(close_rel) = rest[open + 1..].find(')') else {
-            return (Some(0.0), Vec::new(), 1.0, None, None);
+        let after_open = &rest[open + 1..];
+        let Some(close_rel) = matching_close_paren(after_open) else {
+            return ParsedFilterList::none();
         };
-        let arg = rest[open + 1..open + 1 + close_rel].trim();
+        let arg = after_open[..close_rel].trim();
         match name.as_str() {
             "blur" => {
                 if let Some(r) = parse_filter_blur(&format!("blur({arg})")) {
-                    blur = Some(r);
-                    ops.push(ColorFilterOp::Blur(r));
+                    ops.push(FilterOperation::Blur(r));
                 } else {
-                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                    return ParsedFilterList::none();
                 }
             }
             "grayscale" => {
-                ops.push(ColorFilterOp::Grayscale(
+                ops.push(FilterOperation::Grayscale(
                     parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
                 ));
             }
             "sepia" => {
-                ops.push(ColorFilterOp::Sepia(
+                ops.push(FilterOperation::Sepia(
                     parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
                 ));
             }
             "invert" => {
-                ops.push(ColorFilterOp::Invert(
+                ops.push(FilterOperation::Invert(
                     parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
                 ));
             }
             "brightness" => {
-                ops.push(ColorFilterOp::Brightness(
+                ops.push(FilterOperation::Brightness(
                     parse_filter_amount(arg, 1.0).max(0.0),
                 ));
             }
             "contrast" => {
-                ops.push(ColorFilterOp::Contrast(
+                ops.push(FilterOperation::Contrast(
                     parse_filter_amount(arg, 1.0).max(0.0),
                 ));
             }
             "saturate" => {
-                ops.push(ColorFilterOp::Saturate(
+                ops.push(FilterOperation::Saturate(
                     parse_filter_amount(arg, 1.0).max(0.0),
                 ));
             }
             "hue-rotate" => {
-                ops.push(ColorFilterOp::HueRotate(parse_filter_angle(arg)));
+                ops.push(FilterOperation::HueRotate(parse_filter_angle(arg)));
             }
             "opacity" => {
-                opacity *= parse_filter_amount(arg, 1.0).clamp(0.0, 1.0);
+                ops.push(FilterOperation::Opacity(
+                    parse_filter_amount(arg, 1.0).clamp(0.0, 1.0),
+                ));
             }
             "drop-shadow" => {
-                if let Some(ds) = parse_drop_shadow(arg) {
-                    drop_shadow = Some(ds);
+                if let Some(ds) = parse_drop_shadow(arg, current_color) {
+                    ops.push(FilterOperation::DropShadow(ds));
                 } else {
-                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                    return ParsedFilterList::none();
                 }
             }
             "url" => {
@@ -7069,35 +8969,39 @@ fn parse_filter(
                 if let Some(id) = inner.strip_prefix('#') {
                     url_id = Some(id.to_string());
                 } else {
-                    return (Some(0.0), Vec::new(), 1.0, None, None);
+                    return ParsedFilterList::none();
                 }
             }
-            _ => return (Some(0.0), Vec::new(), 1.0, None, None),
+            _ => return ParsedFilterList::none(),
         }
-        rest = &rest[open + 1 + close_rel + 1..];
+        rest = &after_open[close_rel + 1..];
     }
-    if blur.is_none() && ops.iter().any(|op| matches!(op, ColorFilterOp::Sepia(_))) {
-        // Force replaced-image sepia through the rendered-raster filter path:
-        // Chrome applies filter functions to the painted image, not directly to
-        // the source pixels. A sub-CSS-pixel blur is visually neutral but gives
-        // the existing raster pipeline a concrete trigger.
-        blur = Some(0.1125);
+    ParsedFilterList {
+        operations: ops,
+        url_id,
+        establishes_stacking_context: true,
     }
-    (blur, ops, opacity, drop_shadow, url_id)
+}
+
+#[cfg(test)]
+fn parse_filter(val: &str) -> ParsedFilterList {
+    parse_filter_for_color(val, Color::BLACK)
 }
 
 /// Parse the inner argument of `drop-shadow(<offset-x> <offset-y> <blur>?
 /// <color>?)` (css-filter-effects-1 §4.4). Lengths become points; the color
 /// defaults to the element's `currentColor`, resolved after cascade finalization.
 /// Returns `None` when the two required offsets are missing.
-fn parse_drop_shadow(arg: &str) -> Option<DropShadow> {
+fn parse_drop_shadow(arg: &str, current_color: Color) -> Option<DropShadow> {
     let mut lengths: Vec<f32> = Vec::new();
-    let mut color: Option<(f32, f32, f32, f32)> = None;
-    for tok in arg.split_whitespace() {
+    let mut color = None;
+    // Keep functional colors such as `color(srgb 0 0 0 / .5)` intact. This
+    // parser runs after the outer drop-shadow() function has been balanced.
+    for tok in split_css_whitespace(arg) {
         if let Some(CssValue::Length(l)) = crate::parser::css::parse_length(tok) {
             lengths.push(l);
         } else if let Some(c) = parse_border_color(tok) {
-            color = Some(c.to_f32_rgba());
+            color = Some(c);
         } else if tok == "0" {
             lengths.push(0.0);
         }
@@ -7109,42 +9013,10 @@ fn parse_drop_shadow(arg: &str) -> Option<DropShadow> {
         dx: lengths[0],
         dy: lengths[1],
         blur: lengths.get(2).copied().unwrap_or(0.0).max(0.0),
-        color: color.unwrap_or(CURRENT_COLOR_SENTINEL.to_f32_rgba()),
+        color: color
+            .unwrap_or(SpecifiedColor::CurrentColor)
+            .resolve(current_color),
     })
-}
-
-fn drop_shadow_color_is_current_color(color: (f32, f32, f32, f32)) -> bool {
-    let sentinel = CURRENT_COLOR_SENTINEL.to_f32_rgba();
-    (color.0 - sentinel.0).abs() < f32::EPSILON
-        && (color.1 - sentinel.1).abs() < f32::EPSILON
-        && (color.2 - sentinel.2).abs() < f32::EPSILON
-        && (color.3 - sentinel.3).abs() < f32::EPSILON
-}
-
-fn add_filter_drop_shadow_box_shadow(style: &mut ComputedStyle) {
-    let Some(shadow) = style.drop_shadow else {
-        return;
-    };
-    style.box_shadow.push(BoxShadow {
-        offset_x: shadow.dx,
-        offset_y: shadow.dy,
-        blur: shadow.blur,
-        spread: 0.0,
-        color: color_from_filter_shadow(shadow.color),
-        inset: false,
-    });
-}
-
-fn color_from_filter_shadow(color: (f32, f32, f32, f32)) -> Color {
-    if drop_shadow_color_is_current_color(color) {
-        return CURRENT_COLOR_SENTINEL;
-    }
-    Color {
-        r: (color.0 * 255.0).round().clamp(0.0, 255.0) as u8,
-        g: (color.1 * 255.0).round().clamp(0.0, 255.0) as u8,
-        b: (color.2 * 255.0).round().clamp(0.0, 255.0) as u8,
-        a: (color.3 * 255.0).round().clamp(0.0, 255.0) as u8,
-    }
 }
 
 /// Parse a filter amount: `100%` -> 1.0, `1.5` -> 1.5, empty -> `default`.
@@ -7308,8 +9180,7 @@ fn resolve_gradient_layer_box(map: &StyleMap, gradient_idx: usize) -> GradientLa
         origin,
         clip,
         attachment,
-        border_image: false,
-        paint_above_raster: false,
+        ..Default::default()
     }
 }
 
@@ -7326,11 +9197,9 @@ enum SimpleBackgroundLayerSource {
     Linear(LinearGradient),
 }
 
-const BACKGROUND_LAYER_RECORD_SEP: char = '\x1f';
-const BACKGROUND_LAYER_FIELD_SEP: char = '\x1e';
-
 fn synthesize_simple_multi_background_svg(map: &StyleMap, style: &mut ComputedStyle) {
-    let Some(sources) = parse_background_layer_sources(map) else {
+    let Some(sources) = parse_background_layer_sources(map, style.color, &style.custom_properties)
+    else {
         return;
     };
     if sources.len() <= 1 {
@@ -7384,83 +9253,6 @@ fn synthesize_simple_multi_background_svg(map: &StyleMap, style: &mut ComputedSt
     style.background_clip = BackgroundClip::Border;
 }
 
-fn synthesize_repeating_linear_background_raster(map: &StyleMap, style: &mut ComputedStyle) {
-    if style.background_svg.is_some()
-        || style.background_image.is_some()
-        || style.background_radial_gradient.is_some()
-        || style.background_conic_gradient.is_some()
-        || !matches!(
-            style.background_repeat,
-            BackgroundRepeat::Space
-                | BackgroundRepeat::Round
-                | BackgroundRepeat::SpaceRound
-                | BackgroundRepeat::RoundSpace
-        )
-        || style.background_clip != BackgroundClip::Border
-        || style.border_radius > 0.0
-        || style.border_radius_pct.is_some()
-        || style.border_radii.iter().any(|r| *r > 0.0)
-        || style.border_radii_y.iter().any(|r| *r > 0.0)
-    {
-        return;
-    }
-    let Some(gradient) = style.background_gradient.as_ref() else {
-        return;
-    };
-    let Some((border_width, border_height)) = style_background_border_box_size(style) else {
-        return;
-    };
-    let border_rect = CssBoxRect {
-        x: 0.0,
-        y: 0.0,
-        width: border_width,
-        height: border_height,
-    };
-    let Some(layer) = raster_linear_background_layer(map, style, 0, border_rect, gradient) else {
-        return;
-    };
-    let (px_w, px_h) = repeating_background_raster_dimensions(border_width, border_height);
-    let base = style.background_color.unwrap_or(Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    });
-    let mut image =
-        image::RgbaImage::from_pixel(px_w, px_h, image::Rgba([base.r, base.g, base.b, base.a]));
-    for py in 0..px_h {
-        let y = (py as f32 + 0.5) * border_height / px_h as f32;
-        for px in 0..px_w {
-            let x = (px as f32 + 0.5) * border_width / px_w as f32;
-            let Some(source_pixel) = sample_raster_linear_background_layer(&layer, x, y) else {
-                continue;
-            };
-            let backdrop = *image.get_pixel(px, py);
-            let Some(pixel) = composite_blended_pixel(source_pixel, backdrop, BlendMode::Normal)
-            else {
-                return;
-            };
-            image.put_pixel(px, py, pixel);
-        }
-    }
-    let Some(tree) = raster_image_background_svg(image, border_width, border_height) else {
-        return;
-    };
-    style.background_color = None;
-    style.clear_background_images();
-    style.background_svg = Some(tree);
-    style.background_size = BackgroundSize::Explicit {
-        width: border_width,
-        height: Some(border_height),
-        width_is_percent: false,
-        height_is_percent: false,
-    };
-    style.background_repeat = BackgroundRepeat::NoRepeat;
-    style.background_position = BackgroundPosition::default();
-    style.background_origin = BackgroundOrigin::Border;
-    style.background_clip = BackgroundClip::Border;
-}
-
 fn build_blended_linear_background_raster_svg(
     map: &StyleMap,
     style: &ComputedStyle,
@@ -7468,14 +9260,7 @@ fn build_blended_linear_background_raster_svg(
     border_width: f32,
     border_height: f32,
 ) -> Option<crate::parser::svg::SvgTree> {
-    if style.background_clip != BackgroundClip::Border
-        || style.border_radius > 0.0
-        || style.border_radius_pct.is_some()
-        || style.border_radii.iter().any(|r| *r > 0.0)
-        || style.border_radii_y.iter().any(|r| *r > 0.0)
-        || style.border_radii_pct.iter().any(Option::is_some)
-        || style.border_radii_y_pct.iter().any(Option::is_some)
-    {
+    if style.background_clip != BackgroundClip::Border || !style.border_radii.is_zero() {
         return None;
     }
     if !sources
@@ -7497,88 +9282,80 @@ fn build_blended_linear_background_raster_svg(
         return None;
     }
 
-    let (px_w, px_h) = simple_background_raster_dimensions(border_width, border_height)?;
-    let base = style.background_color.unwrap_or(Color {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    });
-    let mut image =
-        image::RgbaImage::from_pixel(px_w, px_h, image::Rgba([base.r, base.g, base.b, base.a]));
+    let dimensions = background_raster_dimensions(
+        border_width,
+        border_height,
+        style.raster_quality.background_dpi,
+    )?;
+    let base = style
+        .background_color
+        .unwrap_or_else(|| Color::rgba8(0, 0, 0, 0));
     let border_rect = CssBoxRect {
         x: 0.0,
         y: 0.0,
         width: border_width,
         height: border_height,
     };
+    let layers = sources
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(index, source)| {
+            let SimpleBackgroundLayerSource::Linear(gradient) = source else {
+                return None;
+            };
+            Some((
+                raster_linear_background_layer(map, style, index, border_rect, gradient)?,
+                style.background_blend_mode.background_layer(index),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
 
-    for (idx, source) in sources.iter().enumerate().rev() {
-        let SimpleBackgroundLayerSource::Linear(gradient) = source else {
-            return None;
-        };
-        let layer = raster_linear_background_layer(map, style, idx, border_rect, gradient)?;
-        let blend_mode = style.background_blend_mode.background_layer(idx);
-        for py in 0..px_h {
-            let y = (py as f32 + 0.5) * border_height / px_h as f32;
-            for px in 0..px_w {
-                let x = (px as f32 + 0.5) * border_width / px_w as f32;
-                let Some(source_pixel) = sample_raster_linear_background_layer(&layer, x, y) else {
-                    continue;
-                };
-                let backdrop = *image.get_pixel(px, py);
-                image.put_pixel(
-                    px,
-                    py,
-                    composite_blended_pixel(source_pixel, backdrop, blend_mode)?,
-                );
+    tiled_raster_background_svg(dimensions, border_width, border_height, |tile| {
+        let mut image =
+            image::RgbaImage::from_pixel(tile.width, tile.height, image::Rgba(base.to_rgba8()));
+        for (layer, blend_mode) in &layers {
+            for py in 0..tile.height {
+                let y = (tile.y + py) as f32 + 0.5;
+                let y = y * border_height / dimensions.height as f32;
+                for px in 0..tile.width {
+                    let x = (tile.x + px) as f32 + 0.5;
+                    let x = x * border_width / dimensions.width as f32;
+                    let Some(source_pixel) = sample_raster_linear_background_layer(layer, x, y)
+                    else {
+                        continue;
+                    };
+                    let backdrop = *image.get_pixel(px, py);
+                    image.put_pixel(
+                        px,
+                        py,
+                        composite_blended_pixel(source_pixel, backdrop, *blend_mode)?,
+                    );
+                }
             }
         }
-    }
-
-    raster_image_background_svg(image, border_width, border_height)
+        Some(image)
+    })
 }
 
-struct RasterLinearBackgroundLayer<'a> {
-    gradient: &'a LinearGradient,
+struct RasterLinearBackgroundLayer {
+    sampler: crate::render::gradient_sampling::LinearGradientSampler,
     origin: CssBoxRect,
     clip: CssBoxRect,
-    tile_width: f32,
-    tile_height: f32,
-    tiles_x: Vec<f32>,
-    tiles_y: Vec<f32>,
+    tiles: crate::render::background::BackgroundTilePattern,
 }
 
-fn raster_linear_background_layer<'a>(
+fn raster_linear_background_layer(
     map: &StyleMap,
     style: &ComputedStyle,
     index: usize,
     border_rect: CssBoxRect,
-    gradient: &'a LinearGradient,
-) -> Option<RasterLinearBackgroundLayer<'a>> {
+    gradient: &LinearGradient,
+) -> Option<RasterLinearBackgroundLayer> {
     let origin = background_layer_origin_rect(map, style, index, border_rect)?;
     let clip = background_layer_clip_rect(map, style, index, border_rect)?;
-    let size = background_layer_size(map, index)
-        .and_then(|size| resolve_simple_background_tile_size(size, origin.width, origin.height))
-        .unwrap_or((origin.width, origin.height));
-    if size.0 <= 0.0 || size.1 <= 0.0 {
-        return None;
-    }
+    let size = background_layer_size(map, index).unwrap_or(BackgroundSize::Auto);
     let position = background_layer_position(map, index).unwrap_or_default();
-    let offset_x = if position.x_is_percent {
-        (origin.width - size.0) * position.x
-    } else if position.x < 0.0 {
-        (origin.width - size.0) + position.x
-    } else {
-        position.x
-    };
-    let offset_y = if position.y_is_percent {
-        (origin.height - size.1) * position.y
-    } else if position.y < 0.0 {
-        (origin.height - size.1) + position.y
-    } else {
-        position.y
-    };
     let repeat = get_non_special(map, "background-repeat")
         .and_then(|v| match v {
             CssValue::Keyword(k) => {
@@ -7587,276 +9364,81 @@ fn raster_linear_background_layer<'a>(
             _ => None,
         })
         .unwrap_or(BackgroundRepeat::Repeat);
-    let (tiles_x, tile_width) =
-        simple_background_axis_tiles(simple_repeat_x(repeat), offset_x, size.0, origin.width);
-    let (tiles_y, tile_height) =
-        simple_background_axis_tiles(simple_repeat_y(repeat), offset_y, size.1, origin.height);
+    let tiles = crate::render::background::BackgroundTilePattern::resolve(
+        size,
+        position,
+        repeat,
+        Size::new(origin.width, origin.height),
+    )?;
     Some(RasterLinearBackgroundLayer {
-        gradient,
+        sampler: crate::render::gradient_sampling::LinearGradientSampler::resolve(
+            gradient,
+            tiles.tile_size(),
+        )?,
         origin,
         clip,
-        tile_width,
-        tile_height,
-        tiles_x,
-        tiles_y,
+        tiles,
     })
 }
 
 fn sample_raster_linear_background_layer(
-    layer: &RasterLinearBackgroundLayer<'_>,
+    layer: &RasterLinearBackgroundLayer,
     x: f32,
     y: f32,
 ) -> Option<image::Rgba<u8>> {
     if !point_in_css_rect(x, y, layer.clip) {
         return None;
     }
-    let offset_x = layer.tiles_x.iter().copied().find(|offset| {
-        x >= layer.origin.x + *offset && x < layer.origin.x + *offset + layer.tile_width
-    })?;
-    let offset_y = layer.tiles_y.iter().copied().find(|offset| {
-        y >= layer.origin.y + *offset && y < layer.origin.y + *offset + layer.tile_height
-    })?;
-    let local_x = x - layer.origin.x - offset_x;
-    let local_y = y - layer.origin.y - offset_y;
-    Some(sample_linear_gradient_pixel(
-        layer.gradient,
-        layer.tile_width,
-        layer.tile_height,
-        local_x,
-        local_y,
-    ))
+    let local = layer
+        .tiles
+        .sample(Point::new(x - layer.origin.x, y - layer.origin.y))?;
+    Some(image::Rgba(layer.sampler.sample(local).to_rgba8()))
 }
 
 fn point_in_css_rect(x: f32, y: f32, rect: CssBoxRect) -> bool {
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
 
-fn simple_background_raster_dimensions(width: f32, height: f32) -> Option<(u32, u32)> {
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    let scale = 3.125;
-    Some((
-        (width / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
-        (height / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
-    ))
-}
-
-fn repeating_background_raster_dimensions(width: f32, height: f32) -> (u32, u32) {
-    let scale = 3.125;
-    (
-        (width / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
-        (height / 0.75 * scale).round().clamp(1.0, 2048.0) as u32,
-    )
-}
-
-fn raster_image_background_svg(
-    image: image::RgbaImage,
+fn tiled_raster_background_svg(
+    dimensions: RasterDimensions,
     width: f32,
     height: f32,
+    mut render: impl FnMut(RasterTile) -> Option<image::RgbaImage>,
 ) -> Option<crate::parser::svg::SvgTree> {
-    let mut encoded = Vec::new();
-    image::DynamicImage::ImageRgba8(image)
-        .write_to(
-            &mut std::io::Cursor::new(&mut encoded),
-            image::ImageFormat::Png,
-        )
-        .ok()?;
-    let data = encode_base64_background_data(&encoded);
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><image x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"/></svg>",
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">",
         fmt_svg_num(width),
         fmt_svg_num(height),
         fmt_svg_num(width),
         fmt_svg_num(height),
-        fmt_svg_num(width),
-        fmt_svg_num(height),
-        xml_escape_attr(&data)
     );
-    crate::parser::svg::parse_svg_from_string(&svg)
-}
-
-#[derive(Clone, Copy)]
-enum SimpleRepeatAxis {
-    Repeat,
-    NoRepeat,
-    Space,
-    Round,
-}
-
-fn simple_repeat_x(repeat: BackgroundRepeat) -> SimpleRepeatAxis {
-    match repeat {
-        BackgroundRepeat::NoRepeat | BackgroundRepeat::RepeatY => SimpleRepeatAxis::NoRepeat,
-        BackgroundRepeat::Space | BackgroundRepeat::SpaceRound => SimpleRepeatAxis::Space,
-        BackgroundRepeat::Round | BackgroundRepeat::RoundSpace => SimpleRepeatAxis::Round,
-        _ => SimpleRepeatAxis::Repeat,
-    }
-}
-
-fn simple_repeat_y(repeat: BackgroundRepeat) -> SimpleRepeatAxis {
-    match repeat {
-        BackgroundRepeat::NoRepeat | BackgroundRepeat::RepeatX => SimpleRepeatAxis::NoRepeat,
-        BackgroundRepeat::Round | BackgroundRepeat::SpaceRound => SimpleRepeatAxis::Round,
-        BackgroundRepeat::Space | BackgroundRepeat::RoundSpace => SimpleRepeatAxis::Space,
-        _ => SimpleRepeatAxis::Repeat,
-    }
-}
-
-fn simple_tile_offsets(origin: f32, step: f32, extent: f32) -> Vec<f32> {
-    if step <= 0.0 {
-        return vec![origin];
-    }
-    let mut offsets = Vec::new();
-    let mut start = origin;
-    while start > 0.0 {
-        start -= step;
-    }
-    let mut pos = start;
-    while pos < extent {
-        offsets.push(pos);
-        pos += step;
-    }
-    if offsets.is_empty() {
-        offsets.push(origin);
-    }
-    offsets
-}
-
-fn simple_background_axis_tiles(
-    repeat: SimpleRepeatAxis,
-    origin: f32,
-    step: f32,
-    extent: f32,
-) -> (Vec<f32>, f32) {
-    if step <= 0.0 || extent <= 0.0 {
-        return (vec![origin], step);
-    }
-    match repeat {
-        SimpleRepeatAxis::NoRepeat => (vec![origin], step),
-        SimpleRepeatAxis::Repeat => (simple_tile_offsets(origin, step, extent), step),
-        SimpleRepeatAxis::Space => {
-            let count = (extent / step).floor().max(1.0) as usize;
-            if count <= 1 {
-                (vec![0.0], step)
-            } else {
-                let gap = (extent - step * count as f32) / (count - 1) as f32;
-                ((0..count).map(|i| i as f32 * (step + gap)).collect(), step)
-            }
+    for tile in dimensions.tiles(MAX_RASTER_TILE_EDGE)? {
+        let image = render(tile)?;
+        if image.dimensions() != (tile.width, tile.height) {
+            return None;
         }
-        SimpleRepeatAxis::Round => {
-            let count = (extent / step).round().max(1.0) as usize;
-            let rounded_step = extent / count as f32;
-            (
-                (0..count).map(|i| i as f32 * rounded_step).collect(),
-                rounded_step,
+        let mut encoded = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
             )
-        }
+            .ok()?;
+        let x = width * tile.x as f32 / dimensions.width as f32;
+        let y = height * tile.y as f32 / dimensions.height as f32;
+        let tile_width = width * tile.width as f32 / dimensions.width as f32;
+        let tile_height = height * tile.height as f32 / dimensions.height as f32;
+        svg.push_str(&format!(
+            "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"/>",
+            fmt_svg_num(x),
+            fmt_svg_num(y),
+            fmt_svg_num(tile_width),
+            fmt_svg_num(tile_height),
+            encode_base64_background_data(&encoded),
+        ));
     }
-}
-
-fn sample_linear_gradient_pixel(
-    gradient: &LinearGradient,
-    width: f32,
-    height: f32,
-    sample_x: f32,
-    sample_y: f32,
-) -> image::Rgba<u8> {
-    let theta = gradient.angle.to_radians();
-    let dx = theta.sin();
-    let dy = -theta.cos();
-    let half = (width * dx.abs() + height * dy.abs()).max(1e-6) / 2.0;
-    let cx = width / 2.0;
-    let cy = height / 2.0;
-    let proj = (sample_x - cx) * dx + (sample_y - cy) * dy;
-    let t = (proj + half) / (2.0 * half);
-    let basis = (width * dx.abs() + height * dy.abs()).max(1e-6);
-    rgba_pixel_from_f32(sample_gradient_stops(
-        &resolve_gradient_stops_for_basis(&gradient.stops, basis),
-        t,
-        gradient.repeating,
-    ))
-}
-
-fn resolve_gradient_stops_for_basis(stops: &[GradientStop], basis: f32) -> Vec<GradientStop> {
-    let basis = basis.max(1e-6);
-    let mut last = 0.0_f32;
-    stops
-        .iter()
-        .copied()
-        .map(|mut stop| {
-            let mut position = stop.position + stop.position_length / basis;
-            if position < last {
-                position = last;
-            }
-            last = position;
-            stop.position = position.clamp(0.0, 1.0);
-            stop.position_length = 0.0;
-            stop
-        })
-        .collect()
-}
-
-fn sample_gradient_stops(
-    stops: &[GradientStop],
-    mut t: f32,
-    repeating: bool,
-) -> (f32, f32, f32, f32) {
-    if stops.is_empty() {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
-    if repeating && stops.len() > 1 {
-        let first = stops[0].position;
-        let last = stops[stops.len() - 1].position;
-        let period = last - first;
-        if period > 0.0001 {
-            t = first + (t - first).rem_euclid(period);
-        }
-    }
-    if t <= stops[0].position {
-        return gradient_stop_rgba_f32(stops[0]);
-    }
-    let last_idx = stops.len() - 1;
-    if t >= stops[last_idx].position {
-        return gradient_stop_rgba_f32(stops[last_idx]);
-    }
-    for pair in stops.windows(2) {
-        let a = pair[0];
-        let b = pair[1];
-        if t >= a.position && t <= b.position {
-            let span = b.position - a.position;
-            if span <= 0.00001 {
-                return gradient_stop_rgba_f32(b);
-            }
-            let f = ((t - a.position) / span).clamp(0.0, 1.0);
-            let (ar, ag, ab, aa) = gradient_stop_rgba_f32(a);
-            let (br, bg, bb, ba) = gradient_stop_rgba_f32(b);
-            return (
-                ar + (br - ar) * f,
-                ag + (bg - ag) * f,
-                ab + (bb - ab) * f,
-                aa + (ba - aa) * f,
-            );
-        }
-    }
-    gradient_stop_rgba_f32(stops[last_idx])
-}
-
-fn gradient_stop_rgba_f32(stop: GradientStop) -> (f32, f32, f32, f32) {
-    (
-        f32::from(stop.color.r) / 255.0,
-        f32::from(stop.color.g) / 255.0,
-        f32::from(stop.color.b) / 255.0,
-        f32::from(stop.color.a) / 255.0,
-    )
-}
-
-fn rgba_pixel_from_f32((r, g, b, a): (f32, f32, f32, f32)) -> image::Rgba<u8> {
-    image::Rgba([
-        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
-        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
-        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
-        (a.clamp(0.0, 1.0) * 255.0).round() as u8,
-    ])
+    svg.push_str("</svg>");
+    crate::parser::svg::parse_svg_from_string(&svg)
 }
 
 fn raster_background_blend_supported(mode: BlendMode) -> bool {
@@ -7885,6 +9467,20 @@ fn composite_blended_pixel(
     if !raster_background_blend_supported(mode) {
         return None;
     }
+    // Chrome's PDF paint path composites opaque 8-bit background samples with
+    // integer channel arithmetic. Matching that representation matters here:
+    // a floating-point round-to-nearest changes a whole flat region by one RGB
+    // unit for `screen`/`multiply`, which is still a real PDF mismatch under
+    // the exact comparator. Semi-transparent pixels retain the general
+    // premultiplied-alpha path below.
+    if source[3] == u8::MAX && backdrop[3] == u8::MAX {
+        return Some(image::Rgba([
+            composite_opaque_background_channel(source[0], backdrop[0], mode),
+            composite_opaque_background_channel(source[1], backdrop[1], mode),
+            composite_opaque_background_channel(source[2], backdrop[2], mode),
+            u8::MAX,
+        ]));
+    }
     let sa = f32::from(source[3]) / 255.0;
     let ba = f32::from(backdrop[3]) / 255.0;
     let out_a = sa + ba * (1.0 - sa);
@@ -7902,6 +9498,45 @@ fn composite_blended_pixel(
     }
     out[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
     Some(image::Rgba(out))
+}
+
+/// Opaque source-over compositing for the integer blend modes emitted by the
+/// browser's PDF path. `screen` is deliberately expressed as the complement
+/// of an integer multiply: it preserves the browser's floor-at-the-product
+/// boundary rather than a floating-point nearest-integer approximation.
+fn composite_opaque_background_channel(source: u8, backdrop: u8, mode: BlendMode) -> u8 {
+    let source = u16::from(source);
+    let backdrop = u16::from(backdrop);
+    let result = match mode {
+        BlendMode::Normal => source,
+        BlendMode::Multiply => source * backdrop / 255,
+        BlendMode::Screen => 255 - (255 - source) * (255 - backdrop) / 255,
+        _ => {
+            return (blend_channel(mode, source as f32 / 255.0, backdrop as f32 / 255.0) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    };
+    result as u8
+}
+
+#[cfg(test)]
+mod opaque_background_blend_tests {
+    use super::{BlendMode, composite_blended_pixel};
+
+    #[test]
+    fn opaque_screen_then_multiply_matches_browser_integer_channels() {
+        let base = image::Rgba([253, 216, 53, 255]);
+        let blue = image::Rgba([21, 101, 192, 255]);
+        let red = image::Rgba([211, 47, 47, 255]);
+
+        let screen = composite_blended_pixel(blue, base, BlendMode::Screen).unwrap();
+        assert_eq!(screen, image::Rgba([254, 232, 206, 255]));
+        assert_eq!(
+            composite_blended_pixel(red, screen, BlendMode::Multiply),
+            Some(image::Rgba([210, 42, 37, 255]))
+        );
+    }
 }
 
 fn blend_channel(mode: BlendMode, source: f32, backdrop: f32) -> f32 {
@@ -7982,26 +9617,30 @@ fn encode_base64_background_data(data: &[u8]) -> String {
     out
 }
 
-fn parse_background_layer_sources(map: &StyleMap) -> Option<Vec<SimpleBackgroundLayerSource>> {
-    let CssValue::Keyword(raw) = get_non_special(map, "background-layer-sources")? else {
+fn parse_background_layer_sources(
+    map: &StyleMap,
+    current_color: Color,
+    custom_properties: &HashMap<String, String>,
+) -> Option<Vec<SimpleBackgroundLayerSource>> {
+    let CssValue::BackgroundLayers(raw) = get_non_special(map, "background-image")? else {
         return None;
     };
     let mut sources = Vec::new();
-    for record in raw.split(BACKGROUND_LAYER_RECORD_SEP) {
-        let (kind, value) = record.split_once(BACKGROUND_LAYER_FIELD_SEP)?;
-        let value = value.trim();
-        if value.eq_ignore_ascii_case("none") {
-            continue;
-        }
-        match kind {
-            "background-image" => {
-                sources.push(SimpleBackgroundLayerSource::Image(value.to_string()));
-            }
-            "background-gradient" => {
-                sources.push(SimpleBackgroundLayerSource::Linear(parse_linear_gradient(
+    for source in raw {
+        match source {
+            BackgroundLayerSource::Raster(value) => {
+                sources.push(SimpleBackgroundLayerSource::Image(resolve_embedded_vars(
                     value,
-                )?));
+                    custom_properties,
+                )));
             }
+            BackgroundLayerSource::Linear(value) => {
+                let value = resolve_embedded_vars(value, custom_properties);
+                sources.push(SimpleBackgroundLayerSource::Linear(
+                    parse_linear_gradient_for_color(&value, current_color)?,
+                ));
+            }
+            BackgroundLayerSource::None => {}
             _ => return None,
         }
     }
@@ -8012,14 +9651,8 @@ fn style_background_border_box_size(style: &ComputedStyle) -> Option<(f32, f32)>
     let mut width = style.width?;
     let mut height = style.height?;
     if style.box_sizing == BoxSizing::ContentBox {
-        width += style.padding.left
-            + style.padding.right
-            + style.border.left.width
-            + style.border.right.width;
-        height += style.padding.top
-            + style.padding.bottom
-            + style.border.top.width
-            + style.border.bottom.width;
+        width += style.padding.horizontal() + style.border.horizontal_width();
+        height += style.padding.vertical() + style.border.vertical_width();
     }
     (width > 0.0 && height > 0.0).then_some((width, height))
 }
@@ -8123,15 +9756,14 @@ fn build_simple_multi_background_svg(
                 ));
                 let basis = size.0 * gradient.angle.to_radians().sin().abs()
                     + size.1 * gradient.angle.to_radians().cos().abs();
-                for stop in &gradient.stops {
-                    let offset = (stop.position + stop.position_length / basis.max(1e-6))
-                        .clamp(0.0, 1.0)
-                        * 100.0;
+                let stops = gradient.ramp.resolve(basis)?;
+                for stop in stops.svg_unit_interval_stops()? {
+                    let offset = stop.position * 100.0;
                     defs.push_str(&format!(
                         r#"<stop offset="{offset}%" stop-color="{color}" stop-opacity="{opacity}"/>"#,
                         offset = fmt_svg_num(offset),
-                        color = color_to_svg_hex(stop.color),
-                        opacity = fmt_svg_num(stop.color.a as f32 / 255.0),
+                        color = color_to_svg_hex(stop.color.color),
+                        opacity = fmt_svg_num(stop.color.color.a as f32 / 255.0),
                     ));
                 }
                 defs.push_str("</linearGradient>");
@@ -8215,10 +9847,10 @@ fn css_box_rect_for_background_origin(
 
 fn css_padding_box_rect(style: &ComputedStyle, border_rect: CssBoxRect) -> CssBoxRect {
     CssBoxRect {
-        x: border_rect.x + style.border.left.width,
-        y: border_rect.y + style.border.top.width,
-        width: (border_rect.width - style.border.left.width - style.border.right.width).max(0.0),
-        height: (border_rect.height - style.border.top.width - style.border.bottom.width).max(0.0),
+        x: border_rect.x + style.border.left.used_width(),
+        y: border_rect.y + style.border.top.used_width(),
+        width: (border_rect.width - style.border.horizontal_width()).max(0.0),
+        height: (border_rect.height - style.border.vertical_width()).max(0.0),
     }
 }
 
@@ -8227,7 +9859,7 @@ fn css_content_box_rect(style: &ComputedStyle, border_rect: CssBoxRect) -> CssBo
     CssBoxRect {
         x: padding.x + style.padding.left,
         y: padding.y + style.padding.top,
-        width: (padding.width - style.padding.left - style.padding.right).max(0.0),
+        width: (padding.width - style.padding.horizontal()).max(0.0),
         height: (padding.height - style.padding.top - style.padding.bottom).max(0.0),
     }
 }
@@ -8326,24 +9958,19 @@ fn solid_data_png_color(href: &str) -> Option<Color> {
     if pixels.any(|pixel| pixel.0 != first.0) {
         return None;
     }
-    Some(Color {
-        r: first[0],
-        g: first[1],
-        b: first[2],
-        a: first[3],
-    })
+    Some(Color::rgba8(first[0], first[1], first[2], first[3]))
 }
 
 fn multiply_colors(source: Color, backdrop: Color) -> Color {
-    if source.a < 255 || backdrop.a < 255 {
+    if source.a < 255.0 || backdrop.a < 255.0 {
         return source;
     }
-    Color {
-        r: ((source.r as u16 * backdrop.r as u16) / 255) as u8,
-        g: ((source.g as u16 * backdrop.g as u16) / 255) as u8,
-        b: ((source.b as u16 * backdrop.b as u16) / 255) as u8,
-        a: 255,
-    }
+    Color::from_css_rgb(
+        source.r * backdrop.r / 255.0,
+        source.g * backdrop.g / 255.0,
+        source.b * backdrop.b / 255.0,
+        255.0,
+    )
 }
 
 fn linear_gradient_svg_line(
@@ -8368,7 +9995,8 @@ fn linear_gradient_svg_line(
 }
 
 fn color_to_svg_hex(color: Color) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+    let [r, g, b, _] = color.to_rgba8();
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 fn xml_escape_attr(value: &str) -> String {
@@ -8616,13 +10244,234 @@ fn extract_image_set_url(value: &str) -> Option<String> {
     (!source.is_empty()).then(|| source.to_string())
 }
 
-fn parse_border_image_gradient(value: &str) -> Option<LinearGradient> {
-    let trimmed = value.trim();
-    let end = trimmed.find(')')?;
-    let gradient_value = &trimmed[..=end];
-    let mut gradient = parse_linear_gradient(gradient_value)?;
-    gradient.layer_box.border_image = true;
-    Some(gradient)
+fn parse_border_image_source(source: &str, current_color: Color) -> Option<BorderImageSource> {
+    let source = source.trim();
+    let lower = source.to_ascii_lowercase();
+    let source = if lower.starts_with("linear-gradient(")
+        || lower.starts_with("repeating-linear-gradient(")
+    {
+        BorderImageSource::LinearGradient(parse_linear_gradient_for_color(source, current_color)?)
+    } else if lower.starts_with("radial-gradient(")
+        || lower.starts_with("repeating-radial-gradient(")
+    {
+        BorderImageSource::RadialGradient(parse_radial_gradient_for_color(source, current_color)?)
+    } else if lower.starts_with("conic-gradient(") || lower.starts_with("repeating-conic-gradient(")
+    {
+        BorderImageSource::ConicGradient(parse_conic_gradient_for_color(source, current_color)?)
+    } else {
+        BorderImageSource::Url(background_url_href(source)?)
+    };
+    Some(source)
+}
+
+fn parse_border_image_slices(input: &str) -> Option<BorderImageSlices> {
+    let slice_part = input.trim();
+    let mut fill = false;
+    let mut values = Vec::new();
+    for token in slice_part.split_ascii_whitespace() {
+        if token.eq_ignore_ascii_case("fill") {
+            fill = true;
+            continue;
+        }
+        let value = if let Some(percent) = token.strip_suffix('%') {
+            BorderImageSliceValue::Percentage(percent.parse().ok()?)
+        } else {
+            BorderImageSliceValue::Number(token.parse().ok()?)
+        };
+        values.push(value);
+    }
+    if values.is_empty() {
+        return Some(BorderImageSlices {
+            fill,
+            ..Default::default()
+        });
+    }
+    let (top, right, bottom, left) = expand_border_image_quad(&values)?;
+    Some(BorderImageSlices {
+        top,
+        right,
+        bottom,
+        left,
+        fill,
+    })
+}
+
+fn parse_border_image_widths(
+    input: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<BorderImageWidths> {
+    let values = split_css_whitespace(input)
+        .into_iter()
+        .map(|value| parse_border_image_width(value, style, length_context, font_metrics))
+        .collect::<Option<Vec<_>>>()?;
+    let (top, right, bottom, left) = expand_border_image_quad(&values)?;
+    Some(BorderImageWidths {
+        top,
+        right,
+        bottom,
+        left,
+    })
+}
+
+fn parse_border_image_outsets(
+    input: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<BorderImageOutsets> {
+    let values = split_css_whitespace(input)
+        .into_iter()
+        .map(|value| parse_border_image_outset(value, style, length_context, font_metrics))
+        .collect::<Option<Vec<_>>>()?;
+    let (top, right, bottom, left) = expand_border_image_quad(&values)?;
+    Some(BorderImageOutsets {
+        top,
+        right,
+        bottom,
+        left,
+    })
+}
+
+fn parse_border_image_repeats(input: &str) -> Option<BorderImageRepeats> {
+    let mut values = input.split_ascii_whitespace().map(|value| match value {
+        value if value.eq_ignore_ascii_case("stretch") => Some(BorderImageRepeatMode::Stretch),
+        value if value.eq_ignore_ascii_case("repeat") => Some(BorderImageRepeatMode::Repeat),
+        value if value.eq_ignore_ascii_case("round") => Some(BorderImageRepeatMode::Round),
+        value if value.eq_ignore_ascii_case("space") => Some(BorderImageRepeatMode::Space),
+        _ => None,
+    });
+    let horizontal = values.next()??;
+    let vertical = match values.next() {
+        Some(value) => value?,
+        None => horizontal,
+    };
+    values.next().is_none().then_some(BorderImageRepeats {
+        horizontal,
+        vertical,
+    })
+}
+
+fn parse_border_image_width(
+    token: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<BorderImageWidth> {
+    let token = token.trim();
+    if token.eq_ignore_ascii_case("auto") {
+        return Some(BorderImageWidth::Auto);
+    }
+    if let Ok(value) = token.parse::<f32>() {
+        return (value.is_finite() && value >= 0.0).then_some(BorderImageWidth::Number(value));
+    }
+    match parse_length(token)? {
+        CssValue::Clamp(min, preferred, max) => Some(BorderImageWidth::Clamp {
+            min: parse_border_image_length_percent(&min, style, length_context, font_metrics)?,
+            preferred: parse_border_image_length_percent(
+                &preferred,
+                style,
+                length_context,
+                font_metrics,
+            )?,
+            max: parse_border_image_length_percent(&max, style, length_context, font_metrics)?,
+        }),
+        CssValue::Var(name, fallback) => {
+            let value = crate::style::resolve::resolve_var_to_string(
+                &name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            parse_border_image_width(&value, style, length_context, font_metrics)
+        }
+        value => parse_border_image_length_percent(&value, style, length_context, font_metrics)
+            .map(BorderImageWidth::LengthPercent),
+    }
+}
+
+fn parse_border_image_length_percent(
+    value: &CssValue,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<LengthPercent> {
+    let value = match value {
+        CssValue::Length(value) => LengthPercent::length(*value),
+        CssValue::Percentage(value) => LengthPercent::percent(*value),
+        CssValue::Calc(tokens) => calc_length_percent(tokens, style)?,
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            return parse_border_image_width(&raw, style, length_context, font_metrics).and_then(
+                |value| match value {
+                    BorderImageWidth::LengthPercent(value) => Some(value),
+                    _ => None,
+                },
+            );
+        }
+        CssValue::Clamp(_, _, _) => return None,
+        value => LengthPercent::length(resolve_css_length_for_style(
+            value,
+            style,
+            length_context,
+            font_metrics,
+        )?),
+    };
+    (value.length.is_finite() && value.percent.is_finite()).then_some(value)
+}
+
+fn parse_border_image_outset(
+    token: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<BorderImageOutset> {
+    let token = token.trim();
+    if let Ok(value) = token.parse::<f32>() {
+        return (value.is_finite() && value >= 0.0).then_some(BorderImageOutset::Number(value));
+    }
+    let value = match parse_length(token)? {
+        CssValue::Var(name, fallback) => {
+            let value = crate::style::resolve::resolve_var_to_string(
+                &name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            return parse_border_image_outset(&value, style, length_context, font_metrics);
+        }
+        value if css_value_contains_percentage(&value) => return None,
+        value => resolve_css_length_for_style(&value, style, length_context, font_metrics)?,
+    };
+    (value.is_finite() && value >= 0.0).then_some(BorderImageOutset::Length(value))
+}
+
+fn css_value_contains_percentage(value: &CssValue) -> bool {
+    match value {
+        CssValue::Percentage(_) => true,
+        CssValue::Calc(tokens) => tokens
+            .iter()
+            .any(|token| matches!(token, CalcToken::Percent(_))),
+        CssValue::Clamp(min, preferred, max) => {
+            css_value_contains_percentage(min)
+                || css_value_contains_percentage(preferred)
+                || css_value_contains_percentage(max)
+        }
+        _ => false,
+    }
+}
+
+fn expand_border_image_quad<T: Copy>(values: &[T]) -> Option<(T, T, T, T)> {
+    match *values {
+        [top] => Some((top, top, top, top)),
+        [top, right] => Some((top, right, top, right)),
+        [top, right, bottom] => Some((top, right, bottom, right)),
+        [top, right, bottom, left] => Some((top, right, bottom, left)),
+        _ => None,
+    }
 }
 
 /// Parse a `box-shadow` shorthand value.
@@ -8631,105 +10480,80 @@ fn parse_border_image_gradient(value: &str) -> Option<LinearGradient> {
 /// - `[inset]? <offset-x> <offset-y> [<blur> [<spread>]] [<color>]`
 /// - `inset 0 2px 8px rgba(0,0,0,0.3)`
 /// - `4px 4px 8px 2px #ccc`  (with spread)
-/// - Multiple shadows separated by commas — only the first is retained.
-fn parse_box_shadow(val: &str) -> Vec<BoxShadow> {
+/// - Multiple shadows separated by commas.
+///
+/// The list is parsed atomically. A malformed entry invalidates the complete
+/// property value; silently dropping one entry changes both the declaration's
+/// validity and its paint result.
+fn parse_box_shadow_for_color(val: &str, current_color: Color) -> Option<Vec<BoxShadow>> {
     let val = val.trim();
     if val == "none" {
-        return Vec::new();
+        return Some(Vec::new());
+    }
+    if val.starts_with(',') || val.ends_with(',') {
+        return None;
     }
 
     // A `box-shadow` may list several shadows separated by top-level commas
     // (outside parens). They paint back-to-front, the first listed on top.
-    split_top_level_comma(val)
+    let entries = split_top_level_comma(val);
+    if entries.is_empty() || entries.iter().any(|entry| entry.trim().is_empty()) {
+        return None;
+    }
+    entries
         .iter()
-        .filter_map(|s| parse_single_box_shadow(s))
+        .map(|entry| parse_single_box_shadow_for_color(entry, current_color))
         .collect()
 }
 
 /// Parse one shadow from a `box-shadow` list entry.
-fn parse_single_box_shadow(val: &str) -> Option<BoxShadow> {
+fn parse_single_box_shadow_for_color(val: &str, current_color: Color) -> Option<BoxShadow> {
     let val = val.trim();
     if val.is_empty() {
         return None;
     }
 
-    // Tokenize: spaces delimit tokens, but rgba(...) / rgb(...) / hsl(...)
-    // and keyword `inset` are each a single token.
-    let mut tokens: Vec<String> = Vec::new();
-    let mut chars = val.chars().peekable();
-    let mut current = String::new();
+    // Whitespace inside color functions is not a component separator.
+    let tokens = split_css_components(val);
 
-    while let Some(&ch) = chars.peek() {
-        if ch == ' ' && !current.contains('(') {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
-            chars.next();
-        } else if ch == ')' {
-            current.push(ch);
-            chars.next();
-            tokens.push(std::mem::take(&mut current));
-        } else {
-            current.push(ch);
-            chars.next();
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    // Pull out `inset` keyword wherever it appears (CSS allows it at either
-    // end of the declaration).
+    // CSS combines these components with `&&`, so color and `inset` may occur
+    // on either side of the length sequence. Each may occur at most once.
     let mut inset = false;
-    tokens.retain(|t| {
-        if t.eq_ignore_ascii_case("inset") {
+    let mut lengths = Vec::with_capacity(4);
+    let mut color = None;
+    for token in &tokens {
+        if token.eq_ignore_ascii_case("inset") {
+            if inset {
+                return None;
+            }
             inset = true;
-            false
+        } else if let Some(length) = parse_shadow_length(token) {
+            lengths.push(length);
+        } else if color.is_none() {
+            color = parse_border_color(token);
+            color?;
         } else {
-            true
+            return None;
         }
-    });
+    }
 
-    if tokens.len() < 2 {
+    if !(2..=4).contains(&lengths.len()) {
+        return None;
+    }
+    let blur = lengths.get(2).copied().unwrap_or(0.0);
+    if blur < 0.0 {
         return None;
     }
 
-    let offset_x = parse_shadow_length(&tokens[0])?;
-    let offset_y = parse_shadow_length(&tokens[1])?;
-
-    // Tokens after offsets may be: [blur [spread]] [color]. Lengths parse
-    // numerically; colors don't. Walk forward consuming up to 2 lengths.
-    let mut idx = 2;
-    let mut blur = 0.0;
-    let mut spread = 0.0;
-    if idx < tokens.len() {
-        if let Some(b) = parse_shadow_length(&tokens[idx]) {
-            blur = b;
-            idx += 1;
-            if idx < tokens.len()
-                && let Some(s) = parse_shadow_length(&tokens[idx])
-            {
-                spread = s;
-                idx += 1;
-            }
-        }
-    }
-
-    // An omitted (or `currentColor`) shadow color defaults to the element's
-    // `color`, resolved later via the CURRENT_COLOR_SENTINEL in
-    // resolve_current_color (CSS Backgrounds & Borders L3 §7.2).
-    let color = if idx < tokens.len() {
-        parse_border_color(&tokens[idx]).unwrap_or(CURRENT_COLOR_SENTINEL)
-    } else {
-        CURRENT_COLOR_SENTINEL
-    };
-
+    let (color, color_source) =
+        bind_specified_color(color.unwrap_or(SpecifiedColor::CurrentColor), current_color);
     Some(BoxShadow {
-        offset_x,
-        offset_y,
+        offset_x: lengths[0],
+        offset_y: lengths[1],
         blur,
-        spread,
+        spread: lengths.get(3).copied().unwrap_or(0.0),
         color,
+        color_source,
         inset,
     })
 }
@@ -8738,20 +10562,35 @@ fn parse_single_box_shadow(val: &str) -> Option<BoxShadow> {
 /// Syntax: `none | [ <color>? && <length>{2,3} ]#`. Unlike `box-shadow` there
 /// is no spread or `inset`, and the optional color may precede or follow the
 /// offsets. Reuses `BoxShadow` storage with `spread = 0` and `inset = false`.
-fn parse_text_shadow(val: &str) -> Vec<BoxShadow> {
+fn parse_text_shadow_for_color(val: &str, current_color: Color) -> Vec<BoxShadow> {
     let val = val.trim();
     if val.is_empty() || val == "none" {
         return Vec::new();
     }
     split_top_level_comma(val)
         .iter()
-        .filter_map(|s| parse_single_text_shadow(s))
+        .filter_map(|s| parse_single_text_shadow(s, current_color))
         .collect()
+}
+
+#[cfg(test)]
+fn parse_box_shadow(val: &str) -> Option<Vec<BoxShadow>> {
+    parse_box_shadow_for_color(val, Color::BLACK)
+}
+
+#[cfg(test)]
+fn parse_single_box_shadow(val: &str) -> Option<BoxShadow> {
+    parse_single_box_shadow_for_color(val, Color::BLACK)
+}
+
+#[cfg(test)]
+fn parse_text_shadow(val: &str) -> Vec<BoxShadow> {
+    parse_text_shadow_for_color(val, Color::BLACK)
 }
 
 /// Parse one `text-shadow` list entry: 2 or 3 lengths plus an optional color
 /// that may appear before or after the lengths.
-fn parse_single_text_shadow(val: &str) -> Option<BoxShadow> {
+fn parse_single_text_shadow(val: &str, current_color: Color) -> Option<BoxShadow> {
     let val = val.trim();
     if val.is_empty() {
         return None;
@@ -8780,7 +10619,7 @@ fn parse_single_text_shadow(val: &str) -> Option<BoxShadow> {
     // Separate the (at most one) color token from the length tokens. The color
     // may be at either end; lengths parse numerically, colors do not.
     let mut lengths: Vec<f32> = Vec::new();
-    let mut color: Option<Color> = None;
+    let mut color = None;
     for t in &tokens {
         if let Some(len) = parse_shadow_length(t) {
             lengths.push(len);
@@ -8793,14 +10632,15 @@ fn parse_single_text_shadow(val: &str) -> Option<BoxShadow> {
         return None;
     }
 
+    let (color, color_source) =
+        bind_specified_color(color.unwrap_or(SpecifiedColor::CurrentColor), current_color);
     Some(BoxShadow {
         offset_x: lengths[0],
         offset_y: lengths[1],
         blur: lengths.get(2).copied().unwrap_or(0.0),
         spread: 0.0,
-        // An omitted color defaults to the element's `color`, resolved later via
-        // the CURRENT_COLOR_SENTINEL in resolve_current_color.
-        color: color.unwrap_or(CURRENT_COLOR_SENTINEL),
+        color,
+        color_source,
         inset: false,
     })
 }
@@ -8833,7 +10673,10 @@ fn split_top_level_comma(val: &str) -> Vec<String> {
     parts
 }
 
-/// Parse a length value for box-shadow (px or pt or bare number).
+/// Parse a length value for box-shadow.
+///
+/// CSS permits a unitless zero where a length is expected, but a non-zero
+/// number is not a length and invalidates the declaration.
 fn parse_shadow_length(val: &str) -> Option<f32> {
     let val = val.trim();
     if let Some(n) = val.strip_suffix("px") {
@@ -8841,7 +10684,7 @@ fn parse_shadow_length(val: &str) -> Option<f32> {
     } else if let Some(n) = val.strip_suffix("pt") {
         n.parse::<f32>().ok()
     } else {
-        val.parse::<f32>().ok()
+        val.parse::<f32>().ok().filter(|value| *value == 0.0)
     }
 }
 
@@ -8852,14 +10695,12 @@ fn parse_shadow_length(val: &str) -> Option<f32> {
 fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Option<Transform> {
     let val = val.trim();
     let len = |s: &str| parse_transform_length(s, font_size, root_font_size);
-    let mk_translate = |x: Option<(f32, bool)>, y: Option<(f32, bool)>| {
-        let (tx, tx_pct) = x.unwrap_or((0.0, false));
-        let (ty, ty_pct) = y.unwrap_or((0.0, false));
+    let mk_translate = |x: Option<(f64, bool)>, y: Option<(f64, bool)>| {
+        let (x, x_percentage) = x.unwrap_or((0.0, false));
+        let (y, y_percentage) = y.unwrap_or((0.0, false));
         Transform::Translate {
-            tx,
-            ty,
-            tx_pct,
-            ty_pct,
+            offset: CssVector::new(x, y),
+            percentages: PercentageAxes::new(x_percentage, y_percentage),
         }
     };
 
@@ -8914,9 +10755,9 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
     {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
         if parts.len() == 4 {
-            let x = parts[0].parse::<f32>().ok()?;
-            let y = parts[1].parse::<f32>().ok()?;
-            let z = parts[2].parse::<f32>().ok()?;
+            let x = parts[0].parse::<f64>().ok()?;
+            let y = parts[1].parse::<f64>().ok()?;
+            let z = parts[2].parse::<f64>().ok()?;
             let deg = parse_angle_deg(parts[3])?;
             return Some(Transform::Matrix3d(matrix3d_rotate_axis(x, y, z, deg)?));
         }
@@ -8926,33 +10767,33 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
         .strip_prefix("scaleX(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let sx = inner.trim().parse::<f32>().ok()?;
-        return Some(Transform::Scale(sx, 1.0));
+        let sx = parse_scale_factor(inner)?;
+        return Some(Transform::Scale(CssVector::new(sx, 1.0)));
     }
 
     if let Some(inner) = val
         .strip_prefix("scaleY(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        let sy = inner.trim().parse::<f32>().ok()?;
-        return Some(Transform::Scale(1.0, sy));
+        let sy = parse_scale_factor(inner)?;
+        return Some(Transform::Scale(CssVector::new(1.0, sy)));
     }
 
     if let Some(inner) = val.strip_prefix("scale(").and_then(|s| s.strip_suffix(')')) {
         let parts: Vec<&str> = inner.split(',').collect();
         if parts.len() == 1 {
-            let s = parts[0].trim().parse::<f32>().ok()?;
-            return Some(Transform::Scale(s, s));
+            let scale = parse_scale_factor(parts[0])?;
+            return Some(Transform::Scale(CssVector::splat(scale)));
         } else if parts.len() == 2 {
-            let sx = parts[0].trim().parse::<f32>().ok()?;
+            let sx = parse_scale_factor(parts[0])?;
             // CSS: an omitted/empty second arg defaults to the first.
             let sy_tok = parts[1].trim();
             let sy = if sy_tok.is_empty() {
                 sx
             } else {
-                sy_tok.parse::<f32>().ok()?
+                parse_scale_factor(sy_tok)?
             };
-            return Some(Transform::Scale(sx, sy));
+            return Some(Transform::Scale(CssVector::new(sx, sy)));
         }
     }
 
@@ -8962,9 +10803,9 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
     {
         let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
         if parts.len() == 3 {
-            let sx = parts[0].parse::<f32>().ok()?;
-            let sy = parts[1].parse::<f32>().ok()?;
-            let sz = parts[2].parse::<f32>().ok()?;
+            let sx = parse_scale_factor(parts[0])?;
+            let sy = parse_scale_factor(parts[1])?;
+            let sz = parse_scale_factor(parts[2])?;
             return Some(Transform::Matrix3d(matrix3d_scale(sx, sy, sz)));
         }
     }
@@ -9035,19 +10876,21 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
         } else {
             0.0
         };
-        let tan_x = (ax * std::f32::consts::PI / 180.0).tan();
-        let tan_y = (ay * std::f32::consts::PI / 180.0).tan();
-        return Some(Transform::Matrix(1.0, tan_y, tan_x, 1.0, 0.0, 0.0));
+        return Some(Transform::Skew(CssVector::new(ax, ay)));
     }
 
     if let Some(inner) = val.strip_prefix("skewX(").and_then(|s| s.strip_suffix(')')) {
-        let tan_x = (parse_angle_deg(inner)? * std::f32::consts::PI / 180.0).tan();
-        return Some(Transform::Matrix(1.0, 0.0, tan_x, 1.0, 0.0, 0.0));
+        return Some(Transform::Skew(CssVector::new(
+            parse_angle_deg(inner)?,
+            0.0,
+        )));
     }
 
     if let Some(inner) = val.strip_prefix("skewY(").and_then(|s| s.strip_suffix(')')) {
-        let tan_y = (parse_angle_deg(inner)? * std::f32::consts::PI / 180.0).tan();
-        return Some(Transform::Matrix(1.0, tan_y, 0.0, 1.0, 0.0, 0.0));
+        return Some(Transform::Skew(CssVector::new(
+            0.0,
+            parse_angle_deg(inner)?,
+        )));
     }
 
     if let Some(inner) = val
@@ -9061,19 +10904,19 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
         if toks.len() != 6 {
             return None;
         }
-        let mut nums = [0.0_f32; 6];
+        let mut nums = [0.0_f64; 6];
         for (i, tok) in toks.iter().enumerate() {
-            nums[i] = tok.trim().parse::<f32>().ok()?;
+            nums[i] = tok.trim().parse::<f64>().ok()?;
         }
         // a, b, c, d are unitless; e, f are pixel translations -> points.
-        return Some(Transform::Matrix(
+        return Some(Transform::Matrix(CssAffineMatrix::from_components(
             nums[0],
             nums[1],
             nums[2],
             nums[3],
             nums[4] * 0.75,
             nums[5] * 0.75,
-        ));
+        )));
     }
 
     if let Some(inner) = val
@@ -9084,26 +10927,26 @@ fn parse_single_transform(val: &str, font_size: f32, root_font_size: f32) -> Opt
         if toks.len() != 16 {
             return None;
         }
-        let mut nums = [0.0_f32; 16];
+        let mut nums = [0.0_f64; 16];
         for (i, tok) in toks.iter().enumerate() {
-            nums[i] = tok.trim().parse::<f32>().ok()?;
+            nums[i] = tok.trim().parse::<f64>().ok()?;
         }
         nums[12] *= 0.75;
         nums[13] *= 0.75;
         nums[14] *= 0.75;
-        return Some(Transform::Matrix3d(nums));
+        return Some(Transform::Matrix3d(CssMatrix3d::new(nums)));
     }
 
     None
 }
 
-fn matrix3d_identity() -> [f32; 16] {
-    [
+fn matrix3d_identity() -> CssMatrix3d {
+    CssMatrix3d::new([
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+    ])
 }
 
-fn matrix3d_translate(tx: f32, ty: f32, tz: f32) -> [f32; 16] {
+fn matrix3d_translate(tx: f64, ty: f64, tz: f64) -> CssMatrix3d {
     let mut m = matrix3d_identity();
     m[12] = tx;
     m[13] = ty;
@@ -9111,38 +10954,38 @@ fn matrix3d_translate(tx: f32, ty: f32, tz: f32) -> [f32; 16] {
     m
 }
 
-fn matrix3d_scale(sx: f32, sy: f32, sz: f32) -> [f32; 16] {
-    [
+fn matrix3d_scale(sx: f64, sy: f64, sz: f64) -> CssMatrix3d {
+    CssMatrix3d::new([
         sx, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, sz, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+    ])
 }
 
-fn matrix3d_rotate_x(deg: f32) -> [f32; 16] {
-    let rad = deg * std::f32::consts::PI / 180.0;
+fn matrix3d_rotate_x(deg: f64) -> CssMatrix3d {
+    let rad = deg.to_radians();
     let (c, s) = (rad.cos(), rad.sin());
-    [
+    CssMatrix3d::new([
         1.0, 0.0, 0.0, 0.0, 0.0, c, s, 0.0, 0.0, -s, c, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+    ])
 }
 
-fn matrix3d_rotate_y(deg: f32) -> [f32; 16] {
-    let rad = deg * std::f32::consts::PI / 180.0;
+fn matrix3d_rotate_y(deg: f64) -> CssMatrix3d {
+    let rad = deg.to_radians();
     let (c, s) = (rad.cos(), rad.sin());
-    [
+    CssMatrix3d::new([
         c, 0.0, -s, 0.0, 0.0, 1.0, 0.0, 0.0, s, 0.0, c, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+    ])
 }
 
-fn matrix3d_rotate_axis(x: f32, y: f32, z: f32, deg: f32) -> Option<[f32; 16]> {
+fn matrix3d_rotate_axis(x: f64, y: f64, z: f64, deg: f64) -> Option<CssMatrix3d> {
     let len = (x * x + y * y + z * z).sqrt();
     if len == 0.0 {
         return None;
     }
     let (x, y, z) = (x / len, y / len, z / len);
-    let rad = deg * std::f32::consts::PI / 180.0;
+    let rad = deg.to_radians();
     let (c, s) = (rad.cos(), rad.sin());
     let t = 1.0 - c;
-    Some([
+    Some(CssMatrix3d::new([
         t * x * x + c,
         t * x * y + s * z,
         t * x * z - s * y,
@@ -9159,10 +11002,10 @@ fn matrix3d_rotate_axis(x: f32, y: f32, z: f32, deg: f32) -> Option<[f32; 16]> {
         0.0,
         0.0,
         1.0,
-    ])
+    ]))
 }
 
-fn matrix3d_multiply(lhs: &[f32; 16], rhs: &[f32; 16]) -> [f32; 16] {
+fn matrix3d_multiply(lhs: &CssMatrix3d, rhs: &CssMatrix3d) -> CssMatrix3d {
     let mut out = [0.0; 16];
     for col in 0..4 {
         for row in 0..4 {
@@ -9172,21 +11015,22 @@ fn matrix3d_multiply(lhs: &[f32; 16], rhs: &[f32; 16]) -> [f32; 16] {
                 + lhs[12 + row] * rhs[col * 4 + 3];
         }
     }
-    out
+    CssMatrix3d::new(out)
 }
 
-fn transform_to_matrix3d(t: &Transform) -> [f32; 16] {
+fn transform_to_matrix3d(t: &Transform) -> CssMatrix3d {
     match *t {
         Transform::Matrix3d(m) | Transform::Project3d { matrix: m, .. } => m,
         Transform::Rotate(_)
-        | Transform::Scale(_, _)
+        | Transform::Skew(_)
+        | Transform::Scale(_)
         | Transform::Translate { .. }
-        | Transform::Matrix(_, _, _, _, _, _)
-        | Transform::MatrixPct { .. } => {
-            let [a, b, c, d, e, f] = t.to_css_matrix(0.0, 0.0);
-            [
+        | Transform::Matrix(_)
+        | Transform::MatrixPct(_) => {
+            let [a, b, c, d, e, f] = t.to_css_matrix(CssVector::ZERO).components();
+            CssMatrix3d::new([
                 a, b, 0.0, 0.0, c, d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, e, f, 0.0, 1.0,
-            ]
+            ])
         }
     }
 }
@@ -9195,48 +11039,72 @@ fn transform_to_matrix3d(t: &Transform) -> [f32; 16] {
 /// `[a, b, c, d, e, f, e_w, e_h, f_w, f_h]`, where the effective translation for
 /// a box of size `w`×`h` is `e + e_w*w + e_h*h` / `f + f_w*w + f_h*h`. This lets
 /// `%` translate components survive composition without knowing the box size.
-type ExtMatrix = [f32; 10];
+type ExtMatrix = [f64; 10];
 
 /// Convert a single Transform into its extended affine matrix.
 fn transform_to_ext(t: &Transform) -> ExtMatrix {
     match *t {
         Transform::Rotate(deg) => {
-            let rad = deg * std::f32::consts::PI / 180.0;
+            let rad = deg.to_radians();
             let (c, s) = (rad.cos(), rad.sin());
             [c, s, -s, c, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         }
-        Transform::Scale(sx, sy) => [sx, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        Transform::Skew(angles) => [
+            1.0,
+            angles.y.to_radians().tan(),
+            angles.x.to_radians().tan(),
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        Transform::Scale(scale) => [scale.x, 0.0, 0.0, scale.y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         Transform::Translate {
-            tx,
-            ty,
-            tx_pct,
-            ty_pct,
+            offset,
+            percentages,
         } => {
-            let (e, e_w) = if tx_pct { (0.0, tx / 100.0) } else { (tx, 0.0) };
-            let (f, f_h) = if ty_pct { (0.0, ty / 100.0) } else { (ty, 0.0) };
+            let (e, e_w) = if percentages.x {
+                (0.0, offset.x / 100.0)
+            } else {
+                (offset.x, 0.0)
+            };
+            let (f, f_h) = if percentages.y {
+                (0.0, offset.y / 100.0)
+            } else {
+                (offset.y, 0.0)
+            };
             [1.0, 0.0, 0.0, 1.0, e, f, e_w, 0.0, 0.0, f_h]
         }
-        Transform::Matrix(a, b, c, d, e, f) => [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0],
+        Transform::Matrix(matrix) => {
+            let [a, b, c, d, e, f] = matrix.components();
+            [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0]
+        }
         Transform::Matrix3d(m) => {
-            let [a, b, c, d, e, f] = matrix3d_affine_projection(&m);
+            let [a, b, c, d, e, f] = matrix3d_affine_projection(&m).components();
             [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0]
         }
         Transform::Project3d { matrix, .. } => {
-            let [a, b, c, d, e, f] = matrix3d_affine_projection(&matrix);
+            let [a, b, c, d, e, f] = matrix3d_affine_projection(&matrix).components();
             [a, b, c, d, e, f, 0.0, 0.0, 0.0, 0.0]
         }
-        Transform::MatrixPct {
-            a,
-            b,
-            c,
-            d,
-            e,
-            f,
-            e_w,
-            e_h,
-            f_w,
-            f_h,
-        } => [a, b, c, d, e, f, e_w, e_h, f_w, f_h],
+        Transform::MatrixPct(matrix) => {
+            let [a, b, c, d, e, f] = matrix.constant.components();
+            [
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                matrix.width_translation.x,
+                matrix.height_translation.x,
+                matrix.width_translation.y,
+                matrix.height_translation.y,
+            ]
+        }
     }
 }
 
@@ -9245,7 +11113,7 @@ fn transform_to_ext(t: &Transform) -> ExtMatrix {
 /// coefficients) each transform through `lhs`'s linear part, keeping the result
 /// affine in `(w, h)`.
 fn multiply_ext(lhs: &ExtMatrix, rhs: &ExtMatrix) -> ExtMatrix {
-    let lin = |x: f32, y: f32| (lhs[0] * x + lhs[2] * y, lhs[1] * x + lhs[3] * y);
+    let lin = |x: f64, y: f64| (lhs[0] * x + lhs[2] * y, lhs[1] * x + lhs[3] * y);
     let (e, f) = lin(rhs[4], rhs[5]);
     let (ew, fw) = lin(rhs[6], rhs[8]);
     let (eh, fh) = lin(rhs[7], rhs[9]);
@@ -9261,6 +11129,19 @@ fn multiply_ext(lhs: &ExtMatrix, rhs: &ExtMatrix) -> ExtMatrix {
         fw + lhs[8],
         fh + lhs[9],
     ]
+}
+
+fn transform_from_ext(matrix: ExtMatrix) -> Transform {
+    let [a, b, c, d, e, f, e_w, e_h, f_w, f_h] = matrix;
+    if [e_w, e_h, f_w, f_h].into_iter().all(|value| value == 0.0) {
+        Transform::Matrix(CssAffineMatrix::from_components(a, b, c, d, e, f))
+    } else {
+        Transform::MatrixPct(ParametricAffineMatrix {
+            constant: CssAffineMatrix::from_components(a, b, c, d, e, f),
+            width_translation: CssVector::new(e_w, f_w),
+            height_translation: CssVector::new(e_h, f_h),
+        })
+    }
 }
 
 /// Parse a CSS `transform` value (one or more space-separated functions).
@@ -9354,24 +11235,7 @@ fn compose_transforms(transforms: &[Transform]) -> Option<Transform> {
         for t in transforms {
             result = multiply_ext(&result, &transform_to_ext(t));
         }
-        if result[6] == 0.0 && result[7] == 0.0 && result[8] == 0.0 && result[9] == 0.0 {
-            Some(Transform::Matrix(
-                result[0], result[1], result[2], result[3], result[4], result[5],
-            ))
-        } else {
-            Some(Transform::MatrixPct {
-                a: result[0],
-                b: result[1],
-                c: result[2],
-                d: result[3],
-                e: result[4],
-                f: result[5],
-                e_w: result[6],
-                e_h: result[7],
-                f_w: result[8],
-                f_h: result[9],
-            })
-        }
+        Some(transform_from_ext(result))
     }
 }
 
@@ -9380,22 +11244,18 @@ fn parse_individual_translate(val: &str, font_size: f32, root_font_size: f32) ->
     let len = |s: &str| parse_transform_length(s, font_size, root_font_size);
     match parts.as_slice() {
         [x] => {
-            let (tx, tx_pct) = len(x)?;
+            let (x, x_percentage) = len(x)?;
             Some(Transform::Translate {
-                tx,
-                ty: 0.0,
-                tx_pct,
-                ty_pct: false,
+                offset: CssVector::new(x, 0.0),
+                percentages: PercentageAxes::new(x_percentage, false),
             })
         }
         [x, y] => {
-            let (tx, tx_pct) = len(x)?;
-            let (ty, ty_pct) = len(y)?;
+            let (x, x_percentage) = len(x)?;
+            let (y, y_percentage) = len(y)?;
             Some(Transform::Translate {
-                tx,
-                ty,
-                tx_pct,
-                ty_pct,
+                offset: CssVector::new(x, y),
+                percentages: PercentageAxes::new(x_percentage, y_percentage),
             })
         }
         [x, y, z] => {
@@ -9429,17 +11289,34 @@ fn parse_individual_scale(val: &str) -> Option<Transform> {
     let parts: Vec<&str> = val.split_whitespace().collect();
     match parts.as_slice() {
         [s] => {
-            let s = s.parse().ok()?;
-            Some(Transform::Scale(s, s))
+            let scale = parse_scale_factor(s)?;
+            Some(Transform::Scale(CssVector::splat(scale)))
         }
-        [sx, sy] => Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+        [sx, sy] => Some(Transform::Scale(CssVector::new(
+            parse_scale_factor(sx)?,
+            parse_scale_factor(sy)?,
+        ))),
         [sx, sy, sz] => Some(Transform::Matrix3d(matrix3d_scale(
-            sx.parse().ok()?,
-            sy.parse().ok()?,
-            sz.parse().ok()?,
+            parse_scale_factor(sx)?,
+            parse_scale_factor(sy)?,
+            parse_scale_factor(sz)?,
         ))),
         _ => None,
     }
+}
+
+fn parse_scale_factor(value: &str) -> Option<f64> {
+    let value = value.trim();
+    value.strip_suffix('%').map_or_else(
+        || value.parse::<f64>().ok(),
+        |percentage| {
+            percentage
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .map(|value| value / 100.0)
+        },
+    )
 }
 
 fn parse_transform(val: &str, font_size: f32, root_font_size: f32) -> Option<Transform> {
@@ -9501,43 +11378,65 @@ fn parse_transform(val: &str, font_size: f32, root_font_size: f32) -> Option<Tra
 
     // Collapse to the cheaper `Matrix` form when no percentage translate is
     // present; otherwise keep the coefficients for render-time resolution.
-    if result[6] == 0.0 && result[7] == 0.0 && result[8] == 0.0 && result[9] == 0.0 {
-        Some(Transform::Matrix(
-            result[0], result[1], result[2], result[3], result[4], result[5],
-        ))
-    } else {
-        Some(Transform::MatrixPct {
-            a: result[0],
-            b: result[1],
-            c: result[2],
-            d: result[3],
-            e: result[4],
-            f: result[5],
-            e_w: result[6],
-            e_h: result[7],
-            f_w: result[8],
-            f_h: result[9],
-        })
-    }
+    Some(transform_from_ext(result))
 }
 
 /// Parse a length/percentage argument to `translate()` into `(value, is_percent)`.
 ///
 /// Absolute units (px/pt/in/cm/mm/pc) and font-relative units (em/rem) resolve
 /// to pt; a `%` token returns the raw percentage with `is_percent = true` (it is
-/// resolved against the element's own border box at render time). A bare number
-/// is treated as pixels (lenient, matching the legacy fallback). `font_size` and
-/// `root_font_size` are in pt.
-fn parse_transform_length(val: &str, font_size: f32, root_font_size: f32) -> Option<(f32, bool)> {
+/// resolved against the element's own border box at render time). Only a bare
+/// zero is accepted as a unitless length. `font_size` and `root_font_size` are
+/// in pt.
+fn parse_transform_length(val: &str, font_size: f32, root_font_size: f32) -> Option<(f64, bool)> {
     let val = val.trim();
     if let Some(n) = val.strip_suffix('%') {
-        return n.trim().parse::<f32>().ok().map(|v| (v, true));
+        return n.trim().parse::<f64>().ok().map(|v| (v, true));
     }
-    parse_abs_length_pt(val, font_size, root_font_size).map(|v| (v, false))
+    parse_abs_length_pt_f64(val, font_size, root_font_size).map(|v| (v, false))
+}
+
+fn parse_abs_length_pt_f64(val: &str, font_size: f32, root_font_size: f32) -> Option<f64> {
+    let val = val.trim();
+    if let Some(number) = val.strip_suffix("px") {
+        number.trim().parse::<f64>().ok().map(|value| value * 0.75)
+    } else if let Some(number) = val.strip_suffix("pt") {
+        number.trim().parse::<f64>().ok()
+    } else if let Some(number) = val.strip_suffix("rem") {
+        number
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| value * f64::from(root_font_size))
+    } else if let Some(number) = val.strip_suffix("em") {
+        number
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| value * f64::from(font_size))
+    } else if let Some(number) = val.strip_suffix("in") {
+        number.trim().parse::<f64>().ok().map(|value| value * 72.0)
+    } else if let Some(number) = val.strip_suffix("cm") {
+        number
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| value * 72.0 / 2.54)
+    } else if let Some(number) = val.strip_suffix("mm") {
+        number
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| value * 72.0 / 25.4)
+    } else if let Some(number) = val.strip_suffix("pc") {
+        number.trim().parse::<f64>().ok().map(|value| value * 12.0)
+    } else {
+        val.parse::<f64>().ok().filter(|value| *value == 0.0)
+    }
 }
 
 /// Resolve a CSS absolute/font-relative length token to pt. Returns `None` for
-/// percentages or unknown units. A bare number is treated as pixels.
+/// percentages, unknown units, and non-zero unitless numbers.
 fn parse_abs_length_pt(val: &str, font_size: f32, root_font_size: f32) -> Option<f32> {
     let val = val.trim();
     if let Some(n) = val.strip_suffix("px") {
@@ -9557,31 +11456,24 @@ fn parse_abs_length_pt(val: &str, font_size: f32, root_font_size: f32) -> Option
     } else if let Some(n) = val.strip_suffix("pc") {
         n.trim().parse::<f32>().ok().map(|v| v * 12.0)
     } else {
-        // Bare number: lenient fallback (treated as pt), matching legacy
-        // behaviour for `translate()`/`transform-origin` fixtures.
-        val.parse::<f32>().ok()
+        val.parse::<f32>().ok().filter(|value| *value == 0.0)
     }
 }
 
-/// Parse a CSS angle token (deg/rad/grad/turn, or bare number = degrees) to
-/// degrees. Reused by `rotate()` and `skew*()`.
-fn parse_angle_deg(val: &str) -> Option<f32> {
+/// Parse a CSS angle token (deg/rad/grad/turn) to degrees. Transform functions
+/// additionally accept a unitless zero for legacy compatibility.
+fn parse_angle_deg(val: &str) -> Option<f64> {
     let val = val.trim();
     if let Some(n) = val.strip_suffix("deg") {
-        n.trim().parse::<f32>().ok()
+        n.trim().parse::<f64>().ok()
     } else if let Some(n) = val.strip_suffix("grad") {
-        n.trim().parse::<f32>().ok().map(|g| g * 0.9)
+        n.trim().parse::<f64>().ok().map(|g| g * 0.9)
     } else if let Some(n) = val.strip_suffix("turn") {
-        n.trim().parse::<f32>().ok().map(|t| t * 360.0)
+        n.trim().parse::<f64>().ok().map(|t| t * 360.0)
     } else if let Some(n) = val.strip_suffix("rad") {
-        n.trim()
-            .parse::<f32>()
-            .ok()
-            .map(|r| r * 180.0 / std::f32::consts::PI)
+        n.trim().parse::<f64>().ok().map(f64::to_degrees)
     } else {
-        // Bare number: CSS treats a unitless angle as invalid, but ironpress is
-        // lenient elsewhere and existing fixtures rely on bare degrees.
-        val.parse::<f32>().ok()
+        val.parse::<f64>().ok().filter(|value| *value == 0.0)
     }
 }
 
@@ -9666,40 +11558,22 @@ fn split_css_words(raw: &str) -> Vec<String> {
 }
 
 fn parse_clip_position(raw: &str) -> (LengthPercent, LengthPercent) {
-    let center = LengthPercent {
-        value: 50.0,
-        is_percent: true,
-    };
+    let center = LengthPercent::percent(50.0);
     let tokens = split_css_words(raw);
     if tokens.is_empty() {
         return (center, center);
     }
     let edge_value = |edge: &str, offset: Option<&str>| -> Option<LengthPercent> {
         match edge {
-            "left" | "top" => offset.and_then(parse_clip_len_lp).or(Some(LengthPercent {
-                value: 0.0,
-                is_percent: true,
-            })),
-            "right" | "bottom" => {
-                if let Some(lp) = offset.and_then(parse_clip_len_lp) {
-                    if lp.is_percent {
-                        Some(LengthPercent {
-                            value: 100.0 - lp.value,
-                            is_percent: true,
-                        })
-                    } else {
-                        Some(LengthPercent {
-                            value: -lp.value,
-                            is_percent: true,
-                        })
-                    }
-                } else {
-                    Some(LengthPercent {
-                        value: 100.0,
-                        is_percent: true,
-                    })
-                }
-            }
+            "left" | "top" => offset
+                .and_then(parse_clip_len_lp)
+                .or(Some(LengthPercent::ZERO)),
+            "right" | "bottom" => Some(
+                LengthPercent::percent(100.0)
+                    - offset
+                        .and_then(parse_clip_len_lp)
+                        .unwrap_or(LengthPercent::ZERO),
+            ),
             "center" => Some(center),
             _ => None,
         }
@@ -9743,38 +11617,45 @@ fn parse_clip_position(raw: &str) -> (LengthPercent, LengthPercent) {
     }
 }
 
-fn parse_border_radius_list(raw: &str) -> ([f32; 4], [f32; 4]) {
-    let expand = |vals: Vec<f32>| -> [f32; 4] {
-        match vals.as_slice() {
-            [a] => [*a; 4],
-            [a, b] => [*a, *b, *a, *b],
-            [a, b, c] => [*a, *b, *c, *b],
-            [a, b, c, d, ..] => [*a, *b, *c, *d],
-            _ => [0.0; 4],
-        }
-    };
-    let (x_part, y_part) = raw.split_once('/').unwrap_or((raw, raw));
-    let xs = x_part
-        .split_whitespace()
-        .filter_map(|t| parse_clip_len(t).map(|(v, _)| v.max(0.0)))
-        .collect();
-    let ys = y_part
-        .split_whitespace()
-        .filter_map(|t| parse_clip_len(t).map(|(v, _)| v.max(0.0)))
-        .collect();
-    let rx = expand(xs);
-    let ry = if y_part == raw { rx } else { expand(ys) };
-    (rx, ry)
+fn parse_clip_radius_group(tokens: &[&str]) -> Option<[f32; 4]> {
+    let values = tokens
+        .iter()
+        .map(|token| parse_clip_len(token).map(|(value, _)| value.max(0.0)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(match values.as_slice() {
+        [a] => [*a; 4],
+        [a, b] => [*a, *b, *a, *b],
+        [a, b, c] => [*a, *b, *c, *b],
+        [a, b, c, d] => [*a, *b, *c, *d],
+        _ => return None,
+    })
 }
 
-fn parse_rect_like_radii(raw: &str) -> ([f32; 4], [f32; 4]) {
+fn parse_clip_corner_radii(raw: &str) -> Option<CornerRadii> {
+    let components = split_radius_components(raw, true)?;
+    let [tl_x, tr_x, br_x, bl_x] = parse_clip_radius_group(&components.horizontal)?;
+    let [tl_y, tr_y, br_y, bl_y] = components
+        .vertical
+        .as_deref()
+        .map(parse_clip_radius_group)
+        .unwrap_or(Some([tl_x, tr_x, br_x, bl_x]))?;
+    Some(CornerRadii::new(
+        CornerRadius::new(tl_x, tl_y),
+        CornerRadius::new(tr_x, tr_y),
+        CornerRadius::new(br_x, br_y),
+        CornerRadius::new(bl_x, bl_y),
+    ))
+}
+
+fn parse_rect_like_radii(raw: &str) -> Option<CornerRadii> {
     raw.split_once(" round ")
-        .map(|(_, r)| parse_border_radius_list(r))
-        .unwrap_or(([0.0; 4], [0.0; 4]))
+        .map_or(Some(CornerRadii::ZERO), |(_, radii)| {
+            parse_clip_corner_radii(radii)
+        })
 }
 
-/// Parse a CSS `clip-path` basic shape (circle/ellipse/inset/polygon). Returns
-/// None for `none` and unsupported forms (url(), path(), etc.).
+/// Parse a CSS `clip-path` basic shape. Returns `None` for `none` and invalid
+/// forms; supported fragment URLs and `path()` values have dedicated variants.
 fn parse_clip_path(val: &str) -> Option<ClipPath> {
     let (raw, geometry_box) = split_clip_geometry_box(val);
     let raw = raw.trim();
@@ -9814,8 +11695,8 @@ fn parse_clip_path(val: &str) -> Option<ClipPath> {
     }
     if let Some(inner) = split_function_args(raw, "inset") {
         let (insets_part, radius) = match inner.split_once(" round ") {
-            Some((a, r)) => (a, parse_border_radius_list(r)),
-            None => (inner, ([0.0; 4], [0.0; 4])),
+            Some((insets, radii)) => (insets, parse_clip_corner_radii(radii)?),
+            None => (inner, CornerRadii::ZERO),
         };
         let vals: Vec<LengthPercent> = insets_part
             .split_whitespace()
@@ -9834,8 +11715,7 @@ fn parse_clip_path(val: &str) -> Option<ClipPath> {
             right,
             bottom,
             left,
-            radii_x: radius.0,
-            radii_y: radius.1,
+            radii: radius,
             geometry_box,
         });
     }
@@ -9885,24 +11765,17 @@ fn parse_clip_path(val: &str) -> Option<ClipPath> {
             let right = vals[1];
             let bottom = vals[2];
             let left = vals[3];
-            let (radii_x, radii_y) = if radii.is_empty() {
-                ([0.0; 4], [0.0; 4])
+            let radii = if radii.is_empty() {
+                CornerRadii::ZERO
             } else {
-                parse_border_radius_list(radii)
+                parse_clip_corner_radii(radii)?
             };
             return Some(ClipPath::Rect {
                 x: left,
                 y: top,
-                width: LengthPercent {
-                    value: right.value - left.value,
-                    is_percent: right.is_percent && left.is_percent,
-                },
-                height: LengthPercent {
-                    value: bottom.value - top.value,
-                    is_percent: bottom.is_percent && top.is_percent,
-                },
-                radii_x,
-                radii_y,
+                width: right - left,
+                height: bottom - top,
+                radii,
                 geometry_box,
             });
         }
@@ -9914,14 +11787,13 @@ fn parse_clip_path(val: &str) -> Option<ClipPath> {
             .filter_map(parse_clip_len_lp)
             .collect();
         if vals.len() >= 4 {
-            let (radii_x, radii_y) = parse_rect_like_radii(inner);
+            let radii = parse_rect_like_radii(inner)?;
             return Some(ClipPath::Rect {
                 x: vals[0],
                 y: vals[1],
                 width: vals[2],
                 height: vals[3],
-                radii_x,
-                radii_y,
+                radii,
                 geometry_box,
             });
         }
@@ -9930,26 +11802,19 @@ fn parse_clip_path(val: &str) -> Option<ClipPath> {
         return Some(ClipPath::Url(id));
     }
     parse_shape_box(raw).map(|box_kind| ClipPath::Inset {
-        top: LengthPercent {
-            value: 0.0,
-            is_percent: false,
-        },
-        right: LengthPercent {
-            value: 0.0,
-            is_percent: false,
-        },
-        bottom: LengthPercent {
-            value: 0.0,
-            is_percent: false,
-        },
-        left: LengthPercent {
-            value: 0.0,
-            is_percent: false,
-        },
-        radii_x: [0.0; 4],
-        radii_y: [0.0; 4],
+        top: LengthPercent::ZERO,
+        right: LengthPercent::ZERO,
+        bottom: LengthPercent::ZERO,
+        left: LengthPercent::ZERO,
+        radii: CornerRadii::ZERO,
         geometry_box: box_kind,
     })
+}
+
+/// Whether `value` is a valid clip path that this engine can preserve when an
+/// upstream CSS parser leaves the property as an unparsed token list.
+pub(crate) fn is_supported_clip_path(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("none") || parse_clip_path(value).is_some()
 }
 
 fn parse_legacy_clip_rect(val: &str) -> Option<ClipPath> {
@@ -9966,16 +11831,9 @@ fn parse_legacy_clip_rect(val: &str) -> Option<ClipPath> {
     Some(ClipPath::Rect {
         x: vals[3],
         y: vals[0],
-        width: LengthPercent {
-            value: vals[1].value - vals[3].value,
-            is_percent: vals[1].is_percent && vals[3].is_percent,
-        },
-        height: LengthPercent {
-            value: vals[2].value - vals[0].value,
-            is_percent: vals[2].is_percent && vals[0].is_percent,
-        },
-        radii_x: [0.0; 4],
-        radii_y: [0.0; 4],
+        width: vals[1] - vals[3],
+        height: vals[2] - vals[0],
+        radii: CornerRadii::ZERO,
         geometry_box: ShapeBox::Border,
     })
 }
@@ -10009,16 +11867,16 @@ fn parse_fragment_url(raw: &str) -> Option<String> {
     inner.strip_prefix('#').map(str::to_string)
 }
 
-fn parse_mask_layer_source(raw: &str) -> Option<MaskLayerSource> {
+fn parse_mask_layer_source(raw: &str, current_color: Color) -> Option<MaskLayerSource> {
     let lower = raw.trim().to_ascii_lowercase();
     if lower.starts_with("linear-gradient(") || lower.starts_with("repeating-linear-gradient(") {
-        return parse_linear_gradient(raw).map(MaskLayerSource::Linear);
+        return parse_linear_gradient_for_color(raw, current_color).map(MaskLayerSource::Linear);
     }
     if lower.starts_with("radial-gradient(") || lower.starts_with("repeating-radial-gradient(") {
-        return parse_radial_gradient(raw).map(MaskLayerSource::Radial);
+        return parse_radial_gradient_for_color(raw, current_color).map(MaskLayerSource::Radial);
     }
     if lower.starts_with("conic-gradient(") || lower.starts_with("repeating-conic-gradient(") {
-        return parse_conic_gradient(raw).map(MaskLayerSource::Conic);
+        return parse_conic_gradient_for_color(raw, current_color).map(MaskLayerSource::Conic);
     }
     if lower.starts_with("url(") {
         if let Some(id) = parse_fragment_url(raw) {
@@ -10069,7 +11927,7 @@ fn mask_source_from_layers(layers: Vec<MaskLayer>) -> Option<Option<MaskSource>>
     }
 }
 
-fn parse_mask_image(val: &str, mode: MaskMode) -> Option<Option<MaskSource>> {
+fn parse_mask_image(val: &str, mode: MaskMode, current_color: Color) -> Option<Option<MaskSource>> {
     let raw = val.trim();
     if raw.eq_ignore_ascii_case("none") {
         return Some(None);
@@ -10077,7 +11935,8 @@ fn parse_mask_image(val: &str, mode: MaskMode) -> Option<Option<MaskSource>> {
     let layers: Vec<MaskLayer> = split_top_level_commas_value(raw)
         .into_iter()
         .filter_map(|part| {
-            parse_mask_layer_source(&part).map(|src| mask_layer_from_source(src, mode))
+            parse_mask_layer_source(&part, current_color)
+                .map(|src| mask_layer_from_source(src, mode))
         })
         .collect();
     mask_source_from_layers(layers)
@@ -10110,13 +11969,20 @@ fn extract_first_function(raw: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_mask_shorthand(val: &str, inherited_mode: MaskMode) -> Option<Option<MaskSource>> {
+fn parse_mask_shorthand(
+    val: &str,
+    inherited_mode: MaskMode,
+    current_color: Color,
+) -> Option<Option<MaskSource>> {
     let raw = val.trim();
     if raw.eq_ignore_ascii_case("none") {
         return Some(None);
     }
     let (image, rest) = extract_first_function(raw)?;
-    let mut layer = mask_layer_from_source(parse_mask_layer_source(image)?, inherited_mode);
+    let mut layer = mask_layer_from_source(
+        parse_mask_layer_source(image, current_color)?,
+        inherited_mode,
+    );
     let mut rest = rest.trim();
     for token in split_css_words(rest) {
         match token.as_str() {
@@ -10169,10 +12035,10 @@ fn parse_mask_shorthand(val: &str, inherited_mode: MaskMode) -> Option<Option<Ma
     Some(Some(MaskSource::Layers(vec![layer])))
 }
 
-fn apply_mask_longhands(map: &StyleMap, style: &mut ComputedStyle) {
+fn apply_mask_longhands(map: &StyleMap, style: &mut ComputedStyle, current_color: Color) {
     let Some(source) = style.mask_image.take() else {
         if let Some(CssValue::Keyword(k)) = get_non_special(map, "mask-border-source")
-            && parse_mask_layer_source(k).is_some()
+            && parse_mask_layer_source(k, current_color).is_some()
         {
             let width = get_non_special(map, "mask-border-width")
                 .and_then(|v| match v {
@@ -10501,50 +12367,113 @@ fn split_css_components(val: &str) -> Vec<String> {
     parts
 }
 
-fn set_flex_basis_auto(style: &mut ComputedStyle, content_sized: bool) {
-    style.flex_basis = None;
-    style.flex_basis_pct = None;
-    style.flex_basis_content = content_sized;
-    style.flex_basis_keyword = if content_sized {
-        Some(IntrinsicWidthKeyword::MaxContent)
-    } else {
-        None
-    };
+fn set_flex_basis_auto(style: &mut ComputedStyle) {
+    style.flex_basis = FlexBasis::Auto;
 }
 
 fn set_flex_basis_length(style: &mut ComputedStyle, value: f32) {
-    style.flex_basis = Some(value.max(0.0));
-    style.flex_basis_pct = None;
-    style.flex_basis_content = false;
-    style.flex_basis_keyword = None;
+    style.flex_basis = FlexBasis::Definite(LengthPercent::length(value));
 }
 
-fn set_flex_basis_percentage(style: &mut ComputedStyle, pct: f32) {
-    style.flex_basis_pct = Some((pct / 100.0).max(0.0));
-    style.flex_basis = None;
-    style.flex_basis_content = false;
-    style.flex_basis_keyword = None;
+fn set_flex_basis_percentage(style: &mut ComputedStyle, percent: f32) {
+    style.flex_basis = FlexBasis::Definite(LengthPercent::percent(percent));
+}
+
+fn calc_length_percent(tokens: &[CalcToken], style: &ComputedStyle) -> Option<LengthPercent> {
+    let value = |token: &CalcToken| match token {
+        CalcToken::Length(value) => Some(LengthPercent::length(*value)),
+        CalcToken::Percent(value) => Some(LengthPercent::percent(*value)),
+        CalcToken::Em(value) => Some(LengthPercent::length(*value * style.font_size)),
+        CalcToken::Rem(value) => Some(LengthPercent::length(*value * style.root_font_size)),
+        CalcToken::Vw(value) => Some(LengthPercent::length(style.viewport_width * *value / 100.0)),
+        CalcToken::Vh(value) => Some(LengthPercent::length(
+            style.viewport_height * *value / 100.0,
+        )),
+        CalcToken::Vmin(value) => Some(LengthPercent::length(
+            style.viewport_width.min(style.viewport_height) * *value / 100.0,
+        )),
+        CalcToken::Vmax(value) => Some(LengthPercent::length(
+            style.viewport_width.max(style.viewport_height) * *value / 100.0,
+        )),
+        CalcToken::Op(_) => None,
+    };
+
+    let mut tokens = tokens.iter();
+    let mut result = value(tokens.next()?)?;
+    while let Some(operator) = tokens.next() {
+        let rhs = value(tokens.next()?)?;
+        result = match operator {
+            CalcToken::Op(CalcOp::Add) => result + rhs,
+            CalcToken::Op(CalcOp::Sub) => result - rhs,
+            // CSS permits multiplication/division only with a number. The
+            // current typed token stream has no number variant, so accepting
+            // either form here would silently apply invalid dimensional math.
+            CalcToken::Op(CalcOp::Mul | CalcOp::Div) | _ => return None,
+        };
+    }
+    Some(result)
+}
+
+fn flex_length_percent(
+    value: &CssValue,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<LengthPercent> {
+    match value {
+        CssValue::Length(value) => Some(LengthPercent::length(*value)),
+        CssValue::Percentage(value) => Some(LengthPercent::percent(*value)),
+        CssValue::Calc(tokens) => calc_length_percent(tokens, style),
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            flex_length_percent(
+                &parse_property_value("flex-basis", &raw)?,
+                style,
+                length_context,
+                font_metrics,
+            )
+        }
+        value => resolve_css_length_for_style(value, style, length_context, font_metrics)
+            .map(LengthPercent::length),
+    }
 }
 
 fn apply_flex_basis_value(
     style: &mut ComputedStyle,
     value: &CssValue,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> bool {
     match value {
-        CssValue::Length(v) => {
-            set_flex_basis_length(style, *v);
+        CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Calc(_) | CssValue::Var(_, _) => {
+            let Some(value) = flex_length_percent(value, style, length_context, font_metrics)
+            else {
+                return false;
+            };
+            style.flex_basis = FlexBasis::Definite(value);
             true
         }
-        CssValue::Percentage(p) => {
-            set_flex_basis_percentage(style, *p);
+        CssValue::Clamp(min, preferred, max) => {
+            let (Some(min), Some(preferred), Some(max)) = (
+                flex_length_percent(min, style, length_context, font_metrics),
+                flex_length_percent(preferred, style, length_context, font_metrics),
+                flex_length_percent(max, style, length_context, font_metrics),
+            ) else {
+                return false;
+            };
+            style.flex_basis = FlexBasis::Clamp {
+                min,
+                preferred,
+                max,
+            };
             true
         }
-        CssValue::Keyword(k) => apply_flex_basis_token(style, k, length_context),
-        CssValue::Calc(_)
-        | CssValue::Clamp(_, _, _)
-        | CssValue::Var(_, _)
-        | CssValue::Rem(_)
+        CssValue::Keyword(k) => apply_flex_basis_token(style, k, length_context, font_metrics),
+        CssValue::Rem(_)
         | CssValue::Vw(_)
         | CssValue::Vh(_)
         | CssValue::Vmin(_)
@@ -10552,7 +12481,9 @@ fn apply_flex_basis_value(
         | CssValue::Ex(_)
         | CssValue::Ch(_)
         | CssValue::Number(_) => {
-            if let Some(v) = resolve_css_length_for_style(value, style, length_context) {
+            if let Some(v) =
+                resolve_css_length_for_style(value, style, length_context, font_metrics)
+            {
                 set_flex_basis_length(style, v);
                 true
             } else {
@@ -10567,20 +12498,20 @@ fn apply_flex_basis_token(
     style: &mut ComputedStyle,
     token: &str,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> bool {
     let lower = token.trim().to_ascii_lowercase();
     match lower.as_str() {
         "auto" => {
-            set_flex_basis_auto(style, false);
+            set_flex_basis_auto(style);
             true
         }
         "content" | "max-content" => {
-            set_flex_basis_auto(style, true);
+            style.flex_basis = FlexBasis::Content(IntrinsicWidthKeyword::MaxContent);
             true
         }
         "fit-content" | "min-content" => {
-            set_flex_basis_auto(style, true);
-            style.flex_basis_keyword = Some(if lower == "min-content" {
+            style.flex_basis = FlexBasis::Content(if lower == "min-content" {
                 IntrinsicWidthKeyword::MinContent
             } else {
                 IntrinsicWidthKeyword::FitContent
@@ -10592,42 +12523,40 @@ fn apply_flex_basis_token(
                 set_flex_basis_percentage(style, p);
                 true
             }
-            Some(parsed) => apply_flex_basis_value(style, &parsed, length_context),
+            Some(parsed) => apply_flex_basis_value(style, &parsed, length_context, font_metrics),
             None => false,
         },
     }
 }
 
 fn set_flex_basis_zero(style: &mut ComputedStyle) {
-    style.flex_basis = Some(0.0);
-    style.flex_basis_pct = None;
-    style.flex_basis_content = false;
-    style.flex_basis_keyword = None;
+    style.flex_basis = FlexBasis::Definite(LengthPercent::ZERO);
 }
 
 fn apply_flex_shorthand(
     style: &mut ComputedStyle,
     value: &str,
     length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) {
     let lower = value.trim().to_ascii_lowercase();
     match lower.as_str() {
         "none" => {
             style.flex_grow = 0.0;
             style.flex_shrink = 0.0;
-            set_flex_basis_auto(style, false);
+            set_flex_basis_auto(style);
             return;
         }
         "auto" => {
             style.flex_grow = 1.0;
             style.flex_shrink = 1.0;
-            set_flex_basis_auto(style, false);
+            set_flex_basis_auto(style);
             return;
         }
         "initial" => {
             style.flex_grow = 0.0;
             style.flex_shrink = 1.0;
-            set_flex_basis_auto(style, false);
+            set_flex_basis_auto(style);
             return;
         }
         _ => {}
@@ -10647,16 +12576,16 @@ fn apply_flex_shorthand(
             if let Ok(shrink) = second.parse::<f32>() {
                 style.flex_shrink = shrink.max(0.0);
                 if let Some(third) = parts.get(2) {
-                    apply_flex_basis_token(style, third, length_context);
+                    apply_flex_basis_token(style, third, length_context, font_metrics);
                 }
             } else {
-                apply_flex_basis_token(style, second, length_context);
+                apply_flex_basis_token(style, second, length_context, font_metrics);
             }
         }
         return;
     }
 
-    if parts.len() == 1 && apply_flex_basis_token(style, first, length_context) {
+    if parts.len() == 1 && apply_flex_basis_token(style, first, length_context, font_metrics) {
         style.flex_grow = 1.0;
         style.flex_shrink = 1.0;
     }
@@ -10719,22 +12648,23 @@ fn parse_grid_line(token: &str) -> GridLine {
     }
     if let Some(rest) = token.strip_prefix("span") {
         let rest = rest.trim();
-        if let Ok(n) = rest.parse::<usize>() {
-            return GridLine::Span(n.max(1));
-        }
         let parts = split_css_components(rest);
-        if parts.len() == 2 {
-            if let Ok(n) = parts[0].parse::<usize>() {
-                return GridLine::Span(n.max(1));
-            }
-            if let Ok(n) = parts[1].parse::<usize>() {
-                return GridLine::Span(n.max(1));
+        let mut count = 1usize;
+        let mut name: Option<String> = None;
+        for part in parts {
+            if let Ok(parsed) = part.parse::<usize>() {
+                if parsed == 0 {
+                    return GridLine::Auto;
+                }
+                count = parsed;
+            } else if name.replace(part).is_some() {
+                return GridLine::Auto;
             }
         }
-        if !rest.is_empty() {
-            return GridLine::SpanNamed(rest.to_string());
+        if let Some(name) = name {
+            return GridLine::SpanNamed { count, name };
         }
-        return GridLine::Span(1);
+        return GridLine::Span(count);
     }
     if let Ok(n) = token.parse::<i32>() {
         // A line number of 0 is invalid per spec; treat as auto.
@@ -11325,6 +13255,25 @@ fn resolve_embedded_vars(raw: &str, cp: &HashMap<String, String>) -> String {
     out
 }
 
+fn resolved_raw_css_value<'a>(
+    value: &'a CssValue,
+    custom_properties: &HashMap<String, String>,
+) -> Option<Cow<'a, str>> {
+    match value {
+        CssValue::Keyword(raw) if raw.contains("var(") => {
+            Some(Cow::Owned(resolve_embedded_vars(raw, custom_properties)))
+        }
+        CssValue::Keyword(raw) => Some(Cow::Borrowed(raw)),
+        CssValue::Var(name, fallback) => crate::style::resolve::resolve_var_to_string(
+            name,
+            fallback.as_deref(),
+            custom_properties,
+        )
+        .map(Cow::Owned),
+        _ => None,
+    }
+}
+
 /// Byte offset of the `)` that closes the parenthesis group `s` is inside of,
 /// where `s` is the text immediately AFTER an opening `(`. Returns `None` if the
 /// group is unterminated. Nested `(...)` (e.g. a fallback containing another
@@ -11346,134 +13295,189 @@ fn matching_close_paren(s: &str) -> Option<usize> {
     None
 }
 
-/// A single border-radius token resolved to either an absolute length (points)
-/// or a percentage to be resolved against the box dimensions in layout.
-#[derive(Debug, Clone, Copy)]
-enum RadiusToken {
-    Len(f32),
-    Pct(f32),
-}
-
-/// Parse one border-radius token (`12px`, `40px`, `25%`, `0`) into a
-/// `RadiusToken`. Lengths convert px→pt; percentages are preserved for
-/// layout-time resolution. Returns `None` for unrecognised tokens.
-fn parse_radius_token(tok: &str) -> Option<RadiusToken> {
-    let tok = tok.trim();
-    if let Some(p) = tok.strip_suffix('%') {
-        return p.parse::<f32>().ok().map(RadiusToken::Pct);
-    }
-    if let Some(p) = tok.strip_suffix("px") {
-        return p.parse::<f32>().ok().map(|v| RadiusToken::Len(v * 0.75));
-    }
-    if let Some(p) = tok.strip_suffix("pt") {
-        return p.parse::<f32>().ok().map(RadiusToken::Len);
-    }
-    // Bare `0` (and other unitless numbers, treated as px-equivalent zero-ish
-    // lengths only when exactly zero per CSS; non-zero unitless is invalid but
-    // we accept it as points to be forgiving).
-    tok.parse::<f32>().ok().map(|v| {
-        if v == 0.0 {
-            RadiusToken::Len(0.0)
-        } else {
-            RadiusToken::Len(v * 0.75)
+fn specified_radius_from_css_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedRadiusValue> {
+    let radius = match value {
+        CssValue::Percentage(value) if value.is_finite() && *value >= 0.0 => {
+            SpecifiedRadiusValue::Percentage(*value)
         }
-    })
+        CssValue::Percentage(_) => return None,
+        value => {
+            let value = resolve_css_length_for_style(value, style, length_context, font_metrics)?;
+            if !value.is_finite() || value < 0.0 {
+                return None;
+            }
+            SpecifiedRadiusValue::Length(value)
+        }
+    };
+    Some(radius)
 }
 
-/// Expand the CSS `border-radius` shorthand (the horizontal-radii group, before
-/// any `/`) of 1-4 space-separated tokens into the four corners in
-/// [top-left, top-right, bottom-right, bottom-left] order, following the CSS
-/// edge-list expansion rules.
-fn expand_radius_group(tokens: &[RadiusToken]) -> [RadiusToken; 4] {
-    match tokens.len() {
-        1 => [tokens[0]; 4],
-        2 => [tokens[0], tokens[1], tokens[0], tokens[1]],
-        3 => [tokens[0], tokens[1], tokens[2], tokens[1]],
-        _ => [tokens[0], tokens[1], tokens[2], tokens[3]],
+/// Parse one `<length-percentage>` radius token. CSS permits a bare number only
+/// when it is exactly zero.
+fn parse_radius_token(
+    token: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedRadiusValue> {
+    let token = token.trim();
+    if let Ok(number) = token.parse::<f32>() {
+        return (number == 0.0).then_some(SpecifiedRadiusValue::Length(0.0));
     }
+    let value = parse_length(token)?;
+    specified_radius_from_css_value(&value, style, length_context, font_metrics)
 }
 
-/// Parse a full `border-radius` value into per-corner horizontal and vertical
-/// radii. The grammar is `<h1> [h2 h3 h4] [ / <v1> [v2 v3 v4] ]`: the optional
-/// part after `/` gives the VERTICAL radii (elliptical corners). When no `/`
-/// group is present the vertical radii equal the horizontal ones (circular
-/// corners). Returns `(radii_x_pt, radii_x_pct, radii_y_pt, radii_y_pct)` in
-/// [top-left, top-right, bottom-right, bottom-left] corner order.
-#[allow(clippy::type_complexity)]
+fn parse_radius_group(
+    tokens: &[&str],
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<[SpecifiedRadiusValue; 4]> {
+    let tokens = tokens
+        .iter()
+        .map(|token| parse_radius_token(token, style, length_context, font_metrics))
+        .collect::<Option<Vec<_>>>()?;
+    let radii = match tokens.as_slice() {
+        [a] => [*a; 4],
+        [a, b] => [*a, *b, *a, *b],
+        [a, b, c] => [*a, *b, *c, *b],
+        [a, b, c, d] => [*a, *b, *c, *d],
+        _ => return None,
+    };
+    Some(radii)
+}
+
 fn parse_border_radius_shorthand(
     value: &str,
-) -> ([f32; 4], [Option<f32>; 4], [f32; 4], [Option<f32>; 4]) {
-    let mut parts = value.split('/');
-    let horiz_part = parts.next().unwrap_or("").trim();
-    let vert_part = parts.next().map(str::trim);
-    let parse_group = |s: &str| -> Option<[RadiusToken; 4]> {
-        let tokens: Vec<RadiusToken> = s
-            .split_whitespace()
-            .filter_map(parse_radius_token)
-            .collect();
-        if tokens.is_empty() {
-            None
-        } else {
-            Some(expand_radius_group(&tokens))
-        }
-    };
-    let Some(h_corners) = parse_group(horiz_part) else {
-        return ([0.0; 4], [None; 4], [0.0; 4], [None; 4]);
-    };
-    // Vertical group defaults to the horizontal one (circular corners).
-    let v_corners = vert_part.and_then(parse_group).unwrap_or(h_corners);
-    let to_arrays = |corners: [RadiusToken; 4]| -> ([f32; 4], [Option<f32>; 4]) {
-        let mut radii = [0.0f32; 4];
-        let mut radii_pct = [None; 4];
-        for (i, c) in corners.iter().enumerate() {
-            match c {
-                RadiusToken::Len(v) => radii[i] = *v,
-                RadiusToken::Pct(p) => radii_pct[i] = Some(*p),
-            }
-        }
-        (radii, radii_pct)
-    };
-    let (rx, rx_pct) = to_arrays(h_corners);
-    let (ry, ry_pct) = to_arrays(v_corners);
-    (rx, rx_pct, ry, ry_pct)
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedCornerRadii> {
+    let value = resolve_embedded_vars(value, &style.custom_properties);
+    let components = split_radius_components(&value, true)?;
+    let [tl_x, tr_x, br_x, bl_x] =
+        parse_radius_group(&components.horizontal, style, length_context, font_metrics)?;
+    let [tl_y, tr_y, br_y, bl_y] = components
+        .vertical
+        .as_deref()
+        .map_or(Some([tl_x, tr_x, br_x, bl_x]), |vertical| {
+            parse_radius_group(vertical, style, length_context, font_metrics)
+        })?;
+    Some(SpecifiedCornerRadii::new(
+        SpecifiedCornerRadius::new(tl_x, tl_y),
+        SpecifiedCornerRadius::new(tr_x, tr_y),
+        SpecifiedCornerRadius::new(br_x, br_y),
+        SpecifiedCornerRadius::new(bl_x, bl_y),
+    ))
 }
 
-/// Map a CSS `border-style` keyword to a `BorderStyle`. Unknown keywords keep
-/// the CSS-wide default (`solid`); `none`/`hidden` suppress the edge.
-fn parse_border_style_keyword(keyword: &str) -> BorderStyle {
-    parse_border_style_keyword_with_bevel(keyword).0
+fn parse_corner_radius_raw(
+    value: &str,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedCornerRadius> {
+    let value = resolve_embedded_vars(value, &style.custom_properties);
+    let components = split_radius_components(&value, false)?;
+    let x = parse_radius_token(
+        components.horizontal[0],
+        style,
+        length_context,
+        font_metrics,
+    )?;
+    let y = match components.horizontal.get(1) {
+        Some(token) => parse_radius_token(token, style, length_context, font_metrics)?,
+        None => x,
+    };
+    Some(SpecifiedCornerRadius::new(x, y))
 }
 
-fn parse_border_style_keyword_with_bevel(keyword: &str) -> (BorderStyle, Option<BorderBevelKind>) {
-    match keyword.trim().to_ascii_lowercase().as_str() {
-        "solid" => (BorderStyle::Solid, None),
-        "dashed" => (BorderStyle::Dashed, None),
-        "dotted" => (BorderStyle::Dotted, None),
-        "double" => (BorderStyle::Double, None),
-        "groove" => (BorderStyle::Solid, Some(BorderBevelKind::Groove)),
-        "ridge" => (BorderStyle::Solid, Some(BorderBevelKind::Ridge)),
-        "inset" => (BorderStyle::Solid, Some(BorderBevelKind::Inset)),
-        "outset" => (BorderStyle::Solid, Some(BorderBevelKind::Outset)),
-        "none" | "hidden" => (BorderStyle::None, None),
-        _ => (BorderStyle::Solid, None),
+fn parse_border_radius_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedCornerRadii> {
+    match value {
+        CssValue::Keyword(value) => {
+            parse_border_radius_shorthand(value, style, length_context, font_metrics)
+        }
+        CssValue::Var(name, fallback) => crate::style::resolve::resolve_var_to_string(
+            name,
+            fallback.as_deref(),
+            &style.custom_properties,
+        )
+        .and_then(|value| {
+            parse_border_radius_shorthand(&value, style, length_context, font_metrics)
+        }),
+        value => specified_radius_from_css_value(value, style, length_context, font_metrics)
+            .map(SpecifiedCornerRadii::circular),
+    }
+}
+
+fn parse_corner_radius_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<SpecifiedCornerRadius> {
+    match value {
+        CssValue::Keyword(value) => {
+            parse_corner_radius_raw(value, style, length_context, font_metrics)
+        }
+        CssValue::Var(name, fallback) => crate::style::resolve::resolve_var_to_string(
+            name,
+            fallback.as_deref(),
+            &style.custom_properties,
+        )
+        .and_then(|value| parse_corner_radius_raw(&value, style, length_context, font_metrics)),
+        value => specified_radius_from_css_value(value, style, length_context, font_metrics)
+            .map(SpecifiedCornerRadius::circular),
     }
 }
 
 /// Parse a `column-rule` shorthand (`<width> || <style> || <color>`) into a
 /// `BorderSide`, reusing the border-shorthand tokenizer. Per CSS Multicol §6 the
-/// initial `column-rule-width` is `medium`, so a shorthand that names a visible
-/// style without a width (e.g. `column-rule: dotted blue`) still paints at the
-/// medium width rather than the 0 the border tokenizer leaves it at.
-fn parse_column_rule_shorthand(k: &str, font_size: f32) -> BorderSide {
-    let (mut width, color, style, _) = parse_border_shorthand(k, font_size);
-    if width <= 0.0 && style != BorderStyle::None {
-        width = MEDIUM_RULE_WIDTH_PT;
+/// initial `column-rule-width` is `medium`, shared with border shorthands.
+fn parse_column_rule_shorthand(raw: &str, font_size: f32) -> Option<BorderSide> {
+    let (without_function_color, mut color) = extract_border_function_color(raw);
+    let mut width = None;
+    let mut rule_style = None;
+    let mut found = color.is_some();
+    for token in split_css_whitespace(&without_function_color) {
+        if let Some(value) = borders::parse_border_style(token) {
+            if rule_style.replace(value).is_some() {
+                return None;
+            }
+        } else if let Some(value) = match token.trim().to_ascii_lowercase().as_str() {
+            "thin" => Some(0.75),
+            "medium" => Some(MEDIUM_RULE_WIDTH_PT),
+            "thick" => Some(3.75),
+            _ => resolve_border_width(parse_length(token).as_ref(), font_size),
+        } {
+            if value < 0.0 || width.replace(value).is_some() {
+                return None;
+            }
+        } else if let Some(value) = parse_border_color(token) {
+            if color.replace(value).is_some() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+        found = true;
     }
-    BorderSide {
-        width,
-        color,
-        style,
-    }
+    found.then(|| BorderSide {
+        width: width.unwrap_or(MEDIUM_RULE_WIDTH_PT),
+        color: color.unwrap_or(SpecifiedColor::CurrentColor),
+        style: rule_style.unwrap_or(BorderStyle::None),
+    })
 }
 
 /// CSS `medium` line width in points (~3px). Shared by the column-rule
@@ -11522,15 +13526,16 @@ fn resolve_css_length_for_style(
     val: &CssValue,
     style: &ComputedStyle,
     base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> Option<f32> {
     match val {
         CssValue::Length(v) => Some(*v),
         CssValue::Number(v) => Some(*v * style.font_size),
         CssValue::Percentage(v) => Some(base.parent_width * *v / 100.0),
-        CssValue::Ex(v) => Some(*v * style.font_size * style_ex_length_ratio(style)),
-        CssValue::Ch(v) => Some(
-            *v * style.font_size * crate::style::font_ctx::style_ch_ratio(style).unwrap_or(0.5),
-        ),
+        CssValue::Ex(v) => Some(*v * style.font_size * style_ex_length_ratio(style, font_metrics)),
+        CssValue::Ch(v) => {
+            Some(*v * style.font_size * font_metrics.style_ch_ratio(style).unwrap_or(0.5))
+        }
         CssValue::Rem(v) => Some(*v * style.root_font_size),
         CssValue::Vw(v) => Some(style.viewport_width * *v / 100.0),
         CssValue::Vh(v) => Some(style.viewport_height * *v / 100.0),
@@ -11543,8 +13548,152 @@ fn resolve_css_length_for_style(
                 style_length_context(style, base),
             )
         }
-        CssValue::Keyword(k) => resolve_raw_length_for_style(k, style, base),
+        CssValue::Keyword(k) => resolve_raw_length_for_style(k, style, base, font_metrics),
         _ => None,
+    }
+}
+
+/// Normalize a `text-indent` value without choosing a percentage basis early.
+/// CSS Text resolves percentages against the block container's own inner inline
+/// size, which layout alone knows. Font- and viewport-relative `calc()` terms
+/// are already definite at computed-value time, so convert only those terms to
+/// points and leave percentage tokens for layout.
+fn text_indent_from_css_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<TextIndent> {
+    match value {
+        CssValue::Length(value) => Some(TextIndent::Length(*value)),
+        CssValue::Percentage(value) => Some(TextIndent::Percentage(*value)),
+        CssValue::Calc(tokens) => Some(TextIndent::Calc(
+            tokens
+                .iter()
+                .map(|token| match token {
+                    CalcToken::Length(value) => CalcToken::Length(*value),
+                    CalcToken::Percent(value) => CalcToken::Percent(*value),
+                    CalcToken::Em(value) => CalcToken::Length(*value * style.font_size),
+                    CalcToken::Rem(value) => CalcToken::Length(*value * style.root_font_size),
+                    CalcToken::Vw(value) => {
+                        CalcToken::Length(style.viewport_width * *value / 100.0)
+                    }
+                    CalcToken::Vh(value) => {
+                        CalcToken::Length(style.viewport_height * *value / 100.0)
+                    }
+                    CalcToken::Vmin(value) => CalcToken::Length(
+                        style.viewport_width.min(style.viewport_height) * *value / 100.0,
+                    ),
+                    CalcToken::Vmax(value) => CalcToken::Length(
+                        style.viewport_width.max(style.viewport_height) * *value / 100.0,
+                    ),
+                    CalcToken::Op(operator) => CalcToken::Op(*operator),
+                })
+                .collect(),
+        )),
+        CssValue::Clamp(min, preferred, max) => Some(TextIndent::Clamp {
+            min: Box::new(text_indent_from_css_value(min, style, base, font_metrics)?),
+            preferred: Box::new(text_indent_from_css_value(
+                preferred,
+                style,
+                base,
+                font_metrics,
+            )?),
+            max: Box::new(text_indent_from_css_value(max, style, base, font_metrics)?),
+        }),
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            text_indent_from_css_value(&parse_length(&raw)?, style, base, font_metrics)
+        }
+        value => {
+            resolve_css_length_for_style(value, style, base, font_metrics).map(TextIndent::Length)
+        }
+    }
+}
+
+/// Resolve CSS Text's `word-spacing: <length-percentage>` against the computed
+/// font size. Unlike most CSS percentages, this percentage basis is `1em`, not
+/// the containing block width.
+fn word_spacing_from_css_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<f32> {
+    match value {
+        CssValue::Length(value) => Some(*value),
+        // `parse_length` retains `em` as a Number multiplier.
+        CssValue::Number(value) => Some(*value * style.font_size),
+        CssValue::Percentage(value) => Some(style.font_size * *value / 100.0),
+        CssValue::Calc(tokens) => Some(crate::style::resolve::resolve_calc(
+            tokens,
+            style.font_size,
+            style.font_size,
+            style.root_font_size,
+            base.page_width,
+            base.page_height,
+        )),
+        CssValue::Clamp(min, preferred, max) => {
+            let min = word_spacing_from_css_value(min, style, base, font_metrics)?;
+            let preferred = word_spacing_from_css_value(preferred, style, base, font_metrics)?;
+            let max = word_spacing_from_css_value(max, style, base, font_metrics)?;
+            Some(preferred.min(max).max(min))
+        }
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            word_spacing_from_css_value(
+                &parse_property_value("word-spacing", &raw)?,
+                style,
+                base,
+                font_metrics,
+            )
+        }
+        CssValue::Keyword(value) if value.eq_ignore_ascii_case("normal") => Some(0.0),
+        value => resolve_css_length_for_style(
+            value,
+            style,
+            crate::style::resolve::LengthResolutionContext::new(
+                style.font_size,
+                style.font_size,
+                style.root_font_size,
+                base.page_width,
+                base.page_height,
+            ),
+            font_metrics,
+        ),
+    }
+}
+
+fn letter_spacing_from_css_value(
+    value: &CssValue,
+    style: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> Option<f32> {
+    match value {
+        CssValue::Keyword(value) if value.eq_ignore_ascii_case("normal") => Some(0.0),
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                &style.custom_properties,
+            )?;
+            letter_spacing_from_css_value(
+                &parse_property_value("letter-spacing", &raw)?,
+                style,
+                base,
+                font_metrics,
+            )
+        }
+        value => resolve_css_length_for_style(value, style, base, font_metrics),
     }
 }
 
@@ -11552,6 +13701,7 @@ fn resolve_raw_length_for_style(
     raw: &str,
     style: &ComputedStyle,
     base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> Option<f32> {
     let lower = raw.trim().to_ascii_lowercase();
     if let Some(number) = lower.strip_suffix("cap") {
@@ -11570,7 +13720,7 @@ fn resolve_raw_length_for_style(
     }
     parse_length(&lower).and_then(|parsed| match parsed {
         CssValue::Keyword(_) => None,
-        _ => resolve_css_length_for_style(&parsed, style, base),
+        _ => resolve_css_length_for_style(&parsed, style, base, font_metrics),
     })
 }
 
@@ -11578,8 +13728,9 @@ fn style_cap_height_ratio(_style: &ComputedStyle) -> f32 {
     0.75
 }
 
-fn style_ex_length_ratio(style: &ComputedStyle) -> f32 {
-    crate::style::font_ctx::style_x_height_ratio(style)
+fn style_ex_length_ratio(style: &ComputedStyle, font_metrics: FontMetrics<'_>) -> f32 {
+    font_metrics
+        .style_x_height_ratio(style)
         .unwrap_or(0.5)
         .max(0.5625)
 }
@@ -11631,10 +13782,11 @@ fn parse_border_width_shorthand_values(
     raw: &str,
     style: &ComputedStyle,
     base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> Option<[f32; 4]> {
     let values: Vec<f32> = split_css_whitespace(raw)
         .into_iter()
-        .map(|part| parse_border_width_token(part, style, base))
+        .map(|part| parse_border_width_token(part, style, base, font_metrics))
         .collect::<Option<Vec<_>>>()?;
     expand_box_values(&values)
 }
@@ -11643,99 +13795,48 @@ fn parse_border_width_token(
     token: &str,
     style: &ComputedStyle,
     base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> Option<f32> {
     match token.trim().to_ascii_lowercase().as_str() {
         "thin" => Some(0.75),
         "medium" => Some(MEDIUM_RULE_WIDTH_PT),
         "thick" => Some(3.75),
-        other => resolve_raw_length_for_style(other, style, base),
+        other => resolve_raw_length_for_style(other, style, base, font_metrics),
     }
 }
 
-fn parse_border_color_shorthand_values(raw: &str) -> Option<[Color; 4]> {
-    let values: Vec<Color> = split_css_whitespace(raw)
+fn parse_border_color_shorthand_values(raw: &str) -> Option<[SpecifiedColor; 4]> {
+    let values: Vec<SpecifiedColor> = split_css_whitespace(raw)
         .into_iter()
         .map(parse_border_color)
         .collect::<Option<Vec<_>>>()?;
     expand_box_values(&values)
 }
 
-fn parse_border_style_shorthand_values(
-    raw: &str,
-) -> Option<[(BorderStyle, Option<BorderBevelKind>); 4]> {
-    let parts = split_css_whitespace(raw);
-    if parts.is_empty() || parts.len() > 4 {
-        return None;
-    }
-    let values: Vec<(BorderStyle, Option<BorderBevelKind>)> = parts
-        .into_iter()
-        .map(parse_border_style_keyword_with_bevel)
-        .collect();
-    expand_box_values(&values)
-}
-
-fn parse_border_shorthand(
-    k: &str,
-    font_size: f32,
-) -> (f32, Option<Color>, BorderStyle, Option<BorderBevelKind>) {
-    // A function color such as `rgba(38, 50, 56, 0.35)` contains internal spaces,
-    // so pull it out (and remove it from the string) before tokenizing on
-    // whitespace. Otherwise the rgba(...) would shatter into several "words" and
-    // the color (alpha included) would be lost, painting the border opaque black.
-    let (rest, func_color) = extract_border_function_color(k);
-    let parts: Vec<&str> = rest.split_whitespace().collect();
-    let mut width = 0.0f32;
-    let mut border_style = BorderStyle::Solid;
-    let mut border_bevel = None;
-    for part in &parts {
-        match *part {
-            "dashed" | "dotted" | "double" | "groove" | "ridge" | "inset" | "outset" | "none"
-            | "hidden" | "solid" => {
-                let (style, bevel) = parse_border_style_keyword_with_bevel(part);
-                border_style = style;
-                border_bevel = bevel;
-            }
-            // CSS keyword border widths.
-            "thin" => width = 0.75,
-            "medium" => width = 2.25,
-            "thick" => width = 3.75,
-            // Any length token (px/pt/em/ex/ch/cm/mm/Q/in/pc/rem). `parse_length`
-            // returns pt for absolute units and an em factor (Number) for
-            // font-relative units; resolve_border_width applies the font-size
-            // basis. Previously only px/pt were handled, so an em/cm/etc. width
-            // was silently dropped (width = 0) — e.g. `border: 0.2em solid`.
-            other => {
-                if let Some(w) = resolve_border_width(parse_length(other).as_ref(), font_size) {
-                    width = w;
-                }
-            }
-        }
-    }
-    let color = func_color.or_else(|| parts.last().and_then(|last| parse_border_color(last)));
-    (width, color, border_style, border_bevel)
-}
-
 /// Parse a single border color token using the shared CSS color parser, which
 /// handles named colors, `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex (lightningcss
 /// serialises `rgba(...)` to 8-digit hex with the alpha byte), and
 /// `rgb()`/`rgba()` functions — preserving alpha for translucent borders.
-fn parse_border_color_token(val: &str) -> Option<Color> {
+fn parse_border_color_token(val: &str) -> Option<SpecifiedColor> {
     match crate::parser::css::parse_color(val) {
         Some(CssValue::Color(c)) => Some(c),
         _ => None,
     }
 }
 
-/// Pull a function color (`rgb(...)` / `rgba(...)`) out of a border shorthand,
-/// returning the string with that token removed plus the parsed color. The
-/// remaining tokens (width / style keyword) are space-separated as usual. If no
-/// function color is present the input is returned unchanged with `None`.
-fn extract_border_function_color(k: &str) -> (String, Option<Color>) {
+/// Pull a function color out of a border shorthand, returning the string with
+/// that complete, balanced token removed plus the parsed color. Lightning may
+/// serialize precise RGB input as `color(srgb ...)`, so limiting this to the
+/// legacy `rgb()` spellings would silently discard both color and alpha.
+fn extract_border_function_color(k: &str) -> (String, Option<SpecifiedColor>) {
     let lower = k.to_ascii_lowercase();
-    for prefix in ["rgba(", "rgb("] {
+    for prefix in [
+        "rgba(", "rgb(", "color(", "oklab(", "oklch(", "lab(", "lch(",
+    ] {
         if let Some(start) = lower.find(prefix) {
-            if let Some(close_rel) = k[start..].find(')') {
-                let end = start + close_rel + 1;
+            let open = start + prefix.len() - 1;
+            if let Some(close_rel) = matching_close_paren(&k[open + 1..]) {
+                let end = open + 1 + close_rel + 1;
                 let func = &k[start..end];
                 let color = match crate::parser::css::parse_color(func) {
                     Some(CssValue::Color(c)) => Some(c),
@@ -11752,32 +13853,12 @@ fn extract_border_function_color(k: &str) -> (String, Option<Color>) {
     (k.to_string(), None)
 }
 
-/// Parse a color name or hex value for border shorthand.
-fn parse_border_color(val: &str) -> Option<Color> {
-    let lower = val.to_ascii_lowercase();
-    // `currentColor` can't be resolved here (the element's final `color` isn't
-    // known yet). Mark it with a sentinel; a post-pass in
-    // `compute_style_with_context` swaps it for the computed `color`.
-    if lower == "currentcolor" {
-        return Some(CURRENT_COLOR_SENTINEL);
-    }
-    // Delegate everything else (named colors, #rgb/#rgba/#rrggbb/#rrggbbaa hex,
-    // rgb()/rgba() functions) to the shared CSS color parser so translucent
-    // borders keep their alpha channel.
-    parse_border_color_token(val).or_else(|| match lower.as_str() {
-        "black" => Some(Color::rgb(0, 0, 0)),
-        "white" => Some(Color::rgb(255, 255, 255)),
-        "red" => Some(Color::rgb(255, 0, 0)),
-        "green" => Some(Color::rgb(0, 128, 0)),
-        "blue" => Some(Color::rgb(0, 0, 255)),
-        "yellow" => Some(Color::rgb(255, 255, 0)),
-        "orange" => Some(Color::rgb(255, 165, 0)),
-        "purple" => Some(Color::rgb(128, 0, 128)),
-        "gray" | "grey" => Some(Color::rgb(128, 128, 128)),
-        _ => lower.strip_prefix('#').and_then(parse_hex_to_color),
-    })
+/// Parse a color token without binding `currentColor` prematurely.
+fn parse_border_color(val: &str) -> Option<SpecifiedColor> {
+    parse_border_color_token(val)
 }
 
+#[cfg(test)]
 fn parse_hex_to_color(hex: &str) -> Option<Color> {
     // Per CSS Color 4 §5.2: each single hex digit expands by duplication
     // (`#rgb`/`#rgba`); `#rgba` and `#rrggbbaa` carry an alpha byte where
@@ -11794,7 +13875,7 @@ fn parse_hex_to_color(hex: &str) -> Option<Color> {
             let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
             let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
             let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
-            Some(Color { r, g, b, a })
+            Some(Color::rgba8(r, g, b, a))
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -11807,7 +13888,7 @@ fn parse_hex_to_color(hex: &str) -> Option<Color> {
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
             let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
-            Some(Color { r, g, b, a })
+            Some(Color::rgba8(r, g, b, a))
         }
         _ => None,
     }
@@ -11821,7 +13902,12 @@ fn parse_hex_to_color(hex: &str) -> Option<Color> {
 /// - `linear-gradient(45deg, #ff0000, #0000ff)`
 /// - `linear-gradient(to bottom, red 0%, white 50%, blue 100%)`
 /// - `repeating-linear-gradient(45deg, red 0 10px, blue 10px 20px)`
-pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
+#[cfg(test)]
+fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
+    parse_linear_gradient_for_color(val, Color::BLACK)
+}
+
+fn parse_linear_gradient_for_color(val: &str, current_color: Color) -> Option<LinearGradient> {
     let val = val.trim();
     let (inner, repeating) = if let Some(i) = val
         .strip_prefix("repeating-linear-gradient(")
@@ -11838,12 +13924,14 @@ pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
 
     // Split on commas, but be careful of commas inside rgb() or rgba()
     let parts = split_gradient_args(inner);
-    if parts.len() < 2 {
+    if parts.is_empty() {
         return None;
     }
 
     let first = parts[0].trim();
-    let first = strip_gradient_interpolation_method(first);
+    let (first, interpolation) = parse_gradient_interpolation(first)?;
+    let has_interpolation = interpolation.is_some();
+    let first = first.trim();
 
     // Determine if the first arg is a direction/angle or a color stop
     let (angle, color_start) = if first.starts_with("to ") {
@@ -11856,37 +13944,60 @@ pub fn parse_linear_gradient(val: &str) -> Option<LinearGradient> {
             "to bottom right" | "to right bottom" => 135.0,
             "to bottom left" | "to left bottom" => 225.0,
             "to top left" | "to left top" => 315.0,
-            _ => 180.0,
+            _ => return None,
         };
         (angle, 1)
     } else if let Some(deg) = parse_css_angle_deg(first) {
         (deg, 1)
+    } else if has_interpolation && first.is_empty() {
+        (180.0, 1)
+    } else if has_interpolation {
+        return None;
     } else {
         // No direction specified, default is "to bottom" = 180deg
         (180.0, 0)
     };
 
     let color_parts = &parts[color_start..];
-    if color_parts.len() < 2 {
+    if color_parts.is_empty() {
         return None;
     }
 
-    let stops = parse_gradient_stops(color_parts)?;
+    let ramp = parse_gradient_ramp(
+        color_parts,
+        current_color,
+        interpolation.unwrap_or_default(),
+        repeating,
+        parse_gradient_stop_position,
+    )?;
 
     Some(LinearGradient {
         angle,
-        stops,
-        repeating,
+        ramp,
         layer_box: GradientLayerBox::default(),
     })
 }
 
-fn strip_gradient_interpolation_method(first: &str) -> &str {
-    let lower = first.to_ascii_lowercase();
-    if let Some(idx) = lower.find(" in oklab") {
-        return first[..idx].trim();
-    }
-    first
+fn parse_gradient_interpolation(prelude: &str) -> Option<(String, Option<GradientInterpolation>)> {
+    let mut tokens = split_css_components(prelude);
+    let indices = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| token.eq_ignore_ascii_case("in").then_some(index))
+        .collect::<Vec<_>>();
+    let ([] | [_]) = indices.as_slice() else {
+        return None;
+    };
+    let Some(&index) = indices.first() else {
+        return Some((prelude.to_string(), None));
+    };
+    let interpolation = match tokens.get(index + 1)?.to_ascii_lowercase().as_str() {
+        "srgb" => GradientInterpolation::Srgb,
+        "oklab" => GradientInterpolation::Oklab,
+        _ => return None,
+    };
+    tokens.drain(index..=index + 1);
+    Some((tokens.join(" "), Some(interpolation)))
 }
 
 /// Parse a CSS `<angle>` token into degrees. Supports `deg`, `grad`, `rad`,
@@ -11921,7 +14032,12 @@ fn parse_css_angle_deg(tok: &str) -> Option<f32> {
 /// Honors the shape (`circle`/`ellipse`), the extent keyword
 /// (`closest-side`/`closest-corner`/`farthest-side`/`farthest-corner`), an
 /// explicit circle radius or ellipse radii, and the `at <position>` clause.
-pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
+#[cfg(test)]
+fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
+    parse_radial_gradient_for_color(val, Color::BLACK)
+}
+
+fn parse_radial_gradient_for_color(val: &str, current_color: Color) -> Option<RadialGradient> {
     let val = val.trim();
     let (inner, repeating) = if let Some(i) = val
         .strip_prefix("repeating-radial-gradient(")
@@ -11937,11 +14053,13 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
     };
 
     let parts = split_gradient_args(inner);
-    if parts.len() < 2 {
+    if parts.is_empty() {
         return None;
     }
 
-    let first = parts[0].trim().to_ascii_lowercase();
+    let (first, interpolation) = parse_gradient_interpolation(parts[0].trim())?;
+    let has_interpolation = interpolation.is_some();
+    let first = first.trim().to_ascii_lowercase();
 
     // A first arg is a shape/size/position prefix (not a color stop) when it
     // names a shape keyword, an extent keyword, an `at <pos>` clause, or is a
@@ -11949,76 +14067,74 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
     // `circle 60px at center` to `60px`). We detect the bare-length case by it
     // not parsing as a color while parsing as a length token, so a real first
     // color stop is never dropped.
-    let is_shape_or_size = first.starts_with("circle")
+    let is_shape_or_size = has_interpolation
+        || first.starts_with("circle")
         || first.starts_with("ellipse")
         || first.contains("at ")
         || first.contains("closest-side")
         || first.contains("farthest-side")
         || first.contains("closest-corner")
         || first.contains("farthest-corner")
-        || (parse_gradient_color(&first).is_none() && first_token_is_length(&first));
+        || (parse_gradient_color_for_color(&first, current_color).is_none()
+            && first_token_is_length(&first));
     let color_start = usize::from(is_shape_or_size);
 
     // Honor the `at <position>` clause, the extent keyword, and explicit
     // radius/radii, else default to a box-centered farthest-corner ellipse.
     let (center, shape, extent, radius, radii) = if color_start == 1 {
-        let center = parse_radial_center(&first);
-        // The shape/size keywords precede any `at` clause.
-        let size_part = first.split("at").next().unwrap_or("").trim();
-
-        let extent = if size_part.contains("closest-side") {
-            RadialExtent::ClosestSide
-        } else if size_part.contains("closest-corner") {
-            RadialExtent::ClosestCorner
-        } else if size_part.contains("farthest-side") {
-            RadialExtent::FarthestSide
-        } else {
-            RadialExtent::FarthestCorner
-        };
-
-        let size_tokens: Vec<&str> = size_part
-            .split_whitespace()
-            .filter(|t| {
-                !t.is_empty() && *t != "circle" && *t != "ellipse" && parse_radial_pos(t).is_some()
-            })
-            .collect();
-
-        let shape = if first.starts_with("circle") {
-            RadialShape::Circle
-        } else if first.starts_with("ellipse") {
-            RadialShape::Ellipse
-        } else if size_tokens.len() == 1 {
-            // A lone length size denotes a circle of that radius.
-            RadialShape::Circle
-        } else {
-            RadialShape::Ellipse
-        };
-
-        // Explicit sizes: a circle takes one length radius; an ellipse takes two
-        // length/percentage radii (rx, ry).
-        let (radius, radii) = match shape {
-            RadialShape::Circle => (
-                size_tokens.first().and_then(|t| parse_radial_length_pt(t)),
-                None,
-            ),
-            RadialShape::Ellipse => {
-                if size_tokens.len() == 2 {
-                    let rx = parse_radial_pos(size_tokens[0]);
-                    let ry = parse_radial_pos(size_tokens[1]);
-                    match (rx, ry) {
-                        (Some(rx), Some(ry)) => (None, Some((rx, ry))),
-                        _ => (None, None),
-                    }
-                } else {
-                    (None, None)
-                }
+        let center = parse_radial_center(&first)?;
+        let size_part = first
+            .find("at ")
+            .map(|at| &first[..at])
+            .unwrap_or(&first)
+            .trim();
+        let mut shape = None;
+        let mut extent = None;
+        let mut size_tokens = Vec::new();
+        for token in size_part.split_whitespace() {
+            match token {
+                "circle" if shape.replace(RadialShape::Circle).is_none() => {}
+                "ellipse" if shape.replace(RadialShape::Ellipse).is_none() => {}
+                "closest-side" if extent.replace(RadialExtent::ClosestSide).is_none() => {}
+                "closest-corner" if extent.replace(RadialExtent::ClosestCorner).is_none() => {}
+                "farthest-side" if extent.replace(RadialExtent::FarthestSide).is_none() => {}
+                "farthest-corner" if extent.replace(RadialExtent::FarthestCorner).is_none() => {}
+                token if parse_radial_pos(token).is_some() => size_tokens.push(token),
+                _ => return None,
             }
+        }
+        if extent.is_some() && !size_tokens.is_empty() {
+            return None;
+        }
+
+        let shape = shape.unwrap_or(if size_tokens.len() == 1 {
+            RadialShape::Circle
+        } else {
+            RadialShape::Ellipse
+        });
+        let (radius, radii) = match (shape, size_tokens.as_slice()) {
+            (_, []) => (None, None),
+            (RadialShape::Circle, [radius]) => {
+                let radius = parse_radial_length_pt(radius)?;
+                if radius < 0.0 {
+                    return None;
+                }
+                (Some(radius), None)
+            }
+            (RadialShape::Ellipse, [rx, ry]) => {
+                let (rx, ry) = (parse_radial_pos(rx)?, parse_radial_pos(ry)?);
+                if !radial_pos_is_nonnegative(rx) || !radial_pos_is_nonnegative(ry) {
+                    return None;
+                }
+                (None, Some(RadialVector::new(rx, ry)))
+            }
+            _ => return None,
         };
 
-        (center, shape, extent, radius, radii)
+        (center, shape, extent.unwrap_or_default(), radius, radii)
     } else {
         (
-            (RadialPos::Fraction(0.5), RadialPos::Fraction(0.5)),
+            RadialPoint::default(),
             RadialShape::Ellipse,
             RadialExtent::FarthestCorner,
             None,
@@ -12027,26 +14143,25 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
     };
 
     let color_parts = &parts[color_start..];
-    if color_parts.len() < 2 {
+    if color_parts.is_empty() {
         return None;
     }
 
-    let length_stop_extent = max_gradient_length_stop(color_parts);
-    let stops = parse_gradient_stops(color_parts)?;
-    let radius = if repeating && radius.is_none() {
-        length_stop_extent
-    } else {
-        radius
-    };
+    let ramp = parse_gradient_ramp(
+        color_parts,
+        current_color,
+        interpolation.unwrap_or_default(),
+        repeating,
+        parse_gradient_stop_position,
+    )?;
 
     Some(RadialGradient {
-        stops,
+        ramp,
         center,
         shape,
         extent,
         radius,
         radii,
-        repeating,
         layer_box: GradientLayerBox::default(),
     })
 }
@@ -12057,7 +14172,12 @@ pub fn parse_radial_gradient(val: &str) -> Option<RadialGradient> {
 /// Honors `from <angle>`, `at <position>`, and angular color stops in `deg`,
 /// `grad`, `rad`, `turn`, or `%` (100% = one turn). Stop positions are
 /// normalized to a fraction of a full turn.
-pub fn parse_conic_gradient(val: &str) -> Option<ConicGradient> {
+#[cfg(test)]
+fn parse_conic_gradient(val: &str) -> Option<ConicGradient> {
+    parse_conic_gradient_for_color(val, Color::BLACK)
+}
+
+fn parse_conic_gradient_for_color(val: &str, current_color: Color) -> Option<ConicGradient> {
     let val = val.trim();
     let (inner, repeating) = if let Some(i) = val
         .strip_prefix("repeating-conic-gradient(")
@@ -12077,188 +14197,78 @@ pub fn parse_conic_gradient(val: &str) -> Option<ConicGradient> {
         return None;
     }
 
-    let first = parts[0].trim();
-    let first_lower = first.to_ascii_lowercase();
+    let (first, interpolation) = parse_gradient_interpolation(parts[0].trim())?;
+    let first_lower = first.trim().to_ascii_lowercase();
 
     // The first argument is a `[from <angle>] [at <position>]` prefix when it
     // mentions either keyword; otherwise it is the first color stop.
-    let has_prefix = first_lower.starts_with("from ") || first_lower.contains("at ");
+    let has_prefix =
+        interpolation.is_some() || first_lower.starts_with("from ") || first_lower.contains("at ");
     let color_start = usize::from(has_prefix);
 
     let (from_angle, center) = if has_prefix {
-        let from_angle = first_lower
-            .strip_prefix("from ")
-            .map(|rest| rest.split("at").next().unwrap_or("").trim().to_string())
-            .and_then(|tok| parse_css_angle_deg(&tok))
-            .unwrap_or(0.0);
-        let center = parse_radial_center(&first_lower);
-        (from_angle, center)
+        parse_conic_prelude(&first_lower)?
     } else {
-        (0.0, (RadialPos::Fraction(0.5), RadialPos::Fraction(0.5)))
+        (0.0, RadialPoint::default())
     };
 
     let color_parts = &parts[color_start..];
-    let stops = parse_conic_stops(color_parts)?;
-    if stops.len() < 2 {
-        return None;
-    }
+    let ramp = parse_gradient_ramp(
+        color_parts,
+        current_color,
+        interpolation.unwrap_or_default(),
+        repeating,
+        parse_conic_angle_fraction,
+    )?;
 
     Some(ConicGradient {
         from_angle,
         center,
-        stops,
-        repeating,
+        ramp,
         layer_box: GradientLayerBox::default(),
     })
 }
 
-/// Parse angular color stops for a conic gradient. Each part is `color`,
-/// `color <angle>`, or `color <angle> <angle>` (a hard/range stop expands into
-/// two stops at the two angles). Positions are normalized to fractions of one
-/// turn. Stops without an explicit angle are distributed/clamped per CSS:
-/// the first defaults to 0, the last to 1, and interior gaps are interpolated.
-fn parse_conic_stops(parts: &[String]) -> Option<Vec<GradientStop>> {
-    // Raw stops: (color, optional fraction position).
-    let mut raw: Vec<(Color, Option<f32>)> = Vec::new();
-    let mut hints: Vec<(usize, f32)> = Vec::new();
-
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        // Split into whitespace tokens; the leading run that parses as a color
-        // is the color, trailing tokens are angle positions. Colors like
-        // `rgb(...)` have no spaces after lightningcss normalization.
-        let tokens: Vec<&str> = part.split_whitespace().collect();
-        if tokens.is_empty() {
-            continue;
-        }
-        if tokens.len() == 1
-            && let Some(position) = parse_conic_angle_fraction(tokens[0])
-        {
-            if let Some(prev) = raw.len().checked_sub(1) {
-                hints.push((prev, position));
-            }
-            continue;
-        }
-        // Find how many leading tokens form the color (1 normally).
-        let color = parse_gradient_color(tokens[0])?;
-        let angle_tokens = &tokens[1..];
-        let positions: Vec<f32> = angle_tokens
-            .iter()
-            .filter_map(|t| parse_conic_angle_fraction(t))
-            .collect();
-        match positions.len() {
-            0 => raw.push((color, None)),
-            1 => raw.push((color, Some(positions[0]))),
-            _ => {
-                // A range stop `color a b` expands to two coincident-color stops.
-                for p in positions {
-                    raw.push((color, Some(p)));
-                }
-            }
-        }
+fn parse_conic_prelude(prelude: &str) -> Option<(f32, RadialPoint)> {
+    let prelude = prelude.trim();
+    if prelude.is_empty() {
+        return Some((0.0, RadialPoint::default()));
     }
 
-    if raw.len() < 2 {
+    let (from_angle, remainder) = if let Some(rest) = prelude.strip_prefix("from ") {
+        let angle_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        (
+            parse_css_angle_deg(&rest[..angle_end])?,
+            rest[angle_end..].trim(),
+        )
+    } else {
+        (0.0, prelude)
+    };
+    let center = if remainder.is_empty() {
+        RadialPoint::default()
+    } else if remainder.starts_with("at ") {
+        parse_radial_center(remainder)?
+    } else {
         return None;
-    }
-
-    // Fill missing positions: clamp ends, then linearly distribute interior runs.
-    let n = raw.len();
-    if raw[0].1.is_none() {
-        raw[0].1 = Some(0.0);
-    }
-    if raw[n - 1].1.is_none() {
-        raw[n - 1].1 = Some(1.0);
-    }
-    let mut i = 0;
-    while i < n {
-        if raw[i].1.is_some() {
-            i += 1;
-            continue;
-        }
-        // Find the next anchored stop.
-        let start = i - 1;
-        let mut j = i;
-        while j < n && raw[j].1.is_none() {
-            j += 1;
-        }
-        let p0 = raw[start].1.unwrap_or(0.0);
-        let p1 = raw[j].1.unwrap_or(1.0);
-        let span = (j - start) as f32;
-        for (k, idx) in (i..j).enumerate() {
-            let frac = (k as f32 + 1.0) / span;
-            raw[idx].1 = Some(p0 + (p1 - p0) * frac);
-        }
-        i = j;
-    }
-
-    // Enforce non-decreasing positions (later smaller positions clamp up).
-    let mut last = 0.0_f32;
-    let mut stops: Vec<GradientStop> = raw
-        .into_iter()
-        .map(|(color, pos)| {
-            let mut p = pos.unwrap_or(0.0).clamp(0.0, 1.0);
-            if p < last {
-                p = last;
-            }
-            last = p;
-            GradientStop {
-                color,
-                position: p,
-                position_length: 0.0,
-            }
-        })
-        .collect();
-
-    for (prev, hint_pos) in hints.into_iter().rev() {
-        if prev + 1 >= stops.len() {
-            continue;
-        }
-        let left = stops[prev].position;
-        let right = stops[prev + 1].position;
-        let span = right - left;
-        if span <= 1e-6 {
-            continue;
-        }
-        let hint_t = ((hint_pos - left) / span).clamp(0.0, 1.0);
-        if hint_t <= 1e-6 || hint_t >= 1.0 - 1e-6 {
-            continue;
-        }
-        let exponent = 0.5_f32.ln() / hint_t.ln();
-        let mut hinted = Vec::new();
-        const HINT_STEPS: usize = 256;
-        for step in 1..HINT_STEPS {
-            let t = step as f32 / HINT_STEPS as f32;
-            hinted.push(GradientStop {
-                color: lerp_color(
-                    stops[prev].color,
-                    stops[prev + 1].color,
-                    color_hint_progress(t, hint_t, exponent),
-                ),
-                position: left + span * t,
-                position_length: 0.0,
-            });
-        }
-        stops.splice(prev + 1..prev + 1, hinted);
-    }
-
-    Some(stops)
+    };
+    Some((from_angle, center))
 }
 
 /// Parse a single conic angular position into a fraction of one turn (0..1).
 /// Accepts `deg`, `grad`, `rad`, `turn`, and `%` (100% = one turn).
-fn parse_conic_angle_fraction(tok: &str) -> Option<f32> {
+fn parse_conic_angle_fraction(tok: &str) -> Option<GradientPosition> {
     let tok = tok.trim();
     if let Some(n) = tok.strip_suffix('%') {
-        return n.trim().parse::<f32>().ok().map(|p| p / 100.0);
+        return n
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|p| GradientPosition::fraction(p / 100.0));
     }
     if let Some(n) = tok.strip_suffix("turn") {
-        return n.trim().parse::<f32>().ok();
+        return n.trim().parse::<f32>().ok().map(GradientPosition::fraction);
     }
-    parse_css_angle_deg(tok).map(|deg| deg / 360.0)
+    parse_css_angle_deg(tok).map(|deg| GradientPosition::fraction(deg / 360.0))
 }
 
 /// True when the first whitespace-delimited token looks like a CSS length or
@@ -12295,19 +14305,28 @@ fn parse_radial_pos(tok: &str) -> Option<RadialPos> {
     parse_radial_length_pt(tok).map(RadialPos::Points)
 }
 
+fn radial_pos_is_nonnegative(position: RadialPos) -> bool {
+    match position {
+        RadialPos::Fraction(value) | RadialPos::Points(value) | RadialPos::EndOffset(value) => {
+            value >= 0.0
+        }
+    }
+}
+
 /// Parse the `at <position>` clause of a radial-gradient first argument into a
 /// center `(x, y)` measured from the box's left/top edges (CSS top-down).
 /// Supports keyword positions (`center`, `top`, `left`, corners), percentages,
-/// and lengths. Falls back to box center when absent or unparseable.
-fn parse_radial_center(first: &str) -> (RadialPos, RadialPos) {
+/// and lengths. An absent clause means box center; a malformed clause rejects
+/// the gradient instead of silently changing its geometry.
+fn parse_radial_center(first: &str) -> Option<RadialPoint> {
     let half = RadialPos::Fraction(0.5);
     let lower = first.to_ascii_lowercase();
     let Some(at_pos) = lower.find("at ") else {
-        return (half, half);
+        return Some(RadialPoint::new(half, half));
     };
     let pos = lower[at_pos + 3..].trim();
     if pos.is_empty() {
-        return (half, half);
+        return None;
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12376,17 +14395,18 @@ fn parse_radial_center(first: &str) -> (RadialPos, RadialPos) {
             i += usize::from(next.is_some()) + 1;
             continue;
         }
-        if let Some(p) = parse_radial_pos(tokens[i]) {
-            if x.is_none() {
-                x = Some(p);
-            } else if y.is_none() {
-                y = Some(p);
-            }
+        let p = parse_radial_pos(tokens[i])?;
+        if x.is_none() {
+            x = Some(p);
+        } else if y.is_none() {
+            y = Some(p);
+        } else {
+            return None;
         }
         i += 1;
     }
 
-    (x.unwrap_or(half), y.unwrap_or(half))
+    Some(RadialPoint::new(x.unwrap_or(half), y.unwrap_or(half)))
 }
 
 /// Split gradient arguments on commas, respecting parentheses (e.g., rgb(...)).
@@ -12421,65 +14441,35 @@ fn split_gradient_args(s: &str) -> Vec<String> {
     parts
 }
 
-#[derive(Debug, Clone, Copy)]
-struct GradientStopPosition {
-    fraction: f32,
-    length: f32,
-}
-
-impl GradientStopPosition {
-    fn zero() -> Self {
-        Self {
-            fraction: 0.0,
-            length: 0.0,
-        }
-    }
-
-    fn one() -> Self {
-        Self {
-            fraction: 1.0,
-            length: 0.0,
-        }
-    }
-}
-
 enum RawGradientItem {
-    Stop(Color, Vec<GradientStopPosition>),
-    Hint(GradientStopPosition),
+    Stop(GradientColor, Vec<GradientPosition>),
+    Hint(GradientPosition),
 }
 
-fn parse_gradient_stop_position(token: &str) -> Option<GradientStopPosition> {
+fn parse_gradient_stop_position(token: &str) -> Option<GradientPosition> {
     match parse_length(token)? {
-        CssValue::Percentage(p) => Some(GradientStopPosition {
-            fraction: p / 100.0,
-            length: 0.0,
-        }),
-        CssValue::Length(length) => Some(GradientStopPosition {
-            fraction: 0.0,
-            length,
-        }),
+        CssValue::Percentage(value) => Some(GradientPosition::fraction(value / 100.0)),
+        CssValue::Length(value) => Some(GradientPosition::length(value)),
         CssValue::Calc(tokens) => {
-            let mut total = GradientStopPosition::zero();
+            let mut total = GradientPosition::ZERO;
             let mut op = CalcOp::Add;
             for token in tokens {
-                match token {
-                    crate::parser::css::CalcToken::Op(next) => op = next,
-                    crate::parser::css::CalcToken::Percent(p) => {
-                        let value = GradientStopPosition {
-                            fraction: p / 100.0,
-                            length: 0.0,
-                        };
-                        apply_gradient_calc_component(&mut total, op, value)?;
+                let value = match token {
+                    crate::parser::css::CalcToken::Op(next) => {
+                        op = next;
+                        continue;
                     }
-                    crate::parser::css::CalcToken::Length(length) => {
-                        let value = GradientStopPosition {
-                            fraction: 0.0,
-                            length,
-                        };
-                        apply_gradient_calc_component(&mut total, op, value)?;
+                    crate::parser::css::CalcToken::Percent(value) => {
+                        GradientPosition::fraction(value / 100.0)
                     }
+                    crate::parser::css::CalcToken::Length(value) => GradientPosition::length(value),
                     _ => return None,
-                }
+                };
+                match op {
+                    CalcOp::Add => total += value,
+                    CalcOp::Sub => total -= value,
+                    CalcOp::Mul | CalcOp::Div => return None,
+                };
             }
             Some(total)
         }
@@ -12487,302 +14477,448 @@ fn parse_gradient_stop_position(token: &str) -> Option<GradientStopPosition> {
     }
 }
 
-fn apply_gradient_calc_component(
-    total: &mut GradientStopPosition,
-    op: CalcOp,
-    value: GradientStopPosition,
-) -> Option<()> {
-    match op {
-        CalcOp::Add => {
-            total.fraction += value.fraction;
-            total.length += value.length;
-            Some(())
-        }
-        CalcOp::Sub => {
-            total.fraction -= value.fraction;
-            total.length -= value.length;
-            Some(())
-        }
-        CalcOp::Mul | CalcOp::Div => None,
-    }
-}
-
-fn make_gradient_stop(color: Color, position: GradientStopPosition) -> GradientStop {
-    GradientStop {
-        color,
-        position: position.fraction,
-        position_length: position.length,
-    }
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let t = t.clamp(0.0, 1.0);
-    Color {
-        r: (f32::from(a.r) + (f32::from(b.r) - f32::from(a.r)) * t).round() as u8,
-        g: (f32::from(a.g) + (f32::from(b.g) - f32::from(a.g)) * t).round() as u8,
-        b: (f32::from(a.b) + (f32::from(b.b) - f32::from(a.b)) * t).round() as u8,
-        a: (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8,
-    }
-}
-
-fn interpolate_stop_position(
-    a: GradientStopPosition,
-    b: GradientStopPosition,
-    t: f32,
-) -> GradientStopPosition {
-    GradientStopPosition {
-        fraction: a.fraction + (b.fraction - a.fraction) * t,
-        length: a.length + (b.length - a.length) * t,
-    }
-}
-
-fn hint_relative_position(
-    a: GradientStopPosition,
-    b: GradientStopPosition,
-    hint: GradientStopPosition,
-) -> Option<f32> {
-    if (a.length - b.length).abs() > 1e-6 || hint.length.abs() > 1e-6 {
-        return None;
-    }
-    let span = b.fraction - a.fraction;
-    if span.abs() <= 1e-6 {
-        return None;
-    }
-    Some(((hint.fraction - a.fraction) / span).clamp(0.0, 1.0))
-}
-
-fn color_hint_progress(t: f32, hint_t: f32, exponent: f32) -> f32 {
-    let spec = t.powf(exponent);
-    if hint_t < 0.5 && t < hint_t {
-        let piece = 0.5 * t / hint_t;
-        let weight = (3.0 * t / hint_t).clamp(0.0, 1.0);
-        piece + (spec - piece) * weight
-    } else {
-        spec
-    }
-}
-
-/// Parse gradient color stops from a list of comma-separated stop tokens.
+/// Parse one shared gradient ramp from comma-separated color stops.
 ///
 /// Each token is `color`, `color <pos>`, `color <pos> <pos>`, or a standalone
-/// `<linear-color-hint>` between two color stops. Length and calc() positions
-/// are preserved until paint time because their percentage basis is the actual
-/// gradient line/radius.
-fn parse_gradient_stops(parts: &[String]) -> Option<Vec<GradientStop>> {
+/// transition hint between two color stops. Positions remain unresolved until
+/// the actual line/radius is known.
+fn parse_gradient_ramp(
+    parts: &[String],
+    current_color: Color,
+    interpolation: GradientInterpolation,
+    repeating: bool,
+    parse_position: fn(&str) -> Option<GradientPosition>,
+) -> Option<GradientRamp> {
     let mut items = Vec::new();
     for part in parts {
         let part = part.trim();
         if part.is_empty() {
-            continue;
+            return None;
         }
         let tokens = split_css_components(part);
         if tokens.is_empty() {
-            continue;
+            return None;
         }
         if tokens.len() == 1
-            && let Some(position) = parse_gradient_stop_position(&tokens[0])
+            && let Some(position) = parse_position(&tokens[0])
         {
             items.push(RawGradientItem::Hint(position));
             continue;
         }
 
         let mut split_at = tokens.len();
-        while split_at > 1 && parse_gradient_stop_position(&tokens[split_at - 1]).is_some() {
+        while split_at > 0 && parse_position(&tokens[split_at - 1]).is_some() {
             split_at -= 1;
         }
+        if split_at == 0 || tokens.len() - split_at > 2 {
+            return None;
+        }
         let color_str = tokens[..split_at].join(" ");
-        let color = parse_gradient_color(&color_str)?;
-        let positions: Vec<GradientStopPosition> = tokens[split_at..]
+        let color = parse_gradient_color_for_color(&color_str, current_color)?;
+        let positions = tokens[split_at..]
             .iter()
-            .filter_map(|t| parse_gradient_stop_position(t))
-            .collect();
+            .map(|token| parse_position(token))
+            .collect::<Option<Vec<_>>>()?;
         items.push(RawGradientItem::Stop(color, positions));
     }
 
-    let mut flat: Vec<(Color, Option<GradientStopPosition>)> = Vec::new();
-    let mut hints: Vec<(usize, GradientStopPosition)> = Vec::new();
+    let mut stops = Vec::new();
+    let mut awaiting_right_stop = false;
     for item in items {
         match item {
             RawGradientItem::Hint(position) => {
-                if let Some(prev) = flat.len().checked_sub(1) {
-                    hints.push((prev, position));
+                let previous: &mut GradientStop = stops.last_mut()?;
+                if awaiting_right_stop || previous.hint_after.is_some() {
+                    return None;
+                }
+                previous.hint_after = Some(position);
+                awaiting_right_stop = true;
+            }
+            RawGradientItem::Stop(color, positions) => {
+                awaiting_right_stop = false;
+                match positions.as_slice() {
+                    [] => stops.push(GradientStop::new(color, None)),
+                    [position] => stops.push(GradientStop::new(color, Some(*position))),
+                    [first, second] => {
+                        stops.push(GradientStop::new(color, Some(*first)));
+                        stops.push(GradientStop::new(color, Some(*second)));
+                    }
+                    _ => return None,
                 }
             }
-            RawGradientItem::Stop(color, positions) => match positions.len() {
-                0 => flat.push((color, None)),
-                1 => flat.push((color, Some(positions[0]))),
-                _ => {
-                    for position in positions {
-                        flat.push((color, Some(position)));
-                    }
-                }
-            },
         }
     }
-
-    let n = flat.len();
-    if n < 2 {
+    if awaiting_right_stop || stops.is_empty() {
         return None;
     }
-    if flat[0].1.is_none() {
-        flat[0].1 = Some(GradientStopPosition::zero());
-    }
-    if flat[n - 1].1.is_none() {
-        flat[n - 1].1 = Some(GradientStopPosition::one());
-    }
-    let mut i = 0;
-    while i < n {
-        if flat[i].1.is_some() {
-            i += 1;
-            continue;
-        }
-        let start = i - 1;
-        let mut j = i;
-        while j < n && flat[j].1.is_none() {
-            j += 1;
-        }
-        let p0 = flat[start].1.unwrap_or(GradientStopPosition::zero());
-        let p1 = flat[j].1.unwrap_or(GradientStopPosition::one());
-        let span = (j - start) as f32;
-        for (k, idx) in (i..j).enumerate() {
-            let f = (k as f32 + 1.0) / span;
-            flat[idx].1 = Some(GradientStopPosition {
-                fraction: p0.fraction + (p1.fraction - p0.fraction) * f,
-                length: p0.length + (p1.length - p0.length) * f,
-            });
-        }
-        i = j;
-    }
-
-    let mut stops: Vec<GradientStop> = flat
-        .into_iter()
-        .map(|(color, pos)| make_gradient_stop(color, pos.unwrap_or(GradientStopPosition::zero())))
-        .collect();
-
-    for (prev, hint_pos) in hints.into_iter().rev() {
-        if prev + 1 >= stops.len() {
-            continue;
-        }
-        let left = GradientStopPosition {
-            fraction: stops[prev].position,
-            length: stops[prev].position_length,
-        };
-        let right = GradientStopPosition {
-            fraction: stops[prev + 1].position,
-            length: stops[prev + 1].position_length,
-        };
-        let Some(hint_t) = hint_relative_position(left, right, hint_pos) else {
-            stops.insert(
-                prev + 1,
-                make_gradient_stop(
-                    lerp_color(stops[prev].color, stops[prev + 1].color, 0.5),
-                    hint_pos,
-                ),
-            );
-            continue;
-        };
-        if !(0.0..=1.0).contains(&hint_t) || hint_t <= 1e-6 || hint_t >= 1.0 - 1e-6 {
-            continue;
-        }
-        let exponent = 0.5_f32.ln() / hint_t.ln();
-        let mut hinted = Vec::new();
-        const HINT_STEPS: usize = 256;
-        for step in 1..HINT_STEPS {
-            let t = step as f32 / HINT_STEPS as f32;
-            hinted.push(make_gradient_stop(
-                lerp_color(
-                    stops[prev].color,
-                    stops[prev + 1].color,
-                    color_hint_progress(t, hint_t, exponent),
-                ),
-                interpolate_stop_position(left, right, t),
-            ));
-        }
-        stops.splice(prev + 1..prev + 1, hinted);
-    }
-
-    if stops.len() >= 2 { Some(stops) } else { None }
-}
-
-fn max_gradient_length_stop(parts: &[String]) -> Option<f32> {
-    let mut max_len = 0.0_f32;
-    for part in parts {
-        for token in split_css_components(part) {
-            if let Some(pos) = parse_gradient_stop_position(&token)
-                && pos.length > 0.0
-            {
-                max_len = max_len.max(pos.length);
-            }
-        }
-    }
-    (max_len > 0.0).then_some(max_len)
+    Some(GradientRamp {
+        stops,
+        interpolation,
+        repeat: if repeating {
+            GradientRepeat::Repeat
+        } else {
+            GradientRepeat::Clamp
+        },
+    })
 }
 
 /// Parse a color string for gradient stops.
+#[cfg(test)]
 fn parse_gradient_color(val: &str) -> Option<Color> {
-    let val = val.trim().to_ascii_lowercase();
-    match val.as_str() {
-        "black" => Some(Color::rgb(0, 0, 0)),
-        "white" => Some(Color::rgb(255, 255, 255)),
-        "red" => Some(Color::rgb(255, 0, 0)),
-        "green" => Some(Color::rgb(0, 128, 0)),
-        "blue" => Some(Color::rgb(0, 0, 255)),
-        "yellow" => Some(Color::rgb(255, 255, 0)),
-        "orange" => Some(Color::rgb(255, 165, 0)),
-        "purple" => Some(Color::rgb(128, 0, 128)),
-        "gray" | "grey" => Some(Color::rgb(128, 128, 128)),
-        "silver" => Some(Color::rgb(192, 192, 192)),
-        "maroon" => Some(Color::rgb(128, 0, 0)),
-        "navy" => Some(Color::rgb(0, 0, 128)),
-        "teal" => Some(Color::rgb(0, 128, 128)),
-        "aqua" | "cyan" => Some(Color::rgb(0, 255, 255)),
-        "fuchsia" | "magenta" => Some(Color::rgb(255, 0, 255)),
-        "lime" => Some(Color::rgb(0, 255, 0)),
-        // CSS Color 4 §6.1: `transparent` is `rgb(0 0 0 / 0)`, not white.
-        "transparent" => Some(Color {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }),
-        _ => {
-            if let Some(hex) = val.strip_prefix('#') {
-                parse_hex_to_color(hex)
-            } else if let Some(inner) = val.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
-                let parts: Vec<&str> = inner.split(',').collect();
-                if parts.len() == 3 {
-                    let r = parts[0].trim().parse::<u8>().ok()?;
-                    let g = parts[1].trim().parse::<u8>().ok()?;
-                    let b = parts[2].trim().parse::<u8>().ok()?;
-                    Some(Color::rgb(r, g, b))
-                } else {
-                    None
-                }
-            } else if let Some(inner) = val.strip_prefix("rgba(").and_then(|s| s.strip_suffix(')'))
-            {
-                let parts: Vec<&str> = inner.split(',').collect();
-                if parts.len() == 4 {
-                    let r = parts[0].trim().parse::<u8>().ok()?;
-                    let g = parts[1].trim().parse::<u8>().ok()?;
-                    let b = parts[2].trim().parse::<u8>().ok()?;
-                    Some(Color::rgb(r, g, b))
-                } else {
-                    None
-                }
-            } else {
-                match crate::parser::css::parse_color(&val) {
-                    Some(CssValue::Color(c)) => Some(c),
-                    _ => None,
-                }
-            }
-        }
-    }
+    parse_gradient_color_for_color(val, Color::BLACK).map(|color| color.color)
+}
+
+fn parse_gradient_color_for_color(val: &str, current_color: Color) -> Option<GradientColor> {
+    let source = val.trim();
+    let lower = source.to_ascii_lowercase();
+    let Some(CssValue::Color(specified)) = crate::parser::css::parse_color(source) else {
+        return None;
+    };
+    let provenance = if lower == "currentcolor" {
+        GradientColorProvenance::CurrentColor
+    } else if ["color(", "lab(", "lch(", "oklab(", "oklch("]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        GradientColorProvenance::Modern
+    } else {
+        GradientColorProvenance::LegacySrgb
+    };
+    Some(GradientColor::new(
+        specified.resolve(current_color),
+        provenance,
+    ))
 }
 
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_column_rule_longhand_preserves_the_prior_cascaded_style() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("column-rule-style: dashed; column-rule-style: zigzag"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.column_rule.style, BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn invalid_column_rule_shorthand_preserves_the_prior_declaration() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("column-rule: 4px double red; column-rule: 2px dashed red extra"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.column_rule.style, BorderStyle::Double);
+        assert_eq!(style.column_rule.width, 3.0);
+    }
+
+    #[test]
+    fn negative_column_rule_width_does_not_replace_a_valid_width() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("column-rule-width: 4px; column-rule-width: -2px"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.column_rule.width, 3.0);
+    }
+
+    #[test]
+    fn non_identity_color_matrix_requires_a_composited_filter_source() {
+        let identity = FilterOperation::Matrix([
+            1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+        ]);
+        let desaturate = FilterOperation::Matrix([
+            0.213, 0.715, 0.072, 0.0, 0.0, 0.213, 0.715, 0.072, 0.0, 0.0, 0.213, 0.715, 0.072, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ]);
+
+        assert!(!identity.requires_group_rasterization());
+        assert!(desaturate.requires_group_rasterization());
+    }
+
+    fn gradient_stop(position: f32, color: Color) -> GradientStop {
+        GradientStop::new(
+            GradientColor::new(color, GradientColorProvenance::LegacySrgb),
+            Some(GradientPosition::fraction(position)),
+        )
+    }
+
+    fn gradient_ramp(stops: impl IntoIterator<Item = GradientStop>) -> GradientRamp {
+        GradientRamp {
+            stops: stops.into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn resolved_positions(ramp: &GradientRamp) -> Vec<f32> {
+        ramp.resolve(1.0)
+            .unwrap()
+            .stops()
+            .iter()
+            .map(|stop| stop.position)
+            .collect()
+    }
+
+    fn assert_rgba_close(actual: (f32, f32, f32, f32), expected: (f32, f32, f32, f32)) {
+        for (actual, expected) in [actual.0, actual.1, actual.2, actual.3]
+            .into_iter()
+            .zip([expected.0, expected.1, expected.2, expected.3])
+        {
+            assert!(
+                (actual - expected).abs() <= f32::EPSILON,
+                "{actual} != {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn background_repeat_pattern_is_constant_size_for_billions_of_tiles() {
+        let pattern = AxisRepeatPattern::new(AxisRepeatMode::Repeat, 0.0, 1e-9, 1e30).unwrap();
+        assert!(std::mem::size_of_val(&pattern) <= 5 * std::mem::size_of::<f64>());
+        let local = pattern.sample(2.25e-9).unwrap();
+        assert!(local >= 0.0 && local < pattern.tile_size());
+
+        let spaced = AxisRepeatPattern::new(AxisRepeatMode::Space, 0.0, 1e-9, 100.0).unwrap();
+        let local = spaced.sample(50.0).unwrap();
+        assert!(local >= 0.0 && local < spaced.tile_size());
+
+        let rounded = AxisRepeatPattern::new(AxisRepeatMode::Round, 0.0, 1e-9, 100.0).unwrap();
+        let local = rounded.sample(50.0).unwrap();
+        assert!(local >= 0.0 && local < rounded.tile_size());
+    }
+
+    #[test]
+    fn background_space_with_one_tile_preserves_authored_position() {
+        let pattern = AxisRepeatPattern::new(AxisRepeatMode::Space, 17.0, 60.0, 100.0).unwrap();
+        assert_eq!(pattern.sample(16.0), None);
+        assert_eq!(pattern.sample(17.0), Some(0.0));
+        assert_eq!(pattern.sample(27.0), Some(10.0));
+        assert_eq!(pattern.sample(77.0), None);
+    }
+
+    #[test]
+    fn background_axis_pattern_samples_without_offset_search() {
+        let repeat = AxisRepeatPattern::new(AxisRepeatMode::Repeat, 3.0, 10.0, 100.0).unwrap();
+        assert_eq!(repeat.sample(4.0), Some(1.0));
+        assert_eq!(repeat.sample(2.0), Some(9.0));
+
+        let no_repeat = AxisRepeatPattern::new(AxisRepeatMode::NoRepeat, 3.0, 10.0, 100.0).unwrap();
+        assert_eq!(no_repeat.sample(2.0), None);
+        assert_eq!(no_repeat.sample(12.0), Some(9.0));
+        assert_eq!(no_repeat.sample(13.0), None);
+    }
+
+    #[test]
+    fn resolved_gradient_ramp_preserves_endpoint_plateaus() {
+        let ramp = gradient_ramp([
+            gradient_stop(0.2, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(0.8, Color::rgba8(0, 0, 255, 255)),
+        ])
+        .resolve(1.0)
+        .unwrap();
+        let visible = ramp.svg_unit_interval_stops().unwrap();
+        assert_eq!(
+            visible.iter().map(|stop| stop.position).collect::<Vec<_>>(),
+            [0.0, 0.2, 0.8, 1.0]
+        );
+        assert_eq!(visible[0].color.color, Color::rgba8(255, 0, 0, 255));
+        assert_eq!(visible[3].color.color, Color::rgba8(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn resolved_gradient_ramp_preserves_and_projects_out_of_range_positions() {
+        let ramp = gradient_ramp([
+            gradient_stop(-0.5, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(1.5, Color::rgba8(0, 0, 255, 255)),
+        ])
+        .resolve(1.0)
+        .unwrap();
+        assert_eq!(ramp.stops()[0].position, -0.5);
+        assert_eq!(ramp.stops()[1].position, 1.5);
+        assert_rgba_close(ramp.sample(0.0), (0.75, 0.0, 0.25, 1.0));
+        assert_rgba_close(ramp.sample(1.0), (0.25, 0.0, 0.75, 1.0));
+
+        let visible = ramp.svg_unit_interval_stops().unwrap();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].position, 0.0);
+        assert_eq!(visible[1].position, 1.0);
+        assert_rgba_close(visible[0].color.color.to_f32_rgba(), ramp.sample(0.0));
+        assert_rgba_close(visible[1].color.color.to_f32_rgba(), ramp.sample(1.0));
+    }
+
+    #[test]
+    fn resolved_gradient_ramp_interpolates_premultiplied_srgba() {
+        let ramp = gradient_ramp([
+            gradient_stop(0.0, Color::rgba8(0, 0, 0, 0)),
+            gradient_stop(1.0, Color::rgba8(255, 0, 0, 255)),
+        ])
+        .resolve(1.0)
+        .unwrap();
+        assert_rgba_close(ramp.sample(0.5), (1.0, 0.0, 0.0, 0.5));
+        assert_rgba_close(
+            ResolvedGradientRamp::average_samples([(0.0, 0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 1.0)]),
+            (1.0, 0.0, 0.0, 0.5),
+        );
+    }
+
+    #[test]
+    fn resolved_gradient_ramp_samples_exact_and_adjacent_hard_transitions() {
+        let boundary = 0.5_f32;
+        let next = f32::from_bits(boundary.to_bits() + 1);
+        let exact = gradient_ramp([
+            gradient_stop(0.0, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(boundary, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(boundary, Color::rgba8(0, 0, 255, 255)),
+            gradient_stop(1.0, Color::rgba8(0, 0, 255, 255)),
+        ])
+        .resolve(1.0)
+        .unwrap();
+        assert_eq!(exact.sample(boundary), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(
+            exact.sample(f32::from_bits(boundary.to_bits() - 1)),
+            (1.0, 0.0, 0.0, 1.0)
+        );
+
+        let adjacent = gradient_ramp([
+            gradient_stop(0.0, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(boundary, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(next, Color::rgba8(0, 0, 255, 255)),
+            gradient_stop(1.0, Color::rgba8(0, 0, 255, 255)),
+        ])
+        .resolve(1.0)
+        .unwrap();
+        assert_eq!(adjacent.sample(boundary), (1.0, 0.0, 0.0, 1.0));
+        assert_eq!(adjacent.sample(next), (0.0, 0.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn zero_period_repeating_gradient_uses_weighted_premultiplied_average() {
+        let opaque = GradientRamp {
+            stops: vec![
+                gradient_stop(0.5, Color::rgba8(255, 0, 0, 255)),
+                gradient_stop(0.5, Color::rgba8(255, 255, 255, 255)),
+                gradient_stop(0.5, Color::rgba8(0, 0, 255, 255)),
+            ],
+            repeat: GradientRepeat::Repeat,
+            ..Default::default()
+        }
+        .resolve(1.0)
+        .unwrap();
+        assert_rgba_close(opaque.sample(0.25), (0.75, 0.5, 0.75, 1.0));
+
+        let alpha = GradientRamp {
+            stops: vec![
+                gradient_stop(0.5, Color::rgba8(0, 0, 0, 0)),
+                gradient_stop(0.5, Color::rgba8(255, 0, 0, 255)),
+            ],
+            repeat: GradientRepeat::Repeat,
+            ..Default::default()
+        }
+        .resolve(1.0)
+        .unwrap();
+        assert_rgba_close(alpha.sample(0.75), (1.0, 0.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn resolved_gradient_ramp_accepts_positive_submicro_bases_and_exact_fixup() {
+        let length_stop = GradientStop::new(
+            GradientColor::new(
+                Color::rgba8(0, 0, 255, 255),
+                GradientColorProvenance::LegacySrgb,
+            ),
+            Some(GradientPosition::length(0.000_000_5)),
+        );
+        let ramp = gradient_ramp([
+            gradient_stop(0.5, Color::rgba8(255, 0, 0, 255)),
+            length_stop,
+        ])
+        .resolve(0.000_000_5)
+        .unwrap();
+        assert_eq!(ramp.stops()[1].position, 1.0);
+
+        let decreasing = gradient_ramp([
+            gradient_stop(0.75, Color::rgba8(255, 0, 0, 255)),
+            gradient_stop(-4.0, Color::rgba8(0, 0, 255, 255)),
+        ])
+        .resolve(f32::MIN_POSITIVE)
+        .unwrap();
+        assert_eq!(decreasing.stops()[1].position, 0.75);
+
+        for basis in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                gradient_ramp([length_stop, length_stop])
+                    .resolve(basis)
+                    .is_none()
+            );
+        }
+        assert!(
+            gradient_ramp([length_stop, length_stop])
+                .resolve_scaled(1.0, f32::NAN)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn gradient_fixup_clamps_positioned_stops_before_distributing_omissions() {
+        let ramp = GradientRamp {
+            stops: vec![
+                GradientStop::new(
+                    GradientColor::new(Color::rgb(255, 0, 0), GradientColorProvenance::LegacySrgb),
+                    Some(GradientPosition::length(80.0)),
+                ),
+                GradientStop::new(
+                    GradientColor::new(Color::WHITE, GradientColorProvenance::LegacySrgb),
+                    Some(GradientPosition::length(0.0)),
+                ),
+                GradientStop::new(
+                    GradientColor::new(Color::BLACK, GradientColorProvenance::LegacySrgb),
+                    None,
+                ),
+                GradientStop::new(
+                    GradientColor::new(Color::rgb(0, 0, 255), GradientColorProvenance::LegacySrgb),
+                    Some(GradientPosition::length(100.0)),
+                ),
+            ],
+            ..Default::default()
+        }
+        .resolve(100.0)
+        .unwrap();
+        assert_eq!(
+            ramp.stops()
+                .iter()
+                .map(|stop| stop.position)
+                .collect::<Vec<_>>(),
+            [0.8, 0.8, 0.9, 1.0]
+        );
+    }
+
+    #[test]
+    fn color_architecture_size_baseline() {
+        eprintln!(
+            "Color={} CssValue={} GradientStop={} BoxShadow={} BorderSide={} ComputedStyle={}",
+            std::mem::size_of::<Color>(),
+            std::mem::size_of::<CssValue>(),
+            std::mem::size_of::<GradientStop>(),
+            std::mem::size_of::<BoxShadow>(),
+            std::mem::size_of::<BorderSide>(),
+            std::mem::size_of::<ComputedStyle>(),
+        );
+    }
+
+    #[test]
+    fn background_raster_tiling_preserves_large_physical_dimensions() {
+        assert_eq!(
+            background_raster_dimensions(3_000.0, 1.0, RasterQuality::default().background_dpi,)
+                .unwrap()
+                .width,
+            8_000
+        );
+    }
 
     #[test]
     fn object_position_keywords_and_default() {
@@ -12882,11 +15018,36 @@ mod tests {
     }
 
     #[test]
+    fn font_size_adjust_preserves_computed_font_and_line_sizes() {
+        let mut parent = ComputedStyle::default();
+        parent.font_size = 30.0;
+        parent.line_height = 1.6;
+
+        let style = compute_style(HtmlTag::Span, Some("font-size-adjust: 0.8"), &parent);
+
+        assert_eq!(style.font_size, 30.0);
+        assert_eq!(style.line_height, 1.6);
+        assert_eq!(style.font_size_adjust.target_ex_height(), Some(0.8));
+    }
+
+    #[test]
+    fn font_size_adjust_is_inherited_and_none_resets_it() {
+        let mut parent = ComputedStyle::default();
+        parent.font_size_adjust = FontSizeAdjust::ex_height(0.8);
+
+        let inherited = compute_style(HtmlTag::Span, None, &parent);
+        let reset = compute_style(HtmlTag::Span, Some("font-size-adjust: none"), &parent);
+
+        assert_eq!(inherited.font_size_adjust, parent.font_size_adjust);
+        assert_eq!(reset.font_size_adjust, FontSizeAdjust::none());
+    }
+
+    #[test]
     fn color_inherited() {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(255, 0, 0);
         let style = compute_style(HtmlTag::Span, None, &parent);
-        assert_eq!(style.color.r, 255);
+        assert_eq!(style.color.r, 255 as f32);
     }
 
     #[test]
@@ -12904,7 +15065,10 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("column-rule: solid blue"), &parent);
         assert!((style.column_rule.width - 2.25).abs() < 0.01);
         assert_eq!(style.column_rule.style, BorderStyle::Solid);
-        assert!(style.column_rule.color.is_some());
+        assert_eq!(
+            style.column_rule.color.resolve(style.color),
+            Color::rgb(0, 0, 255)
+        );
     }
 
     #[test]
@@ -12919,13 +15083,49 @@ mod tests {
         let child = compute_style(HtmlTag::Span, None, &vrl);
         assert_eq!(child.writing_mode, WritingMode::VerticalRl);
 
-        // `vertical-lr` shares the vertical layout mode and carries a side flag.
+        // Every authored mode remains represented through inheritance.
         let lr = compute_style(HtmlTag::Div, Some("writing-mode: vertical-lr"), &parent);
-        assert_eq!(lr.writing_mode, WritingMode::VerticalRl);
-        assert!(lr.writing_mode_vertical_lr);
+        assert_eq!(lr.writing_mode, WritingMode::VerticalLr);
+        assert_eq!(
+            compute_style(HtmlTag::Span, None, &lr).writing_mode,
+            WritingMode::VerticalLr
+        );
+        let sideways_lr = compute_style(HtmlTag::Div, Some("writing-mode: sideways-lr"), &parent);
+        assert_eq!(sideways_lr.writing_mode, WritingMode::SidewaysLr);
         let htb = compute_style(HtmlTag::Div, Some("writing-mode: horizontal-tb"), &vrl);
         assert_eq!(htb.writing_mode, WritingMode::HorizontalTb);
-        assert!(!htb.writing_mode_vertical_lr);
+    }
+
+    #[test]
+    fn text_combine_upright_digits_parses_valid_range_and_inherits() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("text-combine-upright: digits 3"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(parent.text_combine_upright, TextCombineUpright::Digits(3));
+        assert_eq!(
+            compute_style(HtmlTag::Span, None, &parent).text_combine_upright,
+            TextCombineUpright::Digits(3)
+        );
+        assert_eq!(
+            compute_style(
+                HtmlTag::Span,
+                Some("text-combine-upright: digits"),
+                &ComputedStyle::default(),
+            )
+            .text_combine_upright,
+            TextCombineUpright::Digits(2)
+        );
+        assert_eq!(
+            compute_style(
+                HtmlTag::Span,
+                Some("text-combine-upright: digits 1"),
+                &parent,
+            )
+            .text_combine_upright,
+            TextCombineUpright::Digits(3)
+        );
     }
 
     #[test]
@@ -12934,6 +15134,17 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("column-rule: dotted"), &parent);
         assert!((style.column_rule.width - 2.25).abs() < 0.01);
         assert_eq!(style.column_rule.style, BorderStyle::Dotted);
+    }
+
+    #[test]
+    fn column_rule_bevel_style_is_not_flattened_to_solid() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("column-rule: 6px ridge #00897b"),
+            &parent,
+        );
+        assert_eq!(style.column_rule.style, BorderStyle::Ridge);
     }
 
     #[test]
@@ -13045,6 +15256,34 @@ mod tests {
     }
 
     #[test]
+    fn calc_uses_content_box_basis_without_changing_inheritance_parent() {
+        // The inherited style still records the parent's declared 300pt
+        // border-box width, but CSS percentages resolve against the layout
+        // content box supplied by the caller (297pt × 117pt here).
+        let mut parent = ComputedStyle::default();
+        parent.width = Some(300.0);
+        parent.height = Some(120.0);
+
+        let style = compute_style_with_context_and_percentage_basis(
+            HtmlTag::Div,
+            Some("width: calc(50% - 40px); height: calc(100% - 60px)"),
+            &parent,
+            &[],
+            "div",
+            &[],
+            None,
+            &HashMap::new(),
+            &SelectorContext::default(),
+            PercentageBasis::new(Some(297.0), Some(117.0)),
+        );
+
+        assert!(matches!(style.width, Some(w) if (w - 118.5).abs() < 0.01));
+        assert!(matches!(style.height, Some(h) if (h - 72.0).abs() < 0.01));
+        assert_eq!(parent.width, Some(300.0));
+        assert_eq!(parent.height, Some(120.0));
+    }
+
+    #[test]
     fn clamp_width_resolves_against_parent_width() {
         // clamp(120px, 50%, 240px): 50% of 600pt = 300, clamped to 180pt (240px).
         let mut parent = ComputedStyle::default();
@@ -13097,12 +15336,37 @@ mod tests {
     }
 
     #[test]
+    fn font_style_preserves_the_authored_oblique_angle() {
+        let parent = ComputedStyle::default();
+        assert_eq!(
+            compute_style(HtmlTag::Span, Some("font-style: oblique 20deg"), &parent,).font_style,
+            FontStyle::Oblique(20.0)
+        );
+        assert_eq!(
+            compute_style(HtmlTag::Span, Some("font-style: oblique"), &parent).font_style,
+            FontStyle::Oblique(FontStyle::DEFAULT_OBLIQUE_ANGLE_DEGREES)
+        );
+    }
+
+    #[test]
+    fn font_shorthand_preserves_the_authored_oblique_angle() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("font: oblique 25deg bold 20px/24px ParitySans"),
+            &parent,
+        );
+        assert_eq!(style.font_style, FontStyle::Oblique(25.0));
+        assert_eq!(style.font_weight, FontWeight::Bold);
+    }
+
+    #[test]
     fn background_color_applied() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("background-color: red"), &parent);
         assert!(style.background_color.is_some());
         let bg = style.background_color.unwrap();
-        assert_eq!(bg.r, 255);
+        assert_eq!(bg.r, 255 as f32);
     }
 
     // --- CSS Color 4 spec coverage (full inline-style pipeline) -------------
@@ -13117,7 +15381,8 @@ mod tests {
         let c = style
             .background_color
             .expect("background-color should parse");
-        (c.r, c.g, c.b, c.a)
+        let [r, g, b, a] = c.to_rgba8();
+        (r, g, b, a)
     }
 
     #[test]
@@ -13246,7 +15511,8 @@ mod tests {
     }
 
     fn rgba_tuple(c: Color) -> (u8, u8, u8, u8) {
-        (c.r, c.g, c.b, c.a)
+        let [r, g, b, a] = c.to_rgba8();
+        (r, g, b, a)
     }
 
     #[test]
@@ -13427,11 +15693,45 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid black"), &parent);
         assert!((style.border.top.width - 0.75).abs() < 0.1); // 1px = 0.75pt
-        assert!(style.border.top.color.is_some());
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
+        assert_eq!(
+            style.border.top.color,
+            SpecifiedColor::Absolute(Color::BLACK)
+        );
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 0 as f32);
+        assert_eq!(c.g, 0 as f32);
+        assert_eq!(c.b, 0 as f32);
+    }
+
+    #[test]
+    fn omitted_border_width_and_color_use_medium_and_current_color() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("color: #6a1b9a; border: solid"), &parent);
+
+        for side in [
+            style.border.top,
+            style.border.right,
+            style.border.bottom,
+            style.border.left,
+        ] {
+            assert_eq!(side.used_width(), MEDIUM_RULE_WIDTH_PT);
+            assert_eq!(side.color, SpecifiedColor::CurrentColor);
+            assert_eq!(
+                side.color.resolve(style.color),
+                Color::rgb(0x6a, 0x1b, 0x9a)
+            );
+        }
+    }
+
+    #[test]
+    fn border_style_longhand_uses_the_initial_medium_width() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border-style: solid"),
+            &ComputedStyle::default(),
+        );
+
+        assert_eq!(style.border.top.used_width(), MEDIUM_RULE_WIDTH_PT);
     }
 
     #[test]
@@ -13445,14 +15745,71 @@ mod tests {
     }
 
     #[test]
+    fn border_bevel_style_is_typed_and_preserves_rgb_pdf_alpha_semantics() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border: 4px groove rgba(0 137 123 / 50%)"),
+            &parent,
+        );
+        for side in [
+            style.border.top,
+            style.border.right,
+            style.border.bottom,
+            style.border.left,
+        ] {
+            assert_eq!(side.style, BorderStyle::Groove);
+            let alpha = side.color.resolve(style.color).a;
+            let expected = 128.0_f32;
+            assert!(
+                (alpha - expected).abs() <= expected * f32::EPSILON * 4.0,
+                "alpha={alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn border_style_four_value_shorthand_preserves_each_bevel_kind() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-width: 4px; border-color: #00897b; \
+                 border-style: groove ridge inset outset",
+            ),
+            &parent,
+        );
+        assert_eq!(style.border.top.style, BorderStyle::Groove);
+        assert_eq!(style.border.right.style, BorderStyle::Ridge);
+        assert_eq!(style.border.bottom.style, BorderStyle::Inset);
+        assert_eq!(style.border.left.style, BorderStyle::Outset);
+    }
+
+    #[test]
+    fn solid_border_high_alpha_byte_is_not_bevel_metadata() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("border: 4px solid #00897bfb"), &parent);
+        assert_eq!(style.border.top.style, BorderStyle::Solid);
+        assert_eq!(style.border.top.color.resolve(style.color).a, 251.0);
+    }
+
+    #[test]
+    fn hidden_border_style_remains_distinct_from_none() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("border: 4px hidden red"), &parent);
+        assert_eq!(style.border.top.style, BorderStyle::Hidden);
+        assert!(!style.border.top.style.paints());
+    }
+
+    #[test]
     fn border_with_custom_color() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 2px solid red"), &parent);
         assert!((style.border.top.width - 1.5).abs() < 0.1); // 2px = 1.5pt
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 255);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 255 as f32);
+        assert_eq!(c.g, 0 as f32);
+        assert_eq!(c.b, 0 as f32);
     }
 
     #[test]
@@ -13473,8 +15830,8 @@ mod tests {
             style.border.top.width
         );
         assert!((style.border.bottom.width - 3.0).abs() < 0.05);
-        let c = style.border.top.color.unwrap();
-        assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!((c.r, c.g, c.b), (0x11 as f32, 0x30 as f32, 0x5f as f32));
     }
 
     #[test]
@@ -13513,8 +15870,8 @@ mod tests {
             Some("border: 4px solid var(--bc, var(--bc2, #11305f))"),
             &parent,
         );
-        let c = style.border.top.color.unwrap();
-        assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!((c.r, c.g, c.b), (0x11 as f32, 0x30 as f32, 0x5f as f32));
     }
 
     #[test]
@@ -13526,10 +15883,10 @@ mod tests {
             &parent,
         );
         assert!((style.border.top.width - 3.0).abs() < 0.1);
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 255);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 0 as f32);
+        assert_eq!(c.g, 0 as f32);
+        assert_eq!(c.b, 255 as f32);
     }
 
     #[test]
@@ -13559,8 +15916,8 @@ mod tests {
             &style.border.left,
         ] {
             assert_eq!(side.style, BorderStyle::Solid);
-            let c = side.color.expect("per-side border color should be set");
-            assert_eq!((c.r, c.g, c.b), (0x11, 0x30, 0x5f));
+            let c = side.color.resolve(style.color);
+            assert_eq!((c.r, c.g, c.b), (0x11 as f32, 0x30 as f32, 0x5f as f32));
             // Paintable: width > 0 && style != None.
             assert!(side.width > 0.0 && side.style != BorderStyle::None);
         }
@@ -13581,8 +15938,8 @@ mod tests {
         assert_eq!(style.border.top.style, BorderStyle::Dashed);
         assert_eq!(style.border.right.style, BorderStyle::Dotted);
         assert_eq!(style.border.bottom.style, BorderStyle::None);
-        let left = style.border.left.color.expect("left color should be set");
-        assert_eq!((left.r, left.g, left.b), (255, 0, 0));
+        let left = style.border.left.color.resolve(style.color);
+        assert_eq!((left.r, left.g, left.b), (255 as f32, 0 as f32, 0 as f32));
     }
 
     #[test]
@@ -13631,6 +15988,31 @@ mod tests {
     }
 
     #[test]
+    fn font_variant_position_parses_and_resets() {
+        let parent = ComputedStyle::default();
+        let super_style =
+            compute_style(HtmlTag::Span, Some("font-variant-position: super"), &parent);
+        assert_eq!(
+            super_style.font_variant_position,
+            FontVariantPosition::Super
+        );
+
+        let normal = compute_style(
+            HtmlTag::Span,
+            Some("font-variant-position: normal"),
+            &super_style,
+        );
+        assert_eq!(normal.font_variant_position, FontVariantPosition::Normal);
+
+        let initial = compute_style(
+            HtmlTag::Span,
+            Some("font-variant-position: initial"),
+            &super_style,
+        );
+        assert_eq!(initial.font_variant_position, FontVariantPosition::Normal);
+    }
+
+    #[test]
     fn font_feature_settings_liga_off_disables_ligatures() {
         let parent = ComputedStyle::default();
         assert!(parent.ligatures_enabled);
@@ -13651,6 +16033,17 @@ mod tests {
             &parent,
         );
         assert!(style.ligatures_enabled);
+    }
+
+    #[test]
+    fn font_variant_ligatures_no_common_ligatures_disables_ligatures() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("font-variant-ligatures: no-common-ligatures"),
+            &parent,
+        );
+        assert!(!style.ligatures_enabled);
     }
 
     #[test]
@@ -13716,10 +16109,10 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 2pt solid green"), &parent);
         assert!((style.border.top.width - 2.0).abs() < 0.1);
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 128);
-        assert_eq!(c.b, 0);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 0 as f32);
+        assert_eq!(c.g, 128 as f32);
+        assert_eq!(c.b, 0 as f32);
     }
 
     #[test]
@@ -13732,12 +16125,12 @@ mod tests {
             Some("color: #6a1b9a; border: 12px solid currentColor"),
             &parent,
         );
-        let c = style.border.top.color.expect("border color should be set");
+        let c = style.border.top.color.resolve(style.color);
         assert_eq!(
             (c.r, c.g, c.b),
             (style.color.r, style.color.g, style.color.b)
         );
-        assert_eq!((c.r, c.g, c.b), (0x6a, 0x1b, 0x9a));
+        assert_eq!((c.r, c.g, c.b), (0x6a as f32, 0x1b as f32, 0x9a as f32));
     }
 
     #[test]
@@ -13753,8 +16146,12 @@ mod tests {
         ] {
             let css = format!("border: 1px solid {name}");
             let style = compute_style(HtmlTag::Div, Some(&css), &parent);
-            let c = style.border.top.color.unwrap();
-            assert_eq!((c.r, c.g, c.b), (r, g, b), "failed for {name}");
+            let c = style.border.top.color.resolve(style.color);
+            assert_eq!(
+                (c.r, c.g, c.b),
+                (r as f32, g as f32, b as f32),
+                "failed for {name}"
+            );
         }
     }
 
@@ -13762,39 +16159,29 @@ mod tests {
     fn border_color_hex_short() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid #f00"), &parent);
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 255);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 255 as f32);
+        assert_eq!(c.g, 0 as f32);
+        assert_eq!(c.b, 0 as f32);
     }
 
     #[test]
     fn border_color_hex_long() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid #00ff00"), &parent);
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 255);
-        assert_eq!(c.b, 0);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 0 as f32);
+        assert_eq!(c.g, 255 as f32);
+        assert_eq!(c.b, 0 as f32);
     }
 
     #[test]
-    fn border_color_unknown_falls_back_to_current_color() {
-        // An unrecognized color token leaves the border without an explicit
-        // color. Per CSS the initial value of `border-color` is `currentColor`,
-        // so a visible border with no resolvable color paints in the element's
-        // computed `color` (here the default, black) rather than staying unset.
+    fn invalid_border_color_discards_the_whole_shorthand() {
+        // A custom ident is not a color, so the entire border shorthand is
+        // invalid rather than a visible currentColor border.
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: 1px solid foobar"), &parent);
-        let c = style
-            .border
-            .top
-            .color
-            .expect("visible border resolves a color");
-        assert_eq!(
-            (c.r, c.g, c.b),
-            (style.color.r, style.color.g, style.color.b)
-        );
+        assert!(!style.border.has_any());
     }
 
     #[test]
@@ -14028,6 +16415,25 @@ mod tests {
     }
 
     #[test]
+    fn opacity_reparses_percentage_after_var_substitution() {
+        let parent = ComputedStyle::default();
+        for declarations in [
+            "--half: 50%; opacity: var(--half)",
+            "opacity: var(--half); --half: 50%",
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(declarations), &parent);
+            assert!((style.opacity - 0.5).abs() < 0.01, "{declarations}");
+        }
+
+        let mut inherited = ComputedStyle::default();
+        inherited
+            .custom_properties
+            .insert("--half".to_string(), "50%".to_string());
+        let style = compute_style(HtmlTag::Div, Some("opacity: var(--half)"), &inherited);
+        assert!((style.opacity - 0.5).abs() < 0.01);
+    }
+
+    #[test]
     fn blend_modes_from_inline_style() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("mix-blend-mode: multiply"), &parent);
@@ -14109,6 +16515,54 @@ mod tests {
     fn float_default_is_none() {
         let style = ComputedStyle::default();
         assert_eq!(style.float, Float::None);
+    }
+
+    #[test]
+    fn footnote_formatting_is_typed_and_non_inherited() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("footnote-display: compact; footnote-policy: line"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(parent.footnote.display, FootnoteDisplay::Compact);
+        assert_eq!(parent.footnote.policy, FootnotePolicy::Line);
+
+        let child = compute_style(HtmlTag::Span, None, &parent);
+        assert_eq!(child.footnote, FootnoteFormatting::default());
+
+        let inherited = compute_style(
+            HtmlTag::Span,
+            Some("footnote-display: inherit; footnote-policy: inherit"),
+            &parent,
+        );
+        assert_eq!(inherited.footnote, parent.footnote);
+    }
+
+    #[test]
+    fn footnote_formatting_css_wide_initial_resets_each_property() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "footnote-display: inline; footnote-policy: block; \
+                 footnote-display: initial; footnote-policy: initial",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.footnote, FootnoteFormatting::default());
+    }
+
+    #[test]
+    fn invalid_footnote_formatting_declarations_do_not_replace_valid_values() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "footnote-display: inline; footnote-policy: line; \
+                 footnote-display: sideways; footnote-policy: paragraph",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.footnote.display, FootnoteDisplay::Inline);
+        assert_eq!(style.footnote.policy, FootnotePolicy::Line);
     }
 
     #[test]
@@ -14204,9 +16658,9 @@ mod tests {
         assert!((shadow.offset_x - 2.25).abs() < 0.1); // 3px * 0.75
         assert!((shadow.offset_y - 2.25).abs() < 0.1);
         assert!((shadow.blur - 0.0).abs() < 0.1);
-        assert_eq!(shadow.color.r, 0);
-        assert_eq!(shadow.color.g, 0);
-        assert_eq!(shadow.color.b, 0);
+        assert_eq!(shadow.color.r, 0 as f32);
+        assert_eq!(shadow.color.g, 0 as f32);
+        assert_eq!(shadow.color.b, 0 as f32);
     }
 
     #[test]
@@ -14217,7 +16671,7 @@ mod tests {
         assert!((shadow.offset_x - 1.5).abs() < 0.1); // 2px * 0.75
         assert!((shadow.offset_y - 1.5).abs() < 0.1);
         assert!((shadow.blur - 3.0).abs() < 0.1); // 4px * 0.75
-        assert_eq!(shadow.color.r, 0);
+        assert_eq!(shadow.color.r, 0 as f32);
     }
 
     #[test]
@@ -14227,14 +16681,14 @@ mod tests {
         let shadow = style.box_shadow[0];
         assert!((shadow.offset_x - 3.0).abs() < 0.1);
         assert!((shadow.offset_y - 3.0).abs() < 0.1);
-        assert_eq!(shadow.color.r, 255);
+        assert_eq!(shadow.color.r, 255 as f32);
     }
 
     #[test]
     fn box_shadow_none() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("box-shadow: none"), &parent);
-        assert!(style.box_shadow.is_empty());
+        assert_eq!(style.box_shadow.len(), 0);
     }
 
     #[test]
@@ -14254,10 +16708,10 @@ mod tests {
         assert_eq!(style.box_shadow.len(), 2);
         // First listed shadow.
         assert!((style.box_shadow[0].offset_x - 12.0).abs() < 0.1); // 16px * 0.75
-        assert_eq!(style.box_shadow[0].color.r, 0x6a);
+        assert_eq!(style.box_shadow[0].color.r, 0x6a as f32);
         // Second listed shadow.
         assert!((style.box_shadow[1].offset_x + 12.0).abs() < 0.1); // -16px * 0.75
-        assert_eq!(style.box_shadow[1].color.g, 0x83);
+        assert_eq!(style.box_shadow[1].color.g, 0x83 as f32);
     }
 
     #[test]
@@ -14303,6 +16757,22 @@ mod tests {
     }
 
     #[test]
+    fn overflow_x_visible_y_hidden_coerces_to_auto_and_clips() {
+        // CSS Overflow 3 applies the same computed-value rule in the opposite
+        // direction: a visible x axis becomes auto when y is scrollable.
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Div,
+            Some("overflow-x: visible; overflow-y: hidden"),
+            &parent,
+        );
+        assert_eq!(s.overflow_x, Overflow::Auto);
+        assert_eq!(s.overflow_y, Overflow::Hidden);
+        assert_eq!(s.overflow, Overflow::Hidden);
+        assert!(s.overflow.clips());
+    }
+
+    #[test]
     fn overflow_both_visible_does_not_clip() {
         let parent = ComputedStyle::default();
         let s = compute_style(
@@ -14331,6 +16801,7 @@ mod tests {
             blur: 0.0,
             spread: 0.0,
             color: Color::BLACK,
+            color_source: ColorSource::Absolute,
             inset: false,
         }];
         let style = compute_style(HtmlTag::Div, None, &parent);
@@ -14438,14 +16909,20 @@ mod tests {
     fn transform_scale_uniform() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("transform: scale(2)"), &parent);
-        assert_eq!(style.transform, Some(Transform::Scale(2.0, 2.0)));
+        assert_eq!(
+            style.transform,
+            Some(Transform::Scale(CssVector::splat(2.0)))
+        );
     }
 
     #[test]
     fn transform_scale_non_uniform() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("transform: scale(1.5, 2.0)"), &parent);
-        assert_eq!(style.transform, Some(Transform::Scale(1.5, 2.0)));
+        assert_eq!(
+            style.transform,
+            Some(Transform::Scale(CssVector::new(1.5, 2.0)))
+        );
     }
 
     #[test]
@@ -14459,10 +16936,8 @@ mod tests {
         assert_eq!(
             style.transform,
             Some(Transform::Translate {
-                tx: 10.0,
-                ty: 20.0,
-                tx_pct: false,
-                ty_pct: false
+                offset: CssVector::new(10.0, 20.0),
+                percentages: PercentageAxes::default(),
             })
         );
     }
@@ -14477,16 +16952,13 @@ mod tests {
         );
         let t = style.transform.unwrap();
         if let Transform::Translate {
-            tx,
-            ty,
-            tx_pct,
-            ty_pct,
-            ..
+            offset,
+            percentages,
         } = t
         {
-            assert!((tx - 7.5).abs() < 0.1); // 10 * 0.75
-            assert!((ty - 15.0).abs() < 0.1); // 20 * 0.75
-            assert!(!tx_pct && !ty_pct);
+            assert!((offset.x - 7.5).abs() < 0.1); // 10 * 0.75
+            assert!((offset.y - 15.0).abs() < 0.1); // 20 * 0.75
+            assert_eq!(percentages, PercentageAxes::default());
         } else {
             panic!("Expected Translate");
         }
@@ -14505,16 +16977,17 @@ mod tests {
         assert_eq!(
             style.transform,
             Some(Transform::Translate {
-                tx: 50.0,
-                ty: 25.0,
-                tx_pct: true,
-                ty_pct: true
+                offset: CssVector::new(50.0, 25.0),
+                percentages: PercentageAxes::new(true, true),
             })
         );
         // The render-time resolution multiplies the percentage by the box size.
-        let m = style.transform.unwrap().to_css_matrix(200.0, 80.0);
-        assert!((m[4] - 100.0).abs() < 0.01); // 50% of 200pt
-        assert!((m[5] - 20.0).abs() < 0.01); // 25% of 80pt
+        let matrix = style
+            .transform
+            .unwrap()
+            .to_css_matrix(CssVector::new(200.0, 80.0));
+        assert!((matrix.translation.x - 100.0).abs() < 0.01); // 50% of 200pt
+        assert!((matrix.translation.y - 20.0).abs() < 0.01); // 25% of 80pt
     }
 
     #[test]
@@ -14524,15 +16997,16 @@ mod tests {
         assert_eq!(
             style.transform,
             Some(Transform::Translate {
-                tx: 50.0,
-                ty: 0.0,
-                tx_pct: true,
-                ty_pct: false
+                offset: CssVector::new(50.0, 0.0),
+                percentages: PercentageAxes::new(true, false),
             })
         );
-        let m = style.transform.unwrap().to_css_matrix(120.0, 60.0);
-        assert!((m[4] - 60.0).abs() < 0.01); // 50% of 120pt width
-        assert!(m[5].abs() < 0.01); // no Y translation
+        let matrix = style
+            .transform
+            .unwrap()
+            .to_css_matrix(CssVector::new(120.0, 60.0));
+        assert!((matrix.translation.x - 60.0).abs() < 0.01); // 50% of 120pt width
+        assert!(matrix.translation.y.abs() < 0.01); // no Y translation
     }
 
     #[test]
@@ -14589,6 +17063,24 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("grid-column: 2 / span 2"), &parent);
         assert_eq!(style.grid_column_start, GridLine::Line(2));
         assert_eq!(style.grid_column_end, GridLine::Span(2));
+    }
+
+    #[test]
+    fn grid_named_span_preserves_count_and_name_in_either_order() {
+        let parent = ComputedStyle::default();
+        for declaration in [
+            "grid-column: 1 / span 2 target",
+            "grid-column: 1 / span target 2",
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(declaration), &parent);
+            assert_eq!(
+                style.grid_column_end,
+                GridLine::SpanNamed {
+                    count: 2,
+                    name: "target".into(),
+                }
+            );
+        }
     }
 
     #[test]
@@ -14873,11 +17365,11 @@ mod tests {
     fn parse_linear_gradient_to_right() {
         let lg = parse_linear_gradient("linear-gradient(to right, red, blue)").unwrap();
         assert!((lg.angle - 90.0).abs() < 0.01);
-        assert_eq!(lg.stops.len(), 2);
-        assert_eq!(lg.stops[0].color.r, 255);
-        assert_eq!(lg.stops[0].color.g, 0);
-        assert_eq!(lg.stops[1].color.b, 255);
-        assert!(!lg.repeating);
+        assert_eq!(lg.ramp.stops.len(), 2);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 255 as f32);
+        assert_eq!(lg.ramp.stops[0].color.color.g, 0 as f32);
+        assert_eq!(lg.ramp.stops[1].color.color.b, 255 as f32);
+        assert!(!lg.ramp.repeat.is_repeating());
     }
 
     #[test]
@@ -14886,13 +17378,9 @@ mod tests {
         // range form. The parser must expand it back into four stops.
         let lg = parse_linear_gradient("linear-gradient(90deg, #d32f2f 0% 50%, #1565c0 50% 100%)")
             .unwrap();
-        assert_eq!(lg.stops.len(), 4);
-        assert!((lg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((lg.stops[1].position - 0.5).abs() < 0.01);
-        assert!((lg.stops[2].position - 0.5).abs() < 0.01);
-        assert!((lg.stops[3].position - 1.0).abs() < 0.01);
-        assert_eq!(lg.stops[0].color.r, 211);
-        assert_eq!(lg.stops[3].color.b, 192);
+        assert_eq!(resolved_positions(&lg.ramp), [0.0, 0.5, 0.5, 1.0]);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 211 as f32);
+        assert_eq!(lg.ramp.stops[3].color.color.b, 192 as f32);
     }
 
     #[test]
@@ -14900,8 +17388,8 @@ mod tests {
         let lg =
             parse_linear_gradient("repeating-linear-gradient(90deg, red 0% 10%, blue 10% 20%)")
                 .unwrap();
-        assert!(lg.repeating);
-        assert_eq!(lg.stops.len(), 4);
+        assert!(lg.ramp.repeat.is_repeating());
+        assert_eq!(lg.ramp.stops.len(), 4);
     }
 
     #[test]
@@ -14922,10 +17410,10 @@ mod tests {
         let rg = parse_radial_gradient("radial-gradient(ellipse 120px 60px at center, red, blue)")
             .unwrap();
         assert_eq!(rg.shape, RadialShape::Ellipse);
-        let (rx, ry) = rg.radii.expect("explicit radii");
+        let radii = rg.radii.expect("explicit radii");
         // 120px → 90pt, 60px → 45pt.
-        assert!((rx.resolve(1000.0) - 90.0).abs() < 0.01);
-        assert!((ry.resolve(1000.0) - 45.0).abs() < 0.01);
+        assert!((radii.x.resolve(1000.0) - 90.0).abs() < 0.01);
+        assert!((radii.y.resolve(1000.0) - 45.0).abs() < 0.01);
     }
 
     #[test]
@@ -14933,7 +17421,7 @@ mod tests {
         let rg =
             parse_radial_gradient("repeating-radial-gradient(circle, red 0% 10%, blue 10% 20%)")
                 .unwrap();
-        assert!(rg.repeating);
+        assert!(rg.ramp.repeat.is_repeating());
         assert_eq!(rg.shape, RadialShape::Circle);
     }
 
@@ -14943,43 +17431,42 @@ mod tests {
             "conic-gradient(from 0deg at center, #e53935 0deg 90deg, #43a047 90deg 180deg, #1e88e5 180deg 270deg, #fdd835 270deg 360deg)",
         )
         .unwrap();
-        assert!(!cg.repeating);
+        assert!(!cg.ramp.repeat.is_repeating());
         assert!((cg.from_angle - 0.0).abs() < 0.01);
         // 4 quadrant range stops → 8 stops (two per quadrant).
-        assert_eq!(cg.stops.len(), 8);
-        assert!((cg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((cg.stops[1].position - 0.25).abs() < 0.01);
-        assert!((cg.stops.last().unwrap().position - 1.0).abs() < 0.01);
+        assert_eq!(cg.ramp.stops.len(), 8);
+        let positions = resolved_positions(&cg.ramp);
+        assert!((positions[0] - 0.0).abs() < 0.01);
+        assert!((positions[1] - 0.25).abs() < 0.01);
+        assert!((positions.last().unwrap() - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn parse_conic_gradient_from_angle_and_position() {
         let cg = parse_conic_gradient("conic-gradient(from 45deg at 30% 30%, red, blue)").unwrap();
         assert!((cg.from_angle - 45.0).abs() < 0.01);
-        let (x, _y) = cg.center;
-        assert!(matches!(x, RadialPos::Fraction(f) if (f - 0.3).abs() < 0.01));
+        assert!(matches!(cg.center.x, RadialPos::Fraction(f) if (f - 0.3).abs() < 0.01));
         // Two implicit stops distribute to 0 and 1.
-        assert_eq!(cg.stops.len(), 2);
-        assert!((cg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((cg.stops[1].position - 1.0).abs() < 0.01);
+        assert_eq!(cg.ramp.stops.len(), 2);
+        assert_eq!(resolved_positions(&cg.ramp), [0.0, 1.0]);
     }
 
     #[test]
     fn parse_repeating_conic_gradient_sets_flag() {
         let cg = parse_conic_gradient("repeating-conic-gradient(red 0deg 30deg, blue 30deg 60deg)")
             .unwrap();
-        assert!(cg.repeating);
-        assert_eq!(cg.stops.len(), 4);
+        assert!(cg.ramp.repeat.is_repeating());
+        assert_eq!(cg.ramp.stops.len(), 4);
         // 30deg → 1/12 turn.
-        assert!((cg.stops[1].position - (30.0 / 360.0)).abs() < 0.01);
+        assert!((resolved_positions(&cg.ramp)[1] - (30.0 / 360.0)).abs() < 0.01);
     }
 
     #[test]
     fn parse_conic_angle_fraction_units() {
-        assert!((parse_conic_angle_fraction("90deg").unwrap() - 0.25).abs() < 0.001);
-        assert!((parse_conic_angle_fraction("0.25turn").unwrap() - 0.25).abs() < 0.001);
-        assert!((parse_conic_angle_fraction("50%").unwrap() - 0.5).abs() < 0.001);
-        assert!((parse_conic_angle_fraction("100grad").unwrap() - 0.25).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("90deg").unwrap().fraction - 0.25).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("0.25turn").unwrap().fraction - 0.25).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("50%").unwrap().fraction - 0.5).abs() < 0.001);
+        assert!((parse_conic_angle_fraction("100grad").unwrap().fraction - 0.25).abs() < 0.001);
     }
 
     #[test]
@@ -14994,9 +17481,9 @@ mod tests {
     fn parse_linear_gradient_45deg() {
         let lg = parse_linear_gradient("linear-gradient(45deg, #ff0000, #0000ff)").unwrap();
         assert!((lg.angle - 45.0).abs() < 0.01);
-        assert_eq!(lg.stops.len(), 2);
-        assert_eq!(lg.stops[0].color.r, 255);
-        assert_eq!(lg.stops[1].color.b, 255);
+        assert_eq!(lg.ramp.stops.len(), 2);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 255 as f32);
+        assert_eq!(lg.ramp.stops[1].color.color.b, 255 as f32);
     }
 
     #[test]
@@ -15009,12 +17496,9 @@ mod tests {
     fn parse_linear_gradient_with_positions() {
         let lg = parse_linear_gradient("linear-gradient(to bottom, red 0%, white 50%, blue 100%)")
             .unwrap();
-        assert_eq!(lg.stops.len(), 3);
-        assert!((lg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((lg.stops[1].position - 0.5).abs() < 0.01);
-        assert!((lg.stops[2].position - 1.0).abs() < 0.01);
-        assert_eq!(lg.stops[1].color.r, 255); // white
-        assert_eq!(lg.stops[1].color.g, 255);
+        assert_eq!(resolved_positions(&lg.ramp), [0.0, 0.5, 1.0]);
+        assert_eq!(lg.ramp.stops[1].color.color.r, 255 as f32); // white
+        assert_eq!(lg.ramp.stops[1].color.color.g, 255 as f32);
     }
 
     #[test]
@@ -15032,21 +17516,217 @@ mod tests {
     #[test]
     fn parse_linear_gradient_invalid() {
         assert!(parse_linear_gradient("not-a-gradient").is_none());
-        assert!(parse_linear_gradient("linear-gradient(red)").is_none());
+        assert!(parse_linear_gradient("linear-gradient(to sideways, red, blue)").is_none());
+    }
+
+    #[test]
+    fn gradient_interpolation_method_is_typed_for_every_geometry() {
+        let linear =
+            parse_linear_gradient("linear-gradient(in oklab to right, red, blue)").unwrap();
+        assert_eq!(linear.ramp.interpolation, GradientInterpolation::Oklab);
+        let radial = parse_radial_gradient("radial-gradient(in srgb circle, red, blue)").unwrap();
+        assert_eq!(radial.ramp.interpolation, GradientInterpolation::Srgb);
+        let conic = parse_conic_gradient("conic-gradient(in oklab from 30deg, red, blue)").unwrap();
+        assert_eq!(conic.ramp.interpolation, GradientInterpolation::Oklab);
+        assert!(parse_linear_gradient("linear-gradient(in display-p3, red, blue)").is_none());
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("background-image: linear-gradient(to right in oklab, red, blue)"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.background_gradient.unwrap().ramp.interpolation,
+            GradientInterpolation::Oklab
+        );
+    }
+
+    #[test]
+    fn gradient_hint_remains_one_semantic_hint() {
+        let gradient = parse_linear_gradient("linear-gradient(red 0%, 25%, blue 100%)").unwrap();
+        assert_eq!(gradient.ramp.stops.len(), 2);
+        assert_eq!(
+            gradient.ramp.stops[0].hint_after,
+            Some(GradientPosition::fraction(0.25))
+        );
+        assert_rgba_close(
+            gradient.ramp.resolve(1.0).unwrap().sample(0.25),
+            (0.5, 0.0, 0.5, 1.0),
+        );
+        for invalid in [
+            "linear-gradient(25%, red, blue)",
+            "linear-gradient(red, 25%, 30%, blue)",
+            "linear-gradient(red, blue, 75%)",
+        ] {
+            assert!(parse_linear_gradient(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn gradient_hint_participates_in_stop_fixup_order() {
+        let before =
+            parse_linear_gradient("linear-gradient(red 0%, 80%, white, blue 100%)").unwrap();
+        assert_eq!(resolved_positions(&before.ramp), [0.0, 0.9, 1.0]);
+        assert_eq!(
+            before.ramp.stops[0].hint_after,
+            Some(GradientPosition::fraction(0.8))
+        );
+
+        let after =
+            parse_linear_gradient("linear-gradient(red 0%, white, 80%, blue 100%)").unwrap();
+        assert_eq!(resolved_positions(&after.ramp), [0.0, 0.4, 1.0]);
+        assert_eq!(
+            after.ramp.stops[1].hint_after,
+            Some(GradientPosition::fraction(0.8))
+        );
+    }
+
+    #[test]
+    fn auto_distinguishes_legacy_and_modern_srgb_sources() {
+        let legacy = parse_linear_gradient("linear-gradient(rgb(255 0 0), rgb(0 0 255))").unwrap();
+        let modern =
+            parse_linear_gradient("linear-gradient(color(srgb 1 0 0), color(srgb 0 0 1))").unwrap();
+        assert!(
+            legacy
+                .ramp
+                .stops
+                .iter()
+                .all(|stop| stop.color.provenance == GradientColorProvenance::LegacySrgb)
+        );
+        assert!(
+            modern
+                .ramp
+                .stops
+                .iter()
+                .all(|stop| stop.color.provenance == GradientColorProvenance::Modern)
+        );
+        assert_rgba_close(
+            legacy.ramp.resolve(1.0).unwrap().sample(0.5),
+            (0.5, 0.0, 0.5, 1.0),
+        );
+        let modern_midpoint = modern.ramp.resolve(1.0).unwrap().sample(0.5);
+        assert!((modern_midpoint.0 - 0.5).abs() > 0.02);
+
+        let mixed = parse_linear_gradient(
+            "linear-gradient(rgb(255 0 0) 0%, rgb(255 255 255) 50%, color(srgb 0 0 1) 100%)",
+        )
+        .unwrap()
+        .ramp
+        .resolve(1.0)
+        .unwrap();
+        assert!(
+            mixed
+                .segments()
+                .all(|segment| segment.interpolation == GradientInterpolation::Oklab)
+        );
+    }
+
+    #[test]
+    fn oklab_conversion_preserves_finite_extended_srgb_channels() {
+        let converted = ResolvedGradientRamp::oklab_to_srgb((0.5, 1.0, 1.0, 1.0));
+        assert!(
+            [converted.0, converted.1, converted.2, converted.3]
+                .into_iter()
+                .all(f32::is_finite)
+        );
+        assert!(converted.1 < 0.0 && converted.2 < 0.0);
+    }
+
+    #[test]
+    fn lightning_path_preserves_gradient_color_source_and_precision() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("background-image: linear-gradient(rgb(10% 20% 30%), color(srgb 0 0 1))"),
+            &ComputedStyle::default(),
+        );
+        let ramp = style.background_gradient.unwrap().ramp;
+        assert_eq!(
+            ramp.stops[0].color.provenance,
+            GradientColorProvenance::LegacySrgb
+        );
+        assert_eq!(
+            ramp.stops[1].color.provenance,
+            GradientColorProvenance::Modern
+        );
+        assert!((ramp.stops[0].color.color.r - 25.5).abs() < 1e-6);
+        assert!((ramp.stops[0].color.color.g - 51.0).abs() < 1e-6);
+        assert!((ramp.stops[0].color.color.b - 76.5).abs() < 1e-6);
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "--stop: rgb(10% 20% 30%); \
+                 background-image: linear-gradient(var(--stop), color(srgb 0 0 1))",
+            ),
+            &ComputedStyle::default(),
+        );
+        let stop = style.background_gradient.unwrap().ramp.stops[0].color;
+        assert_eq!(stop.provenance, GradientColorProvenance::LegacySrgb);
+        assert!((stop.color.r - 25.5).abs() < 1e-6);
+
+        let rules = crate::parser::css::parse_stylesheet(concat!(
+            ".sample { background-image: ",
+            "linear-gradient(in oklab, rgb(10% 20% 30%), color(srgb 0 0 1)) }"
+        ));
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &ComputedStyle::default(),
+            &rules,
+            "div",
+            &["sample"],
+            None,
+        );
+        let ramp = style.background_gradient.unwrap().ramp;
+        assert_eq!(ramp.interpolation, GradientInterpolation::Oklab);
+        assert_eq!(
+            ramp.stops[0].color.provenance,
+            GradientColorProvenance::LegacySrgb
+        );
+        assert!((ramp.stops[0].color.color.r - 25.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn malformed_radial_and_conic_preludes_are_rejected() {
+        for invalid in [
+            "radial-gradient(circle at garbage, red, blue)",
+            "radial-gradient(circle garbage, red, blue)",
+            "radial-gradient(ellipse 10px, red, blue)",
+            "radial-gradient(circle 50%, red, blue)",
+            "radial-gradient(circle -1px, red, blue)",
+        ] {
+            assert!(parse_radial_gradient(invalid).is_none(), "{invalid}");
+        }
+        for invalid in [
+            "conic-gradient(at garbage, red, blue)",
+            "conic-gradient(from nope, red, blue)",
+            "conic-gradient(foo at center, red, blue)",
+            "conic-gradient(in oklab foo, red, blue)",
+        ] {
+            assert!(parse_conic_gradient(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn repeating_radial_stop_lengths_do_not_resize_the_ending_shape() {
+        let radial =
+            parse_radial_gradient("repeating-radial-gradient(circle, red 0px, blue 20px)").unwrap();
+        assert_eq!(radial.radius, None);
+        assert_eq!(radial.extent, RadialExtent::FarthestCorner);
     }
 
     #[test]
     fn parse_radial_gradient_basic() {
         let rg = parse_radial_gradient("radial-gradient(red, blue)").unwrap();
-        assert_eq!(rg.stops.len(), 2);
-        assert_eq!(rg.stops[0].color.r, 255);
-        assert_eq!(rg.stops[1].color.b, 255);
+        assert_eq!(rg.ramp.stops.len(), 2);
+        assert_eq!(rg.ramp.stops[0].color.color.r, 255 as f32);
+        assert_eq!(rg.ramp.stops[1].color.color.b, 255 as f32);
     }
 
     #[test]
     fn parse_radial_gradient_with_circle() {
         let rg = parse_radial_gradient("radial-gradient(circle, red, blue)").unwrap();
-        assert_eq!(rg.stops.len(), 2);
+        assert_eq!(rg.ramp.stops.len(), 2);
         assert_eq!(rg.shape, RadialShape::Circle);
     }
 
@@ -15062,18 +17742,23 @@ mod tests {
         let rg = parse_radial_gradient("radial-gradient(ellipse at top left, #00897b, #b71c1c)")
             .unwrap();
         assert_eq!(rg.shape, RadialShape::Ellipse);
-        assert_eq!(rg.center.0, RadialPos::Fraction(0.0));
-        assert_eq!(rg.center.1, RadialPos::Fraction(0.0));
+        assert_eq!(rg.center.x, RadialPos::Fraction(0.0));
+        assert_eq!(rg.center.y, RadialPos::Fraction(0.0));
         assert_eq!(rg.radius, None);
     }
 
     #[test]
     fn gradient_color_stop_auto_positions() {
         let lg = parse_linear_gradient("linear-gradient(to right, red, green, blue)").unwrap();
-        assert_eq!(lg.stops.len(), 3);
-        assert!((lg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((lg.stops[1].position - 0.5).abs() < 0.01);
-        assert!((lg.stops[2].position - 1.0).abs() < 0.01);
+        assert_eq!(
+            lg.ramp
+                .stops
+                .iter()
+                .filter(|stop| stop.position.is_none())
+                .count(),
+            3
+        );
+        assert_eq!(resolved_positions(&lg.ramp), [0.0, 0.5, 1.0]);
     }
 
     #[test]
@@ -15087,7 +17772,7 @@ mod tests {
         assert!(style.background_gradient.is_some());
         let lg = style.background_gradient.unwrap();
         assert!((lg.angle - 90.0).abs() < 0.01);
-        assert_eq!(lg.stops.len(), 2);
+        assert_eq!(lg.ramp.stops.len(), 2);
     }
 
     #[test]
@@ -15120,7 +17805,7 @@ mod tests {
         match &layer.source {
             MaskLayerSource::Linear(lg) => {
                 assert!((lg.angle - 90.0).abs() < 0.01);
-                assert_eq!(lg.stops.len(), 2);
+                assert_eq!(lg.ramp.stops.len(), 2);
             }
             other => panic!("expected a linear mask source, got {other:?}"),
         }
@@ -15233,19 +17918,19 @@ mod tests {
     fn gradient_with_rgb_colors() {
         let lg = parse_linear_gradient("linear-gradient(to right, rgb(255, 0, 0), rgb(0, 0, 255))")
             .unwrap();
-        assert_eq!(lg.stops.len(), 2);
-        assert_eq!(lg.stops[0].color.r, 255);
-        assert_eq!(lg.stops[1].color.b, 255);
+        assert_eq!(lg.ramp.stops.len(), 2);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 255 as f32);
+        assert_eq!(lg.ramp.stops[1].color.color.b, 255 as f32);
     }
 
     #[test]
     fn gradient_with_hex_colors() {
         let lg =
             parse_linear_gradient("linear-gradient(90deg, #ff0000, #00ff00, #0000ff)").unwrap();
-        assert_eq!(lg.stops.len(), 3);
-        assert_eq!(lg.stops[0].color.r, 255);
-        assert_eq!(lg.stops[1].color.g, 255);
-        assert_eq!(lg.stops[2].color.b, 255);
+        assert_eq!(lg.ramp.stops.len(), 3);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 255 as f32);
+        assert_eq!(lg.ramp.stops[1].color.color.g, 255 as f32);
+        assert_eq!(lg.ramp.stops[2].color.color.b, 255 as f32);
     }
 
     // --- border-radius tests ---
@@ -15253,22 +17938,131 @@ mod tests {
     #[test]
     fn border_radius_default_is_zero() {
         let style = ComputedStyle::default();
-        assert!((style.border_radius - 0.0).abs() < 0.001);
+        assert_eq!(style.border_radii, SpecifiedCornerRadii::ZERO);
     }
 
     #[test]
     fn border_radius_from_inline_style() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border-radius: 10pt"), &parent);
-        assert!((style.border_radius - 10.0).abs() < 0.001);
+        assert_eq!(
+            style.resolve_corner_radii(80.0, 40.0),
+            CornerRadii::circular(10.0)
+        );
     }
 
     #[test]
     fn border_radius_not_inherited() {
         let mut parent = ComputedStyle::default();
-        parent.border_radius = 15.0;
+        parent.border_radii = SpecifiedCornerRadii::circular(SpecifiedRadiusValue::Length(15.0));
         let style = compute_style(HtmlTag::Div, None, &parent);
-        assert!((style.border_radius - 0.0).abs() < 0.001);
+        assert_eq!(style.border_radii, SpecifiedCornerRadii::ZERO);
+    }
+
+    #[test]
+    fn border_radius_shorthand_resolves_named_elliptical_corners() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border-radius: 10pt 20pt 30pt 40pt / 1pt 2pt 3pt 4pt"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.resolve_corner_radii(200.0, 100.0),
+            CornerRadii::new(
+                CornerRadius::new(10.0, 1.0),
+                CornerRadius::new(20.0, 2.0),
+                CornerRadius::new(30.0, 3.0),
+                CornerRadius::new(40.0, 4.0),
+            )
+        );
+    }
+
+    #[test]
+    fn invalid_radius_declarations_preserve_prior_winners() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-radius: 7px; border-radius: 9; \
+                 border-top-left-radius: 8px; border-top-left-radius: 11",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.resolve_corner_radii(100.0, 100.0),
+            CornerRadii::new(
+                CornerRadius::circular(6.0),
+                CornerRadius::circular(5.25),
+                CornerRadius::circular(5.25),
+                CornerRadius::circular(5.25),
+            )
+        );
+    }
+
+    #[test]
+    fn radius_shorthand_and_longhand_follow_cascade_order() {
+        let parent = ComputedStyle::default();
+        let shorthand_last = compute_style(
+            HtmlTag::Div,
+            Some("border-top-left-radius: 2pt; border-radius: 10pt"),
+            &parent,
+        );
+        assert_eq!(
+            shorthand_last.resolve_corner_radii(100.0, 100.0),
+            CornerRadii::circular(10.0)
+        );
+
+        let longhand_last = compute_style(
+            HtmlTag::Div,
+            Some("border-radius: 10pt; border-top-left-radius: 2pt"),
+            &parent,
+        );
+        assert_eq!(
+            longhand_last.resolve_corner_radii(100.0, 100.0),
+            CornerRadii::new(
+                CornerRadius::circular(2.0),
+                CornerRadius::circular(10.0),
+                CornerRadius::circular(10.0),
+                CornerRadius::circular(10.0),
+            )
+        );
+
+        let important_longhand = compute_style(
+            HtmlTag::Div,
+            Some("border-top-left-radius: 2pt !important; border-radius: 10pt"),
+            &parent,
+        );
+        assert_eq!(
+            important_longhand.resolve_corner_radii(100.0, 100.0),
+            longhand_last.resolve_corner_radii(100.0, 100.0)
+        );
+
+        let important_shorthand = compute_style(
+            HtmlTag::Div,
+            Some("border-radius: 10pt !important; border-top-left-radius: 2pt"),
+            &parent,
+        );
+        assert_eq!(
+            important_shorthand.resolve_corner_radii(100.0, 100.0),
+            CornerRadii::circular(10.0)
+        );
+    }
+
+    #[test]
+    fn radius_var_expansion_preserves_corner_and_axis_structure() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("--r: 25% 10pt / 50% 5pt; border-radius: var(--r)"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.resolve_corner_radii(80.0, 40.0),
+            CornerRadii::new(
+                CornerRadius::new(20.0, 20.0),
+                CornerRadius::new(10.0, 5.0),
+                CornerRadius::new(20.0, 20.0),
+                CornerRadius::new(10.0, 5.0),
+            )
+        );
     }
 
     // --- outline tests ---
@@ -15286,7 +18080,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("outline: 2px solid red"), &parent);
         assert!((style.outline_width - 1.5).abs() < 0.001); // 2px * 0.75
         assert!(style.outline_color.is_some());
-        assert_eq!(style.outline_color.unwrap().r, 255);
+        assert_eq!(style.outline_color.unwrap().r, 255 as f32);
     }
 
     #[test]
@@ -15334,8 +18128,8 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(255, 0, 0);
         let style = compute_style(HtmlTag::Div, Some("color: inherit"), &parent);
-        assert_eq!(style.color.r, 255);
-        assert_eq!(style.color.g, 0);
+        assert_eq!(style.color.r, 255 as f32);
+        assert_eq!(style.color.g, 0 as f32);
     }
 
     #[test]
@@ -15350,7 +18144,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(0, 128, 0);
         let style = compute_style(HtmlTag::Div, Some("color: unset"), &parent);
-        assert_eq!(style.color.g, 128);
+        assert_eq!(style.color.g, 128 as f32);
     }
 
     #[test]
@@ -15459,22 +18253,22 @@ mod tests {
     fn border_width_initial_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border-width: initial"), &parent);
-        assert!((style.border.top.width - 0.0).abs() < 0.1);
+        assert!((style.border.top.used_width() - 0.0).abs() < 0.1);
     }
 
     #[test]
     fn border_color_initial_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border-color: initial"), &parent);
-        assert!(style.border.top.color.is_none());
+        assert_eq!(style.border.top.color, SpecifiedColor::CurrentColor);
     }
 
     #[test]
     fn border_initial_resets_both() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("border: initial"), &parent);
-        assert!((style.border.top.width - 0.0).abs() < 0.1);
-        assert!(style.border.top.color.is_none());
+        assert!((style.border.top.used_width() - 0.0).abs() < 0.1);
+        assert_eq!(style.border.top.color, SpecifiedColor::CurrentColor);
     }
 
     #[test]
@@ -15534,6 +18328,64 @@ mod tests {
     }
 
     #[test]
+    fn all_shorthand_respects_declaration_source_order() {
+        let parent = ComputedStyle::default();
+        let reset_later = compute_style(
+            HtmlTag::Div,
+            Some("background-color: green; all: initial; display: block; width: 50px"),
+            &parent,
+        );
+        assert!(reset_later.background_color.is_none());
+        assert!(reset_later.width.is_some());
+
+        let explicit_later = compute_style(
+            HtmlTag::Div,
+            Some("all: initial; display: block; width: 50px; background-color: green"),
+            &parent,
+        );
+        assert!(explicit_later.background_color.is_some());
+        assert!(explicit_later.width.is_some());
+    }
+
+    #[test]
+    fn cascade_selects_winner_before_computed_value_resolution() {
+        let parent = ComputedStyle::default();
+        let rules = crate::parser::css::parse_stylesheet(
+            ".target { width: 150px; opacity: var(--half); } \
+             div.target { width: var(--missing-width); --half: 50%; }",
+        );
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &rules,
+            "div",
+            &["target"],
+            None,
+        );
+        assert_eq!(style.width, None);
+        assert!((style.opacity - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn revert_removes_the_author_origin_winner() {
+        let parent = ComputedStyle::default();
+        let rules = crate::parser::css::parse_stylesheet(
+            ".target { display: flex; } div.target { display: revert; }",
+        );
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &rules,
+            "div",
+            &["target"],
+            None,
+        );
+        assert_eq!(style.display, Display::Block);
+    }
+
+    #[test]
     fn flex_direction_initial_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("flex-direction: initial"), &parent);
@@ -15576,6 +18428,33 @@ mod tests {
         parent.font_style = FontStyle::Italic;
         let style = compute_style(HtmlTag::Span, Some("font-style: inherit"), &parent);
         assert_eq!(style.font_style, FontStyle::Italic);
+    }
+
+    #[test]
+    fn font_stretch_is_inherited_and_accepts_condensed() {
+        let parent = ComputedStyle::default();
+        let condensed = compute_style(HtmlTag::Span, Some("font-stretch: condensed"), &parent);
+        assert_eq!(condensed.font_stretch, FontStretch::Condensed);
+
+        let inherited = compute_style(HtmlTag::Span, Some("font-stretch: inherit"), &condensed);
+        assert_eq!(inherited.font_stretch, FontStretch::Condensed);
+
+        let alias = compute_style(HtmlTag::Span, Some("font-width: expanded"), &parent);
+        assert_eq!(alias.font_stretch, FontStretch::Expanded);
+
+        let cascade = compute_style(
+            HtmlTag::Span,
+            Some("font-width: expanded; font-stretch: condensed"),
+            &parent,
+        );
+        assert_eq!(cascade.font_stretch, FontStretch::Condensed);
+
+        let shorthand = compute_style(
+            HtmlTag::Span,
+            Some("font: condensed 12px ParitySans"),
+            &parent,
+        );
+        assert_eq!(shorthand.font_stretch, FontStretch::Condensed);
     }
 
     #[test]
@@ -15642,7 +18521,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.background_color = Some(Color::rgb(0, 128, 0));
         let style = compute_style(HtmlTag::Div, Some("background-color: inherit"), &parent);
-        assert_eq!(style.background_color.unwrap().g, 128);
+        assert_eq!(style.background_color.unwrap().g, 128 as f32);
     }
 
     #[test]
@@ -15728,7 +18607,7 @@ mod tests {
     #[test]
     fn border_width_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.border = BorderSides::uniform(3.0, None);
+        parent.border = BorderSides::uniform(BorderSide::solid(3.0, SpecifiedColor::CurrentColor));
         let style = compute_style(HtmlTag::Div, Some("border-width: inherit"), &parent);
         assert!((style.border.top.width - 3.0).abs() < 0.1);
     }
@@ -15736,18 +18615,18 @@ mod tests {
     #[test]
     fn border_color_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.border = BorderSides::uniform(0.0, Some(Color::rgb(255, 0, 0)));
+        parent.border = BorderSides::uniform(BorderSide::solid(0.0, Color::rgb(255, 0, 0).into()));
         let style = compute_style(HtmlTag::Div, Some("border-color: inherit"), &parent);
-        assert_eq!(style.border.top.color.unwrap().r, 255);
+        assert_eq!(style.border.top.color.resolve(style.color).r, 255.0);
     }
 
     #[test]
     fn border_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.border = BorderSides::uniform(2.0, Some(Color::rgb(0, 0, 255)));
+        parent.border = BorderSides::uniform(BorderSide::solid(2.0, Color::rgb(0, 0, 255).into()));
         let style = compute_style(HtmlTag::Div, Some("border: inherit"), &parent);
         assert!((style.border.top.width - 2.0).abs() < 0.1);
-        assert_eq!(style.border.top.color.unwrap().b, 255);
+        assert_eq!(style.border.top.color.resolve(style.color).b, 255.0);
     }
 
     #[test]
@@ -15855,8 +18734,34 @@ mod tests {
     fn flex_basis_percentage_parses() {
         let p = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("flex-basis: 25%"), &p);
-        assert!(s.flex_basis.is_none());
-        assert!((s.flex_basis_pct.unwrap() - 0.25).abs() < 1e-4);
+        assert_eq!(
+            s.flex_basis,
+            FlexBasis::Definite(LengthPercent::percent(25.0))
+        );
+    }
+
+    #[test]
+    fn flex_basis_calc_preserves_its_percentage_term() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("flex-basis: calc(25% - 10pt)"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.flex_basis,
+            FlexBasis::Definite(LengthPercent::from_terms(-10.0, 25.0))
+        );
+    }
+
+    #[test]
+    fn flex_basis_clamp_gives_minimum_precedence_without_panicking() {
+        let basis = FlexBasis::Clamp {
+            min: LengthPercent::length(40.0),
+            preferred: LengthPercent::length(20.0),
+            max: LengthPercent::length(30.0),
+        };
+
+        assert_eq!(basis.resolve(0.0), Some(40.0));
     }
 
     #[test]
@@ -15864,12 +18769,12 @@ mod tests {
         let p = ComputedStyle::default();
         let none = compute_style(HtmlTag::Div, Some("flex: none"), &p);
         assert_eq!((none.flex_grow, none.flex_shrink), (0.0, 0.0));
-        assert!(none.flex_basis.is_none());
+        assert_eq!(none.flex_basis, FlexBasis::Auto);
         let auto = compute_style(HtmlTag::Div, Some("flex: auto"), &p);
         assert_eq!((auto.flex_grow, auto.flex_shrink), (1.0, 1.0));
         let one = compute_style(HtmlTag::Div, Some("flex: 1"), &p);
         assert_eq!((one.flex_grow, one.flex_shrink), (1.0, 1.0));
-        assert_eq!(one.flex_basis, Some(0.0));
+        assert!(one.flex_basis.is_zero());
     }
 
     #[test]
@@ -15926,6 +18831,7 @@ mod tests {
             blur: 3.0,
             spread: 0.0,
             color: Color::BLACK,
+            color_source: ColorSource::Absolute,
             inset: false,
         }];
         let style = compute_style(HtmlTag::Div, Some("box-shadow: inherit"), &parent);
@@ -15998,17 +18904,25 @@ mod tests {
     }
 
     #[test]
-    fn justify_content_unknown_fallback_to_flex_start() {
+    fn invalid_justify_content_does_not_replace_valid_value() {
         let parent = ComputedStyle::default();
-        let style = compute_style(HtmlTag::Div, Some("justify-content: foobar"), &parent);
-        assert_eq!(style.justify_content, JustifyContent::FlexStart);
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("justify-content: center; justify-content: foobar"),
+            &parent,
+        );
+        assert_eq!(style.justify_content, JustifyContent::Center);
     }
 
     #[test]
-    fn align_items_unknown_fallback_to_stretch() {
+    fn invalid_align_items_does_not_replace_valid_value() {
         let parent = ComputedStyle::default();
-        let style = compute_style(HtmlTag::Div, Some("align-items: foobar"), &parent);
-        assert_eq!(style.align_items, AlignItems::Stretch);
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("align-items: center; align-items: foobar"),
+            &parent,
+        );
+        assert_eq!(style.align_items, AlignItems::Center);
     }
 
     #[test]
@@ -16077,14 +18991,13 @@ mod tests {
         assert!((style.max_height.unwrap() - 180.0).abs() < 0.1);
     }
 
-    // --- opacity as Number (line 933) ---
+    // --- invalid opacity dimension ---
 
     #[test]
-    fn opacity_as_number_value() {
+    fn invalid_dimension_on_opacity_does_not_replace_valid_value() {
         let parent = ComputedStyle::default();
-        // opacity: 0.7em gets parsed as Number(0.7)
-        let style = compute_style(HtmlTag::Div, Some("opacity: 0.7em"), &parent);
-        assert!((style.opacity - 0.7).abs() < 0.01);
+        let style = compute_style(HtmlTag::Div, Some("opacity: 0.4; opacity: 0.7em"), &parent);
+        assert!((style.opacity - 0.4).abs() < 0.01);
     }
 
     // --- clear/position unknown fallback (lines 963, 972) ---
@@ -16111,7 +19024,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("outline: 3pt solid blue"), &parent);
         assert!((style.outline_width - 3.0).abs() < 0.001);
         assert!(style.outline_color.is_some());
-        assert_eq!(style.outline_color.unwrap().b, 255);
+        assert_eq!(style.outline_color.unwrap().b, 255.0);
     }
 
     // --- outline individual properties (lines 1043, 1046) ---
@@ -16128,7 +19041,7 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("outline-color: red"), &parent);
         assert!(style.outline_color.is_some());
-        assert_eq!(style.outline_color.unwrap().r, 255);
+        assert_eq!(style.outline_color.unwrap().r, 255.0);
     }
 
     // --- text-transform (lines 1059-1063) ---
@@ -16187,7 +19100,41 @@ mod tests {
     fn text_indent_from_inline_style() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("text-indent: 20pt"), &parent);
-        assert!((style.text_indent - 20.0).abs() < 0.1);
+        assert!(matches!(style.text_indent, TextIndent::Length(20.0)));
+    }
+
+    #[test]
+    fn text_indent_percentage_is_inherited_and_resolved_from_the_inner_size() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("text-indent: 50%"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(HtmlTag::P, None, &parent);
+        let initial = compute_style(HtmlTag::P, Some("text-indent: initial"), &parent);
+
+        assert!(matches!(child.text_indent, TextIndent::Percentage(50.0)));
+        assert_eq!(child.text_indent.resolve(216.0), 108.0);
+        assert!(matches!(initial.text_indent, TextIndent::Length(0.0)));
+    }
+
+    #[test]
+    fn text_indent_percentage_expressions_stay_deferred() {
+        for (declaration, expected) in [
+            ("text-indent: calc(50% - 10pt)", 98.0),
+            ("text-indent: clamp(20pt, 50%, 100pt)", 100.0),
+            (
+                "--indent: calc(50% - 10pt); text-indent: var(--indent)",
+                98.0,
+            ),
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(declaration), &ComputedStyle::default());
+            assert!(
+                (style.text_indent.resolve(216.0) - expected).abs() < f32::EPSILON,
+                "{declaration} resolved to {}",
+                style.text_indent.resolve(216.0)
+            );
+        }
     }
 
     // --- white-space (lines 1074-1079) ---
@@ -16262,6 +19209,40 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Span, Some("word-spacing: 4pt"), &parent);
         assert!((style.word_spacing - 4.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn word_spacing_percentage_uses_the_computed_font_size() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("font-size: 24px; word-spacing: calc(200% - 3pt)"),
+            &parent,
+        );
+        // 24 CSS px = 18pt; 200% is two computed font sizes.
+        assert!((style.word_spacing - 33.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn word_spacing_normal_resets_the_inherited_value() {
+        let mut parent = ComputedStyle::default();
+        parent.word_spacing = 8.0;
+        let style = compute_style(HtmlTag::Span, Some("word-spacing: normal"), &parent);
+        assert_eq!(style.word_spacing, 0.0);
+    }
+
+    #[test]
+    fn spacing_var_normal_resets_inherited_values() {
+        let mut parent = ComputedStyle::default();
+        parent.letter_spacing = 4.0;
+        parent.word_spacing = 8.0;
+        let style = compute_style(
+            HtmlTag::Span,
+            Some("--spacing: normal; letter-spacing: var(--spacing); word-spacing: var(--spacing)"),
+            &parent,
+        );
+        assert_eq!(style.letter_spacing, 0.0);
+        assert_eq!(style.word_spacing, 0.0);
     }
 
     // --- vertical-align (lines 1095-1101) ---
@@ -16351,6 +19332,18 @@ mod tests {
         let s = shadow.unwrap();
         assert!(s.inset);
         assert!((s.blur - 3.0).abs() < 0.1);
+
+        let color_first = parse_single_box_shadow("red 2px 2px inset").unwrap();
+        assert!(color_first.inset);
+        assert_eq!(
+            (
+                color_first.color.r,
+                color_first.color.g,
+                color_first.color.b,
+                color_first.color.a,
+            ),
+            (255.0, 0.0, 0.0, 255.0)
+        );
     }
 
     #[test]
@@ -16364,47 +19357,74 @@ mod tests {
 
     #[test]
     fn parse_box_shadow_multi_returns_all() {
-        let shadows = parse_box_shadow("2px 2px 4px black, 0 0 8px red");
+        let shadows = parse_box_shadow("2px 2px 4px black, 0 0 8px red").unwrap();
         assert_eq!(shadows.len(), 2);
         // First listed shadow.
         assert!((shadows[0].blur - 3.0).abs() < 0.1);
-        assert_eq!(shadows[0].color.r, 0);
+        assert_eq!(shadows[0].color.r, 0.0);
         // Second listed shadow.
         assert!((shadows[1].blur - 6.0).abs() < 0.1); // 8px * 0.75
-        assert_eq!(shadows[1].color.r, 255);
+        assert_eq!(shadows[1].color.r, 255.0);
     }
 
     #[test]
-    fn parse_box_shadow_non_parseable_blur_uses_as_color() {
-        // "2px 2px notanumber black" — 4 tokens, but third is not a length
-        let shadow = parse_single_box_shadow("2px 2px notanumber black");
-        // blur parse fails, so blur = 0.0, color_start = 2, color = parse "notanumber" which fails
-        // Actually color_start=2 means color_str = "notanumber" which is not a valid color -> Color::BLACK fallback
-        assert!(shadow.is_some());
-        let s = shadow.unwrap();
-        assert!((s.blur - 0.0).abs() < 0.1);
+    fn parse_box_shadow_rejects_unknown_tokens() {
+        assert!(parse_single_box_shadow("2px 2px notanumber black").is_none());
+        assert!(parse_single_box_shadow("2px 2px red blue").is_none());
+        assert!(parse_single_box_shadow("inset inset 2px 2px").is_none());
+    }
+
+    #[test]
+    fn parse_box_shadow_rejects_negative_blur() {
+        assert!(parse_single_box_shadow("2px 2px -1px black").is_none());
+    }
+
+    #[test]
+    fn parse_box_shadow_list_is_atomic() {
+        assert!(parse_box_shadow("2px 2px black, 12 0 blue").is_none());
+        assert!(parse_box_shadow("2px 2px black,").is_none());
+    }
+
+    #[test]
+    fn invalid_box_shadow_list_does_not_create_a_partial_shadow() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("box-shadow: 22px 0 0 red, 12 0 blue"),
+            &parent,
+        );
+        assert_eq!(style.box_shadow.len(), 0);
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "box-shadow: 2px 2px black; \
+                 box-shadow: 22px 0 0 red, 12 0 blue",
+            ),
+            &parent,
+        );
+        assert_eq!(style.box_shadow.len(), 1);
+        assert!((style.box_shadow[0].offset_x - 1.5).abs() < 0.1);
     }
 
     #[test]
     fn parse_box_shadow_no_color_token() {
         // Exactly 3 tokens where third is a valid blur, so color_start=3, no color token
-        let shadow = parse_single_box_shadow("2px 2px 4px");
+        let current_color = Color::rgb(7, 11, 13);
+        let shadow = parse_single_box_shadow_for_color("2px 2px 4px", current_color);
         assert!(shadow.is_some());
         let s = shadow.unwrap();
-        // Per CSS Backgrounds & Borders L3 §7.2 an omitted shadow color defaults to
-        // currentColor: parsed as CURRENT_COLOR_SENTINEL, resolved to the element's
-        // `color` later in resolve_current_color.
-        assert_eq!(s.color.r, CURRENT_COLOR_SENTINEL.r);
-        assert_eq!(s.color.g, CURRENT_COLOR_SENTINEL.g);
-        assert_eq!(s.color.b, CURRENT_COLOR_SENTINEL.b);
-        assert_eq!(s.color.a, CURRENT_COLOR_SENTINEL.a);
+        // Per CSS Backgrounds & Borders L3 §7.2 an omitted shadow color defaults
+        // to currentColor. Keep the typed provenance so inherited text shadows
+        // can rebind on descendants instead of relying on an authorable sentinel.
+        assert_eq!(s.color, current_color);
+        assert_eq!(s.color_source, ColorSource::CurrentColor);
     }
 
     #[test]
-    fn parse_shadow_length_bare_number() {
-        let result = parse_shadow_length("5");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 5.0).abs() < 0.1);
+    fn parse_shadow_length_rejects_nonzero_bare_number() {
+        assert_eq!(parse_shadow_length("5"), None);
+        assert_eq!(parse_shadow_length("0"), Some(0.0));
     }
 
     #[test]
@@ -16418,9 +19438,9 @@ mod tests {
         assert!((s.blur - 0.0).abs() < 0.1);
         assert_eq!(s.spread, 0.0);
         assert!(!s.inset);
-        assert_eq!(s.color.r, 0xff);
-        assert_eq!(s.color.g, 0x6f);
-        assert_eq!(s.color.b, 0x00);
+        assert_eq!(s.color.r, 255.0);
+        assert_eq!(s.color.g, 111.0);
+        assert_eq!(s.color.b, 0.0);
     }
 
     #[test]
@@ -16428,7 +19448,7 @@ mod tests {
         // text-shadow allows the color before the offsets.
         let shadows = parse_text_shadow("red 2px 2px");
         assert_eq!(shadows.len(), 1);
-        assert_eq!(shadows[0].color.r, 255);
+        assert_eq!(shadows[0].color.r, 255.0);
         assert!((shadows[0].offset_x - 1.5).abs() < 0.1);
     }
 
@@ -16447,9 +19467,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_transform_rotate_bare_number() {
-        let t = pt("rotate(45)");
-        assert_eq!(t, Some(Transform::Rotate(45.0)));
+    fn parse_transform_rejects_nonzero_unitless_angle() {
+        assert_eq!(pt("rotate(45)"), None);
+        assert_eq!(pt("rotate(0)"), Some(Transform::Rotate(0.0)));
     }
 
     #[test]
@@ -16458,10 +19478,8 @@ mod tests {
         assert_eq!(
             t,
             Some(Transform::Translate {
-                tx: 10.0,
-                ty: 0.0,
-                tx_pct: false,
-                ty_pct: false
+                offset: CssVector::new(10.0, 0.0),
+                percentages: PercentageAxes::default(),
             })
         );
     }
@@ -16481,11 +19499,10 @@ mod tests {
     fn parse_transform_skew() {
         let t = pt("skew(30deg)");
         assert!(t.is_some());
-        if let Some(Transform::Matrix(a, _b, c, _d, _e, _f)) = t {
-            assert!((a - 1.0).abs() < 0.001);
-            assert!((c - (30.0_f32 * std::f32::consts::PI / 180.0).tan()).abs() < 0.001);
+        if let Some(Transform::Skew(angles)) = t {
+            assert_eq!(angles, CssVector::new(30.0, 0.0));
         } else {
-            panic!("expected Matrix");
+            panic!("expected Skew");
         }
     }
 
@@ -16498,26 +19515,49 @@ mod tests {
 
     #[test]
     fn parse_transform_scale_x_y() {
-        assert_eq!(pt("scaleX(1.5)"), Some(Transform::Scale(1.5, 1.0)));
-        assert_eq!(pt("scaleY(0.5)"), Some(Transform::Scale(1.0, 0.5)));
+        assert_eq!(
+            pt("scaleX(1.5)"),
+            Some(Transform::Scale(CssVector::new(1.5, 1.0)))
+        );
+        assert_eq!(
+            pt("scaleY(0.5)"),
+            Some(Transform::Scale(CssVector::new(1.0, 0.5)))
+        );
     }
 
     #[test]
     fn parse_transform_translate_x_y() {
         assert!(matches!(
             pt("translateX(40px)"),
-            Some(Transform::Translate { ty: y, .. }) if y == 0.0
+            Some(Transform::Translate { offset, .. }) if offset.y == 0.0
         ));
         assert!(matches!(
             pt("translateY(20px)"),
-            Some(Transform::Translate { tx: x, .. }) if x == 0.0
+            Some(Transform::Translate { offset, .. }) if offset.x == 0.0
         ));
     }
 
     #[test]
-    fn parse_transform_length_bare_number() {
-        let result = parse_transform_length("42", 12.0, 12.0);
-        assert_eq!(result, Some((42.0, false)));
+    fn parse_transform_length_rejects_nonzero_bare_number() {
+        assert_eq!(parse_transform_length("42", 12.0, 12.0), None);
+        assert_eq!(parse_transform_length("0", 12.0, 12.0), Some((0.0, false)));
+    }
+
+    #[test]
+    fn invalid_unitless_transform_length_is_not_normalized_to_pixels() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("transform: translate(40, 0)"), &parent);
+        assert_eq!(style.transform, None);
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("transform: translateX(8px); transform: translate(40, 0)"),
+            &parent,
+        );
+        assert!(matches!(
+            style.transform,
+            Some(Transform::Translate { offset, .. }) if (offset.x - 6.0).abs() < 0.01
+        ));
     }
 
     #[test]
@@ -16535,9 +19575,15 @@ mod tests {
 
     #[test]
     fn parse_transform_scale_negative_and_omitted() {
-        assert_eq!(pt("scale(-1, 1)"), Some(Transform::Scale(-1.0, 1.0)));
+        assert_eq!(
+            pt("scale(-1, 1)"),
+            Some(Transform::Scale(CssVector::new(-1.0, 1.0)))
+        );
         // A single arg mirrors to both axes.
-        assert_eq!(pt("scale(2)"), Some(Transform::Scale(2.0, 2.0)));
+        assert_eq!(
+            pt("scale(2)"),
+            Some(Transform::Scale(CssVector::splat(2.0)))
+        );
     }
 
     #[test]
@@ -16546,10 +19592,8 @@ mod tests {
         assert_eq!(
             pt("translate(2em, 1rem)"),
             Some(Transform::Translate {
-                tx: 24.0,
-                ty: 12.0,
-                tx_pct: false,
-                ty_pct: false
+                offset: CssVector::new(24.0, 12.0),
+                percentages: PercentageAxes::default(),
             })
         );
     }
@@ -16566,11 +19610,11 @@ mod tests {
     fn parse_transform_compound_percent() {
         // scale(2) translate(50%) — the % resolves against own box THEN scales.
         let t = pt("scale(2) translate(50%, 0%)").expect("compound");
-        assert!(matches!(t, Transform::MatrixPct { .. }));
-        let m = t.to_css_matrix(100.0, 40.0);
+        assert!(matches!(t, Transform::MatrixPct(_)));
+        let matrix = t.to_css_matrix(CssVector::new(100.0, 40.0));
         // a == 2 (scale x), e == 2 * (50% of 100) == 100.
-        assert!((m[0] - 2.0).abs() < 0.01);
-        assert!((m[4] - 100.0).abs() < 0.01);
+        assert!((matrix.x_axis.x - 2.0).abs() < 0.01);
+        assert!((matrix.translation.x - 100.0).abs() < 0.01);
     }
 
     // --- grid-template-columns bare number (line 1270) ---
@@ -16783,9 +19827,8 @@ mod tests {
     }
 
     #[test]
-    fn linear_gradient_unknown_to_direction_defaults() {
-        let lg = parse_linear_gradient("linear-gradient(to unknown, red, blue)").unwrap();
-        assert!((lg.angle - 180.0).abs() < 0.01);
+    fn linear_gradient_unknown_to_direction_is_invalid() {
+        assert!(parse_linear_gradient("linear-gradient(to unknown, red, blue)").is_none());
     }
 
     // --- linear gradient invalid deg (line 1355) ---
@@ -16803,24 +19846,29 @@ mod tests {
 
     #[test]
     fn linear_gradient_single_color_after_direction() {
-        let lg = parse_linear_gradient("linear-gradient(to right, red)");
-        assert!(lg.is_none());
+        let lg = parse_linear_gradient("linear-gradient(to right, red)").unwrap();
+        assert_eq!(resolved_positions(&lg.ramp), [0.0]);
+        assert_rgba_close(
+            lg.ramp.resolve(1.0).unwrap().sample(0.75),
+            (1.0, 0.0, 0.0, 1.0),
+        );
     }
 
     // --- radial gradient not enough parts (line 1383) ---
 
     #[test]
     fn radial_gradient_single_part() {
-        let rg = parse_radial_gradient("radial-gradient(red)");
-        assert!(rg.is_none());
+        let rg = parse_radial_gradient("radial-gradient(red)").unwrap();
+        assert_eq!(resolved_positions(&rg.ramp), [0.0]);
     }
 
     // --- radial gradient not enough color parts after shape keyword (line 1404) ---
 
     #[test]
     fn radial_gradient_shape_with_single_color() {
-        let rg = parse_radial_gradient("radial-gradient(circle, red)");
-        assert!(rg.is_none());
+        let rg = parse_radial_gradient("radial-gradient(circle, red)").unwrap();
+        assert_eq!(rg.shape, RadialShape::Circle);
+        assert_eq!(resolved_positions(&rg.ramp), [0.0]);
     }
 
     // --- gradient stop percentage without space (line 1462, 1465) ---
@@ -16829,18 +19877,26 @@ mod tests {
     fn gradient_stop_percentage_no_space() {
         // A stop like "50%" where the whole part is "50%" — no space before percentage
         let lg = parse_linear_gradient("linear-gradient(to right, red 0%, blue 100%)").unwrap();
-        assert_eq!(lg.stops.len(), 2);
-        assert!((lg.stops[0].position - 0.0).abs() < 0.01);
-        assert!((lg.stops[1].position - 1.0).abs() < 0.01);
+        assert_eq!(resolved_positions(&lg.ramp), [0.0, 1.0]);
     }
 
     // --- gradient single stop count (line 1474) ---
 
     #[test]
-    fn gradient_stops_single_stop_returns_none() {
-        // Just one color in parts
-        let lg = parse_linear_gradient("linear-gradient(red)");
-        assert!(lg.is_none());
+    fn gradient_single_stop_is_a_solid_image() {
+        let lg = parse_linear_gradient("linear-gradient(red)").unwrap();
+        let ramp = lg.ramp.resolve(1.0).unwrap();
+        assert_eq!(ramp.stops()[0].position, 0.0);
+        for position in [-1.0, 0.0, 0.5, 2.0] {
+            assert_rgba_close(ramp.sample(position), (1.0, 0.0, 0.0, 1.0));
+        }
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("background-image: linear-gradient(red)"),
+            &ComputedStyle::default(),
+        );
+        assert!(style.background_gradient.is_some());
     }
 
     // --- gradient color parsing: rgb, rgba, invalid (lines 1518-1532) ---
@@ -16856,15 +19912,16 @@ mod tests {
     fn gradient_color_rgba() {
         let lg =
             parse_linear_gradient("linear-gradient(to right, rgba(255, 0, 0, 0.5), blue)").unwrap();
-        assert_eq!(lg.stops.len(), 2);
-        assert_eq!(lg.stops[0].color.r, 255);
+        assert_eq!(lg.ramp.stops.len(), 2);
+        assert_eq!(lg.ramp.stops[0].color.color.r, 255.0);
     }
 
     #[test]
-    fn gradient_color_rgba_invalid_parts() {
-        // rgba() with wrong number of parts
-        let lg = parse_linear_gradient("linear-gradient(rgba(255, 0, 0), blue)");
-        assert!(lg.is_none());
+    fn gradient_color_rgba_is_an_rgb_alias() {
+        let lg = parse_linear_gradient("linear-gradient(rgba(255, 0, 0), blue)").unwrap();
+        assert_eq!(lg.ramp.stops[0].color.color, Color::rgb(255, 0, 0));
+        assert!(parse_linear_gradient("linear-gradient(rgba(255, 0), blue)").is_none());
+        assert!(parse_linear_gradient("linear-gradient(rgba(255, 0, 0, .5, 1), blue)").is_none());
     }
 
     #[test]
@@ -16946,30 +20003,33 @@ mod tests {
     fn z_index_positive() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("z-index: 10"), &parent);
-        assert_eq!(style.z_index, 10);
+        assert_eq!(style.z_index, ZIndex::integer(10));
     }
 
     #[test]
     fn z_index_negative() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("z-index: -5"), &parent);
-        assert_eq!(style.z_index, -5);
+        assert_eq!(style.z_index, ZIndex::integer(-5));
     }
 
     #[test]
-    fn z_index_auto_stays_zero() {
+    fn z_index_auto_remains_distinct_from_integer_zero() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("z-index: auto"), &parent);
-        assert_eq!(style.z_index, 0);
+        assert_eq!(style.z_index, ZIndex::Auto);
+
+        let zero = compute_style(HtmlTag::Div, Some("z-index: 0"), &parent);
+        assert_eq!(zero.z_index, ZIndex::integer(0));
     }
 
     #[test]
     fn z_index_resets_between_elements() {
         let parent = ComputedStyle::default();
         let style1 = compute_style(HtmlTag::Div, Some("z-index: 99"), &parent);
-        assert_eq!(style1.z_index, 99);
+        assert_eq!(style1.z_index, ZIndex::integer(99));
         let style2 = compute_style(HtmlTag::Div, None, &parent);
-        assert_eq!(style2.z_index, 0);
+        assert_eq!(style2.z_index, ZIndex::Auto);
     }
 
     // ---- CSS custom properties tests ----
@@ -17094,9 +20154,9 @@ mod tests {
         let parent = ComputedStyle::default();
         let p = compute_style(HtmlTag::Div, Some("--text-color: red"), &parent);
         let child = compute_style(HtmlTag::Span, Some("color: var(--text-color)"), &p);
-        assert_eq!(child.color.r, 255);
-        assert_eq!(child.color.g, 0);
-        assert_eq!(child.color.b, 0);
+        assert_eq!(child.color.r, 255.0);
+        assert_eq!(child.color.g, 0.0);
+        assert_eq!(child.color.b, 0.0);
     }
 
     #[test]
@@ -17105,9 +20165,9 @@ mod tests {
         let p = compute_style(HtmlTag::Div, Some("--bg: blue"), &parent);
         let child = compute_style(HtmlTag::Div, Some("background-color: var(--bg)"), &p);
         let bg = child.background_color.unwrap();
-        assert_eq!(bg.r, 0);
-        assert_eq!(bg.g, 0);
-        assert_eq!(bg.b, 255);
+        assert_eq!(bg.r, 0.0);
+        assert_eq!(bg.g, 0.0);
+        assert_eq!(bg.b, 255.0);
     }
 
     #[test]
@@ -17958,7 +21018,7 @@ mod tests {
 
         assert_eq!(
             style.background_color.map(|c| (c.r, c.g, c.b, c.a)),
-            Some((255, 0, 0, 255))
+            Some((255.0, 0.0, 0.0, 255.0))
         );
         assert_eq!(style.background_repeat, BackgroundRepeat::NoRepeat);
         assert_eq!(style.background_size, BackgroundSize::Cover);
@@ -18002,7 +21062,7 @@ mod tests {
 
         assert_eq!(
             style.background_color.map(|c| (c.r, c.g, c.b, c.a)),
-            Some((255, 0, 0, 255))
+            Some((255.0, 0.0, 0.0, 255.0))
         );
         assert_eq!(style.background_repeat, BackgroundRepeat::RepeatX);
         assert_eq!(style.background_size, BackgroundSize::Auto);
@@ -18030,10 +21090,8 @@ mod tests {
 
     #[test]
     fn multiple_backgrounds_raster_and_gradient_coexist() {
-        // `background-image: url(<png>), linear-gradient(...)` splits (in
-        // parser::css::inline) into a raster `background-image` key AND a
-        // `background-gradient` key. Both layers must survive the cascade so the
-        // renderer can paint a PNG layer over a gradient layer over the color.
+        // The ordered atomic background-image value derives both renderer fields
+        // after the cascade has selected its winner.
         let parent = ComputedStyle::default();
         let style = compute_style(
             HtmlTag::Div,
@@ -18052,9 +21110,102 @@ mod tests {
         );
         assert_eq!(
             style.background_color.map(|c| (c.r, c.g, c.b)),
-            Some((0x37, 0x47, 0x4f)),
+            Some((0x37 as f32, 0x47 as f32, 0x4f as f32)),
             "base color should also survive"
         );
+    }
+
+    #[test]
+    fn later_background_image_url_replaces_lower_gradient_atomically() {
+        let parent = ComputedStyle::default();
+        let lower = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: linear-gradient(red, blue)",
+            ),
+            pseudo_element: None,
+        };
+        let higher = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: url(higher.png)",
+            ),
+            pseudo_element: None,
+        };
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &[lower, higher],
+            "div",
+            &[],
+            None,
+        );
+
+        assert!(style.background_image.is_some());
+        assert!(style.background_gradient.is_none());
+    }
+
+    #[test]
+    fn later_background_image_gradient_replaces_lower_url_atomically() {
+        let parent = ComputedStyle::default();
+        let lower = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: url(lower.png)",
+            ),
+            pseudo_element: None,
+        };
+        let higher = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: linear-gradient(red, blue)",
+            ),
+            pseudo_element: None,
+        };
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &[lower, higher],
+            "div",
+            &[],
+            None,
+        );
+
+        assert!(style.background_image.is_none());
+        assert!(style.background_gradient.is_some());
+    }
+
+    #[test]
+    fn normal_background_image_cannot_replace_lower_important_image_list() {
+        let parent = ComputedStyle::default();
+        let lower = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: linear-gradient(red, blue) !important",
+            ),
+            pseudo_element: None,
+        };
+        let higher = CssRule {
+            selector: "div".to_string(),
+            declarations: crate::parser::css::parse_inline_style(
+                "background-image: url(normal.png)",
+            ),
+            pseudo_element: None,
+        };
+        let style = compute_style_with_rules(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &[lower, higher],
+            "div",
+            &[],
+            None,
+        );
+
+        assert!(style.background_image.is_none());
+        assert!(style.background_gradient.is_some());
     }
 
     #[test]
@@ -18353,20 +21504,17 @@ mod tests {
     fn border_radius_from_percentage() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("border-radius: 50%"), &parent);
-        // A percentage border-radius is kept as a layout-time hint (it resolves
-        // per-axis against the element's OWN box: horizontal radii against width,
-        // vertical against height), not eagerly against the parent width. The
-        // block/flex layout turns the hint into absolute radii.
-        assert_eq!(s.border_radius_pct, Some(50.0));
-        assert_eq!(s.border_radii_pct, [Some(50.0); 4]);
-        assert_eq!(s.border_radii_y_pct, [Some(50.0); 4]);
+        assert_eq!(
+            s.resolve_corner_radii(80.0, 40.0),
+            CornerRadii::uniform(CornerRadius::new(40.0, 20.0))
+        );
     }
 
     #[test]
     fn text_indent_from_rem() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("text-indent: 2rem"), &parent);
-        assert!((s.text_indent - 24.0).abs() < 0.1);
+        assert!(matches!(s.text_indent, TextIndent::Length(24.0)));
     }
 
     #[test]
@@ -18413,9 +21561,12 @@ mod tests {
             Some("--bc: blue; border-color: var(--bc)"),
             &parent,
         );
-        assert!(s.border.top.color.is_some());
-        let c = s.border.top.color.unwrap();
-        assert_eq!(c.b, 255);
+        assert_eq!(
+            s.border.top.color,
+            SpecifiedColor::Absolute(Color::rgb(0, 0, 255))
+        );
+        let c = s.border.top.color.resolve(s.color);
+        assert_eq!(c.b, 255.0);
     }
 
     // --- Coverage: display from Var (lines 1400-1410) ---
@@ -18484,17 +21635,26 @@ mod tests {
     }
 
     #[test]
-    fn position_from_var_fixed_maps_to_absolute() {
-        // For a single-page, non-scrolling PDF the viewport == the page box, so
-        // `position: fixed` is treated as an absolute box anchored to the page
-        // content box (the absolute-at-root path handles the anchoring).
+    fn absolute_inline_display_is_blockified_after_the_cascade() {
+        let parent = ComputedStyle::default();
+        let s = compute_style(
+            HtmlTag::Span,
+            Some("display:inline;position:absolute"),
+            &parent,
+        );
+        assert_eq!(s.position, Position::Absolute);
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn position_from_var_preserves_fixed_semantics() {
         let parent = ComputedStyle::default();
         let s = compute_style(
             HtmlTag::Div,
             Some("--p: fixed; position: var(--p)"),
             &parent,
         );
-        assert_eq!(s.position, Position::Absolute);
+        assert_eq!(s.position, Position::Fixed);
     }
 
     #[test]
@@ -18762,18 +21922,10 @@ mod tests {
     }
 
     #[test]
-    fn background_size_explicit_bare_number() {
+    fn background_size_rejects_nonzero_unitless_number() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("background-size: 42"), &parent);
-        assert_eq!(
-            s.background_size,
-            BackgroundSize::Explicit {
-                width: 42.0,
-                height: None,
-                width_is_percent: false,
-                height_is_percent: false,
-            }
-        );
+        assert_eq!(s.background_size, BackgroundSize::Auto);
     }
 
     #[test]
@@ -18794,58 +21946,70 @@ mod tests {
     #[test]
     fn filter_blur_default_is_zero() {
         let style = ComputedStyle::default();
-        assert!((style.blur_radius - 0.0).abs() < f32::EPSILON);
+        assert!(style.filter.operations.is_empty());
     }
 
     #[test]
     fn filter_blur_from_inline_style_px() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("filter: blur(20px)"), &parent);
-        assert!((style.blur_radius - 15.0).abs() < 0.01);
+        assert_eq!(style.filter.operations, vec![FilterOperation::Blur(15.0)]);
     }
 
     #[test]
     fn filter_blur_from_inline_style_pt() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("filter: blur(10pt)"), &parent);
-        assert!((style.blur_radius - 10.0).abs() < 0.01);
+        assert_eq!(style.filter.operations, vec![FilterOperation::Blur(10.0)]);
     }
 
     #[test]
     fn filter_blur_bare_number_is_rejected() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("filter: blur(8)"), &parent);
-        assert!((style.blur_radius - 0.0).abs() < f32::EPSILON);
+        assert!(style.filter.operations.is_empty());
     }
 
     #[test]
     fn filter_blur_none_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("filter: none"), &parent);
-        assert!((style.blur_radius - 0.0).abs() < f32::EPSILON);
+        assert!(style.filter.operations.is_empty());
+        assert!(!style.filter.establishes_stacking_context);
+    }
+
+    #[test]
+    fn identity_filter_still_establishes_a_stacking_context() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(HtmlTag::Div, Some("filter: brightness(1)"), &parent);
+        assert!(style.filter.establishes_stacking_context);
+        assert_eq!(
+            style.filter.operations,
+            vec![FilterOperation::Brightness(1.0)]
+        );
     }
 
     #[test]
     fn filter_blur_not_inherited() {
         let mut parent = ComputedStyle::default();
-        parent.blur_radius = 10.0;
+        parent.filter.operations = vec![FilterOperation::Blur(10.0)];
         let style = compute_style(HtmlTag::Div, None, &parent);
-        assert!((style.blur_radius - 0.0).abs() < f32::EPSILON);
+        assert!(style.filter.operations.is_empty());
     }
 
     #[test]
     fn filter_blur_inherit_from_parent() {
         let mut parent = ComputedStyle::default();
-        parent.blur_radius = 12.0;
+        parent.filter.operations = vec![FilterOperation::Blur(12.0)];
         let style = compute_style(HtmlTag::Div, Some("filter: inherit"), &parent);
-        assert!((style.blur_radius - 12.0).abs() < f32::EPSILON);
+        assert_eq!(style.filter.operations, parent.filter.operations);
     }
 
     #[test]
     fn filter_blur_initial_resets() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("filter: initial"), &parent);
-        assert!((style.blur_radius - 0.0).abs() < f32::EPSILON);
+        assert!(style.filter.operations.is_empty());
     }
 
     #[test]
@@ -18877,6 +22041,10 @@ mod tests {
             Some(ClipPath::Polygon { points, .. }) => assert_eq!(points.len(), 3),
             other => panic!("expected polygon, got {other:?}"),
         }
+        assert!(matches!(
+            parse_clip_path(r#"path(\"M 20 120 L 100 12 L 180 120 Z\")"#),
+            Some(ClipPath::Path { commands, .. }) if commands.len() == 4
+        ));
         assert_eq!(parse_clip_path("none"), None);
         assert_eq!(parse_clip_path("url(#m)"), Some(ClipPath::Url("m".into())));
     }
@@ -18884,85 +22052,120 @@ mod tests {
     #[test]
     fn parse_filter_color_functions() {
         assert_eq!(
-            parse_filter("grayscale(100%)").1,
-            vec![ColorFilterOp::Grayscale(1.0)]
+            parse_filter("grayscale(100%)").operations,
+            vec![FilterOperation::Grayscale(1.0)]
         );
         assert_eq!(
-            parse_filter("grayscale(0.5)").1,
-            vec![ColorFilterOp::Grayscale(0.5)]
+            parse_filter("grayscale(0.5)").operations,
+            vec![FilterOperation::Grayscale(0.5)]
         );
         assert_eq!(
-            parse_filter("invert(1)").1,
-            vec![ColorFilterOp::Invert(1.0)]
+            parse_filter("invert(1)").operations,
+            vec![FilterOperation::Invert(1.0)]
         );
         assert_eq!(
-            parse_filter("brightness(150%)").1,
-            vec![ColorFilterOp::Brightness(1.5)]
+            parse_filter("brightness(150%)").operations,
+            vec![FilterOperation::Brightness(1.5)]
         );
         assert_eq!(
-            parse_filter("hue-rotate(90deg)").1,
-            vec![ColorFilterOp::HueRotate(90.0)]
+            parse_filter("hue-rotate(90deg)").operations,
+            vec![FilterOperation::HueRotate(90.0)]
         );
-        // bare function defaults to amount 1.0
-        assert_eq!(parse_filter("sepia()").1, vec![ColorFilterOp::Sepia(1.0)]);
-        // chained: blur goes to the blur slot and the ordered filter op stream
-        // so grouped/raster filter rendering can preserve function order.
-        let (blur, ops, _opacity, _ds, _url) = parse_filter("grayscale(1) blur(2px) contrast(2)");
-        assert!(blur.is_some_and(|r| r > 0.0));
         assert_eq!(
-            ops,
+            parse_filter("sepia()").operations,
+            vec![FilterOperation::Sepia(1.0)]
+        );
+        let sepia_style = compute_style(
+            HtmlTag::Img,
+            Some("filter: sepia()"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            sepia_style.filter.operations,
+            vec![FilterOperation::Sepia(1.0)]
+        );
+        let parsed = parse_filter("grayscale(1) blur(2px) contrast(2)");
+        assert_eq!(
+            parsed.operations,
             vec![
-                ColorFilterOp::Grayscale(1.0),
-                ColorFilterOp::Blur(1.5),
-                ColorFilterOp::Contrast(2.0)
+                FilterOperation::Grayscale(1.0),
+                FilterOperation::Blur(1.5),
+                FilterOperation::Contrast(2.0)
             ]
         );
-        // none clears everything
-        assert_eq!(parse_filter("none"), (Some(0.0), vec![], 1.0, None, None));
+        let none = parse_filter("none");
+        assert!(none.operations.is_empty());
+        assert!(none.url_id.is_none());
+        assert!(!none.establishes_stacking_context);
+    }
+
+    #[test]
+    fn filter_drop_shadow_nested_color_keeps_the_following_function() {
+        let parsed = parse_filter_for_color(
+            "drop-shadow(0 0 0 color(srgb 0 0 0 / .5)) brightness(.8)",
+            Color::rgb(255, 0, 0),
+        );
+        assert!(parsed.url_id.is_none());
+        assert!(parsed.establishes_stacking_context);
+        let [
+            FilterOperation::DropShadow(drop_shadow),
+            FilterOperation::Brightness(0.8),
+        ] = parsed.operations.as_slice()
+        else {
+            panic!("drop-shadow and brightness must remain in source order");
+        };
+        assert_eq!(
+            (drop_shadow.dx, drop_shadow.dy, drop_shadow.blur),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            drop_shadow.color,
+            Color::from_srgb(0.0, 0.0, 0.0, 0.5),
+            "the nested color() alpha must not fall back to currentColor"
+        );
     }
 
     #[test]
     fn filter_url_captures_reference_id() {
         // `filter: url(#id)` records the fragment id for later DOM resolution
         // (css-filter-effects-1 §3); it produces no inline color ops/blur.
-        let (blur, ops, opacity, ds, url) = parse_filter("url(#sat)");
-        assert_eq!(url.as_deref(), Some("sat"));
-        assert!(ops.is_empty());
-        assert!(blur.is_none());
-        assert_eq!(opacity, 1.0);
-        assert!(ds.is_none());
+        let parsed = parse_filter("url(#sat)");
+        assert_eq!(parsed.url_id.as_deref(), Some("sat"));
+        assert!(parsed.operations.is_empty());
         // Quoted form and a trailing color function still capture the id.
-        let (_, ops2, _, _, url2) = parse_filter("url('#q') grayscale(1)");
-        assert_eq!(url2.as_deref(), Some("q"));
-        assert_eq!(ops2, vec![ColorFilterOp::Grayscale(1.0)]);
+        let quoted = parse_filter("url('#q') grayscale(1)");
+        assert_eq!(quoted.url_id.as_deref(), Some("q"));
+        assert_eq!(quoted.operations, vec![FilterOperation::Grayscale(1.0)]);
         // A computed style with `filter: url(#id)` exposes the id.
         let style = compute_style(
             HtmlTag::Div,
             Some("filter: url(#sat)"),
             &ComputedStyle::default(),
         );
-        assert_eq!(style.filter_url_id.as_deref(), Some("sat"));
+        assert_eq!(style.filter.url_id.as_deref(), Some("sat"));
     }
 
     #[test]
-    fn filter_opacity_fn_reduces_opacity() {
+    fn filter_opacity_remains_an_ordered_filter_operation() {
         let parent = ComputedStyle::default();
-        // bare number argument
         let style = compute_style(HtmlTag::Div, Some("filter: opacity(0.5)"), &parent);
-        assert!((style.opacity - 0.5).abs() < 0.01);
-        // percentage argument
+        assert_eq!(style.opacity, 1.0);
+        assert_eq!(style.filter.operations, vec![FilterOperation::Opacity(0.5)]);
         let style = compute_style(HtmlTag::Div, Some("filter: opacity(50%)"), &parent);
-        assert!((style.opacity - 0.5).abs() < 0.01);
-        // combines multiplicatively with the opacity property
+        assert_eq!(style.filter.operations, vec![FilterOperation::Opacity(0.5)]);
         let style = compute_style(
             HtmlTag::Div,
-            Some("opacity: 0.5; filter: opacity(0.5)"),
+            Some("opacity: 0.5; filter: opacity(0.5) drop-shadow(1px 0 black)"),
             &parent,
         );
-        assert!((style.opacity - 0.25).abs() < 0.01);
-        // other filter functions leave opacity untouched
-        let style = compute_style(HtmlTag::Div, Some("filter: blur(2px)"), &parent);
-        assert!((style.opacity - 1.0).abs() < 0.01);
+        assert_eq!(style.opacity, 0.5);
+        assert!(matches!(
+            style.filter.operations.as_slice(),
+            [
+                FilterOperation::Opacity(0.5),
+                FilterOperation::DropShadow(_)
+            ]
+        ));
     }
 
     #[test]
@@ -19041,11 +22244,10 @@ mod tests {
     }
 
     #[test]
-    fn background_position_bare_number() {
+    fn background_position_rejects_nonzero_unitless_number() {
         let parent = ComputedStyle::default();
         let s = compute_style(HtmlTag::Div, Some("background-position: 5"), &parent);
-        assert!((s.background_position.x - 5.0).abs() < 0.01);
-        assert!(!s.background_position.x_is_percent);
+        assert_eq!(s.background_position, BackgroundPosition::default());
     }
 
     #[test]
@@ -19068,9 +22270,9 @@ mod tests {
         let s = compute_style(HtmlTag::Div, Some("box-shadow: 2pt 2pt 0pt"), &parent);
         // When there are only 3 tokens and all parse as lengths, color defaults to BLACK
         if let Some(shadow) = s.box_shadow.first() {
-            assert_eq!(shadow.color.r, 0);
-            assert_eq!(shadow.color.g, 0);
-            assert_eq!(shadow.color.b, 0);
+            assert_eq!(shadow.color.r, 0.0);
+            assert_eq!(shadow.color.g, 0.0);
+            assert_eq!(shadow.color.b, 0.0);
         }
     }
 
@@ -19111,7 +22313,7 @@ mod tests {
             &parent,
         );
         if let Some(ref g) = s.background_gradient {
-            assert!((g.stops[0].position - 0.0).abs() < 0.01);
+            assert_eq!(resolved_positions(&g.ramp)[0], 0.0);
         }
     }
 
@@ -19121,14 +22323,14 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style_with_rules(HtmlTag::Div, None, &parent, &rules, "div", &[], None);
         assert!((style.border.top.width - 1.0).abs() < 0.1);
-        let c = style.border.top.color.unwrap();
-        assert_eq!(c.r, 255);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 0);
+        let c = style.border.top.color.resolve(style.color);
+        assert_eq!(c.r, 255.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 0.0);
         // Other sides should be zero
-        assert!((style.border.bottom.width).abs() < 0.01);
-        assert!((style.border.left.width).abs() < 0.01);
-        assert!((style.border.right.width).abs() < 0.01);
+        assert!((style.border.bottom.used_width()).abs() < 0.01);
+        assert!((style.border.left.used_width()).abs() < 0.01);
+        assert!((style.border.right.used_width()).abs() < 0.01);
     }
 
     #[test]
@@ -19137,13 +22339,13 @@ mod tests {
         let parent = ComputedStyle::default();
         let style = compute_style_with_rules(HtmlTag::Div, None, &parent, &rules, "div", &[], None);
         assert!((style.border.left.width - 3.0).abs() < 0.1);
-        let c = style.border.left.color.unwrap();
-        assert_eq!(c.r, 0);
-        assert_eq!(c.g, 0);
-        assert_eq!(c.b, 255);
-        assert!((style.border.top.width).abs() < 0.01);
-        assert!((style.border.right.width).abs() < 0.01);
-        assert!((style.border.bottom.width).abs() < 0.01);
+        let c = style.border.left.color.resolve(style.color);
+        assert_eq!(c.r, 0.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 255.0);
+        assert!((style.border.top.used_width()).abs() < 0.01);
+        assert!((style.border.right.used_width()).abs() < 0.01);
+        assert!((style.border.bottom.used_width()).abs() < 0.01);
     }
 
     #[test]
@@ -19157,8 +22359,8 @@ mod tests {
             style.border.left,
         ] {
             assert!((side.width - 2.0).abs() < 0.1);
-            let c = side.color.unwrap();
-            assert_eq!((c.r, c.g, c.b), (0, 0, 0));
+            let c = side.color.resolve(style.color);
+            assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0));
         }
     }
 
@@ -19172,15 +22374,174 @@ mod tests {
         );
         // Top should be overridden to 2pt red
         assert!((style.border.top.width - 2.0).abs() < 0.1);
-        let top_c = style.border.top.color.unwrap();
-        assert_eq!(top_c.r, 255);
-        assert_eq!(top_c.g, 0);
+        let top_c = style.border.top.color.resolve(style.color);
+        assert_eq!(top_c.r, 255.0);
+        assert_eq!(top_c.g, 0.0);
         // Other sides should remain 1pt black
         for side in [style.border.right, style.border.bottom, style.border.left] {
             assert!((side.width - 1.0).abs() < 0.1);
-            let c = side.color.unwrap();
-            assert_eq!((c.r, c.g, c.b), (0, 0, 0));
+            let c = side.color.resolve(style.color);
+            assert_eq!((c.r, c.g, c.b), (0.0, 0.0, 0.0));
         }
+    }
+
+    #[test]
+    fn border_shorthand_and_side_longhand_follow_cascade_order() {
+        let parent = ComputedStyle::default();
+        let shorthand_last = compute_style(
+            HtmlTag::Div,
+            Some("border-top: 5pt solid red; border: 1pt solid blue"),
+            &parent,
+        );
+        assert_eq!(shorthand_last.border.top.width, 1.0);
+        assert_eq!(
+            shorthand_last
+                .border
+                .top
+                .color
+                .resolve(shorthand_last.color),
+            Color::rgb(0, 0, 255)
+        );
+
+        let longhand_last = compute_style(
+            HtmlTag::Div,
+            Some("border: 1pt solid blue; border-top: 5pt solid red"),
+            &parent,
+        );
+        assert_eq!(longhand_last.border.top.width, 5.0);
+        assert_eq!(
+            longhand_last.border.top.color.resolve(longhand_last.color),
+            Color::rgb(255, 0, 0)
+        );
+    }
+
+    #[test]
+    fn important_border_components_win_as_expanded_longhands() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-top: 5pt solid red !important; \
+                 border: 1pt solid blue",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.border.top.width, 5.0);
+        assert_eq!(
+            style.border.top.color.resolve(style.color),
+            Color::rgb(255, 0, 0)
+        );
+        assert_eq!(style.border.right.width, 1.0);
+    }
+
+    #[test]
+    fn logical_borders_map_and_cascade_with_physical_borders() {
+        let rtl = compute_style(
+            HtmlTag::Div,
+            Some(
+                "direction: rtl; border: 1pt solid black; \
+                 border-inline-start: 5pt solid red",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(rtl.border.right.width, 5.0);
+        assert_eq!(rtl.border.left.width, 1.0);
+
+        let physical_last = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-inline-start: 5pt solid red; \
+                 border-left: 2pt solid blue",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(physical_last.border.left.width, 2.0);
+        assert_eq!(
+            physical_last.border.left.color.resolve(physical_last.color),
+            Color::rgb(0, 0, 255)
+        );
+    }
+
+    #[test]
+    fn logical_border_mapping_covers_vertical_and_sideways_modes() {
+        let vertical_rl = compute_style(
+            HtmlTag::Div,
+            Some(
+                "writing-mode: vertical-rl; \
+                 border-block-start: 3pt solid red; \
+                 border-inline-start: 4pt solid blue",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(vertical_rl.border.right.width, 3.0);
+        assert_eq!(vertical_rl.border.top.width, 4.0);
+
+        let vertical_upright_rtl = compute_style(
+            HtmlTag::Div,
+            Some(
+                "writing-mode: vertical-lr; direction: rtl; text-orientation: upright; \
+                 border-inline-start: 6pt solid green",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(vertical_upright_rtl.border.top.width, 6.0);
+
+        let sideways_lr = compute_style(
+            HtmlTag::Div,
+            Some(
+                "writing-mode: sideways-lr; \
+                 border-block-start: 7pt solid red; \
+                 border-inline-start: 8pt solid blue",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(sideways_lr.border.left.width, 7.0);
+        assert_eq!(sideways_lr.border.bottom.width, 8.0);
+    }
+
+    #[test]
+    fn logical_corner_radii_share_the_physical_cascade_group() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "direction: rtl; border-start-start-radius: 11pt; \
+                 border-top-right-radius: 3pt",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.resolve_corner_radii(100.0, 100.0).top_right,
+            CornerRadius::circular(3.0)
+        );
+
+        let logical_last = compute_style(
+            HtmlTag::Div,
+            Some(
+                "direction: rtl; border-top-right-radius: 3pt; \
+                 border-start-start-radius: 11pt",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            logical_last.resolve_corner_radii(100.0, 100.0).top_right,
+            CornerRadius::circular(11.0)
+        );
+    }
+
+    #[test]
+    fn inherited_currentcolor_rebinds_to_the_child_foreground() {
+        let mut parent = ComputedStyle::default();
+        parent.color = Color::rgb(255, 0, 0);
+        parent.border.left = BorderSide::solid(2.0, SpecifiedColor::CurrentColor);
+        let child = compute_style(
+            HtmlTag::Div,
+            Some("color: blue; border-left: inherit"),
+            &parent,
+        );
+        assert_eq!(child.border.left.color, SpecifiedColor::CurrentColor);
+        assert_eq!(
+            child.border.left.color.resolve(child.color),
+            Color::rgb(0, 0, 255)
+        );
     }
 
     #[test]
@@ -19188,14 +22549,14 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.border.top = BorderSide {
             width: 1.0,
-            color: Some(Color::rgb(0, 0, 0)),
+            color: Color::rgb(0, 0, 0).into(),
             style: BorderStyle::Solid,
         };
         let style = compute_style(HtmlTag::Span, None, &parent);
-        assert!((style.border.top.width).abs() < 0.01);
-        assert!((style.border.bottom.width).abs() < 0.01);
-        assert!((style.border.left.width).abs() < 0.01);
-        assert!((style.border.right.width).abs() < 0.01);
+        assert!((style.border.top.used_width()).abs() < 0.01);
+        assert!((style.border.bottom.used_width()).abs() < 0.01);
+        assert!((style.border.left.used_width()).abs() < 0.01);
+        assert!((style.border.right.used_width()).abs() < 0.01);
     }
 
     #[test]
@@ -19204,22 +22565,22 @@ mod tests {
         let b = BorderSides {
             top: BorderSide {
                 width: 3.0,
-                color: None,
+                color: SpecifiedColor::CurrentColor,
                 style: BorderStyle::Solid,
             },
             right: BorderSide {
                 width: 5.0,
-                color: None,
+                color: SpecifiedColor::CurrentColor,
                 style: BorderStyle::Solid,
             },
             bottom: BorderSide {
                 width: 2.0,
-                color: None,
+                color: SpecifiedColor::CurrentColor,
                 style: BorderStyle::Solid,
             },
             left: BorderSide {
                 width: 4.0,
-                color: None,
+                color: SpecifiedColor::CurrentColor,
                 style: BorderStyle::Solid,
             },
         };
@@ -19238,11 +22599,11 @@ mod tests {
             &parent,
         );
         assert!((style.border.right.width - 2.0).abs() < 0.1);
-        let rc = style.border.right.color.unwrap();
-        assert_eq!(rc.r, 255);
+        let rc = style.border.right.color.resolve(style.color);
+        assert_eq!(rc.r, 255.0);
         assert!((style.border.left.width - 3.0).abs() < 0.1);
-        let lc = style.border.left.color.unwrap();
-        assert_eq!(lc.b, 255);
+        let lc = style.border.left.color.resolve(style.color);
+        assert_eq!(lc.b, 255.0);
     }
 
     #[test]
@@ -19312,21 +22673,21 @@ mod tests {
     fn flex_basis_length() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("flex-basis: 200pt"), &parent);
-        assert_eq!(style.flex_basis, Some(200.0));
+        assert_eq!(style.flex_basis.definite_length(), Some(200.0));
     }
 
     #[test]
     fn flex_basis_auto() {
         let parent = ComputedStyle::default();
         let style = compute_style(HtmlTag::Div, Some("flex-basis: auto"), &parent);
-        assert_eq!(style.flex_basis, None);
+        assert_eq!(style.flex_basis, FlexBasis::Auto);
     }
 
     #[test]
-    fn flex_grow_negative_clamped() {
+    fn invalid_negative_flex_grow_does_not_replace_valid_value() {
         let parent = ComputedStyle::default();
-        let style = compute_style(HtmlTag::Div, Some("flex-grow: -3"), &parent);
-        assert!((style.flex_grow - 0.0).abs() < f32::EPSILON);
+        let style = compute_style(HtmlTag::Div, Some("flex-grow: 2; flex-grow: -3"), &parent);
+        assert!((style.flex_grow - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -19335,7 +22696,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("flex: none"), &parent);
         assert!((style.flex_grow - 0.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 0.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, None);
+        assert_eq!(style.flex_basis, FlexBasis::Auto);
     }
 
     #[test]
@@ -19344,7 +22705,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("flex: auto"), &parent);
         assert!((style.flex_grow - 1.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 1.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, None);
+        assert_eq!(style.flex_basis, FlexBasis::Auto);
     }
 
     #[test]
@@ -19353,7 +22714,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("flex: 3"), &parent);
         assert!((style.flex_grow - 3.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 1.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, Some(0.0));
+        assert!(style.flex_basis.is_zero());
     }
 
     #[test]
@@ -19362,7 +22723,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("flex: 2 0"), &parent);
         assert!((style.flex_grow - 2.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 0.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, Some(0.0));
+        assert!(style.flex_basis.is_zero());
     }
 
     #[test]
@@ -19372,8 +22733,12 @@ mod tests {
         assert!((style.flex_grow - 1.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 0.0).abs() < f32::EPSILON);
         // 200px ≈ 200 * 0.75 = 150pt
-        assert!(style.flex_basis.is_some());
-        assert!(style.flex_basis.unwrap() > 0.0);
+        assert!(
+            style
+                .flex_basis
+                .definite_length()
+                .is_some_and(|value| value > 0.0)
+        );
     }
 
     #[test]
@@ -19382,7 +22747,65 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("flex: 1 1 auto"), &parent);
         assert!((style.flex_grow - 1.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 1.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, None);
+        assert_eq!(style.flex_basis, FlexBasis::Auto);
+    }
+
+    #[test]
+    fn flex_shorthand_intrinsic_basis_keywords_preserve_their_sizing_mode() {
+        let parent = ComputedStyle::default();
+        let parsed = crate::parser::css::parse_inline_style("flex: 0 0 content");
+        assert!(
+            matches!(parsed.get("flex"), Some(CssValue::Keyword(value)) if value == "0 0 content"),
+            "flex shorthand must preserve its three authored components: {parsed:#?}"
+        );
+        for (basis, keyword) in [
+            ("content", IntrinsicWidthKeyword::MaxContent),
+            ("max-content", IntrinsicWidthKeyword::MaxContent),
+            ("min-content", IntrinsicWidthKeyword::MinContent),
+            ("fit-content", IntrinsicWidthKeyword::FitContent),
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(&format!("flex: 0 0 {basis}")), &parent);
+            assert_eq!(style.flex_grow, 0.0);
+            assert_eq!(style.flex_shrink, 0.0);
+            assert_eq!(style.flex_basis.content_keyword(), Some(keyword));
+
+            let longhand =
+                compute_style(HtmlTag::Div, Some(&format!("flex-basis: {basis}")), &parent);
+            assert_eq!(longhand.flex_basis.content_keyword(), Some(keyword));
+        }
+    }
+
+    #[test]
+    fn width_intrinsic_keywords_preserve_their_sizing_mode() {
+        let parent = ComputedStyle::default();
+        for (width, keyword) in [
+            ("min-content", IntrinsicWidthKeyword::MinContent),
+            ("max-content", IntrinsicWidthKeyword::MaxContent),
+            ("fit-content", IntrinsicWidthKeyword::FitContent),
+        ] {
+            let parsed = crate::parser::css::parse_inline_style(&format!("width: {width}"));
+            assert!(
+                matches!(parsed.get("width"), Some(CssValue::Keyword(value)) if value == width),
+                "intrinsic width must remain a keyword: {parsed:#?}",
+            );
+            let style = compute_style(HtmlTag::Div, Some(&format!("width: {width}")), &parent);
+            assert_eq!(style.width, None);
+            assert_eq!(style.width_keyword, Some(keyword));
+        }
+
+        let rules = crate::parser::css::parse_stylesheet(".box { width: fit-content; }");
+        let style = compute_style_with_context(
+            HtmlTag::Div,
+            None,
+            &parent,
+            &rules,
+            "div",
+            &["box"],
+            None,
+            &HashMap::new(),
+            &SelectorContext::default(),
+        );
+        assert_eq!(style.width_keyword, Some(IntrinsicWidthKeyword::FitContent),);
     }
 
     #[test]
@@ -19393,7 +22816,7 @@ mod tests {
         let style = compute_style(HtmlTag::Div, None, &parent);
         assert!((style.flex_grow - 0.0).abs() < f32::EPSILON);
         assert!((style.flex_shrink - 1.0).abs() < f32::EPSILON);
-        assert_eq!(style.flex_basis, None);
+        assert_eq!(style.flex_basis, FlexBasis::Auto);
     }
 
     #[test]
@@ -19409,6 +22832,214 @@ mod tests {
         parent.flex_grow = 3.0;
         let style = compute_style(HtmlTag::Div, Some("flex-grow: inherit"), &parent);
         assert!((style.flex_grow - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn authorable_old_currentcolor_sentinel_is_an_absolute_color() {
+        // The previous implementation encoded currentColor as #010203fe. That
+        // is an authorable CSS color and must never be rewritten to `color`.
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "color: red; \
+                 background-color: #010203fe; \
+                 border: 1px solid #010203fe; \
+                 outline: 1px solid #010203fe; \
+                 column-rule: 1px solid #010203fe; \
+                 box-shadow: 1px 2px #010203fe; \
+                 text-shadow: 1px 2px #010203fe; \
+                 text-decoration: underline #010203fe",
+            ),
+            &ComputedStyle::default(),
+        );
+        let expected = (1, 2, 3, 254);
+        assert_eq!(rgba_tuple(style.background_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.border.top.color.resolve(style.color)),
+            expected
+        );
+        assert_eq!(rgba_tuple(style.outline_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.column_rule.color.resolve(style.color)),
+            expected
+        );
+        assert_eq!(rgba_tuple(style.box_shadow[0].color), expected);
+        assert_eq!(style.box_shadow[0].color_source, ColorSource::Absolute);
+        assert_eq!(rgba_tuple(style.text_shadow[0].color), expected);
+        assert_eq!(style.text_shadow[0].color_source, ColorSource::Absolute);
+        assert_eq!(rgba_tuple(style.text_decoration_color.unwrap()), expected);
+    }
+
+    #[test]
+    fn currentcolor_and_var_consumers_see_final_foreground_color() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "--paint: currentColor; \
+                 background-color: var(--paint); \
+                 border: 1px solid var(--paint); \
+                 outline: 1px solid var(--paint); \
+                 column-rule: 1px solid var(--paint); \
+                 box-shadow: 1px 2px var(--paint); \
+                 text-shadow: 1px 2px var(--paint); \
+                 text-decoration: underline var(--paint); \
+                 color: #345678",
+            ),
+            &ComputedStyle::default(),
+        );
+        let expected = (0x34, 0x56, 0x78, 0xff);
+        assert_eq!(rgba_tuple(style.color), expected);
+        assert_eq!(rgba_tuple(style.background_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.border.top.color.resolve(style.color)),
+            expected
+        );
+        assert_eq!(rgba_tuple(style.outline_color.unwrap()), expected);
+        assert_eq!(
+            rgba_tuple(style.column_rule.color.resolve(style.color)),
+            expected
+        );
+        assert_eq!(rgba_tuple(style.box_shadow[0].color), expected);
+        assert_eq!(style.box_shadow[0].color_source, ColorSource::CurrentColor);
+        assert_eq!(rgba_tuple(style.text_shadow[0].color), expected);
+        assert_eq!(style.text_shadow[0].color_source, ColorSource::CurrentColor);
+        assert_eq!(rgba_tuple(style.text_decoration_color.unwrap()), expected);
+    }
+
+    #[test]
+    fn currentcolor_on_color_itself_uses_the_inherited_color() {
+        let mut parent = ComputedStyle::default();
+        parent.color = Color::rgb(12, 34, 56);
+
+        let direct = compute_style(HtmlTag::Div, Some("color: currentColor"), &parent);
+        assert_eq!(direct.color, parent.color);
+
+        let through_var = compute_style(
+            HtmlTag::Div,
+            Some("--foreground: currentColor; color: var(--foreground)"),
+            &parent,
+        );
+        assert_eq!(through_var.color, parent.color);
+    }
+
+    #[test]
+    fn inherited_currentcolor_text_effects_rebind_on_the_child() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some(
+                "color: #c2185b; \
+                 text-shadow: 1px 2px currentColor; \
+                 text-emphasis: filled dot currentColor",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            parent.text_shadow[0].color_source,
+            ColorSource::CurrentColor
+        );
+        assert_eq!(parent.text_emphasis_color_source, ColorSource::CurrentColor);
+
+        let child = compute_style(HtmlTag::Span, Some("color: #1565c0"), &parent);
+        let child_color = (0x15, 0x65, 0xc0, 0xff);
+        assert_eq!(rgba_tuple(child.text_shadow[0].color), child_color);
+        assert_eq!(rgba_tuple(child.text_emphasis_color), child_color);
+
+        let absolute_parent = compute_style(
+            HtmlTag::Div,
+            Some("color: #c2185b; text-shadow: 1px 2px #c2185b"),
+            &ComputedStyle::default(),
+        );
+        let absolute_child = compute_style(HtmlTag::Span, Some("color: #1565c0"), &absolute_parent);
+        assert_eq!(
+            rgba_tuple(absolute_child.text_shadow[0].color),
+            (0xc2, 0x18, 0x5b, 0xff)
+        );
+        assert_eq!(
+            absolute_child.text_shadow[0].color_source,
+            ColorSource::Absolute
+        );
+    }
+
+    #[test]
+    fn text_emphasis_does_not_overwrite_independent_overline_color() {
+        let style = compute_style(
+            HtmlTag::Span,
+            Some(
+                "color: #111111; \
+                 text-decoration: overline #d7263d; \
+                 text-emphasis: filled dot #1565c0",
+            ),
+            &ComputedStyle::default(),
+        );
+
+        assert!(style.text_decoration_overline);
+        assert!(style.text_emphasis_mark);
+        assert_eq!(
+            rgba_tuple(style.text_decoration_color.unwrap()),
+            (0xd7, 0x26, 0x3d, 0xff)
+        );
+        assert_eq!(
+            rgba_tuple(style.text_emphasis_color),
+            (0x15, 0x65, 0xc0, 0xff)
+        );
+    }
+
+    #[test]
+    fn text_emphasis_position_is_inherited_and_keeps_its_keyword_pair() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("text-emphasis-position: under left"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            parent.text_emphasis_position,
+            TextEmphasisPosition::UnderLeft
+        );
+
+        let child = compute_style(HtmlTag::Span, None, &parent);
+        assert_eq!(
+            child.text_emphasis_position,
+            TextEmphasisPosition::UnderLeft
+        );
+
+        let reset = compute_style(
+            HtmlTag::Span,
+            Some("text-emphasis-position: initial"),
+            &parent,
+        );
+        assert_eq!(
+            reset.text_emphasis_position,
+            TextEmphasisPosition::OverRight
+        );
+    }
+
+    #[test]
+    fn currentcolor_resolves_inside_gradient_image_consumers() {
+        let current = Color::rgb(21, 101, 192);
+        let linear =
+            parse_linear_gradient_for_color("linear-gradient(currentColor, white)", current)
+                .unwrap();
+        let radial =
+            parse_radial_gradient_for_color("radial-gradient(currentColor, white)", current)
+                .unwrap();
+        let conic =
+            parse_conic_gradient_for_color("conic-gradient(currentColor, white)", current).unwrap();
+        assert_eq!(linear.ramp.stops[0].color.color, current);
+        assert_eq!(radial.ramp.stops[0].color.color, current);
+        assert_eq!(conic.ramp.stops[0].color.color, current);
+
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "--stop: currentColor; color: #1565c0; \
+                 background-image: linear-gradient(var(--stop), white)",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.background_gradient.unwrap().ramp.stops[0].color.color,
+            current
+        );
     }
 
     // ---- Pseudo-element style computation tests ----
@@ -19459,6 +23090,95 @@ mod tests {
         let ps = result.unwrap();
         assert_eq!(ps.font_weight, FontWeight::Bold);
         assert_eq!(ps.display, Display::Block);
+    }
+
+    #[test]
+    fn pseudo_preserves_the_originating_decoration_color() {
+        use crate::parser::css::{PseudoElement, parse_stylesheet};
+
+        let mut parent = ComputedStyle::default();
+        parent.color = Color::rgb(0, 0, 238);
+        parent.text_decoration_underline = true;
+        let rules = parse_stylesheet(
+            ".link::after { content: ' target'; color: #d7263d; text-decoration: none; }",
+        );
+        let pseudo = compute_pseudo_element_style(
+            &parent,
+            &rules,
+            "a",
+            &["link"],
+            None,
+            &HashMap::new(),
+            &SelectorContext::default(),
+            PseudoElement::After,
+        )
+        .unwrap();
+
+        assert!(pseudo.text_decoration_underline);
+        assert_eq!(rgba_tuple(pseudo.color), (0xd7, 0x26, 0x3d, 0xff));
+        assert_eq!(
+            rgba_tuple(pseudo.text_decoration_color.unwrap()),
+            (0x00, 0x00, 0xee, 0xff)
+        );
+    }
+
+    #[test]
+    fn pseudo_currentcolor_consumers_use_the_final_cascade_winner() {
+        use crate::parser::css::{PseudoElement, parse_stylesheet};
+
+        // Exercise both source orders. The more-specific color declaration wins
+        // in either case, and currentColor consumers must bind only after the
+        // complete pseudo-element cascade has selected that winner.
+        for css in [
+            ".box::before { content: 'X'; background-color: currentColor; } \
+             div.box::before { color: #1565c0; }",
+            "div.box::before { color: #1565c0; } \
+             .box::before { content: 'X'; background-color: currentColor; }",
+        ] {
+            let rules = parse_stylesheet(css);
+            let style = compute_pseudo_element_style(
+                &ComputedStyle::default(),
+                &rules,
+                "div",
+                &["box"],
+                None,
+                &HashMap::new(),
+                &SelectorContext::default(),
+                PseudoElement::Before,
+            )
+            .unwrap();
+            assert_eq!(rgba_tuple(style.color), (0x15, 0x65, 0xc0, 0xff));
+            assert_eq!(
+                rgba_tuple(style.background_color.unwrap()),
+                (0x15, 0x65, 0xc0, 0xff)
+            );
+        }
+    }
+
+    #[test]
+    fn pseudo_currentcolor_honors_important_before_specificity() {
+        use crate::parser::css::{PseudoElement, parse_stylesheet};
+
+        let rules = parse_stylesheet(
+            ".box::after { content: 'X'; color: #c2185b !important; } \
+             div.box::after { color: #1565c0; background-color: currentColor; }",
+        );
+        let style = compute_pseudo_element_style(
+            &ComputedStyle::default(),
+            &rules,
+            "div",
+            &["box"],
+            None,
+            &HashMap::new(),
+            &SelectorContext::default(),
+            PseudoElement::After,
+        )
+        .unwrap();
+        assert_eq!(rgba_tuple(style.color), (0xc2, 0x18, 0x5b, 0xff));
+        assert_eq!(
+            rgba_tuple(style.background_color.unwrap()),
+            (0xc2, 0x18, 0x5b, 0xff)
+        );
     }
 
     #[test]
@@ -19576,8 +23296,7 @@ mod tests {
         let mut parent = ComputedStyle::default();
         parent.background_gradient = Some(LinearGradient {
             angle: 90.0,
-            stops: vec![],
-            repeating: false,
+            ramp: GradientRamp::default(),
             layer_box: GradientLayerBox::default(),
         });
         let rules = parse_stylesheet(".box::after { content: ''; background-image: inherit; }");
@@ -19594,5 +23313,311 @@ mod tests {
         );
         let ps = result.unwrap();
         assert!(ps.background_gradient.is_some());
+    }
+
+    #[test]
+    fn border_image_gradient_preserves_balanced_source_and_slice_structure() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-image: linear-gradient(to right, rgba(255, 0, 0, .5), blue) 1 2% 3 4% fill",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices {
+                    top: BorderImageSliceValue::Number(1.0),
+                    right: BorderImageSliceValue::Percentage(2.0),
+                    bottom: BorderImageSliceValue::Number(3.0),
+                    left: BorderImageSliceValue::Percentage(4.0),
+                    fill: true,
+                },
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_does_not_replace_an_independent_background_gradient() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "background-image: linear-gradient(white, black); \
+                 border-image: linear-gradient(red, blue) 1",
+            ),
+            &ComputedStyle::default(),
+        );
+
+        assert!(style.background_gradient.is_some());
+        assert!(style.border_image.has_source());
+    }
+
+    #[test]
+    fn border_image_accepts_url_radial_and_conic_image_sources() {
+        let parent = ComputedStyle::default();
+        let url = compute_style(
+            HtmlTag::Div,
+            Some("border-image: url('data:image/png;base64,AAAA') 1"),
+            &parent,
+        );
+        let radial = compute_style(
+            HtmlTag::Div,
+            Some("border-image: radial-gradient(red, blue) 1"),
+            &parent,
+        );
+        let conic = compute_style(
+            HtmlTag::Div,
+            Some("border-image: conic-gradient(red, blue) 1"),
+            &parent,
+        );
+
+        assert!(matches!(
+            url.border_image.paint().map(|image| image.source),
+            Some(BorderImageSource::Url(source))
+                if source == "data:image/png;base64,AAAA"
+        ));
+        assert!(matches!(
+            radial.border_image.paint().map(|image| image.source),
+            Some(BorderImageSource::RadialGradient(_))
+        ));
+        assert!(matches!(
+            conic.border_image.paint().map(|image| image.source),
+            Some(BorderImageSource::ConicGradient(_))
+        ));
+    }
+
+    #[test]
+    fn border_image_numeric_slices_resolve_in_css_pixels() {
+        let slices = BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0));
+        assert_eq!(slices.resolve(165.0, 112.5, 0.75), EdgeSizes::uniform(0.75));
+    }
+
+    #[test]
+    fn overlapping_border_image_slices_preserve_each_corner_region() {
+        let slices = BorderImageSlices {
+            top: BorderImageSliceValue::Percentage(70.0),
+            right: BorderImageSliceValue::Percentage(80.0),
+            bottom: BorderImageSliceValue::Percentage(70.0),
+            left: BorderImageSliceValue::Percentage(80.0),
+            fill: false,
+        };
+        assert_eq!(
+            slices.resolve(100.0, 200.0, 1.0),
+            EdgeSizes::new(140.0, 80.0, 140.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn border_image_width_overlap_uses_one_factor_for_both_axes() {
+        let widths = BorderImageWidths::uniform(BorderImageWidth::Number(1.0));
+        assert_eq!(
+            widths.resolve(EdgeSizes::uniform(80.0), 100.0, 400.0, None,),
+            EdgeSizes::uniform(50.0)
+        );
+    }
+
+    #[test]
+    fn border_image_width_number_multiplies_the_physical_border() {
+        assert_eq!(
+            BorderImageWidths::uniform(BorderImageWidth::Number(3.0)).resolve(
+                EdgeSizes::uniform(6.0),
+                135.0,
+                63.0,
+                None,
+            ),
+            EdgeSizes::uniform(18.0)
+        );
+    }
+
+    #[test]
+    fn border_image_outset_number_expands_from_the_physical_border() {
+        assert_eq!(
+            BorderImageOutsets::uniform(BorderImageOutset::Number(2.0))
+                .resolve(EdgeSizes::new(3.0, 5.0, 7.0, 11.0)),
+            EdgeSizes::new(6.0, 10.0, 14.0, 22.0)
+        );
+    }
+
+    #[test]
+    fn border_image_font_relative_width_and_outset_resolve_after_font_size() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 40px; border-image: linear-gradient(red, blue) 1 / .25em / .25em"),
+            &ComputedStyle::default(),
+        );
+
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                widths: BorderImageWidths::uniform(BorderImageWidth::LengthPercent(
+                    LengthPercent::length(7.5),
+                )),
+                outsets: BorderImageOutsets::uniform(BorderImageOutset::Length(7.5)),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_width_keeps_calc_percentage_for_the_image_area() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 40px; border-image: linear-gradient(red, blue) 1 / calc(25% + .25em)"),
+            &ComputedStyle::default(),
+        );
+
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                widths: BorderImageWidths::uniform(BorderImageWidth::LengthPercent(
+                    LengthPercent::from_terms(7.5, 25.0),
+                )),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_repeat_uses_one_or_two_axis_keywords() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border-image: linear-gradient(red, blue) 1 repeat round"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                repeats: BorderImageRepeats {
+                    horizontal: BorderImageRepeatMode::Repeat,
+                    vertical: BorderImageRepeatMode::Round,
+                },
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_repeat_longhand_cascades_independently_from_the_shorthand() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-image-repeat: space !important; border-image: linear-gradient(red, blue) 1 repeat stretch",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                repeats: BorderImageRepeats::uniform(BorderImageRepeatMode::Space),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_width_longhand_overrides_the_shorthand_component() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border-image: linear-gradient(red, blue) 1; border-image-width: 3"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                widths: BorderImageWidths::uniform(BorderImageWidth::Number(3.0)),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_shorthand_resets_every_border_image_longhand() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-image: linear-gradient(red, blue) 7 / 4 / 3 round; \
+                 border: 2px solid black; \
+                 border-image-source: linear-gradient(green, yellow)",
+            ),
+            &ComputedStyle::default(),
+        );
+
+        assert!(style.border_image.has_source());
+        assert_eq!(style.border_image.geometry, BorderImage::default());
+    }
+
+    #[test]
+    fn border_image_longhands_inherit_without_a_parent_source() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("border-image-slice: 9 fill; border-image-width: 3"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-image-source: linear-gradient(red, blue); \
+                 border-image-slice: inherit; border-image-width: inherit",
+            ),
+            &parent,
+        );
+
+        assert!(child.border_image.has_source());
+        assert_eq!(
+            child.border_image.geometry.slices,
+            BorderImageSlices {
+                fill: true,
+                ..BorderImageSlices::uniform(BorderImageSliceValue::Number(9.0))
+            }
+        );
+        assert_eq!(
+            child.border_image.geometry.widths,
+            BorderImageWidths::uniform(BorderImageWidth::Number(3.0))
+        );
+    }
+
+    #[test]
+    fn border_image_width_important_longhand_survives_a_later_plain_shorthand() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("border-image-width: 3 !important; border-image: linear-gradient(red, blue) 1"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                widths: BorderImageWidths::uniform(BorderImageWidth::Number(3.0)),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn border_image_outset_shorthand_and_longhand_cascade_independently() {
+        let style = compute_style(
+            HtmlTag::Div,
+            Some(
+                "border-image-outset: 3 !important; border-image: linear-gradient(red, blue) 1 / 1 / 2",
+            ),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.background_clip, BackgroundClip::Border);
+        assert_eq!(
+            style.border_image.paint().map(|image| image.geometry),
+            Some(BorderImage {
+                slices: BorderImageSlices::uniform(BorderImageSliceValue::Number(1.0)),
+                widths: BorderImageWidths::uniform(BorderImageWidth::Number(1.0)),
+                outsets: BorderImageOutsets::uniform(BorderImageOutset::Number(3.0)),
+                ..Default::default()
+            })
+        );
     }
 }

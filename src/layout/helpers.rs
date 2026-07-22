@@ -1,12 +1,15 @@
+use crate::layout::elements::LayoutNode;
+use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
-use crate::parser::ttf::TtfFont;
+use crate::parser::ttf::{GlyphSideBearings, TtfFont};
 use crate::style::computed::{
     BackgroundClip, BackgroundOrigin, BackgroundPosition, BackgroundRepeat, BackgroundSize,
-    BoxSizing, ComputedStyle, ConicGradient, ContentItem, Display, FontStyle, FontWeight,
+    BoxSizing, ComputedStyle, ConicGradient, ContentItem, Display, FontFamily, FontWeight,
     IntrinsicWidthKeyword, LEADER_PLACEHOLDER_END, LEADER_PLACEHOLDER_START, LinearGradient,
-    ListStyleType, Position, RadialGradient, VerticalAlign, Visibility, compute_style_with_context,
+    ListStyleType, RadialGradient, VerticalAlign, Visibility, compute_style_with_context,
 };
+use crate::types::{CornerRadii, EdgeSizes};
 use std::collections::HashMap;
 
 pub(crate) fn selector_attributes_with_has(el: &ElementNode) -> HashMap<String, String> {
@@ -408,16 +411,6 @@ pub(crate) fn authored_display_contents(
         .is_some_and(|value| value == "contents")
 }
 
-pub(crate) fn authored_position_fixed(
-    el: &ElementNode,
-    rules: &[CssRule],
-    ancestors: &[AncestorInfo],
-    selector_ctx: &SelectorContext,
-) -> bool {
-    authored_keyword_property(el, rules, ancestors, selector_ctx, "position")
-        .is_some_and(|value| value == "fixed")
-}
-
 pub(crate) fn apply_authored_insets(
     style: &mut ComputedStyle,
     el: &ElementNode,
@@ -505,11 +498,17 @@ fn set_inset_side(style: &mut ComputedStyle, side: &str, value: &CssValue) {
 }
 
 use super::context::ContainingBlock;
+use super::elements::{
+    BackgroundPaint, BlockFlow, BlockSize, BoxModel, BoxPaint, InlineSize, IntoLayoutNode,
+    LayoutSize, OutlinePaint, Positioning, SizeConstraints, TextBlock, TextBlockStyle,
+    TextFragmentation, TextSemantics, TextSpacing,
+};
 use super::engine::{CounterState, InlineBox, LayoutBorder, LayoutElement, TextLine, TextRun};
 use super::images::build_raster_background_tree;
 use super::text::{
-    TextWrapOptions, collapse_whitespace, estimate_word_width, push_text_run_with_fallback,
-    resolve_style_font_family, resolved_line_height_factor, wrap_text_runs,
+    TextWrapOptions, collapse_whitespace, estimate_word_width, parent_line_strut,
+    push_text_run_with_fallback, resolve_style_font_family, text_run_line_height_factor,
+    used_font_size, wrap_text_runs,
 };
 
 // ---------------------------------------------------------------------------
@@ -519,19 +518,18 @@ use super::text::{
 pub(crate) fn resolve_padding_box_height(
     content_height: f32,
     specified_height: Option<f32>,
-    padding_top: f32,
-    padding_bottom: f32,
-    border_vertical: f32,
+    padding: EdgeSizes,
+    border: EdgeSizes,
     box_sizing: BoxSizing,
 ) -> f32 {
-    let content_based_height = padding_top + content_height + padding_bottom;
+    let content_based_height = content_height + padding.vertical();
     match specified_height {
         Some(height) => {
             // When height is explicitly set, use it (don't expand to fit content).
             // This is essential for overflow: hidden to clip correctly.
             match box_sizing {
-                BoxSizing::BorderBox => (height - border_vertical).max(0.0),
-                BoxSizing::ContentBox => height + padding_top + padding_bottom,
+                BoxSizing::BorderBox => (height - border.vertical()).max(0.0),
+                BoxSizing::ContentBox => height + padding.vertical(),
             }
         }
         None => content_based_height,
@@ -548,16 +546,15 @@ pub(crate) fn resolve_padding_box_height(
 /// descendants). Returns 0 when the result would be negative.
 pub(crate) fn resolve_content_box_height(
     specified_height: f32,
-    padding_top: f32,
-    padding_bottom: f32,
-    border_vertical: f32,
+    padding: EdgeSizes,
+    border: EdgeSizes,
     box_sizing: BoxSizing,
 ) -> f32 {
     let padding_box = match box_sizing {
-        BoxSizing::BorderBox => specified_height - border_vertical,
-        BoxSizing::ContentBox => specified_height + padding_top + padding_bottom,
+        BoxSizing::BorderBox => specified_height - border.vertical(),
+        BoxSizing::ContentBox => specified_height + padding.vertical(),
     };
-    (padding_box - padding_top - padding_bottom).max(0.0)
+    (padding_box - padding.vertical()).max(0.0)
 }
 
 /// Strip the first child's top margin and the last child's bottom margin when
@@ -569,122 +566,76 @@ pub(crate) fn resolve_content_box_height(
 /// bars): their `height: 100%` should match the parent's content-box
 /// excluding collapsed outer margins, not the padded wrapper height.
 pub(crate) fn collapse_outer_child_margins(
-    children: &[LayoutElement],
+    children: &[LayoutNode],
     children_height: f32,
-    padding_top: f32,
-    padding_bottom: f32,
-    border_top: f32,
-    border_bottom: f32,
+    padding: EdgeSizes,
+    border: EdgeSizes,
 ) -> f32 {
-    let strip_top = padding_top == 0.0 && border_top == 0.0;
-    let strip_bottom = padding_bottom == 0.0 && border_bottom == 0.0;
+    let strip_top = padding.top == 0.0 && border.top == 0.0;
+    let strip_bottom = padding.bottom == 0.0 && border.bottom == 0.0;
     let first_mt = if strip_top {
-        children.first().map_or(0.0, outer_margin_top)
+        children
+            .first()
+            .map_or(0.0, |child| outer_margin_top(child.as_ref()))
     } else {
         0.0
     };
     let last_mb = if strip_bottom {
-        children.last().map_or(0.0, outer_margin_bottom)
+        children
+            .last()
+            .map_or(0.0, |child| outer_margin_bottom(child.as_ref()))
     } else {
         0.0
     };
     (children_height - first_mt - last_mb).max(0.0)
 }
 
-pub(crate) fn outer_margin_top(el: &LayoutElement) -> f32 {
-    match el {
-        LayoutElement::TextBlock { margin_top, .. }
-        | LayoutElement::Container { margin_top, .. }
-        | LayoutElement::FlexRow { margin_top, .. }
-        | LayoutElement::GridRow { margin_top, .. }
-        | LayoutElement::TableRow { margin_top, .. }
-        | LayoutElement::Image { margin_top, .. }
-        | LayoutElement::Svg { margin_top, .. }
-        | LayoutElement::MathBlock { margin_top, .. } => *margin_top,
-        _ => 0.0,
-    }
+pub(crate) fn outer_margin_top(element: &dyn LayoutElement) -> f32 {
+    element
+        .block_flow_participant()
+        .filter(|flow| flow.collapses_outer_margins())
+        .map_or(0.0, |flow| flow.margins().start)
 }
 
-pub(crate) fn outer_margin_bottom(el: &LayoutElement) -> f32 {
-    match el {
-        LayoutElement::TextBlock { margin_bottom, .. }
-        | LayoutElement::Container { margin_bottom, .. }
-        | LayoutElement::FlexRow { margin_bottom, .. }
-        | LayoutElement::GridRow { margin_bottom, .. }
-        | LayoutElement::TableRow { margin_bottom, .. }
-        | LayoutElement::Image { margin_bottom, .. }
-        | LayoutElement::Svg { margin_bottom, .. }
-        | LayoutElement::MathBlock { margin_bottom, .. } => *margin_bottom,
-        _ => 0.0,
-    }
+pub(crate) fn outer_margin_bottom(element: &dyn LayoutElement) -> f32 {
+    element
+        .block_flow_participant()
+        .filter(|flow| flow.collapses_outer_margins())
+        .map_or(0.0, |flow| flow.margins().end)
 }
 
 /// True for flow-participating block children. Absolute/fixed/float elements
 /// don't participate in margin collapsing.
-fn is_in_flow_block(el: &LayoutElement) -> bool {
-    match el {
-        LayoutElement::TextBlock {
-            position, float, ..
-        }
-        | LayoutElement::Container {
-            position, float, ..
-        } => *position != Position::Absolute && *float == crate::style::computed::Float::None,
-        LayoutElement::FlexRow { .. }
-        | LayoutElement::GridRow { .. }
-        | LayoutElement::TableRow { .. }
-        | LayoutElement::Image { .. }
-        | LayoutElement::Svg { .. }
-        | LayoutElement::MathBlock { .. } => true,
-        _ => false,
-    }
+fn is_in_flow_block(element: &LayoutNode) -> bool {
+    element
+        .block_flow_participant()
+        .is_some_and(|flow| flow.is_in_flow_block())
 }
 
 /// Return the index of the first/last in-flow child that participates in
 /// margin collapsing. Skips absolute/fixed/float children.
-pub(crate) fn first_in_flow_idx(children: &[LayoutElement]) -> Option<usize> {
+pub(crate) fn first_in_flow_idx(children: &[LayoutNode]) -> Option<usize> {
     children.iter().position(is_in_flow_block)
 }
 
-pub(crate) fn last_in_flow_idx(children: &[LayoutElement]) -> Option<usize> {
+pub(crate) fn last_in_flow_idx(children: &[LayoutNode]) -> Option<usize> {
     children.iter().rposition(is_in_flow_block)
 }
 
 /// Take the element's margin-top (and clear it), skipping elements that
 /// don't participate in margin collapsing.
-pub(crate) fn take_margin_top(el: &mut LayoutElement) -> f32 {
-    match el {
-        LayoutElement::TextBlock { margin_top, .. }
-        | LayoutElement::Container { margin_top, .. }
-        | LayoutElement::FlexRow { margin_top, .. }
-        | LayoutElement::GridRow { margin_top, .. }
-        | LayoutElement::TableRow { margin_top, .. }
-        | LayoutElement::Image { margin_top, .. }
-        | LayoutElement::Svg { margin_top, .. }
-        | LayoutElement::MathBlock { margin_top, .. } => {
-            let m = *margin_top;
-            *margin_top = 0.0;
-            m
-        }
-        _ => 0.0,
-    }
+pub(crate) fn take_margin_top(element: &mut dyn LayoutElement) -> f32 {
+    element
+        .block_flow_participant_mut()
+        .filter(|flow| flow.collapses_outer_margins())
+        .map_or(0.0, |flow| std::mem::take(&mut flow.margins_mut().start))
 }
 
-pub(crate) fn take_margin_bottom(el: &mut LayoutElement) -> f32 {
-    match el {
-        LayoutElement::TextBlock { margin_bottom, .. }
-        | LayoutElement::Container { margin_bottom, .. }
-        | LayoutElement::FlexRow { margin_bottom, .. }
-        | LayoutElement::GridRow { margin_bottom, .. }
-        | LayoutElement::TableRow { margin_bottom, .. }
-        | LayoutElement::Image { margin_bottom, .. }
-        | LayoutElement::Svg { margin_bottom, .. }
-        | LayoutElement::MathBlock { margin_bottom, .. } => {
-            let m = *margin_bottom;
-            *margin_bottom = 0.0;
-            m
-        }
-        _ => 0.0,
-    }
+pub(crate) fn take_margin_bottom(element: &mut dyn LayoutElement) -> f32 {
+    element
+        .block_flow_participant_mut()
+        .filter(|flow| flow.collapses_outer_margins())
+        .map_or(0.0, |flow| std::mem::take(&mut flow.margins_mut().end))
 }
 
 /// Collapse the first in-flow child's margin-top into `container_margin_top`,
@@ -707,30 +658,28 @@ pub(crate) fn take_margin_bottom(el: &mut LayoutElement) -> f32 {
 /// child's bottom margin is then contained inside that height.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collapse_margins_through_parent(
-    children: &mut [LayoutElement],
+    children: &mut [LayoutNode],
     container_margin_top: &mut f32,
     container_margin_bottom: &mut f32,
-    padding_top: f32,
-    padding_bottom: f32,
-    border_top: f32,
-    border_bottom: f32,
+    padding: EdgeSizes,
+    border: EdgeSizes,
     suppress_top: bool,
     suppress_bottom: bool,
 ) {
     if !suppress_top
-        && padding_top == 0.0
-        && border_top == 0.0
+        && padding.top == 0.0
+        && border.top == 0.0
         && let Some(i) = first_in_flow_idx(children)
     {
-        let child_mt = take_margin_top(&mut children[i]);
+        let child_mt = take_margin_top(children[i].as_mut());
         *container_margin_top = collapse_margin_pair(*container_margin_top, child_mt);
     }
     if !suppress_bottom
-        && padding_bottom == 0.0
-        && border_bottom == 0.0
+        && padding.bottom == 0.0
+        && border.bottom == 0.0
         && let Some(i) = last_in_flow_idx(children)
     {
-        let child_mb = take_margin_bottom(&mut children[i]);
+        let child_mb = take_margin_bottom(children[i].as_mut());
         *container_margin_bottom = collapse_margin_pair(*container_margin_bottom, child_mb);
     }
 }
@@ -758,7 +707,7 @@ pub(crate) fn collapse_margin_pair(a: f32, b: f32) -> f32 {
 pub(crate) fn establishes_bfc(style: &ComputedStyle) -> bool {
     style.overflow.clips()
         || style.float != crate::style::computed::Float::None
-        || style.position == Position::Absolute
+        || style.position.is_absolute()
 }
 
 pub(crate) fn establishes_bfc_with_overflow(
@@ -767,7 +716,7 @@ pub(crate) fn establishes_bfc_with_overflow(
 ) -> bool {
     overflow_axes.establishes_bfc()
         || style.float != crate::style::computed::Float::None
-        || style.position == Position::Absolute
+        || style.position.is_absolute()
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +750,7 @@ struct IntrinsicWidths {
 /// Horizontal padding+border of a box, used to convert between its content-box
 /// and border-box (outer) widths.
 fn box_horizontal_extra(style: &ComputedStyle) -> f32 {
-    style.padding.left + style.padding.right + style.border.horizontal_width()
+    style.padding.horizontal() + style.border.horizontal_width()
 }
 
 /// Compute the *outer* (margin-box) min/max-content contribution of a single
@@ -856,7 +805,7 @@ fn outer_intrinsic_widths(
         max_c = max_c.max(floor);
     }
     // Convert the content widths to outer (margin-box) widths.
-    let outer_extra = box_horizontal_extra(style) + style.margin.left + style.margin.right;
+    let outer_extra = box_horizontal_extra(style) + style.margin.horizontal();
     IntrinsicWidths {
         min_content: min_c + outer_extra,
         max_content: max_c + outer_extra,
@@ -883,7 +832,7 @@ fn content_intrinsic_widths(
 
     let font_family = resolve_style_font_family(style, fonts);
     let bold = style.font_weight == FontWeight::Bold;
-    let italic = style.font_style == FontStyle::Italic;
+    let italic = style.font_style.is_slanted();
 
     let flush_inline =
         |block_min: &mut f32, block_max: &mut f32, inline_min: &mut f32, inline_line: &mut f32| {
@@ -1005,7 +954,7 @@ fn accumulate_inline_element(
 ) {
     let font_family = resolve_style_font_family(style, fonts);
     let bold = style.font_weight == FontWeight::Bold;
-    let italic = style.font_style == FontStyle::Italic;
+    let italic = style.font_style.is_slanted();
     for child in &el.children {
         match child {
             DomNode::Text(text) => {
@@ -1073,7 +1022,7 @@ pub(crate) fn resolve_intrinsic_keyword_width(
             // fit-content = min(max-content, max(min-content, stretch-fit)).
             // The stretch-fit term is the available (border-box) width less the
             // box's horizontal margins (css-sizing-3 § 5.1).
-            let stretch = (available_width - style.margin.left - style.margin.right).max(0.0);
+            let stretch = (available_width - style.margin.horizontal()).max(0.0);
             max_content.min(min_content.max(stretch))
         }
     };
@@ -1102,60 +1051,81 @@ pub(crate) fn format_list_marker(list_style_type: &ListStyleType, index: usize) 
         ListStyleType::None => String::new(),
     }
 }
-/// Build a GEOMETRIC bullet marker (`disc`/`square`) as an atomic inline box,
-/// matching Chrome's `LayoutListMarker` which paints these markers as filled
-/// shapes sized from the font, NOT as font glyphs. A glyph (U+2022 / U+25AA)
-/// renders at the font's own — usually oversized — advance/ink box, so it lands
-/// at the wrong size and vertical position versus Chrome's geometric square/disc.
+/// Geometry shared by Chromium's built-in filled list markers.
 ///
-/// `font_size` is in the same units layout uses for `TextRun::font_size` (CSS
-/// px); the returned box is sized as a fraction of it. `gap` is the trailing
-/// space between the bullet and the list text, supplied by the caller so the
-/// total marker advance (and thus the `outside` hang) matches the glyph marker
-/// it replaces, keeping the list text at the same horizontal position.
+/// The marker's painted bounds, advance, and baseline position form one unit:
+/// using the textual glyph advance moves `disc` and `square` to different x
+/// positions even though Chromium places them in the same marker slot.
+#[derive(Debug, Clone, Copy)]
+struct GeometricBulletMetrics {
+    size: f32,
+    advance: f32,
+    center_above_baseline: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GeometricBulletSlot {
+    Default,
+    StandaloneInside,
+}
+
+impl GeometricBulletMetrics {
+    fn from_font_size(font_size: f32, slot: GeometricBulletSlot) -> Self {
+        // Chromium quantizes a filled marker to whole CSS pixels. At 22 CSS px
+        // this yields a 7 CSS-px marker; at 30 CSS px it yields 9 CSS px.
+        let size = ((font_size / crate::fonts::PT_PER_CSS_PX) * 0.32).floor()
+            * crate::fonts::PT_PER_CSS_PX;
+        let advance = match slot {
+            // Measured from the locked Chromium oracle: a 20 CSS-px outside
+            // marker slot at a 22 CSS-px font.
+            GeometricBulletSlot::Default => font_size * (10.0 / 11.0),
+            // A standalone `display: list-item; list-style-position: inside`
+            // has no list padding to hang into, so Chromium gives its inline
+            // marker a 40 CSS-px slot at a 30 CSS-px font.
+            GeometricBulletSlot::StandaloneInside => font_size * (4.0 / 3.0),
+        };
+
+        Self {
+            size,
+            advance,
+            // The marker centre sits half a CSS pixel below its painted size
+            // above baseline in Chromium's PDF output.
+            center_above_baseline: size - crate::fonts::PT_PER_CSS_PX / 2.0,
+        }
+    }
+}
+
+/// Build a geometric `disc` or `square` marker as an atomic inline box.
 ///
-/// Returns `None` for non-geometric types (decimal/alpha/roman/circle/none) so
-/// the caller falls back to the textual marker path for those.
+/// Chromium paints these built-in markers as shapes, not font glyphs. Their
+/// slot is also shape-specific rather than derived from U+2022/U+25AA advances,
+/// so the returned box owns its complete marker geometry. Other marker types
+/// use the textual path.
 pub(crate) fn build_list_bullet_marker(
     list_style_type: &ListStyleType,
     font_size: f32,
-    color: (f32, f32, f32),
-    gap: f32,
+    color: crate::types::Color,
+    slot: GeometricBulletSlot,
 ) -> Option<InlineBox> {
-    // Chrome sizes the disc/square marker glyph box from the font. Measured
-    // against Chrome reference rasters: a filled square is ~0.32em on a side and
-    // a filled disc ~0.36em in diameter, both vertically centred near the text
-    // x-height midline. The small box does not exceed the text strut, so it does
-    // not disturb the line-box height.
-    let (size, border_radius) = match list_style_type {
-        ListStyleType::Square => (font_size * 0.32, 0.0),
+    let metrics = GeometricBulletMetrics::from_font_size(font_size, slot);
+    let border_radius = match list_style_type {
+        ListStyleType::Square => 0.0,
         // A filled disc is a circle: a square box with a radius of half its side.
-        ListStyleType::Disc => {
-            let d = font_size * 0.36;
-            (d, d / 2.0)
-        }
+        ListStyleType::Disc => metrics.size / 2.0,
         _ => return None,
     };
-    // Chrome centres the bullet ~0.349em above the text baseline (measured from
-    // its reference rasters) and insets it slightly from the marker slot's left
-    // edge by the symbol glyph's left side bearing (~0.085em). Express the
-    // vertical placement through `baseline_ascent` with `vertical-align: baseline`
-    // so the box bottom lands at `baseline + center_above - size/2` without
-    // touching the shared `vertical-align: middle` geometry used elsewhere.
-    let center_above = font_size * 0.349;
-    let margin_left = font_size * 0.085;
     Some(InlineBox {
-        width: size,
-        height: size,
-        margin_left,
-        margin_right: (gap - margin_left).max(0.0),
-        background_color: Some((color.0, color.1, color.2, 1.0)),
+        width: metrics.size,
+        height: metrics.size,
+        margin_left: 0.0,
+        margin_right: metrics.advance - metrics.size,
+        background_color: Some(color),
         border: LayoutBorder::default(),
-        border_radius,
-        padding_top: 0.0,
-        padding_left: 0.0,
+        border_image: None,
+        border_radii: CornerRadii::circular(border_radius),
+        padding: EdgeSizes::ZERO,
         vertical_align: VerticalAlign::Baseline,
-        baseline_ascent: Some(center_above + size / 2.0),
+        baseline_ascent: Some(metrics.center_above_baseline + metrics.size / 2.0),
         lines: Vec::new(),
         image: None,
         rel_offset_x: 0.0,
@@ -1304,7 +1274,7 @@ fn format_custom_counter(
 pub(crate) fn resolve_content(
     items: &[ContentItem],
     attributes: &HashMap<String, String>,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
 ) -> String {
     resolve_content_with_quotes(items, attributes, counter_state, None)
 }
@@ -1324,11 +1294,11 @@ const DEFAULT_QUOTES: &[(&str, &str)] = &[("\u{201C}", "\u{201D}"), ("\u{2018}",
 pub(crate) fn resolve_content_with_quotes(
     items: &[ContentItem],
     attributes: &HashMap<String, String>,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
     quotes: Option<&[(String, String)]>,
 ) -> String {
     let mut result = String::new();
-    let mut depth = counter_state.quote_depth.get();
+    let mut depth = counter_state.quote_depth;
     let open_glyph = |level: usize| -> String {
         match quotes {
             Some([]) => String::new(),
@@ -1377,26 +1347,23 @@ pub(crate) fn resolve_content_with_quotes(
             ContentItem::OpenQuote => {
                 result.push_str(&open_glyph(depth));
                 depth += 1;
-                counter_state.quote_depth.set(depth);
             }
             ContentItem::NoOpenQuote => {
                 depth += 1;
-                counter_state.quote_depth.set(depth);
             }
             ContentItem::CloseQuote => {
                 depth = depth.saturating_sub(1);
                 result.push_str(&close_glyph(depth));
-                counter_state.quote_depth.set(depth);
             }
             ContentItem::NoCloseQuote => {
                 depth = depth.saturating_sub(1);
-                counter_state.quote_depth.set(depth);
             }
             // Replaced-element content (`url(...)`) is handled by the caller as
             // an image box, not text.
             ContentItem::Url(_) => {}
         }
     }
+    counter_state.quote_depth = depth;
     result
 }
 
@@ -1445,24 +1412,28 @@ pub(crate) fn apply_first_line_style(
         return;
     };
     let family = resolve_style_font_family(fl, fonts);
-    let line_height = resolved_line_height_factor(fl, fonts);
+    let line_height = text_run_line_height_factor(fl, fonts);
+    let font_size = used_font_size(fl, fonts);
     for run in &mut first.runs {
         // Atomic inline boxes (inline-block / images) are not restyled by
         // ::first-line; only their geometry already participates in the line.
         if run.inline_box.is_some() {
             continue;
         }
-        run.color = fl.color.to_f32_rgb();
+        run.color = fl.color;
         run.text = apply_text_transform(&run.text, fl.text_transform);
-        run.font_size = fl.font_size;
+        run.font_size = font_size * fl.font_variant_position.glyph_scale();
+        run.line_height_basis = font_size;
+        run.font_variant_position = fl.font_variant_position;
         run.bold = fl.font_weight == FontWeight::Bold;
-        run.italic = fl.font_style == FontStyle::Italic;
+        run.font_style = fl.font_style;
         run.underline = fl.text_decoration_underline;
         run.line_through = fl.text_decoration_line_through;
         run.overline = fl.text_decoration_overline;
         run.font_family = family.clone();
-        run.background_color = fl.background_color.map(|c| c.to_f32_rgba());
+        run.background_color = fl.background_color;
         run.line_height_factor = line_height;
+        run.metadata = crate::layout::text::text_run_metadata(fl);
     }
     let first_height = first
         .runs
@@ -1548,19 +1519,90 @@ fn is_symbol(c: char) -> bool {
     matches!(c, '$' | '£' | '€' | '¥' | '#' | '%' | '+' | '<' | '=' | '>')
 }
 
-/// Float-exclusion geometry for a `::first-letter { float: left }` drop cap
-/// (css-pseudo-4 §2.2 + css2 §9.5). The enlarged initial stays inline at the
-/// start of the first line (where it overflows its line box downward), and the
-/// first `span_lines` formatted lines are inset by `width` so the following text
-/// wraps beside it.
+/// Inline geometry for a dropped initial letter.
+///
+/// The initial letter remains in its originating line, but its surrounding lines
+/// exclude the kerned margin box. The side-bearing values are retained together
+/// so line wrapping and paint positioning cannot drift apart.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DropCap {
-    /// Inline width occupied by the drop cap: its glyph advance plus the
-    /// first-letter's `padding-right`. Lines that overlap it are inset by this.
-    pub width: f32,
-    /// Number of formatted lines the drop cap vertically spans (and therefore
-    /// the count of lines to inset), `ceil(cap_height / line_height)`.
-    pub span_lines: usize,
+    advance: f32,
+    leading_kerning: f32,
+    trailing_kerning: f32,
+    span_lines: usize,
+}
+
+impl DropCap {
+    fn new(advance: f32, side_bearings: GlyphSideBearings, span_lines: usize) -> Self {
+        let advance = advance.max(0.0);
+        let leading_kerning = side_bearings.start.clamp(0.0, advance);
+        let trailing_kerning = side_bearings
+            .end
+            .clamp(0.0, (advance - leading_kerning).max(0.0));
+        Self {
+            advance,
+            leading_kerning,
+            trailing_kerning,
+            span_lines: span_lines.max(1),
+        }
+    }
+
+    /// The first line moves with the initial letter's negatively kerned margin
+    /// box. Subsequent overlapping lines start after its remaining exclusion.
+    pub(crate) fn line_inset(self, line_index: usize) -> f32 {
+        if line_index == 0 {
+            -self.leading_kerning
+        } else if line_index < self.span_lines {
+            self.exclusion_width()
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn exclusion_width(self) -> f32 {
+        (self.advance - self.leading_kerning - self.trailing_kerning).max(0.0)
+    }
+
+    pub(crate) fn spans_line(self, line_index: usize) -> bool {
+        line_index < self.span_lines
+    }
+
+    fn trailing_kerning(self) -> f32 {
+        self.trailing_kerning
+    }
+}
+
+fn initial_letter_side_bearings(
+    run: &TextRun,
+    fonts: &HashMap<String, TtfFont>,
+    inline_metric_size: f32,
+) -> GlyphSideBearings {
+    let Some(ch) = run.text.chars().find(|ch| !ch.is_whitespace()) else {
+        return GlyphSideBearings::default();
+    };
+    let FontFamily::Custom(family) = &run.font_family else {
+        return GlyphSideBearings::default();
+    };
+    let Some((_, font)) =
+        crate::system_fonts::find_font(fonts, family, run.bold, run.font_style.is_slanted())
+    else {
+        return GlyphSideBearings::default();
+    };
+    let side_bearings = font
+        .glyph_side_bearings(ch, inline_metric_size)
+        .unwrap_or_default();
+    GlyphSideBearings {
+        start: snap_initial_letter_metric(side_bearings.start),
+        end: snap_initial_letter_metric(side_bearings.end),
+    }
+}
+
+/// Blink resolves a dropped initial's glyph metrics on its CSS-pixel font grid,
+/// then converts the resulting exclusion box to PDF points. Keep this confined
+/// to `initial-letter`: ordinary inline glyph positions intentionally retain
+/// sub-pixel advances.
+fn snap_initial_letter_metric(metric: f32) -> f32 {
+    (metric / crate::fonts::PT_PER_CSS_PX).round() * crate::fonts::PT_PER_CSS_PX
 }
 
 /// Split off the leading `::first-letter` unit of the first text-bearing run and
@@ -1569,17 +1611,16 @@ pub(crate) struct DropCap {
 /// and the remainder run. Applies the restricted property set (font/color/
 /// decoration/transform).
 ///
-/// When the first-letter is `float: left`, it becomes a drop cap: the enlarged
-/// glyph stays inline on the first line but its line-box contribution is capped
-/// to the surrounding line height (so it does not push the following lines down,
-/// css2 §9.5 — a float is taken out of normal flow). The returned [`DropCap`]
-/// then tells the caller to inset the lines that overlap it. Returns `None` for
-/// a non-floating first-letter.
+/// A dropped `initial-letter` or floated first letter keeps its glyph in the
+/// originating line while its line-box contribution is capped. The returned
+/// [`DropCap`] then supplies matching exclusion geometry for the following lines.
 pub(crate) fn apply_first_letter_style(
     runs: &mut Vec<TextRun>,
     fl: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
     block_line_height: f32,
+    is_drop_cap: bool,
+    initial_letter_inline_metric_size: Option<f32>,
 ) -> Option<DropCap> {
     // Find the first run carrying renderable text (skip pure-whitespace and
     // atomic-box runs, which precede the first letter, e.g. a ::before marker).
@@ -1596,37 +1637,34 @@ pub(crate) fn apply_first_letter_style(
 
     let mut letter_run = base.clone();
     letter_run.text = apply_text_transform(&first_text, fl.text_transform);
-    letter_run.font_size = fl.font_size;
-    letter_run.color = fl.color.to_f32_rgb();
+    letter_run.font_size = used_font_size(fl, fonts);
+    letter_run.color = fl.color;
     letter_run.bold = fl.font_weight == FontWeight::Bold;
-    letter_run.italic = fl.font_style == FontStyle::Italic;
+    letter_run.font_style = fl.font_style;
     letter_run.underline = fl.text_decoration_underline;
     letter_run.line_through = fl.text_decoration_line_through;
     letter_run.overline = fl.text_decoration_overline;
     letter_run.font_family = resolve_style_font_family(fl, fonts);
-    letter_run.background_color = fl.background_color.map(|c| c.to_f32_rgba());
-    letter_run.line_height_factor = resolved_line_height_factor(fl, fonts);
+    letter_run.background_color = fl.background_color;
+    letter_run.line_height_factor = text_run_line_height_factor(fl, fonts);
+    letter_run.shaping = crate::layout::text::text_run_shaping(fl);
+    letter_run.metadata = crate::layout::text::text_run_metadata(fl);
+    crate::layout::text::mark_synthetic_weight_run(&mut letter_run, fl.font_weight, fonts);
 
-    // `::first-letter { float: left }` — drop cap (css-pseudo-4 §2.2 + css2 §9.5).
-    // The float is taken out of normal flow, so it must NOT inflate its line box.
-    // Cap the enlarged glyph's line-height contribution to the surrounding line
-    // height; the glyph then overflows downward, spanning several lines, and we
-    // report how many so the caller insets them. A non-floating first-letter
-    // keeps its natural (possibly larger) line box and returns no drop cap.
-    let drop_cap = if matches!(fl.float, crate::style::computed::Float::Left) && fl.font_size > 0.0
-    {
-        let glyph_w = estimate_word_width(
+    // Dropped initials do not increase their originating line's logical height.
+    // Cap this run's contribution while keeping the glyph in the inline flow.
+    let drop_cap = if is_drop_cap && fl.font_size > 0.0 {
+        let glyph_w = snap_initial_letter_metric(estimate_word_width(
             &letter_run.text,
             letter_run.font_size,
             &letter_run.font_family,
             letter_run.bold,
-            letter_run.italic,
+            letter_run.font_style.is_slanted(),
             fonts,
-        );
-        let width = glyph_w + fl.padding.right.max(0.0);
-        // The drop cap's visual cap height ≈ its font size (the glyph box). It
-        // spans `ceil(cap_height / line_height)` formatted lines.
-        let span_lines = if block_line_height > 0.0 {
+        ));
+        let span_lines = if fl.initial_letter > 1.0 {
+            fl.initial_letter.round().max(1.0) as usize
+        } else if block_line_height > 0.0 {
             (fl.font_size / block_line_height).ceil().max(1.0) as usize
         } else {
             1
@@ -1636,49 +1674,50 @@ pub(crate) fn apply_first_letter_style(
         if block_line_height > 0.0 {
             letter_run.line_height_factor = block_line_height / fl.font_size;
         }
-        Some(DropCap { width, span_lines })
+        letter_run.metadata.is_drop_cap = true;
+        let side_bearings = if let Some(inline_metric_size) = initial_letter_inline_metric_size {
+            initial_letter_side_bearings(&letter_run, fonts, inline_metric_size)
+        } else {
+            GlyphSideBearings::default()
+        };
+        Some(DropCap::new(
+            glyph_w + fl.padding.right.max(0.0),
+            side_bearings,
+            span_lines,
+        ))
     } else {
         None
     };
 
-    // For a `float: left` drop cap, the first-letter's `padding-right` is a gap
-    // between the enlarged glyph and the text that follows it on line 0 (Chrome
-    // starts that text past the glyph advance + padding-right; lines below are
-    // already inset by the same `DropCap::width`). The glyph stays an inline run,
-    // so reserve the gap with an inert zero-height inline-box spacer right after
-    // it: it advances the inline cursor by the pad without painting or growing
-    // the line box.
-    let dropcap_pad = drop_cap.as_ref().map_or(0.0, |_| fl.padding.right.max(0.0));
+    // An initial letter's unbordered margin box is kerned by its side bearings.
+    // Keep authored padding, then remove its trailing bearing with an explicit
+    // non-painting inline advance so the first line and later exclusions agree.
+    let dropcap_advance = drop_cap.map_or(0.0, |drop_cap| {
+        fl.padding.right.max(0.0) - drop_cap.trailing_kerning()
+    });
     let mut replacement = Vec::with_capacity(3);
-    replacement.push(letter_run);
-    if dropcap_pad > 0.0 {
+    if dropcap_advance != 0.0 {
         let mut spacer = base.clone();
         spacer.text = String::new();
         spacer.background_color = None;
         spacer.vertical_align = crate::style::computed::VerticalAlign::Baseline;
-        spacer.inline_box = Some(Box::new(InlineBox {
-            width: dropcap_pad,
-            height: 0.0,
-            margin_left: 0.0,
-            margin_right: 0.0,
-            background_color: None,
-            border: LayoutBorder::default(),
-            border_radius: 0.0,
-            padding_top: 0.0,
-            padding_left: 0.0,
-            vertical_align: crate::style::computed::VerticalAlign::Baseline,
-            baseline_ascent: Some(0.0),
-            lines: Vec::new(),
-            image: None,
-            rel_offset_x: 0.0,
-            rel_offset_y: 0.0,
-        }));
+        spacer.inline_box = Some(Box::new(InlineBox::advance_only(dropcap_advance)));
         replacement.push(spacer);
     }
     if !rest_text.is_empty() {
         let mut rest_run = base;
         rest_run.text = rest_text;
+        // `::first-letter` keeps the initial glyph separately painted, but its
+        // colour/background-only boundary must retain feasible pair positioning
+        // (CSS Text 4 §8.7). Store the shaper-derived outgoing advance on the
+        // first run so layout and PDF paint share it without cross-style
+        // ligatures.
+        letter_run.metadata.trailing_shaping_advance =
+            crate::text::inline_boundary_kerning_advance(&letter_run, &rest_run, fonts);
+        replacement.insert(0, letter_run);
         replacement.push(rest_run);
+    } else {
+        replacement.insert(0, letter_run);
     }
     runs.splice(pos..=pos, replacement);
 
@@ -1726,7 +1765,7 @@ pub(crate) fn measure_runs_width(runs: &[TextRun], fonts: &HashMap<String, TtfFo
                         run.font_size,
                         &run.font_family,
                         run.bold,
-                        run.italic,
+                        run.font_style.is_slanted(),
                         fonts,
                     );
                 }
@@ -1742,7 +1781,7 @@ pub(crate) fn measure_runs_width(runs: &[TextRun], fonts: &HashMap<String, TtfFo
                     run.font_size,
                     &run.font_family,
                     run.bold,
-                    run.italic,
+                    run.font_style.is_slanted(),
                     fonts,
                 );
             }
@@ -1751,9 +1790,16 @@ pub(crate) fn measure_runs_width(runs: &[TextRun], fonts: &HashMap<String, TtfFo
     widest.max(current)
 }
 
+pub(crate) fn measure_lines_width(lines: &[TextLine], fonts: &HashMap<String, TtfFont>) -> f32 {
+    lines
+        .iter()
+        .map(|line| measure_runs_width(&line.runs, fonts))
+        .fold(0.0, f32::max)
+}
+
 pub(crate) fn pseudo_is_block_like(pseudo_style: &ComputedStyle) -> bool {
     matches!(pseudo_style.display, Display::Block | Display::ListItem)
-        || pseudo_style.position == Position::Absolute
+        || pseudo_style.position.is_absolute()
 }
 
 pub(crate) fn append_pseudo_inline_run(
@@ -1761,7 +1807,7 @@ pub(crate) fn append_pseudo_inline_run(
     pseudo_style: Option<&ComputedStyle>,
     el: &ElementNode,
     fonts: &HashMap<String, TtfFont>,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
 ) {
     if let Some(pseudo_style) = pseudo_style {
         if !pseudo_is_block_like(pseudo_style) {
@@ -1777,18 +1823,18 @@ pub(crate) fn append_pseudo_inline_run(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn push_block_pseudo(
-    output: &mut Vec<LayoutElement>,
+    output: &mut Vec<LayoutNode>,
     pseudo_style: Option<&ComputedStyle>,
     el: &ElementNode,
     available_width: f32,
     fonts: &HashMap<String, TtfFont>,
     containing_block_info: Option<ContainingBlock>,
     positioned_ancestor_depth: usize,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
 ) {
     if let Some(pseudo_style) = pseudo_style {
         if pseudo_is_block_like(pseudo_style) {
-            let pseudo_cb = if pseudo_style.position == Position::Absolute {
+            let pseudo_cb = if pseudo_style.position.is_absolute() {
                 containing_block_info
             } else {
                 None
@@ -1807,7 +1853,7 @@ pub(crate) fn push_block_pseudo(
     }
 }
 
-/// Build a `LayoutElement::TextBlock` for a `::before` or `::after` pseudo-element
+/// Build a [`TextBlock`] for a `::before` or `::after` pseudo-element.
 /// that uses `display: block` (or `position: absolute`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pseudo_block(
@@ -1817,9 +1863,9 @@ pub(crate) fn build_pseudo_block(
     fonts: &HashMap<String, TtfFont>,
     containing_block_info: Option<ContainingBlock>,
     positioned_ancestor_depth: usize,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
     list_item_marker: bool,
-) -> LayoutElement {
+) -> LayoutNode {
     let content_text = resolve_content_with_quotes(
         &pseudo_style.content,
         &el.attributes,
@@ -1845,81 +1891,50 @@ pub(crate) fn build_pseudo_block(
     }
 
     let inner_w = if pseudo_style.box_sizing == BoxSizing::BorderBox {
-        block_w
-            - pseudo_style.padding.left
-            - pseudo_style.padding.right
-            - pseudo_style.border.horizontal_width()
+        block_w - pseudo_style.padding.horizontal() - pseudo_style.border.horizontal_width()
     } else {
-        block_w - pseudo_style.padding.left - pseudo_style.padding.right
+        block_w - pseudo_style.padding.horizontal()
     }
     .max(0.0);
 
     let mut lines = Vec::new();
     let mut runs = Vec::new();
     let mut marker_hang = 0.0;
+    let mut text_indent = pseudo_style.text_indent.resolve(inner_w);
     if !content_text.is_empty() {
         if list_item_marker {
             let marker_start = runs.len();
             let marker_text = format_list_marker(&pseudo_style.list_style_type, 0);
             let marker_font = resolve_style_font_family(pseudo_style, fonts);
-            let symbol_advance = estimate_word_width(
-                &marker_text,
-                pseudo_style.font_size,
-                &marker_font,
-                pseudo_style.font_weight == FontWeight::Bold,
-                pseudo_style.font_style == FontStyle::Italic,
-                fonts,
-            );
-            if let Some(mut bullet) = build_list_bullet_marker(
+            if let Some(bullet) = build_list_bullet_marker(
                 &pseudo_style.list_style_type,
-                pseudo_style.font_size,
-                pseudo_style.color.to_f32_rgb(),
-                symbol_advance,
+                used_font_size(pseudo_style, fonts),
+                pseudo_style.color,
+                GeometricBulletSlot::Default,
             ) {
-                bullet.margin_right = (symbol_advance - bullet.margin_left - bullet.width).max(0.0);
                 runs.push(TextRun {
-                    text: String::new(),
-                    font_size: pseudo_style.font_size,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                    line_through: false,
-                    overline: false,
-                    decoration_color: None,
-                    color: pseudo_style.color.to_f32_rgb(),
-                    link_url: None,
+                    font_size: used_font_size(pseudo_style, fonts),
+                    color: pseudo_style.color,
                     font_family: marker_font.clone(),
-                    background_color: None,
-                    padding: (0.0, 0.0),
-                    border_radius: 0.0,
-                    line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
+                    line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
                     inline_box: Some(Box::new(bullet)),
-                    disable_ligatures: false,
-                    vertical_align: VerticalAlign::Baseline,
                     text_shadow: pseudo_style.text_shadow.clone(),
+                    metadata: crate::layout::text::text_run_metadata(pseudo_style),
+                    ..Default::default()
                 });
             } else {
                 push_text_run_with_fallback(
                     TextRun {
                         text: marker_text,
-                        font_size: pseudo_style.font_size,
+                        font_size: used_font_size(pseudo_style, fonts),
                         bold: pseudo_style.font_weight == FontWeight::Bold,
-                        italic: pseudo_style.font_style == FontStyle::Italic,
-                        underline: false,
-                        line_through: false,
-                        overline: false,
-                        decoration_color: None,
-                        color: pseudo_style.color.to_f32_rgb(),
-                        link_url: None,
+                        font_style: pseudo_style.font_style,
+                        color: pseudo_style.color,
                         font_family: marker_font,
-                        background_color: None,
-                        padding: (0.0, 0.0),
-                        border_radius: 0.0,
-                        line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
-                        inline_box: None,
-                        disable_ligatures: false,
-                        vertical_align: VerticalAlign::Baseline,
+                        line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
                         text_shadow: pseudo_style.text_shadow.clone(),
+                        metadata: crate::layout::text::text_run_metadata(pseudo_style),
+                        ..Default::default()
                     },
                     &mut runs,
                     fonts,
@@ -1927,27 +1942,23 @@ pub(crate) fn build_pseudo_block(
             }
             marker_hang = measure_runs_width(&runs[marker_start..], fonts);
         }
+        text_indent -= marker_hang;
         push_text_run_with_fallback(
             TextRun {
                 text: content_text,
-                font_size: pseudo_style.font_size,
+                font_size: used_font_size(pseudo_style, fonts),
                 bold: pseudo_style.font_weight == FontWeight::Bold,
-                italic: pseudo_style.font_style == FontStyle::Italic,
+                font_style: pseudo_style.font_style,
                 underline: pseudo_style.text_decoration_underline,
                 line_through: pseudo_style.text_decoration_line_through,
                 overline: pseudo_style.text_decoration_overline,
-                decoration_color: pseudo_style.text_decoration_color.map(|c| c.to_f32_rgb()),
-                color: pseudo_style.color.to_f32_rgb(),
-                link_url: None,
+                decoration_color: pseudo_style.text_decoration_color,
+                color: pseudo_style.color,
                 font_family: resolve_style_font_family(pseudo_style, fonts),
-                background_color: None,
-                padding: (0.0, 0.0),
-                border_radius: 0.0,
-                line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
-                inline_box: None,
-                disable_ligatures: false,
-                vertical_align: VerticalAlign::Baseline,
+                line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
                 text_shadow: pseudo_style.text_shadow.clone(),
+                metadata: crate::layout::text::text_run_metadata(pseudo_style),
+                ..Default::default()
             },
             &mut runs,
             fonts,
@@ -1956,48 +1967,35 @@ pub(crate) fn build_pseudo_block(
             runs.clone(),
             TextWrapOptions::new(
                 inner_w,
-                pseudo_style.font_size,
-                resolved_line_height_factor(pseudo_style, fonts),
+                used_font_size(pseudo_style, fonts),
+                text_run_line_height_factor(pseudo_style, fonts),
                 pseudo_style.overflow_wrap,
             )
-            .with_text_indent(pseudo_style.text_indent - marker_hang)
+            .with_white_space(pseudo_style.white_space)
+            .with_parent_strut(parent_line_strut(pseudo_style, fonts))
+            .with_text_indent(text_indent)
             .with_rtl(pseudo_style.direction_rtl)
             .with_bidi_override(pseudo_style.bidi_override),
             fonts,
         );
     }
 
-    if pseudo_style.position == Position::Absolute
+    if pseudo_style.position.is_absolute()
         && pseudo_style.width.is_none()
         && pseudo_style.min_width.is_none()
     {
         let content_w = measure_runs_width(&runs, fonts);
         block_w = if pseudo_style.box_sizing == BoxSizing::BorderBox {
-            content_w
-                + pseudo_style.padding.left
-                + pseudo_style.padding.right
-                + pseudo_style.border.horizontal_width()
+            content_w + pseudo_style.padding.horizontal() + pseudo_style.border.horizontal_width()
         } else {
-            content_w + pseudo_style.padding.left + pseudo_style.padding.right
+            content_w + pseudo_style.padding.horizontal()
         };
     }
 
-    let bg = pseudo_style.background_color.map(|c| c.to_f32_rgba());
-    let border = LayoutBorder::from_computed(&pseudo_style.border);
-    let BackgroundFields {
-        gradient: background_gradient,
-        radial_gradient: background_radial_gradient,
-        conic_gradient: background_conic_gradient,
-        svg: background_svg,
-        blur_radius: background_blur_radius,
-        size: background_size,
-        position: background_position,
-        repeat: background_repeat,
-        origin: background_origin,
-        clip: background_clip,
-    } = BackgroundFields::from_style(pseudo_style);
+    let border = LayoutBorder::from_computed(&pseudo_style.border, pseudo_style.color);
+    let background_layers = BackgroundFields::from_style(pseudo_style);
 
-    let explicit_width = if pseudo_style.position == Position::Absolute
+    let explicit_width = if pseudo_style.position.is_absolute()
         || pseudo_style.width.is_some()
         || pseudo_style.min_width.is_some()
     {
@@ -2006,42 +2004,57 @@ pub(crate) fn build_pseudo_block(
         None
     };
 
-    let effective_height = {
-        let mut h = pseudo_style.height;
+    let preferred_height = {
+        let mut height = pseudo_style.height;
         if let Some(cb) = containing_block_info
             && let Some(percent) = pseudo_style.percentage_sizing.height
         {
-            h = Some(cb.height * percent / 100.0);
+            height = Some(cb.height * percent / 100.0);
         }
-        if let Some(min_h) = pseudo_style.min_height {
-            h = Some(h.map_or(min_h, |v| v.max(min_h)));
-        }
-        if let Some(cb) = containing_block_info
-            && let Some(percent) = pseudo_style.percentage_sizing.min_height
-        {
-            let min_h = cb.height * percent / 100.0;
-            h = Some(h.map_or(min_h, |v| v.max(min_h)));
-        }
-        if let Some(max_h) = pseudo_style.max_height {
-            h = h.map(|v| v.min(max_h));
-        }
-        if let Some(cb) = containing_block_info
-            && let Some(percent) = pseudo_style.percentage_sizing.max_height
-        {
-            let max_h = cb.height * percent / 100.0;
-            h = h.map_or(Some(max_h), |v| Some(v.min(max_h)));
-        }
-        h
+        height
     };
+    let minimum_height = pseudo_style.min_height.or_else(|| {
+        containing_block_info.and_then(|cb| {
+            pseudo_style
+                .percentage_sizing
+                .min_height
+                .map(|percent| cb.height * percent / 100.0)
+        })
+    });
+    let maximum_height = pseudo_style.max_height.or_else(|| {
+        containing_block_info.and_then(|cb| {
+            pseudo_style
+                .percentage_sizing
+                .max_height
+                .map(|percent| cb.height * percent / 100.0)
+        })
+    });
+    let height_constraints = SizeConstraints::new(minimum_height, maximum_height);
+    let effective_height = preferred_height.map(|height| height_constraints.constrain(height));
     let text_height: f32 = lines.iter().map(|l| l.height).sum();
-    let padding_box_height = resolve_padding_box_height(
+    let natural_padding_box_height = resolve_padding_box_height(
         text_height,
         effective_height,
-        pseudo_style.padding.top,
-        pseudo_style.padding.bottom,
-        border.vertical_width(),
+        pseudo_style.padding,
+        border.widths(),
         pseudo_style.box_sizing,
     );
+    let padding_box_constraints = height_constraints.map(|height| {
+        resolve_padding_box_height(
+            0.0,
+            Some(height),
+            pseudo_style.padding,
+            border.widths(),
+            pseudo_style.box_sizing,
+        )
+    });
+    let padding_box_height = if preferred_height.is_some() {
+        natural_padding_box_height
+    } else {
+        padding_box_constraints.constrain(natural_padding_box_height)
+    };
+    let border_box_width = explicit_width.unwrap_or(block_w);
+    let border_box_height = padding_box_height + border.vertical_width();
 
     // Resolve bottom/right into top/left when a containing block is present.
     // This allows pagination and rendering to only deal with top/left offsets.
@@ -2087,71 +2100,68 @@ pub(crate) fn build_pseudo_block(
         )
     };
 
-    LayoutElement::TextBlock {
-        box_decoration_break: crate::style::computed::BoxDecorationBreak::Slice,
-        orphans: 2,
-        widows: 2,
+    TextBlock {
         lines,
-        margin_top: pseudo_style.margin.top,
-        margin_bottom: pseudo_style.margin.bottom,
-        text_align: pseudo_style.text_align,
-        writing_mode: crate::style::computed::WritingMode::HorizontalTb,
-        background_color: bg,
-        padding_top: pseudo_style.padding.top,
-        padding_bottom: pseudo_style.padding.bottom,
-        padding_left: pseudo_style.padding.left,
-        padding_right: pseudo_style.padding.right,
-        border,
-        block_width: explicit_width,
-        block_height: effective_height.map(|_| padding_box_height),
-        opacity: pseudo_style.opacity,
-        mix_blend_mode: pseudo_style.mix_blend_mode,
-        background_blend_mode: pseudo_style.background_blend_mode,
-        float: pseudo_style.float,
-        clear: pseudo_style.clear,
-        position: pseudo_style.position,
-        offset_top: resolved_top,
-        offset_left: resolved_left,
-        offset_bottom: pseudo_style.bottom.unwrap_or(0.0),
-        offset_right: pseudo_style.right.unwrap_or(0.0),
-        containing_block: containing_block_info,
-        box_shadow: pseudo_style.box_shadow.clone(),
-        visible: pseudo_style.visibility == Visibility::Visible,
-        clip_rect: None,
-        transform: pseudo_style.transform,
-        transform_origin: pseudo_style.transform_origin,
-        border_radius: pseudo_style.border_radius,
-        border_radii: pseudo_style.border_radii,
-        border_radii_y: pseudo_style.border_radii_y,
-        outline_offset: pseudo_style.outline_offset,
-        outline_width: pseudo_style.outline_width,
-        outline_color: pseudo_style.outline_color.map(|c| c.to_f32_rgb()),
-        text_indent: pseudo_style.text_indent - marker_hang,
-        letter_spacing: pseudo_style.letter_spacing,
-        word_spacing: pseudo_style.word_spacing,
-        vertical_align: pseudo_style.vertical_align,
-        background_gradient,
-        background_radial_gradient,
-        background_conic_gradient,
-        background_svg,
-        background_blur_radius,
-        background_size,
-        background_position,
-        background_repeat,
-        background_origin,
-        background_clip,
-        z_index: pseudo_style.z_index,
-        repeat_on_each_page: false,
-        positioned_depth: if pseudo_style.position == Position::Relative
-            || pseudo_style.position == Position::Absolute
-        {
-            positioned_ancestor_depth + 1
-        } else {
-            positioned_ancestor_depth
+        box_model: BoxModel {
+            size: LayoutSize {
+                width: InlineSize::from_fixed_value(explicit_width),
+                height: BlockSize::from_definite(effective_height.map(|_| padding_box_height)),
+            },
+            margins: BlockMargins::new(pseudo_style.margin.top, pseudo_style.margin.bottom),
+            padding: pseudo_style.padding,
+            border,
         },
-        heading_level: None,
-        clip_children_count: 0,
+        paint: BoxPaint {
+            background: BackgroundPaint {
+                color: pseudo_style.background_color,
+                layers: background_layers,
+                blend_mode: pseudo_style.background_blend_mode,
+            },
+            border_radii: pseudo_style.resolve_corner_radii(border_box_width, border_box_height),
+            shadows: pseudo_style.box_shadow.clone(),
+            outline: OutlinePaint {
+                width: pseudo_style.outline_width,
+                color: pseudo_style.outline_color,
+                offset: pseudo_style.outline_offset,
+            },
+            group: crate::layout::elements::PaintGroup::from_style(pseudo_style),
+            visible: pseudo_style.visibility == Visibility::Visible,
+            ..BoxPaint::default()
+        },
+        flow: BlockFlow {
+            float: pseudo_style.float,
+            clear: pseudo_style.clear,
+        },
+        positioning: Positioning {
+            scheme: pseudo_style.position,
+            insets: EdgeSizes::new(
+                resolved_top,
+                pseudo_style.right.unwrap_or_default(),
+                pseudo_style.bottom.unwrap_or_default(),
+                resolved_left,
+            ),
+            containing_block: containing_block_info,
+            containing_block_depth: if pseudo_style.position.is_positioned() {
+                positioned_ancestor_depth + 1
+            } else {
+                positioned_ancestor_depth
+            },
+            ..Default::default()
+        },
+        fragmentation: TextFragmentation::default(),
+        text: TextBlockStyle {
+            alignment: pseudo_style.text_align,
+            indent: text_indent,
+            spacing: TextSpacing {
+                letter: pseudo_style.letter_spacing,
+                word: pseudo_style.word_spacing,
+            },
+            ..TextBlockStyle::default()
+        },
+        semantics: TextSemantics::default(),
+        ..TextBlock::default()
     }
+    .boxed()
 }
 
 /// Build a `TextRun` for an inline `::before` or `::after` pseudo-element.
@@ -2159,7 +2169,7 @@ pub(crate) fn build_pseudo_inline_run(
     pseudo_style: &ComputedStyle,
     el: &ElementNode,
     fonts: &HashMap<String, TtfFont>,
-    counter_state: &CounterState,
+    counter_state: &mut CounterState,
 ) -> TextRun {
     let content_text = resolve_content_with_quotes(
         &pseudo_style.content,
@@ -2174,25 +2184,15 @@ pub(crate) fn build_pseudo_inline_run(
         && let Some(inline) = build_pseudo_image_box(pseudo_style, url)
     {
         return TextRun {
-            text: String::new(),
-            font_size: pseudo_style.font_size,
-            bold: false,
-            italic: false,
-            underline: false,
-            line_through: false,
-            overline: false,
-            decoration_color: None,
-            color: pseudo_style.color.to_f32_rgb(),
-            link_url: None,
+            font_size: used_font_size(pseudo_style, fonts),
+            color: pseudo_style.color,
             font_family: resolve_style_font_family(pseudo_style, fonts),
-            background_color: None,
-            padding: (0.0, 0.0),
-            border_radius: 0.0,
-            line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
+            line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
             inline_box: Some(Box::new(inline)),
-            disable_ligatures: false,
             vertical_align: pseudo_style.vertical_align,
             text_shadow: pseudo_style.text_shadow.clone(),
+            metadata: crate::layout::text::text_run_metadata(pseudo_style),
+            ..Default::default()
         };
     }
 
@@ -2203,48 +2203,37 @@ pub(crate) fn build_pseudo_inline_run(
     if pseudo_style.display == Display::InlineBlock {
         let inline = build_pseudo_inline_box(pseudo_style, &content_text, fonts);
         return TextRun {
-            text: String::new(),
-            font_size: pseudo_style.font_size,
+            font_size: used_font_size(pseudo_style, fonts),
             bold: pseudo_style.font_weight == FontWeight::Bold,
-            italic: pseudo_style.font_style == FontStyle::Italic,
-            underline: false,
-            line_through: false,
-            overline: false,
-            decoration_color: None,
-            color: pseudo_style.color.to_f32_rgb(),
-            link_url: None,
+            font_style: pseudo_style.font_style,
+            color: pseudo_style.color,
             font_family: resolve_style_font_family(pseudo_style, fonts),
-            background_color: None,
-            padding: (0.0, 0.0),
-            border_radius: 0.0,
-            line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
+            line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
             inline_box: Some(Box::new(inline)),
-            disable_ligatures: false,
             vertical_align: pseudo_style.vertical_align,
             text_shadow: pseudo_style.text_shadow.clone(),
+            metadata: crate::layout::text::text_run_metadata(pseudo_style),
+            ..Default::default()
         };
     }
 
     TextRun {
         text: content_text,
-        font_size: pseudo_style.font_size,
+        font_size: used_font_size(pseudo_style, fonts),
         bold: pseudo_style.font_weight == FontWeight::Bold,
-        italic: pseudo_style.font_style == FontStyle::Italic,
+        font_style: pseudo_style.font_style,
         underline: pseudo_style.text_decoration_underline,
         line_through: pseudo_style.text_decoration_line_through,
         overline: pseudo_style.text_decoration_overline,
-        decoration_color: pseudo_style.text_decoration_color.map(|c| c.to_f32_rgb()),
-        color: pseudo_style.color.to_f32_rgb(),
-        link_url: None,
+        decoration_color: pseudo_style.text_decoration_color,
+        color: pseudo_style.color,
         font_family: resolve_style_font_family(pseudo_style, fonts),
-        background_color: pseudo_style.background_color.map(|c| c.to_f32_rgba()),
-        padding: (0.0, 0.0),
-        border_radius: 0.0,
-        line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
-        inline_box: None,
-        disable_ligatures: false,
+        background_color: pseudo_style.background_color,
+        line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
         vertical_align: pseudo_style.vertical_align,
         text_shadow: pseudo_style.text_shadow.clone(),
+        metadata: crate::layout::text::text_run_metadata(pseudo_style),
+        ..Default::default()
     }
 }
 
@@ -2256,9 +2245,9 @@ fn build_pseudo_inline_box(
     content_text: &str,
     fonts: &HashMap<String, TtfFont>,
 ) -> InlineBox {
-    let border = LayoutBorder::from_computed(&pseudo_style.border);
-    let pad_h = pseudo_style.padding.left + pseudo_style.padding.right;
-    let pad_v = pseudo_style.padding.top + pseudo_style.padding.bottom;
+    let border = LayoutBorder::from_computed(&pseudo_style.border, pseudo_style.color);
+    let pad_h = pseudo_style.padding.horizontal();
+    let pad_v = pseudo_style.padding.vertical();
 
     // Inner text lines (empty content -> no lines).
     let lines: Vec<TextLine> = if content_text.is_empty() {
@@ -2266,33 +2255,30 @@ fn build_pseudo_inline_box(
     } else {
         let run = TextRun {
             text: content_text.to_string(),
-            font_size: pseudo_style.font_size,
+            font_size: used_font_size(pseudo_style, fonts),
             bold: pseudo_style.font_weight == FontWeight::Bold,
-            italic: pseudo_style.font_style == FontStyle::Italic,
+            font_style: pseudo_style.font_style,
             underline: pseudo_style.text_decoration_underline,
             line_through: pseudo_style.text_decoration_line_through,
             overline: pseudo_style.text_decoration_overline,
-            decoration_color: pseudo_style.text_decoration_color.map(|c| c.to_f32_rgb()),
-            color: pseudo_style.color.to_f32_rgb(),
-            link_url: None,
+            decoration_color: pseudo_style.text_decoration_color,
+            color: pseudo_style.color,
             font_family: resolve_style_font_family(pseudo_style, fonts),
-            background_color: None,
-            padding: (0.0, 0.0),
-            border_radius: 0.0,
-            line_height_factor: resolved_line_height_factor(pseudo_style, fonts),
-            inline_box: None,
-            disable_ligatures: false,
-            vertical_align: VerticalAlign::Baseline,
+            line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
             text_shadow: pseudo_style.text_shadow.clone(),
+            metadata: crate::layout::text::text_run_metadata(pseudo_style),
+            ..Default::default()
         };
         wrap_text_runs(
             vec![run],
             TextWrapOptions::new(
                 f32::MAX,
-                pseudo_style.font_size,
-                resolved_line_height_factor(pseudo_style, fonts),
+                used_font_size(pseudo_style, fonts),
+                text_run_line_height_factor(pseudo_style, fonts),
                 pseudo_style.overflow_wrap,
-            ),
+            )
+            .with_white_space(pseudo_style.white_space)
+            .with_parent_strut(parent_line_strut(pseudo_style, fonts)),
             fonts,
         )
     };
@@ -2308,7 +2294,7 @@ fn build_pseudo_inline_box(
                         r.font_size,
                         &r.font_family,
                         r.bold,
-                        r.italic,
+                        r.font_style.is_slanted(),
                         fonts,
                     )
                 })
@@ -2335,11 +2321,11 @@ fn build_pseudo_inline_box(
         height,
         margin_left: pseudo_style.margin.left.max(0.0),
         margin_right: pseudo_style.margin.right.max(0.0),
-        background_color: pseudo_style.background_color.map(|c| c.to_f32_rgba()),
+        background_color: pseudo_style.background_color,
         border,
-        border_radius: pseudo_style.border_radius,
-        padding_top: pseudo_style.padding.top,
-        padding_left: pseudo_style.padding.left,
+        border_image: pseudo_style.border_image.paint(),
+        border_radii: pseudo_style.resolve_corner_radii(width, height),
+        padding: pseudo_style.padding,
         vertical_align: pseudo_style.vertical_align,
         baseline_ascent: None,
         lines,
@@ -2377,10 +2363,10 @@ fn build_pseudo_image_box(pseudo_style: &ComputedStyle, url: &str) -> Option<Inl
         margin_left: pseudo_style.margin.left.max(0.0),
         margin_right: pseudo_style.margin.right.max(0.0),
         background_color: None,
-        border: LayoutBorder::from_computed(&pseudo_style.border),
-        border_radius: pseudo_style.border_radius,
-        padding_top: 0.0,
-        padding_left: 0.0,
+        border: LayoutBorder::from_computed(&pseudo_style.border, pseudo_style.color),
+        border_image: pseudo_style.border_image.paint(),
+        border_radii: pseudo_style.resolve_corner_radii(width, height),
+        padding: EdgeSizes::ZERO,
         vertical_align: pseudo_style.vertical_align,
         baseline_ascent: None,
         lines: Vec::new(),
@@ -2416,9 +2402,9 @@ pub(crate) fn build_list_image_marker(value: &str, gap: f32) -> Option<InlineBox
         margin_right: gap,
         background_color: None,
         border: LayoutBorder::default(),
-        border_radius: 0.0,
-        padding_top: 0.0,
-        padding_left: 0.0,
+        border_image: None,
+        border_radii: CornerRadii::ZERO,
+        padding: EdgeSizes::ZERO,
         vertical_align: VerticalAlign::Baseline,
         baseline_ascent: None,
         lines: Vec::new(),
@@ -2453,7 +2439,10 @@ impl BackgroundFields {
             radial_gradient: style.background_radial_gradient.clone(),
             conic_gradient: style.background_conic_gradient.clone(),
             svg: background_svg_for_style(style),
-            blur_radius: style.blur_radius,
+            // CSS `filter` belongs to the composited box, not its background
+            // image layer. The post-layout filter compositor applies it once
+            // to the complete SourceGraphic.
+            blur_radius: 0.0,
             size: style.background_size,
             position: style.background_position,
             repeat: style.background_repeat,
@@ -2462,7 +2451,30 @@ impl BackgroundFields {
         }
     }
 
-    pub(crate) fn none() -> Self {
+    pub(crate) fn has_image(&self) -> bool {
+        self.gradient.is_some()
+            || self.radial_gradient.is_some()
+            || self.conic_gradient.is_some()
+            || self.svg.is_some()
+    }
+
+    /// Initial/fallback painting values inherited by an individual gradient
+    /// layer when that layer did not carry its own comma-list entry.
+    pub(crate) fn gradient_layer_box(&self) -> crate::style::computed::GradientLayerBox {
+        crate::style::computed::GradientLayerBox {
+            size: Some(self.size),
+            position: Some(self.position),
+            repeat: Some(self.repeat),
+            origin: Some(self.origin),
+            clip: Some(self.clip),
+            attachment: Some(crate::style::computed::BackgroundAttachment::Scroll),
+            ..Default::default()
+        }
+    }
+}
+
+impl Default for BackgroundFields {
+    fn default() -> Self {
         Self {
             gradient: None,
             radial_gradient: None,
@@ -2510,36 +2522,27 @@ pub(crate) fn aspect_ratio_height(width: f32, style: &ComputedStyle) -> Option<f
 // Group 6 — Paint order
 // ---------------------------------------------------------------------------
 
-pub(crate) fn layout_element_paint_order(element: &LayoutElement) -> (i32, i32) {
-    match element {
-        LayoutElement::TextBlock {
-            repeat_on_each_page: true,
-            z_index,
-            ..
-        } if *z_index < 0 => (i32::MIN, 0),
-        LayoutElement::TextBlock {
-            position, z_index, ..
-        }
-        | LayoutElement::Container {
-            position, z_index, ..
-        }
-        | LayoutElement::Image {
-            position, z_index, ..
-        }
-        | LayoutElement::Svg {
-            position, z_index, ..
-        } => {
-            if *z_index < 0 {
-                (-1, *z_index)
-            } else {
-                match position {
-                    Position::Static => (0, 0),
-                    Position::Relative | Position::Absolute => (1, *z_index),
-                }
-            }
-        }
-        _ => (0, 0),
-    }
+pub(crate) fn layout_element_paint_order(
+    element: &dyn LayoutElement,
+) -> crate::layout::elements::StackingLevel {
+    let Some(group) = element.paint_group_owner().map(|owner| owner.paint_group()) else {
+        return crate::layout::elements::StackingLevel::in_flow();
+    };
+    group.stacking.level(
+        element.positioning_owner().map(|owner| owner.positioning()),
+        element.block_flow_owner().map(|owner| owner.block_flow()),
+        group,
+    )
+}
+
+pub(crate) fn layout_element_establishes_stacking_context(element: &dyn LayoutElement) -> bool {
+    let Some(group) = element.paint_group_owner().map(|owner| owner.paint_group()) else {
+        return false;
+    };
+    group.stacking.establishes_context(
+        element.positioning_owner().map(|owner| owner.positioning()),
+        group,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2567,13 +2570,13 @@ pub(crate) fn heading_level(tag: HtmlTag) -> Option<u8> {
 /// Whether an element establishes a containing block for `position: absolute`
 /// descendants (CSS Positioned Layout § 4 / CSS Transforms § 3): any positioned
 /// box (relative/absolute/fixed), or — even when `position: static` — a box with
-/// a `transform` other than `none`. (Filter/perspective/will-change/contain also
-/// establish a CB in full CSS but are not modelled here.) This is what lets an
-/// absolute box resolve against a transformed non-positioned ancestor.
+/// a `transform` or non-`none` `filter`. Other triggers (perspective,
+/// will-change, contain) are not modelled here. This is what lets an absolute
+/// box resolve against a transformed or filtered non-positioned ancestor.
 pub(crate) fn establishes_containing_block(style: &ComputedStyle) -> bool {
-    style.position == Position::Relative
-        || style.position == Position::Absolute
+    style.position.is_positioned()
         || style.transform.is_some()
+        || style.filter.establishes_stacking_context
 }
 
 /// Resolve a single inset (`top`/`right`/`bottom`/`left`) to a length.
@@ -2602,10 +2605,10 @@ pub(crate) fn resolve_abs_containing_block(
     // `top`/`left` only shift a *positioned* box. A `position: static` element
     // ignores them entirely, so it must report a zero offset — otherwise the
     // value leaks into `offset_left`/`offset_top` and shifts the static box.
-    if style.position == Position::Relative {
+    if style.position.is_relative() {
         return (None, style.top.unwrap_or(0.0), style.left.unwrap_or(0.0));
     }
-    if style.position != Position::Absolute {
+    if !style.position.is_absolute() {
         return (None, 0.0, 0.0);
     }
     let cb = match abs_cb {
@@ -2667,78 +2670,12 @@ pub(crate) fn resolve_relative_offsets(
 /// the parent's containing block info. This resolves bottom/right offsets
 /// into top/left and sets the `containing_block` field.
 pub(crate) fn patch_absolute_children_containing_block(
-    elements: &mut [LayoutElement],
+    elements: &mut [LayoutNode],
     cb: ContainingBlock,
 ) {
     for element in elements.iter_mut() {
-        if let LayoutElement::TextBlock {
-            position,
-            containing_block,
-            offset_top,
-            offset_left,
-            offset_bottom,
-            offset_right,
-            block_width,
-            block_height,
-            lines,
-            padding_top,
-            padding_bottom,
-            padding_left: _,
-            padding_right: _,
-            border,
-            ..
-        } = element
-        {
-            if *position == Position::Absolute && containing_block.is_none() {
-                // Compute element dimensions for right/bottom resolution
-                let text_h: f32 = lines.iter().map(|l| l.height).sum();
-                let elem_h = block_height
-                    .unwrap_or(*padding_top + text_h + *padding_bottom + border.vertical_width());
-                let elem_w = block_width.unwrap_or_else(|| {
-                    // Estimate width from text content for right-offset resolution
-                    lines
-                        .iter()
-                        .map(|l| {
-                            l.runs
-                                .iter()
-                                .map(|r| {
-                                    crate::fonts::str_width(
-                                        &r.text,
-                                        r.font_size,
-                                        &r.font_family,
-                                        r.bold,
-                                    )
-                                })
-                                .sum::<f32>()
-                        })
-                        .fold(0.0f32, f32::max)
-                });
-
-                // Resolve right -> left
-                if *offset_left == 0.0 && *offset_right > 0.0 {
-                    *offset_left = cb.width - elem_w - *offset_right;
-                }
-                // Resolve bottom -> top
-                if *offset_top == 0.0 && *offset_bottom > 0.0 {
-                    *offset_top = cb.height - elem_h - *offset_bottom;
-                }
-
-                *containing_block = Some(cb);
-            }
-        } else if let LayoutElement::Container {
-            position,
-            containing_block,
-            ..
-        } = element
-        {
-            // An absolute Container (e.g. an empty `position: absolute` box with
-            // a background) carries its own resolved CB from layout; only stamp
-            // the parent CB when it has none, so the renderer can anchor it to
-            // the correct positioned ancestor by depth. Bottom/right are already
-            // resolved into offset_top/left at layout time for Containers.
-            if *position == Position::Absolute && containing_block.is_none() {
-                *containing_block = Some(cb);
-            }
+        if let Some(consumer) = element.containing_block_consumer_mut() {
+            consumer.attach_missing_containing_block(cb);
         }
     }
 }
@@ -2746,11 +2683,52 @@ pub(crate) fn patch_absolute_children_containing_block(
 #[cfg(test)]
 mod generated_content_tests {
     use super::*;
+    use crate::layout::engine::{SyntheticFontWeight, TextRun};
     use crate::style::computed::ContentItem;
+    use crate::style::computed::FontStack;
     use std::collections::HashMap;
 
     fn cs() -> CounterState {
         CounterState::default()
+    }
+
+    #[test]
+    fn geometric_bullets_share_chromium_marker_slot() {
+        let disc = build_list_bullet_marker(
+            &ListStyleType::Disc,
+            16.5,
+            crate::types::Color::BLACK,
+            GeometricBulletSlot::Default,
+        )
+        .expect("disc is a geometric marker");
+        let square = build_list_bullet_marker(
+            &ListStyleType::Square,
+            16.5,
+            crate::types::Color::BLACK,
+            GeometricBulletSlot::Default,
+        )
+        .expect("square is a geometric marker");
+
+        for marker in [disc, square] {
+            assert!((marker.width - 5.25).abs() < f32::EPSILON);
+            assert!((marker.outer_width() - 15.0).abs() < f32::EPSILON);
+            assert!((marker.baseline_ascent.unwrap() - 7.5).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn standalone_inside_bullets_use_their_own_marker_slot() {
+        let marker = build_list_bullet_marker(
+            &ListStyleType::Disc,
+            22.5,
+            crate::types::Color::BLACK,
+            GeometricBulletSlot::StandaloneInside,
+        )
+        .expect("disc is a geometric marker");
+
+        assert!((marker.width - 6.75).abs() < f32::EPSILON);
+        assert!((marker.outer_width() - 30.0).abs() < f32::EPSILON);
+        assert!((marker.baseline_ascent.unwrap() - 9.75).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2773,10 +2751,61 @@ mod generated_content_tests {
     }
 
     #[test]
+    fn first_letter_preserves_the_requested_synthetic_weight() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans TTF");
+        let fonts = HashMap::from([("paritysans".to_string(), font)]);
+        let family = FontFamily::Custom("ParitySans".to_string());
+        let style = ComputedStyle {
+            font_weight: FontWeight::Bold,
+            font_family: family.clone(),
+            font_stack: FontStack::from_family(family.clone()),
+            ..Default::default()
+        };
+        let mut runs = vec![TextRun {
+            text: "Initial".to_string(),
+            font_family: family,
+            ..Default::default()
+        }];
+
+        apply_first_letter_style(&mut runs, &style, &fonts, 0.0, false, None);
+
+        assert_eq!(runs[0].font_synthesis.weight, SyntheticFontWeight::Auto);
+    }
+
+    #[test]
+    fn initial_letter_metrics_snap_without_quantizing_inline_text() {
+        assert_eq!(snap_initial_letter_metric(3.091_552_7), 3.0);
+        assert_eq!(snap_initial_letter_metric(11.263_424), 11.25);
+        assert_eq!(snap_initial_letter_metric(3.375), 3.75);
+    }
+
+    #[test]
+    fn drop_cap_geometry_keeps_kerning_and_exclusion_together() {
+        let drop_cap = DropCap::new(
+            15.0,
+            GlyphSideBearings {
+                start: 4.0,
+                end: 3.0,
+            },
+            2,
+        );
+
+        assert_eq!(drop_cap.line_inset(0), -4.0);
+        assert_eq!(drop_cap.line_inset(1), 8.0);
+        assert_eq!(drop_cap.line_inset(2), 0.0);
+    }
+
+    #[test]
     fn resolve_quotes_uses_declared_pairs() {
         let items = vec![ContentItem::OpenQuote];
         let pairs = [("<".to_string(), ">".to_string())];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), Some(&pairs));
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, Some(&pairs));
         assert_eq!(s, "<");
     }
 
@@ -2784,14 +2813,16 @@ mod generated_content_tests {
     fn resolve_quotes_none_is_empty() {
         let items = vec![ContentItem::OpenQuote, ContentItem::CloseQuote];
         let pairs: [(String, String); 0] = [];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), Some(&pairs));
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, Some(&pairs));
         assert_eq!(s, "");
     }
 
     #[test]
     fn resolve_quotes_default_when_unset() {
         let items = vec![ContentItem::OpenQuote, ContentItem::CloseQuote];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), None);
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, None);
         assert_eq!(s, "\u{201C}\u{201D}");
     }
 
@@ -2808,8 +2839,40 @@ mod generated_content_tests {
             ("A".to_string(), "a".to_string()),
             ("B".to_string(), "b".to_string()),
         ];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), Some(&pairs));
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, Some(&pairs));
         assert_eq!(s, "ABba");
+    }
+
+    #[test]
+    fn resolve_quotes_carries_depth_between_calls() {
+        let pairs = [
+            ("A".to_string(), "a".to_string()),
+            ("B".to_string(), "b".to_string()),
+        ];
+        let mut state = cs();
+
+        let opened = resolve_content_with_quotes(
+            &[ContentItem::OpenQuote],
+            &HashMap::new(),
+            &mut state,
+            Some(&pairs),
+        );
+        assert_eq!(opened, "A");
+        assert_eq!(state.quote_depth, 1);
+
+        let closed = resolve_content_with_quotes(
+            &[
+                ContentItem::OpenQuote,
+                ContentItem::CloseQuote,
+                ContentItem::CloseQuote,
+            ],
+            &HashMap::new(),
+            &mut state,
+            Some(&pairs),
+        );
+        assert_eq!(closed, "Bba");
+        assert_eq!(state.quote_depth, 0);
     }
 
     #[test]
@@ -2817,7 +2880,8 @@ mod generated_content_tests {
         // no-open-quote increments depth but emits nothing; close then uses depth 0.
         let items = vec![ContentItem::NoOpenQuote, ContentItem::CloseQuote];
         let pairs = [("A".to_string(), "a".to_string())];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), Some(&pairs));
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, Some(&pairs));
         assert_eq!(s, "a");
     }
 
@@ -2826,7 +2890,8 @@ mod generated_content_tests {
         // A stray close-quote at depth 0 stays at 0 (css-content-3 §2.4.2).
         let items = vec![ContentItem::CloseQuote];
         let pairs = [("A".to_string(), "a".to_string())];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), Some(&pairs));
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, Some(&pairs));
         assert_eq!(s, "a");
     }
 
@@ -2846,7 +2911,8 @@ mod generated_content_tests {
     #[test]
     fn missing_attr_resolves_to_empty() {
         let items = vec![ContentItem::Attr("data-missing".to_string())];
-        let s = resolve_content_with_quotes(&items, &HashMap::new(), &cs(), None);
+        let mut state = cs();
+        let s = resolve_content_with_quotes(&items, &HashMap::new(), &mut state, None);
         assert_eq!(s, "");
     }
 }

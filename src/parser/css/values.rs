@@ -1,6 +1,7 @@
 use crate::types::Color;
+use cssparser_color::{Color as ParsedColor, hsl_to_rgb, hwb_to_rgb, parse_color_keyword};
 
-use super::{CalcOp, CalcToken, CssValue};
+use super::{CalcOp, CalcToken, CssValue, SpecifiedColor};
 
 pub(crate) fn is_css_wide_keyword(value: &str) -> bool {
     matches!(
@@ -229,7 +230,7 @@ pub(crate) fn tokenize_calc(expr: &str) -> Option<Vec<CalcToken>> {
                 '-' => CalcOp::Sub,
                 '*' => CalcOp::Mul,
                 '/' => CalcOp::Div,
-                _ => unreachable!(),
+                _ => return None,
             };
             tokens.push(CalcToken::Op(operator));
             index += 1;
@@ -287,16 +288,11 @@ pub(crate) fn parse_color(val: &str) -> Option<CssValue> {
     let lower = val.to_ascii_lowercase();
 
     if lower == "currentcolor" {
-        return Some(CssValue::Color(Color {
-            r: 1,
-            g: 2,
-            b: 3,
-            a: 254,
-        }));
+        return Some(CssValue::Color(SpecifiedColor::CurrentColor));
     }
 
     if let Some(color) = named_color(&lower) {
-        return Some(CssValue::Color(color));
+        return Some(css_color(color));
     }
 
     if let Some(hex) = val.strip_prefix('#') {
@@ -308,6 +304,21 @@ pub(crate) fn parse_color(val: &str) -> Option<CssValue> {
         .and_then(|s| s.strip_suffix(')'))
     {
         return parse_rgba_function(inner);
+    }
+
+    if let Some(inner) = lower
+        .strip_prefix("hsla(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return parse_hsl_function(inner);
+    }
+
+    if let Some(inner) = lower.strip_prefix("hsl(").and_then(|s| s.strip_suffix(')')) {
+        return parse_hsl_function(inner);
+    }
+
+    if let Some(inner) = lower.strip_prefix("hwb(").and_then(|s| s.strip_suffix(')')) {
+        return parse_hwb_function(inner);
     }
 
     if let Some(inner) = lower
@@ -345,6 +356,222 @@ pub(crate) fn parse_color(val: &str) -> Option<CssValue> {
         .and_then(parse_rgb_function)
 }
 
+/// Validate the CSS Multi-column line grammar before an unsupported property
+/// enters Lightning's generic custom-property representation. This keeps a
+/// malformed later declaration from replacing an earlier valid rule while the
+/// computed layer remains the single owner of used widths and colors.
+pub(super) fn column_rule_value_is_valid(property: &str, value: &str) -> bool {
+    match property {
+        "column-rule-style" => value.parse::<crate::style::computed::BorderStyle>().is_ok(),
+        "column-rule-width" => line_width_token_is_valid(value),
+        "column-rule-color" => parse_color(value).is_some(),
+        "column-rule" => {
+            let Some(tokens) = radius_components(value) else {
+                return false;
+            };
+            if tokens.is_empty() {
+                return false;
+            }
+
+            let mut width = false;
+            let mut style = false;
+            let mut color = false;
+            for token in tokens {
+                if token.parse::<crate::style::computed::BorderStyle>().is_ok() {
+                    if std::mem::replace(&mut style, true) {
+                        return false;
+                    }
+                } else if line_width_token_is_valid(token) {
+                    if std::mem::replace(&mut width, true) {
+                        return false;
+                    }
+                } else if parse_color(token).is_some() {
+                    if std::mem::replace(&mut color, true) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+fn line_width_token_is_valid(value: &str) -> bool {
+    let value = value.trim();
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "thin" | "medium" | "thick"
+    ) {
+        return true;
+    }
+    if let Ok(number) = value.parse::<f32>() {
+        return number.is_finite() && number == 0.0;
+    }
+    match parse_length(value) {
+        Some(
+            CssValue::Length(value)
+            | CssValue::Number(value)
+            | CssValue::Ex(value)
+            | CssValue::Ch(value)
+            | CssValue::Rem(value)
+            | CssValue::Vw(value)
+            | CssValue::Vh(value)
+            | CssValue::Vmin(value)
+            | CssValue::Vmax(value),
+        ) => value.is_finite() && value >= 0.0,
+        // Math and deferred substitutions are checked at computed-value time.
+        Some(CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Keyword(value)) => value
+            .strip_suffix("cap")
+            .or_else(|| value.strip_suffix("lh"))
+            .and_then(|number| number.parse::<f32>().ok())
+            .is_some_and(|number| number.is_finite() && number >= 0.0),
+        _ => false,
+    }
+}
+
+fn css_color(color: Color) -> CssValue {
+    CssValue::Color(SpecifiedColor::Absolute(color))
+}
+
+fn radius_groups(value: &str) -> Option<(&str, Option<&str>)> {
+    let mut depth = 0usize;
+    let mut slash = None;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.checked_sub(1)?,
+            '/' if depth == 0 => {
+                if slash.replace(index).is_some() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let (horizontal, vertical) = slash.map_or((value, None), |index| {
+        (&value[..index], Some(&value[index + 1..]))
+    });
+    let horizontal = horizontal.trim();
+    let vertical = vertical.map(str::trim);
+    (!horizontal.is_empty() && !vertical.is_some_and(str::is_empty))
+        .then_some((horizontal, vertical))
+}
+
+fn radius_components(value: &str) -> Option<Vec<&str>> {
+    let mut components = Vec::new();
+    let mut start = None;
+    let mut depth = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '(' => {
+                depth += 1;
+                start.get_or_insert(index);
+            }
+            ')' => depth = depth.checked_sub(1)?,
+            ch if ch.is_whitespace() && depth == 0 => {
+                if let Some(start) = start.take() {
+                    components.push(value[start..index].trim());
+                }
+            }
+            _ => {
+                start.get_or_insert(index);
+            }
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    if let Some(start) = start {
+        components.push(value[start..].trim());
+    }
+    Some(components)
+}
+
+pub(crate) struct RadiusComponents<'a> {
+    pub horizontal: Vec<&'a str>,
+    pub vertical: Option<Vec<&'a str>>,
+}
+
+pub(crate) fn split_radius_components(
+    value: &str,
+    shorthand: bool,
+) -> Option<RadiusComponents<'_>> {
+    let (horizontal, vertical) = radius_groups(value)?;
+    if !shorthand && vertical.is_some() {
+        return None;
+    }
+    let horizontal = radius_components(horizontal)?;
+    let vertical = match vertical {
+        Some(value) => Some(radius_components(value)?),
+        None => None,
+    };
+    if !(1..=if shorthand { 4 } else { 2 }).contains(&horizontal.len())
+        || vertical
+            .as_ref()
+            .is_some_and(|components| !(1..=4).contains(&components.len()))
+    {
+        return None;
+    }
+    Some(RadiusComponents {
+        horizontal,
+        vertical,
+    })
+}
+
+fn radius_component_is_valid(value: &str) -> bool {
+    if value
+        .parse::<f32>()
+        .is_ok_and(|number| number.is_finite() && number == 0.0)
+    {
+        return true;
+    }
+    if value.parse::<f32>().is_ok() {
+        return false;
+    }
+    if (value.starts_with("var(") || value.starts_with("env(")) && value.ends_with(')') {
+        return true;
+    }
+    match parse_length(value) {
+        Some(
+            CssValue::Length(value)
+            | CssValue::Number(value)
+            | CssValue::Percentage(value)
+            | CssValue::Ex(value)
+            | CssValue::Ch(value)
+            | CssValue::Rem(value)
+            | CssValue::Vw(value)
+            | CssValue::Vh(value)
+            | CssValue::Vmin(value)
+            | CssValue::Vmax(value),
+        ) => value.is_finite() && value >= 0.0,
+        Some(CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Keyword(value)) => value
+            .strip_suffix("cap")
+            .or_else(|| value.strip_suffix("lh"))
+            .and_then(|number| number.parse::<f32>().ok())
+            .is_some_and(|number| number.is_finite() && number >= 0.0),
+        _ => false,
+    }
+}
+
+pub(super) fn border_radius_value_is_valid(value: &str, shorthand: bool) -> bool {
+    let Some(components) = split_radius_components(value, shorthand) else {
+        return false;
+    };
+    components
+        .horizontal
+        .into_iter()
+        .chain(components.vertical.into_iter().flatten())
+        .all(radius_component_is_valid)
+}
+
 pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue> {
     let val = val
         .trim()
@@ -369,7 +596,10 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return Some(CssValue::Keyword(lower));
     }
 
-    if property == "border-color" {
+    if matches!(
+        property,
+        "border-color" | "border-block-color" | "border-inline-color"
+    ) {
         return parse_color(val).or_else(|| Some(CssValue::Keyword(val.to_string())));
     }
 
@@ -387,7 +617,10 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return Some(CssValue::Keyword(val.to_string()));
     }
 
-    if matches!(property, "font-weight" | "font-style") {
+    if matches!(
+        property,
+        "font-weight" | "font-style" | "font-stretch" | "font-width"
+    ) {
         return Some(CssValue::Keyword(lower));
     }
 
@@ -439,10 +672,22 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         property,
         "border"
             | "border-style"
+            | "border-block"
+            | "border-inline"
+            | "border-block-start"
+            | "border-block-end"
+            | "border-inline-start"
+            | "border-inline-end"
             | "border-top"
             | "border-right"
             | "border-bottom"
             | "border-left"
+            | "border-block-style"
+            | "border-inline-style"
+            | "border-block-start-style"
+            | "border-block-end-style"
+            | "border-inline-start-style"
+            | "border-inline-end-style"
             | "border-top-style"
             | "border-right-style"
             | "border-bottom-style"
@@ -451,7 +696,10 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return Some(CssValue::Keyword(val.to_string()));
     }
 
-    if property == "border-width" {
+    if matches!(
+        property,
+        "border-width" | "border-block-width" | "border-inline-width"
+    ) {
         // CSS keyword widths map to the usual 1px/3px/5px (-> pt) values.
         match lower.as_str() {
             "thin" => return Some(CssValue::Length(1.0 * 0.75)),
@@ -464,7 +712,14 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
 
     if matches!(
         property,
-        "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width"
+        "border-top-width"
+            | "border-right-width"
+            | "border-bottom-width"
+            | "border-left-width"
+            | "border-block-start-width"
+            | "border-block-end-width"
+            | "border-inline-start-width"
+            | "border-inline-end-width"
     ) {
         // CSS keyword widths map to the usual 1px/3px/5px (→ pt) values.
         match lower.as_str() {
@@ -484,6 +739,16 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             .parse::<i32>()
             .ok()
             .map(|number| CssValue::Number(number as f32));
+    }
+
+    if property == "footnote-display" {
+        return matches!(lower.as_str(), "block" | "inline" | "compact")
+            .then_some(CssValue::Keyword(lower));
+    }
+
+    if property == "footnote-policy" {
+        return matches!(lower.as_str(), "auto" | "line" | "block")
+            .then_some(CssValue::Keyword(lower));
     }
 
     if matches!(
@@ -515,7 +780,12 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
     }
 
     if matches!(property, "flex-grow" | "flex-shrink") {
-        return parse_length(val);
+        return val
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|number| number.is_finite() && *number >= 0.0)
+            .map(CssValue::Number);
     }
 
     if property == "order" {
@@ -648,6 +918,11 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "-webkit-background-clip"
             | "background-attachment"
             | "border-image"
+            | "border-image-source"
+            | "border-image-slice"
+            | "border-image-width"
+            | "border-image-outset"
+            | "border-image-repeat"
             | "background-image"
             | "white-space"
             | "overflow-wrap"
@@ -656,6 +931,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "text-transform"
             | "font-variant"
             | "font-variant-caps"
+            | "font-variant-position"
             | "font-variant-ligatures"
             | "font-kerning"
             | "font-size-adjust"
@@ -677,6 +953,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "text-wrap-mode"
             | "object-fit"
             | "object-position"
+            | "image-rendering"
             | "vertical-align"
             | "inset"
             | "line-clamp"
@@ -686,7 +963,15 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
     }
 
     if property == "column-count" {
-        return parse_length(val).or_else(|| Some(CssValue::Keyword(val.to_string())));
+        if lower == "auto" {
+            return Some(CssValue::Keyword(lower));
+        }
+        return val
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|count| *count >= 1)
+            .map(|count| CssValue::Number(count as f32));
     }
 
     // The `columns` shorthand (`<column-width> || <column-count>`) is ambiguous
@@ -717,10 +1002,8 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return parse_length(val);
     }
 
-    // `border-radius` (and the per-corner longhands) accept 1-4 space-separated
-    // values plus an optional `/` for elliptical radii. A bare single length is
-    // kept as `Length` for the fast uniform path; anything else is preserved
-    // verbatim and expanded into per-corner radii in `compute_style`.
+    // Radius declarations are validated as a whole before entering StyleMap so
+    // a malformed later declaration cannot replace an earlier cascaded winner.
     if matches!(
         property,
         "border-radius"
@@ -728,7 +1011,14 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
             | "border-top-right-radius"
             | "border-bottom-right-radius"
             | "border-bottom-left-radius"
+            | "border-start-start-radius"
+            | "border-start-end-radius"
+            | "border-end-start-radius"
+            | "border-end-end-radius"
     ) {
+        if !border_radius_value_is_valid(val, property == "border-radius") {
+            return None;
+        }
         return parse_length(val).or_else(|| Some(CssValue::Keyword(val.trim().to_string())));
     }
 
@@ -801,6 +1091,13 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return val.trim().parse::<f32>().ok().map(CssValue::Number);
     }
 
+    // CSS Text defines `normal` as a real computed value for both text
+    // spacing properties. It must survive parsing so it can reset an inherited
+    // non-normal value.
+    if matches!(property, "letter-spacing" | "word-spacing") && lower == "normal" {
+        return Some(CssValue::Keyword(lower));
+    }
+
     parse_length(val)
 }
 
@@ -858,29 +1155,14 @@ fn split_spacing_components(val: &str) -> Option<Vec<&str>> {
 }
 
 fn named_color(name: &str) -> Option<Color> {
-    match name {
-        "black" => Some(Color::rgb(0, 0, 0)),
-        "white" => Some(Color::rgb(255, 255, 255)),
-        "red" => Some(Color::rgb(255, 0, 0)),
-        "green" => Some(Color::rgb(0, 128, 0)),
-        "blue" => Some(Color::rgb(0, 0, 255)),
-        "yellow" => Some(Color::rgb(255, 255, 0)),
-        "orange" => Some(Color::rgb(255, 165, 0)),
-        "purple" => Some(Color::rgb(128, 0, 128)),
-        "gray" | "grey" => Some(Color::rgb(128, 128, 128)),
-        "silver" => Some(Color::rgb(192, 192, 192)),
-        "maroon" => Some(Color::rgb(128, 0, 0)),
-        "navy" => Some(Color::rgb(0, 0, 128)),
-        "teal" => Some(Color::rgb(0, 128, 128)),
-        "aqua" | "cyan" => Some(Color::rgb(0, 255, 255)),
-        "fuchsia" | "magenta" => Some(Color::rgb(255, 0, 255)),
-        "lime" => Some(Color::rgb(0, 255, 0)),
-        "transparent" => Some(Color {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }),
+    match parse_color_keyword::<ParsedColor>(name).ok()? {
+        ParsedColor::Rgba(color) => Some(Color::from_css_rgb(
+            f32::from(color.red),
+            f32::from(color.green),
+            f32::from(color.blue),
+            color.alpha * 255.0,
+        )),
+        ParsedColor::CurrentColor => None,
         _ => None,
     }
 }
@@ -889,57 +1171,69 @@ fn parse_hex_color(hex: &str) -> Option<CssValue> {
     let bytes = hex.as_bytes();
     match bytes {
         // #rgb
-        [r, g, b] => Some(CssValue::Color(Color::rgb(
+        [r, g, b] => Some(css_color(Color::rgb(
             hex_digit(*r)? * 17,
             hex_digit(*g)? * 17,
             hex_digit(*b)? * 17,
         ))),
         // #rgba
-        [r, g, b, a] => Some(CssValue::Color(Color {
-            r: hex_digit(*r)? * 17,
-            g: hex_digit(*g)? * 17,
-            b: hex_digit(*b)? * 17,
-            a: hex_digit(*a)? * 17,
-        })),
+        [r, g, b, a] => Some(css_color(Color::rgba8(
+            hex_digit(*r)? * 17,
+            hex_digit(*g)? * 17,
+            hex_digit(*b)? * 17,
+            hex_digit(*a)? * 17,
+        ))),
         // #rrggbb
-        [r1, r2, g1, g2, b1, b2] => Some(CssValue::Color(Color::rgb(
+        [r1, r2, g1, g2, b1, b2] => Some(css_color(Color::rgb(
             hex_pair(*r1, *r2)?,
             hex_pair(*g1, *g2)?,
             hex_pair(*b1, *b2)?,
         ))),
         // #rrggbbaa
-        [r1, r2, g1, g2, b1, b2, a1, a2] => Some(CssValue::Color(Color {
-            r: hex_pair(*r1, *r2)?,
-            g: hex_pair(*g1, *g2)?,
-            b: hex_pair(*b1, *b2)?,
-            a: hex_pair(*a1, *a2)?,
-        })),
+        [r1, r2, g1, g2, b1, b2, a1, a2] => Some(css_color(Color::rgba8(
+            hex_pair(*r1, *r2)?,
+            hex_pair(*g1, *g2)?,
+            hex_pair(*b1, *b2)?,
+            hex_pair(*a1, *a2)?,
+        ))),
         _ => None,
     }
 }
 
 fn parse_rgb_function(inner: &str) -> Option<CssValue> {
     if inner.contains(',') {
-        let parts: Vec<u8> = inner
-            .split(',')
-            .map(str::trim)
-            .map(parse_rgb_255_component)
-            .collect::<Option<Vec<_>>>()?;
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        let (r, g, b, alpha) = match parts.as_slice() {
+            [r, g, b] => (*r, *g, *b, None),
+            [r, g, b, alpha] => (*r, *g, *b, Some(*alpha)),
+            _ => return None,
+        };
 
-        match parts.as_slice() {
-            [r, g, b] => Some(CssValue::Color(Color::rgb(*r, *g, *b))),
-            _ => None,
+        // The comma form is the legacy grammar: all three channels must use
+        // the same number/percentage type. Keep parsed values continuous;
+        // backend-specific representation belongs at that backend seam.
+        let percentage = rgb_component_is_percentage(r);
+        if rgb_component_is_percentage(g) != percentage
+            || rgb_component_is_percentage(b) != percentage
+        {
+            return None;
         }
+        Some(css_color(Color::from_css_rgb(
+            parse_rgb_255_component(r)?,
+            parse_rgb_255_component(g)?,
+            parse_rgb_255_component(b)?,
+            parse_alpha_component(alpha)?,
+        )))
     } else {
         let (components, alpha) = split_color_alpha(inner);
         let parts: Vec<&str> = components.split_whitespace().collect();
         match parts.as_slice() {
-            [r, g, b] => Some(CssValue::Color(Color {
-                r: parse_rgb_255_component(r)?,
-                g: parse_rgb_255_component(g)?,
-                b: parse_rgb_255_component(b)?,
-                a: parse_alpha_component(alpha)?,
-            })),
+            [r, g, b] => Some(css_color(Color::from_css_rgb(
+                parse_rgb_255_component(r)?,
+                parse_rgb_255_component(g)?,
+                parse_rgb_255_component(b)?,
+                parse_alpha_component(alpha)?,
+            ))),
             _ => None,
         }
     }
@@ -951,22 +1245,90 @@ fn parse_rgb_function(inner: &str) -> Option<CssValue> {
 /// can emit a proper ExtGState with `/ca` (fill opacity) instead of
 /// pre-compositing against white.
 fn parse_rgba_function(inner: &str) -> Option<CssValue> {
-    let parts: Vec<&str> = inner.splitn(4, ',').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    let r = parts[0].trim().parse::<u8>().ok()?;
-    let g = parts[1].trim().parse::<u8>().ok()?;
-    let b = parts[2].trim().parse::<u8>().ok()?;
-    let a: f32 = parts[3].trim().parse::<f32>().ok()?;
-    let a = a.clamp(0.0, 1.0);
+    parse_rgb_function(inner)
+}
 
-    Some(CssValue::Color(Color {
+/// Parse hsl()/hsla() without routing through Lightning's byte-backed RGBA
+/// representation. Blink's PDF output retains the continuous HSL conversion
+/// and authored alpha, so both are kept as floats until a real raster boundary.
+fn parse_hsl_function(inner: &str) -> Option<CssValue> {
+    let (hue, saturation, lightness, alpha) = if inner.contains(',') {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        match parts.as_slice() {
+            [h, s, l] => (*h, *s, *l, None),
+            [h, s, l, a] => (*h, *s, *l, Some(*a)),
+            _ => return None,
+        }
+    } else {
+        let (components, alpha) = split_color_alpha(inner);
+        let parts: Vec<&str> = components.split_whitespace().collect();
+        let [h, s, l] = parts.as_slice() else {
+            return None;
+        };
+        (*h, *s, *l, alpha)
+    };
+
+    let h = parse_hue_degrees(hue)? / 360.0;
+    let s = parse_hsl_percentage(saturation)?;
+    let l = parse_hsl_percentage(lightness)?;
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    Some(css_color(Color::from_srgb(
         r,
         g,
         b,
-        a: (a * 255.0).round() as u8,
-    }))
+        parse_alpha_component(alpha)? / 255.0,
+    )))
+}
+
+/// Parse hwb() in continuous sRGB. When whiteness plus blackness is at least
+/// one, CSS Color 4 normalizes the two components to an achromatic result.
+fn parse_hwb_function(inner: &str) -> Option<CssValue> {
+    if inner.contains(',') {
+        return None;
+    }
+    let (components, alpha) = split_color_alpha(inner);
+    let parts: Vec<&str> = components.split_whitespace().collect();
+    let [h, w, b] = parts.as_slice() else {
+        return None;
+    };
+    let h = parse_hue_degrees(h)? / 360.0;
+    let w = parse_hsl_percentage(w)?;
+    let black = parse_hsl_percentage(b)?;
+    let (r, g, blue) = hwb_to_rgb(h, w, black);
+    Some(css_color(Color::from_srgb(
+        r,
+        g,
+        blue,
+        parse_alpha_component(alpha)? / 255.0,
+    )))
+}
+
+fn parse_hue_degrees(raw: &str) -> Option<f32> {
+    let raw = raw.trim();
+    if raw == "none" {
+        return Some(0.0);
+    }
+    let degrees = if let Some(value) = raw.strip_suffix("deg") {
+        value.trim().parse::<f32>().ok()?
+    } else if let Some(value) = raw.strip_suffix("grad") {
+        value.trim().parse::<f32>().ok()? * 0.9
+    } else if let Some(value) = raw.strip_suffix("rad") {
+        value.trim().parse::<f32>().ok()?.to_degrees()
+    } else if let Some(value) = raw.strip_suffix("turn") {
+        value.trim().parse::<f32>().ok()? * 360.0
+    } else {
+        raw.parse::<f32>().ok()?
+    };
+    degrees.is_finite().then_some(degrees.rem_euclid(360.0))
+}
+
+fn parse_hsl_percentage(raw: &str) -> Option<f32> {
+    let raw = raw.trim();
+    if raw == "none" {
+        return Some(0.0);
+    }
+    let value = raw.strip_suffix('%')?.trim().parse::<f32>().ok()?;
+    value.is_finite().then_some((value / 100.0).clamp(0.0, 1.0))
 }
 
 fn parse_color_function(inner: &str) -> Option<CssValue> {
@@ -984,22 +1346,19 @@ fn parse_color_function(inner: &str) -> Option<CssValue> {
 
     let rgb = match space {
         "srgb" => {
-            return Some(CssValue::Color(Color {
-                r: unit_to_byte_floor(coords[0]),
-                g: unit_to_byte_floor(coords[1]),
-                b: unit_to_byte_floor(coords[2]),
-                a: parse_alpha_component(alpha)?,
-            }));
+            return Some(css_color(Color::from_css_rgb(
+                unit_to_css_channel(coords[0]),
+                unit_to_css_channel(coords[1]),
+                unit_to_css_channel(coords[2]),
+                parse_alpha_component(alpha)?,
+            )));
         }
         "srgb-linear" => linear_srgb_to_srgb(coords[0], coords[1], coords[2]),
         "display-p3" => display_p3_to_srgb(coords[0], coords[1], coords[2]),
         "xyz" | "xyz-d65" => xyz_d65_to_srgb(coords[0], coords[1], coords[2]),
         _ => return None,
     };
-    Some(CssValue::Color(rgb_color(
-        rgb,
-        parse_alpha_component(alpha)?,
-    )))
+    Some(css_color(rgb_color(rgb, parse_alpha_component(alpha)?)))
 }
 
 fn parse_lab_function(inner: &str) -> Option<CssValue> {
@@ -1011,7 +1370,7 @@ fn parse_lab_function(inner: &str) -> Option<CssValue> {
     let l = parse_lightness_percent(l)?;
     let a = parse_number_component(a)?;
     let b = parse_number_component(b)?;
-    Some(CssValue::Color(rgb_color(
+    Some(css_color(rgb_color(
         lab_to_srgb(l, a, b),
         parse_alpha_component(alpha)?,
     )))
@@ -1026,7 +1385,7 @@ fn parse_lch_function(inner: &str) -> Option<CssValue> {
     let l = parse_lightness_percent(l)?;
     let c = parse_number_component(c)?;
     let h = parse_number_component(h)?.to_radians();
-    Some(CssValue::Color(rgb_color(
+    Some(css_color(rgb_color(
         lab_to_srgb(l, c * h.cos(), c * h.sin()),
         parse_alpha_component(alpha)?,
     )))
@@ -1041,7 +1400,7 @@ fn parse_oklab_function(inner: &str) -> Option<CssValue> {
     let l = parse_unit_lightness(l)?;
     let a = parse_number_component(a)?;
     let b = parse_number_component(b)?;
-    Some(CssValue::Color(rgb_color(
+    Some(css_color(rgb_color(
         oklab_to_srgb(l, a, b),
         parse_alpha_component(alpha)?,
     )))
@@ -1056,7 +1415,7 @@ fn parse_oklch_function(inner: &str) -> Option<CssValue> {
     let l = parse_unit_lightness(l)?;
     let c = parse_number_component(c)?;
     let h = parse_number_component(h)?.to_radians();
-    Some(CssValue::Color(rgb_color(
+    Some(css_color(rgb_color(
         oklab_to_srgb(l, c * h.cos(), c * h.sin()),
         parse_alpha_component(alpha)?,
     )))
@@ -1069,36 +1428,43 @@ fn split_color_alpha(inner: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn parse_rgb_255_component(raw: &str) -> Option<u8> {
+fn parse_rgb_255_component(raw: &str) -> Option<f32> {
     let raw = raw.trim();
     if let Some(percent) = raw.strip_suffix('%') {
         return percent
             .trim()
             .parse::<f32>()
             .ok()
-            .map(|v| unit_to_byte_round(v / 100.0));
+            .filter(|value| value.is_finite())
+            .map(|v| (v.clamp(0.0, 100.0) / 100.0) * 255.0);
     }
-    raw.parse::<f32>().ok().map(|v| {
-        if v <= 1.0 {
-            unit_to_byte_round(v)
-        } else {
-            v.clamp(0.0, 255.0).round() as u8
-        }
-    })
+    raw.parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|v| v.clamp(0.0, 255.0))
 }
 
-fn parse_alpha_component(alpha: Option<&str>) -> Option<u8> {
+fn rgb_component_is_percentage(raw: &str) -> bool {
+    raw.trim().ends_with('%')
+}
+
+fn parse_alpha_component(alpha: Option<&str>) -> Option<f32> {
     let Some(raw) = alpha else {
-        return Some(255);
+        return Some(255.0);
     };
     if let Some(percent) = raw.strip_suffix('%') {
         return percent
             .trim()
             .parse::<f32>()
             .ok()
-            .map(|v| unit_to_byte_round(v / 100.0));
+            .filter(|value| value.is_finite())
+            .map(|v| (v.clamp(0.0, 100.0) / 100.0) * 255.0);
     }
-    raw.trim().parse::<f32>().ok().map(unit_to_byte_round)
+    raw.trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|v| v.clamp(0.0, 1.0) * 255.0)
 }
 
 fn parse_unit_component(raw: &str) -> Option<f32> {
@@ -1132,21 +1498,17 @@ fn parse_unit_lightness(raw: &str) -> Option<f32> {
     raw.trim().parse::<f32>().ok()
 }
 
-fn unit_to_byte_round(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+fn unit_to_css_channel(value: f32) -> f32 {
+    value.clamp(0.0, 1.0) * 255.0
 }
 
-fn unit_to_byte_floor(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).floor() as u8
-}
-
-fn rgb_color(rgb: (f32, f32, f32), alpha: u8) -> Color {
-    Color {
-        r: unit_to_byte_round(rgb.0),
-        g: unit_to_byte_round(rgb.1),
-        b: unit_to_byte_round(rgb.2),
-        a: alpha,
-    }
+fn rgb_color(rgb: (f32, f32, f32), alpha: f32) -> Color {
+    Color::from_css_rgb(
+        unit_to_css_channel(rgb.0),
+        unit_to_css_channel(rgb.1),
+        unit_to_css_channel(rgb.2),
+        alpha,
+    )
 }
 
 fn srgb_to_linear(v: f32) -> f32 {

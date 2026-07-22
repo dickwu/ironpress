@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>unavailable border image falls back to border styles</title>
+<style>
+  @page { size: 240px 160px; margin: 0; }
+  html, body { background: #ffffff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .box {
+    width: 160px;
+    height: 96px;
+    margin: 32px 40px;
+    background: #f1f3f5;
+    border-width: 12px 16px 10px 14px;
+    border-style: solid;
+    border-color: #d62828 #2a9d8f #264653 #f4a261;
+    border-radius: 24px 12px 20px 8px;
+    border-image-source: url("data:image/png;base64,bm90LWFuLWltYWdl");
+    border-image-slice: 1;
+  }
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

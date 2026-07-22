@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-collapse",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-separate",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-spacing",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-colspan",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-layout-fixed",
@@ -113,10 +95,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "tables-fixed-unspecified-columns-ignore-font-size",
+    "category": "tables",
+    "feature": "table-layout",
+    "subfeature": "fixed-unspecified-track-distribution",
+    "description": "Unspecified fixed-layout columns divide the remaining width equally regardless of the cells' font sizes.",
+    "file": "cases/tables/tables-fixed-unspecified-columns-ignore-font-size.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "tables-layout-auto",
@@ -130,10 +123,35 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "tables-layout-auto-text-exact-fit",
+    "category": "tables",
+    "feature": "table-layout",
+    "subfeature": "auto-text-exact-fit",
+    "description": "A text-only shrink-to-fit auto table keeps multi-run max-content on one line at its exact intrinsic width, including a styled suffix and an unspaced word split across styled runs.",
+    "file": "cases/tables/tables-layout-auto-text-exact-fit.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "tables-layout-auto-styled-run-shaping",
+    "category": "tables",
+    "feature": "table-layout",
+    "subfeature": "auto-styled-run-shaping",
+    "description": "A same-font word split at a colored inline style boundary retains continuous browser shaping and contributes that shaped width to a shrink-to-fit auto table.",
+    "file": "cases/tables/tables-layout-auto-styled-run-shaping.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box"
+    ]
   },
   {
     "id": "tables-thead-tbody-tfoot",
@@ -147,10 +165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-width-percent-columns",
@@ -164,10 +179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-padding",
@@ -181,10 +193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-vertical-align",
@@ -198,10 +207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-text-align",
@@ -216,10 +222,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-caption",
@@ -234,17 +237,14 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-th-header",
     "category": "tables",
     "feature": "th-cell",
     "subfeature": "header-default",
-    "description": "th header cells in the first row vs td data cells, with distinct fills and text.",
+    "description": "th header cells retain centered, middle-aligned cell layout against td data cells; faux bold is suppressed because its exact outline is UA-defined.",
     "file": "cases/tables/tables-th-header.html",
     "kind": "feature",
     "expected_support": "implemented",
@@ -252,10 +252,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-empty-cells-hide",
@@ -269,17 +266,14 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-th-default",
     "category": "tables",
     "feature": "th-cell",
     "subfeature": "ua-center-bold",
-    "description": "th cells get the UA-stylesheet defaults text-align:center + font-weight:bold; td cells stay left/normal.",
+    "description": "th cells get the authenticated parity baseline's explicit center/bold styles; td cells stay left/normal.",
     "file": "cases/tables/tables-th-default.html",
     "kind": "feature",
     "expected_support": "implemented",
@@ -287,10 +281,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-caption-side-bottom",
@@ -305,10 +296,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-colspan-rowspan",
@@ -322,10 +310,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan-stagger",
@@ -339,10 +324,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-spacing-two-value",
@@ -356,10 +338,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-spacing-zero",
@@ -373,10 +352,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-layout-fixed-remainder",
@@ -390,10 +366,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-layout-auto-overflow",
@@ -408,10 +381,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 60.0
+    ]
   },
   {
     "id": "tables-empty-cells-whitespace",
@@ -426,10 +396,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-vertical-align-baseline",
@@ -444,10 +411,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-vertical-align-baseline-sizes",
@@ -462,27 +426,21 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-multipage-thead-repeat",
     "category": "tables",
     "feature": "table-fragmentation",
     "subfeature": "thead-repeat",
-    "description": "A long table whose <thead> repeats at the top of every page it spans (CSS 2.1 \u00a717.2.1; Chrome --print-to-pdf via LayoutNG). 320x240 page: a 40px header plus eight 40px body rows span TWO pages with the header re-emitted at each page top. The multi-page harness asserts the page COUNT (2) and diffs every page, so a missing or mis-placed repeated header fails.",
+    "description": "A long table whose <thead> repeats at the top of every page it spans (CSS 2.1 §17.2.1; Chrome --print-to-pdf via LayoutNG). 320x240 page: a 40px header plus eight 40px body rows span TWO pages with the header re-emitted at each page top. The multi-page harness asserts the page COUNT (2) and diffs every page, so a missing or mis-placed repeated header fails.",
     "file": "cases/tables/tables-multipage-thead-repeat.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-multipage-tfoot-repeat",
@@ -496,27 +454,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-multipage-tfoot-before-tbody",
     "category": "tables",
     "feature": "table-fragmentation",
     "subfeature": "tfoot-before-tbody",
-    "description": "Same multi-page thead+tfoot table but with <tfoot> written BEFORE <tbody> in source. CSS 2.1 \u00a717 mandates section render order thead->tbody->tfoot regardless of DOM order, so Chrome paints the footer at the bottom (its reference is byte-identical to tables-multipage-tfoot-repeat). Pins the section-order reorder; the pre-fix DOM-order behavior would paint the footer band directly under the header.",
+    "description": "Same multi-page thead+tfoot table but with <tfoot> written BEFORE <tbody> in source. CSS 2.1 §17 mandates section render order thead->tbody->tfoot regardless of DOM order, so Chrome paints the footer at the bottom (its reference is byte-identical to tables-multipage-tfoot-repeat). Pins the section-order reorder; the pre-fix DOM-order behavior would paint the footer band directly under the header.",
     "file": "cases/tables/tables-multipage-tfoot-before-tbody.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-multipage-three-page",
@@ -530,10 +482,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-multipage-caption",
@@ -547,10 +496,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "tables-border-hidden-conflict",
@@ -564,10 +510,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-width-conflict",
@@ -581,10 +524,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-style-conflict",
@@ -598,10 +538,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-css-display-table",
@@ -615,10 +552,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-empty-cells-hidden-content",
@@ -632,10 +566,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-fixed-overflow-clip",
@@ -650,10 +581,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-auto-colspan-distribution",
@@ -667,10 +595,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan-zero",
@@ -684,10 +609,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-vertical-align-text-bottom",
@@ -702,10 +624,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-collapse-ignores-spacing",
@@ -719,10 +638,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-colgroup-span-fixed",
@@ -736,10 +652,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-inline-table-inline-flow",
@@ -753,10 +666,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-css-row-groups-reorder",
@@ -770,10 +680,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-css-table-columns-fixed",
@@ -787,10 +694,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-css-table-caption",
@@ -804,10 +708,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-multiple-captions",
@@ -821,10 +722,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-caption-side-on-caption",
@@ -838,10 +736,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-caption-min-width",
@@ -855,10 +750,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-row-group-background",
@@ -872,10 +764,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-column-background",
@@ -889,10 +778,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-colgroup-background",
@@ -906,10 +792,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-row-over-column-background",
@@ -923,10 +806,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-empty-cells-collapse-ignored",
@@ -940,10 +820,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-visibility-collapse-row",
@@ -957,10 +834,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-visibility-collapse-row-group",
@@ -974,10 +848,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-visibility-collapse-column",
@@ -991,10 +862,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-visibility-collapse-colgroup",
@@ -1008,10 +876,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-visibility-collapse-cell",
@@ -1025,10 +890,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan-thead-clipped",
@@ -1042,10 +904,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan-extra-columns",
@@ -1059,10 +918,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-fixed-colspan-width-split",
@@ -1076,10 +932,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-colgroup-span-width",
@@ -1093,10 +946,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-collapse-none-loses",
@@ -1110,10 +960,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-collapse-cell-over-row",
@@ -1127,10 +974,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-collapse-outer-table-border",
@@ -1144,10 +988,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-collapse-directional-tie",
@@ -1161,10 +1002,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-row-height-minimum",
@@ -1178,10 +1016,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-table-height-minimum",
@@ -1195,10 +1030,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-rowspan-height-distribution",
@@ -1212,10 +1044,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-direction-rtl-columns",
@@ -1229,10 +1058,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-break-before-row",
@@ -1246,10 +1072,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-break-inside-avoid-tbody",
@@ -1263,27 +1086,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-second-header-group-not-repeat",
     "category": "tables",
     "feature": "table-fragmentation",
     "subfeature": "second-header-group-normal",
-    "description": "A CSS display table owns two table-header-group boxes; only the first is a header, the second is a normal row group. Catches wrong implementations where a renderer that repeats every header-group or cannot model display header groups passes single thead repetition but repeats the blue subheader incorrectly.",
+    "description": "A CSS display table owns two table-header-group boxes; only the first is a header, the second is a normal row group. The first group explicitly avoids internal breaks and is shorter than one quarter of the 160px page, so CSS Tables requires its dark row to repeat on page 2 while the blue second group must not repeat. Catches tag-specific header handling and implementations that repeat every declared header group.",
     "file": "cases/tables/tables-second-header-group-not-repeat.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-anonymous-cell-in-row",
@@ -1297,10 +1114,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-anonymous-table-cell-siblings",
@@ -1314,10 +1128,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-anonymous-row-group-child",
@@ -1331,10 +1142,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-whitespace-row-fixup",
@@ -1348,10 +1156,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cellpadding-attribute",
@@ -1365,10 +1170,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cellspacing-attribute",
@@ -1382,10 +1184,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-border-attribute",
@@ -1399,10 +1198,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-colspan-max-clamp",
@@ -1411,15 +1207,31 @@
     "subfeature": "colspan-max-clamp",
     "description": "A cell declares colspan=1001 before a normal cell; browsers clamp overly large colspan values to the HTML maximum rather than creating an unbounded grid. Catches wrong implementations where a renderer that accepts the raw integer creates a huge table width or drops later cells, while ordinary small colspan tests pass.",
     "file": "cases/tables/tables-colspan-max-clamp.html",
+    "reference": {
+      "status": "disputed",
+      "note": "HTML clamps the first cell to 1000 columns, then forms a 1001st track for the following cell. CSS Tables fixed layout preserves every column and distributes unspecified-track width equally; Ironpress keeps that subpixel trailing cell, while Chromium gives it an 8px minimum and Firefox does not. The Chromium PDF is a compatibility canary, not a normative pixel oracle."
+    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "tables-colspan-max-clamp-borderless",
+    "category": "tables",
+    "feature": "html-table-attributes",
+    "subfeature": "colspan-max-clamp-fixed-distribution",
+    "description": "A borderless 180px fixed-layout table puts colspan=1001 before one ordinary cell. HTML clamps the span to 1000 and fixed layout divides unspecified tracks without an intrinsic minimum, leaving the final cell subpixel-wide; catches a renderer that invents a visible minimum for that 1001st track.",
+    "file": "cases/tables/tables-colspan-max-clamp-borderless.html",
+    "oracle": "weasyprint",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "tables-cell-inline-svg-child",
@@ -1433,10 +1245,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-nested-table-child",
@@ -1450,10 +1259,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-gradient-child",
@@ -1467,10 +1273,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-box-shadow-child",
@@ -1484,10 +1287,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-generated-before-child",
@@ -1501,10 +1301,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-absolute-descendant",
@@ -1518,10 +1315,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-tall-img-sibling-content",
@@ -1533,32 +1327,25 @@
     "kind": "feature",
     "expected_support": "implemented",
     "sanitize": true,
-    "floor_pct": 2.5,
     "depends_on": [
       "probe-fill-box",
       "probe-image-render",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-nested-table-row-height",
     "category": "tables",
     "feature": "table-cell-children",
     "subfeature": "nested-table-row-height",
-    "description": "A nested table inside a table cell contributes to the outer row height and paints at the same size as in normal block layout.",
+    "description": "A fixed-width single-column outer table expands its row for a nested collapsed table, without relying on the intentionally under-specified automatic column-width distribution.",
     "file": "cases/tables/tables-cell-nested-table-row-height.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-img-width-auto-intrinsic",
@@ -1574,10 +1361,7 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "tables-cell-deep-img-descendant",
@@ -1593,9 +1377,35 @@
       "probe-fill-box",
       "probe-image-render",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "tables-collapse-origin-groups",
+    "category": "tables",
+    "feature": "border-collapse",
+    "subfeature": "row-row-group-column-origin-conflicts",
+    "description": "Collapsed borders from rows, row groups, columns, and column groups participate at their grid edges with width, style, and origin precedence instead of being ignored or painted as independent boxes.",
+    "file": "cases/tables/tables-collapse-origin-groups.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "tables-collapse-span-origin-conflicts",
+    "category": "tables",
+    "feature": "border-collapse",
+    "subfeature": "rowspan-colspan-origin-harmonization",
+    "description": "A spanning cell harmonizes collapsed row and column origin borders across every contiguous track covered by its side.",
+    "file": "cases/tables/tables-collapse-span-origin-conflicts.html",
+    "reference_file": "references/tables/tables-collapse-span-origin-conflicts.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   }
 ]

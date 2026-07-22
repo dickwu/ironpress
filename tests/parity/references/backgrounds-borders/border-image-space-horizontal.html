@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border-image horizontal space reference</title>
+<style>
+@page{size:240px 120px;margin:0}
+html{font-family:ParitySans;line-height:1.5}
+*{margin:0;box-sizing:border-box}
+html,body{background:#fff}
+body{padding:24px}
+.box{position:relative;width:192px;height:72px;background:#f1faee}
+.side{position:absolute;top:0;width:8px;height:72px}
+.left{left:0;background:#e63946}
+.right{right:0;background:#2a9d8f}
+.tile{position:absolute;width:32px;height:8px;background:linear-gradient(to right,#e63946 0 12.5%,#ffbe0b 12.5% 50%,#457b9d 50% 87.5%,#2a9d8f 87.5% 100%)}
+/* CSS Backgrounds 3 §5.6: floor(176 / 32) = 5; (176 - 5×32) / (5 + 1) = 8/3px. */
+.tile:nth-of-type(3),.tile:nth-of-type(8){left:10.666666667px}
+.tile:nth-of-type(4),.tile:nth-of-type(9){left:45.333333333px}
+.tile:nth-of-type(5),.tile:nth-of-type(10){left:80px}
+.tile:nth-of-type(6),.tile:nth-of-type(11){left:114.666666667px}
+.tile:nth-of-type(7),.tile:nth-of-type(12){left:149.333333333px}
+.tile:nth-of-type(-n+7){top:0}
+.tile:nth-of-type(n+8){bottom:0}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="side left"></div><div class="side right"></div>
+  <div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div>
+  <div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div>
+</div>
+</body>
+</html>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>tables-th-header</title>
 <style>
-  @page { size: 412px 136px; margin: 0; }
+  @page { size: 416px 136px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
@@ -22,7 +22,10 @@
     border: 3px solid #001524;
     line-height: 44px;
   }
-  th { background: #15616d; color: #ffffff; }
+  /* `tables-th-default` covers the UA bold default. Keep this fixture focused
+     on header-cell layout: CSS Fonts permits each UA to synthesize a missing
+     bold face differently, which must not obscure table geometry. */
+  th { background: #15616d; color: #ffffff; font-synthesis: none; }
   td { background: #ffecd1; color: #001524; }
 </style>
 </head>

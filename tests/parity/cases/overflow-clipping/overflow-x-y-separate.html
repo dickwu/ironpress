@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <title>overflow-x and overflow-y separate</title>
 <style>
-  @page { size: 297px 171px; margin: 0; }
+  @page { size: 304px 176px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
   .wrap { padding: 30px; }
-  /* overflow-x:hidden clips horizontally while overflow-y:visible lets the
-     child overflow downward only. Child extends past both axes. */
+  /* Because hidden is a scrollable overflow value, the visible y value
+     computes to auto. Both axes therefore constrain the child. */
   .clip {
     overflow-x: hidden;
     overflow-y: visible;

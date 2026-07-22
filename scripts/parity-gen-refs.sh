@@ -1,408 +1,761 @@
 #!/usr/bin/env bash
 #
-# parity-gen-refs.sh — one-time Chrome reference generator for the parity engine.
-#
-# For each fixture under tests/parity/cases/<category>/<id>.html this renders a
-# PDF with headless Chromium at US Letter + 0.4in (28.8pt) margins (Chrome's
-# --print-to-pdf defaults, matching the ironpress lib render in the engine), then
-# rasterizes page 1 with pdftoppm at the engine DPI to
-# tests/parity/refs/<category>/<id>.png.
-#
-# Idempotent: existing refs are skipped unless --force / FORCE=1. An optional
-# positional <category> argument limits generation to one bucket. Chrome is never
-# run at test time; this script is the only place it is invoked.
-#
-# PARALLELISM: fixtures are rendered concurrently across a bounded pool of
-# N = min(nproc-2, 8) workers (xargs -P N). Chromium cold-start dominates the
-# wall-clock cost, so overlapping launches is the single biggest win. Each
-# concurrent Chromium gets its OWN --user-data-dir (mktemp -d per job): Chromium
-# refuses (or silently serializes behind a profile lock) when multiple instances
-# share a profile, which would defeat the parallelism. Per-job temp dirs and the
-# intermediate PDF are removed when the job finishes. The produced PNG set is
-# byte-identical to the old serial version — only the order of console lines and
-# the wall-clock time change.
-#
-# Usage:
-#   scripts/parity-gen-refs.sh                # generate all missing refs
-#   scripts/parity-gen-refs.sh --force        # regenerate everything
-#   scripts/parity-gen-refs.sh flexbox        # only the flexbox bucket
-#   FORCE=1 scripts/parity-gen-refs.sh grid   # force one bucket
+# Generate authenticated browser PDF oracles. PNGs are never committed: the
+# parity test rasterizes oracle and candidate PDFs through the same runtime
+# pdftoppm executable and writes ignored PNG previews for the HTML report.
 
 set -euo pipefail
 
-DPI=300
+VALIDATION_DPI=300
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PARITY="$ROOT/tests/parity"
 CASES="$PARITY/cases"
-REFS="$PARITY/refs"
+ORACLES="$PARITY/oracles"
 FONTS="$PARITY/fonts"
+UA_CSS="$PARITY/ua-pins.css"
 TMP="$ROOT/target/parity-tmp"
 mkdir -p "$TMP"
 
-# --- Paged.js (spec-compliant paged-media reference layout) ------------------
-# Chrome's native --print-to-pdf does NOT implement CSS Paged Media: its
-# printable margin rounds to ~116px (vs the spec 120px@300dpi = 28.8pt, so
-# content sits a VARIABLE 1-5 device px off the ironpress render) and @page
-# margin boxes / named pages / fragmentation are unsupported. ironpress IS a spec
-# paged renderer, so the reference must be laid out by a spec engine. We render
-# the reference with pagedjs-cli (Paged.js + Puppeteer): it paginates per CSS
-# Paged Media and, crucially, WAITS for the layout to finish before printing
-# (the raw `chromium --print-to-pdf` + `--virtual-time-budget` path races the
-# async pagination under parallel cold starts and emits blank pages). The
-# page geometry is forced to ironpress's (Letter, 28.8pt margin). Set PAGEDJS=0
-# to fall back to Chrome's native print (the legacy ad-hoc model).
+if [ ! -f "$UA_CSS" ] || [ -L "$UA_CSS" ]; then
+  echo "parity-gen-refs: pinned UA stylesheet must be a regular file: $UA_CSS" >&2
+  exit 1
+fi
+UA_SHA="$(sha256sum "$UA_CSS" | awk '{print $1}')"
+
+FORCE="${FORCE:-0}"
+ONLY_CATEGORY=""
+FIXTURE_ID="${PARITY_FIXTURE:-}"
+CHECK=0
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    --check) CHECK=1 ;;
+    -*) echo "unknown flag: $arg" >&2; exit 2 ;;
+    *)
+      if [ -n "$ONLY_CATEGORY" ]; then
+        echo "only one category may be selected" >&2
+        exit 2
+      fi
+      ONLY_CATEGORY="$arg"
+      ;;
+  esac
+done
+
+if [ -n "$FIXTURE_ID" ] && ! [[ "$FIXTURE_ID" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "PARITY_FIXTURE must be a fixture id, got: $FIXTURE_ID" >&2
+  exit 2
+fi
+
+"$SCRIPT_DIR/parity-normalize-page-sizes.py"
+
+font_bundle_digest() {
+  FONTS_DIR="$FONTS" python3 - <<'PY'
+import glob, hashlib, os
+root = os.environ["FONTS_DIR"]
+paths = sorted(glob.glob(os.path.join(root, "Parity*.ttf")))
+config = os.path.join(root, "fonts.conf")
+if os.path.isfile(config):
+    paths.insert(0, config)
+external = [
+    ("generic-sans", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    ("generic-serif", "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"),
+    ("generic-monospace", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+    ("cjk-sans", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+]
+missing = [path for _, path in external if not os.path.isfile(path)]
+if missing:
+    raise SystemExit("required parity font(s) missing: " + ", ".join(missing))
+h = hashlib.sha256()
+for path in paths:
+    h.update(os.path.relpath(path, root).encode())
+    h.update(b"\0")
+    with open(path, "rb") as fh:
+        h.update(fh.read())
+    h.update(b"\0")
+for label, path in external:
+    h.update(label.encode())
+    h.update(b"\0")
+    with open(path, "rb") as fh:
+        h.update(fh.read())
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+}
+
+check_refs_lock() {
+  local category="${1:-}"
+  PARITY_DIR="$PARITY" CHECK_CATEGORY="$category" FIXTURE_ID="$FIXTURE_ID" \
+    FONT_SHA="$(font_bundle_digest)" UA_SHA="$UA_SHA" python3 - <<'PY'
+import glob, hashlib, json, os, sys
+
+parity = os.environ["PARITY_DIR"]
+category_filter = os.environ.get("CHECK_CATEGORY", "")
+fixture_filter = os.environ.get("FIXTURE_ID", "")
+lock_path = os.path.join(parity, "refs.lock")
+
+def digest(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+def provenance_id(record):
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+def manifest_digest(entry):
+    identity = [
+        entry["id"], entry["category"], entry["feature"],
+        entry.get("subfeature", ""), entry.get("description", ""), entry["file"],
+        entry.get("reference_file"),
+        entry.get("interaction_of", []), entry.get("base_ids", []),
+        entry.get("sanitize", True), entry.get("kind", "feature"),
+        entry.get("depends_on", []), entry.get("expected_support", "implemented"),
+        entry.get("oracle", "chrome")
+    ]
+    if entry.get("reference", {}).get("status") == "disputed":
+        identity.append(entry["reference"])
+    identity.append({"must_differ_from": entry.get("oracle_semantics", {}).get("must_differ_from", [])})
+    canonical = json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+def is_sha256(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+def safe_digest(root, relative):
+    if not isinstance(relative, str) or os.path.isabs(relative):
+        return None
+    root = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root, relative))
+    try:
+        if os.path.commonpath((root, path)) != root or os.path.islink(root):
+            return None
+        current = root
+        for component in os.path.relpath(path, root).split(os.sep):
+            current = os.path.join(current, component)
+            if os.path.islink(current):
+                return None
+        return digest(path) if os.path.isfile(path) else None
+    except (OSError, ValueError):
+        return None
+
+def generator_is_authenticated(record):
+    expected = record.get("generator_sha256")
+    if record.get("generator") != "scripts/parity-gen-refs.sh" or not is_sha256(expected):
+        return False
+    archived = f"scripts/parity-generators/sha256/{expected}/parity-gen-refs.sh"
+    root = os.path.dirname(os.path.dirname(parity))
+    return any(safe_digest(root, relative) == expected
+               for relative in (record["generator"], archived))
+
+errors = []
+try:
+    with open(lock_path, encoding="utf-8") as fh:
+        lock = json.load(fh)
+except (OSError, json.JSONDecodeError) as error:
+    print(f"parity-gen-refs: refs.lock unreadable: {error}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(lock, dict) or lock.get("schema") != 6:
+    errors.append("refs.lock must use PDF-oracle schema 6")
+fixtures = lock.get("fixtures", {})
+provenance = lock.get("provenance", {})
+if not isinstance(fixtures, dict) or not isinstance(provenance, dict):
+    errors.append("refs.lock fixtures/provenance must be JSON objects")
+    fixtures, provenance = {}, {}
+
+manifest = {}
+for path in sorted(glob.glob(os.path.join(parity, "manifest", "**", "*.json"), recursive=True)):
+    with open(path, encoding="utf-8") as fh:
+        entries = json.load(fh)
+    for entry in entries:
+        if ((category_filter and entry.get("category") != category_filter)
+                or (fixture_filter and entry.get("id") != fixture_filter)):
+            continue
+        fid = entry.get("id")
+        if fid in manifest:
+            errors.append(f"duplicate manifest id: {fid}")
+        manifest[fid] = entry
+
+locked_ids = {
+    fid for fid, entry in fixtures.items()
+    if ((not category_filter or entry.get("category") == category_filter)
+        and (not fixture_filter or fid == fixture_filter))
+}
+for fid in sorted(set(manifest) | locked_ids):
+    current = manifest.get(fid)
+    locked = fixtures.get(fid)
+    if current is None:
+        errors.append(f"{fid}: removed fixture remains in refs.lock")
+        continue
+    if not isinstance(locked, dict):
+        errors.append(f"{fid}: absent from refs.lock")
+        continue
+    rel = current.get("file")
+    oracle = current.get("oracle", "chrome")
+    html = os.path.join(parity, rel) if isinstance(rel, str) else ""
+    reference_rel = current.get("reference_file", rel)
+    reference_html = os.path.join(parity, reference_rel) if isinstance(reference_rel, str) else ""
+    expected_pdf = None
+    if oracle != "none":
+        pdf_rel = f"oracles/{current.get('category')}/{fid}.pdf"
+        pdf_path = os.path.join(parity, pdf_rel)
+        if not os.path.isfile(pdf_path):
+            errors.append(f"{fid}: missing oracle PDF {pdf_rel}")
+        else:
+            expected_pdf = {"file": pdf_rel, "sha256": digest(pdf_path)}
+    expected = {
+        "category": current.get("category"),
+        "file": rel,
+        "manifest_sha256": manifest_digest(current),
+        "html_sha256": digest(html) if os.path.isfile(html) else "",
+        "reference_file": reference_rel,
+        "reference_html_sha256": digest(reference_html) if os.path.isfile(reference_html) else "",
+        "oracle": oracle,
+        "pdf": expected_pdf,
+    }
+    for field, value in expected.items():
+        if locked.get(field) != value:
+            errors.append(f"{fid}: {field} differs from refs.lock")
+
+    key = locked.get("provenance")
+    record = provenance.get(key) if isinstance(key, str) else None
+    if not isinstance(record, dict):
+        errors.append(f"{fid}: missing provenance record {key!r}")
+        continue
+    expected_renderer = {
+        "chrome": {"chromium", "chromium+pagedjs"},
+        "weasyprint": {"weasyprint"},
+        "none": {"none"},
+    }.get(oracle, set())
+    if (record.get("generator") != "scripts/parity-gen-refs.sh"
+            or not generator_is_authenticated(record)
+            or record.get("font_bundle_sha256") != os.environ["FONT_SHA"]
+            or record.get("ua_stylesheet_sha256") != os.environ["UA_SHA"]
+            or record.get("oracle") != oracle
+            or record.get("renderer") not in expected_renderer
+            or not record.get("renderer_version")
+            or not isinstance(record.get("pagedjs"), bool)
+            or key != provenance_id(record)):
+        errors.append(f"provenance {key}: stale or invalid PDF renderer provenance")
+
+if not category_filter:
+    used = {
+        entry.get("provenance") for entry in fixtures.values() if isinstance(entry, dict)
+    }
+    unused = sorted(set(provenance) - used)
+    if unused:
+        errors.append("unused provenance record(s): " + ", ".join(unused))
+
+if errors:
+    errors = list(dict.fromkeys(errors))
+    print(f"parity-gen-refs: refs.lock integrity FAILED ({len(errors)} issue(s)):", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    sys.exit(1)
+
+scope = fixture_filter or category_filter or "complete corpus"
+print(f"refs.lock PDF integrity OK: {len(manifest)} fixture(s), scope={scope}")
+PY
+}
+
+if [ "$CHECK" = "1" ]; then
+  check_refs_lock "$ONLY_CATEGORY"
+  exit 0
+fi
+
 PAGEDJS="${PAGEDJS:-0}"
 PAGE_CSS="$TMP/pagedjs-page.css"
 PAGEDJS_BIN=""
 if [ "$PAGEDJS" = "1" ]; then
   printf '@page{size:Letter;margin:28.8pt;}\n' > "$PAGE_CSS"
-  # Resolve (or bootstrap) pagedjs-cli. Prefer an already-installed binary; else
-  # install it into target/pagedtool WITHOUT downloading a bundled Chromium
-  # (PUPPETEER_SKIP_DOWNLOAD=1) — we drive the system Chromium instead.
   if command -v pagedjs-cli >/dev/null 2>&1; then
     PAGEDJS_BIN="$(command -v pagedjs-cli)"
   elif [ -x "$ROOT/target/pagedtool/node_modules/.bin/pagedjs-cli" ]; then
     PAGEDJS_BIN="$ROOT/target/pagedtool/node_modules/.bin/pagedjs-cli"
-  elif command -v npm >/dev/null 2>&1; then
-    echo "parity-gen-refs: installing pagedjs-cli (system Chromium, no bundled download)..." >&2
-    if PUPPETEER_SKIP_DOWNLOAD=1 npm install --no-save --prefix "$ROOT/target/pagedtool" pagedjs-cli >/dev/null 2>&1 \
-       && [ -x "$ROOT/target/pagedtool/node_modules/.bin/pagedjs-cli" ]; then
-      PAGEDJS_BIN="$ROOT/target/pagedtool/node_modules/.bin/pagedjs-cli"
-    fi
-  fi
-  if [ -z "$PAGEDJS_BIN" ]; then
-    echo "parity-gen-refs: WARNING pagedjs-cli unavailable (need node+npm); falling back to native print." >&2
-    PAGEDJS=0
+  else
+    echo "parity-gen-refs: PAGEDJS=1 but pagedjs-cli is unavailable" >&2
+    exit 1
   fi
 fi
 
-# --- deterministic fonts -----------------------------------------------------
-# Point fontconfig (and therefore Chrome) at the bundled Parity faces so the
-# reference rasters use the SAME outlines as the ironpress in-process render
-# (which registers tests/parity/fonts/Parity*.ttf via HtmlConverter::add_font).
-# Without this, Chrome would shape with whatever system fonts happen to be
-# installed and text-bearing fixtures would measure noise, not parity.
 if [ -f "$FONTS/fonts.conf" ]; then
   export FONTCONFIG_FILE="$FONTS/fonts.conf"
   export FONTCONFIG_PATH="$FONTS"
-  mkdir -p /tmp/ironpress-parity-fontcache
-  echo "parity-gen-refs: FONTCONFIG_FILE=$FONTCONFIG_FILE"
-else
-  echo "parity-gen-refs: WARNING $FONTS/fonts.conf missing; refs will use system fonts (text parity = noise)." >&2
 fi
-
-FORCE="${FORCE:-0}"
-ONLY_CATEGORY=""
-for arg in "$@"; do
-  case "$arg" in
-    --force) FORCE=1 ;;
-    -*) echo "unknown flag: $arg" >&2; exit 2 ;;
-    *) ONLY_CATEGORY="$arg" ;;
-  esac
-done
-
-# --- locate chromium ---------------------------------------------------------
-CHROMIUM=""
-for cand in chromium-browser /snap/bin/chromium chromium google-chrome google-chrome-stable; do
-  if command -v "$cand" >/dev/null 2>&1; then CHROMIUM="$cand"; break; fi
-done
-if [ -z "$CHROMIUM" ]; then
-  echo "parity-gen-refs: chromium not found; skipping reference generation." >&2
-  echo "  (fixtures without a reference stay UNKNOWN and never fail CI.)" >&2
-  exit 0
-fi
-# Absolute path for Puppeteer (pagedjs-cli): puppeteer's executablePath must be a
-# real file, not a PATH name like "chromium-browser" (it errors "no executable
-# found"). The native --print-to-pdf path is happy with either.
-CHROMIUM_ABS="$(command -v "$CHROMIUM" 2>/dev/null || echo "$CHROMIUM")"
-
-if ! command -v pdftoppm >/dev/null 2>&1; then
-  echo "parity-gen-refs: pdftoppm (poppler) not found; skipping." >&2
-  exit 0
-fi
-
-if [ ! -d "$CASES" ]; then
-  echo "parity-gen-refs: no cases dir at $CASES (nothing to do)." >&2
-  exit 0
-fi
-
-# --- size the worker pool ----------------------------------------------------
-# N = min(nproc-2, 8). Leave two cores for the OS / Chromium helper threads and
-# cap at 8 so we don't thrash memory with too many concurrent browsers.
-NCPU="$(nproc 2>/dev/null || echo 4)"
-JOBS=$((NCPU - 2))
-[ "$JOBS" -lt 1 ] && JOBS=1
-[ "$JOBS" -gt 8 ] && JOBS=8
-# pagedjs-cli launches a full Puppeteer-driven Chromium PER job (~250MB + cold
-# start), so cap concurrency lower than the lightweight --print-to-pdf path to
-# avoid memory pressure / launch races that yield blank pages.
-if [ "$PAGEDJS" = "1" ] && [ "$JOBS" -gt 4 ]; then JOBS=4; fi
-
-echo "parity-gen-refs: chromium='$CHROMIUM', dpi=$DPI, force=$FORCE, only='${ONLY_CATEGORY:-<all>}', jobs=$JOBS"
-
-# Make the bundled Parity faces discoverable by Chromium. CRITICAL: snap-packaged
-# Chromium IGNORES $FONTCONFIG_FILE, so pointing it at tests/parity/fonts/fonts.conf
-# is not enough — Chrome falls back to a serif and the text refs become wrong.
-# Installing the faces into the user font dir (which the snap desktop interface
-# exposes) + refreshing the cache makes Chrome AND ironpress select the same
-# outlines. Idempotent; in CI this targets the ephemeral runner's font dir.
-FONTS_SRC="$ROOT/tests/parity/fonts"
+FONTS_SRC="$PARITY/fonts"
 USER_FONTS="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
 if ls "$FONTS_SRC"/Parity*.ttf >/dev/null 2>&1; then
   mkdir -p "$USER_FONTS"
-  cp -f "$FONTS_SRC"/Parity*.ttf "$USER_FONTS"/ 2>/dev/null || true
-  command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$USER_FONTS" >/dev/null 2>&1 || true
-  echo "parity-gen-refs: installed bundled Parity faces into $USER_FONTS"
+  cp -f "$FONTS_SRC"/Parity*.ttf "$USER_FONTS"/
+  command -v fc-cache >/dev/null 2>&1 || {
+    echo "parity-gen-refs: fc-cache is required" >&2
+    exit 1
+  }
+  fc-cache -f "$USER_FONTS" >/dev/null
 fi
 
-# --- per-job worker ----------------------------------------------------------
-# render_one <html>  — runs in its own subshell (one xargs slot). Emits exactly
-# one status token to stdout: "G" generated, "S" skipped, "F" failed. Human log
-# lines go to stderr so they don't pollute the status stream.
-render_one() {
-  local html="$1"
-  local rel category base ref pdf udd pages
-
-  rel="${html#"$CASES"/}"           # <category>/<id>.html
-  category="${rel%%/*}"
-  base="$(basename "$html" .html)"  # <id>
-
-  ref="$REFS/$category/$base.png"
-  if [ -f "$ref" ] && [ "$FORCE" != "1" ]; then
-    echo "S"
-    return 0
+CHROMIUM=""
+for candidate in chromium-browser /snap/bin/chromium chromium google-chrome google-chrome-stable; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    CHROMIUM="$candidate"
+    break
   fi
+done
+if [ -z "$CHROMIUM" ]; then
+  echo "parity-gen-refs: chromium not found" >&2
+  exit 1
+fi
+CHROMIUM_ABS="$(command -v "$CHROMIUM" 2>/dev/null || echo "$CHROMIUM")"
+if ! command -v pdftoppm >/dev/null 2>&1; then
+  echo "parity-gen-refs: pdftoppm is required to validate generated PDFs" >&2
+  exit 1
+fi
 
-  mkdir -p "$REFS/$category"
+NCPU="$(nproc 2>/dev/null || echo 4)"
+DEFAULT_JOBS=$((NCPU - 2))
+[ "$DEFAULT_JOBS" -lt 1 ] && DEFAULT_JOBS=1
+[ "$DEFAULT_JOBS" -gt 8 ] && DEFAULT_JOBS=8
+JOBS="${PARITY_JOBS:-$DEFAULT_JOBS}"
+if ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PARITY_JOBS must be a positive integer" >&2
+  exit 2
+fi
 
-  # Per-fixture reference ORACLE (manifest `oracle`, default "chrome"). CSS GCPM
-  # features (footnotes, running elements) use WeasyPrint because Chrome's print
-  # path renders them blank — Chrome+Paged.js are not a valid oracle there.
-  # "none" = no oracle exists; skip (the fixture stays UNKNOWN, the report shows
-  # only the ironpress render).
-  local oracle
-  oracle="$(python3 -c "import json
+# An oracle may be skipped only when its recorded generator bytes are still
+# authenticated, either as the live script or in the content-addressed archive.
+# Unknown hashes and archive path/content mismatches force real regeneration;
+# schema migration never relabels historical PDF provenance.
+if [ "$FORCE" != "1" ]; then
+  current_font_sha="$(font_bundle_digest)"
+  if ! PARITY_DIR="$PARITY" \
+    FONT_SHA="$current_font_sha" UA_SHA="$UA_SHA" PAGEDJS_ENABLED="$PAGEDJS" python3 - <<'PY'
+import hashlib, json, os, sys
+
+def digest(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+def is_sha256(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+def safe_digest(root, relative):
+    if not isinstance(relative, str) or os.path.isabs(relative):
+        return None
+    root = os.path.abspath(root)
+    path = os.path.abspath(os.path.join(root, relative))
+    try:
+        if os.path.commonpath((root, path)) != root or os.path.islink(root):
+            return None
+        current = root
+        for component in os.path.relpath(path, root).split(os.sep):
+            current = os.path.join(current, component)
+            if os.path.islink(current):
+                return None
+        return digest(path) if os.path.isfile(path) else None
+    except (OSError, ValueError):
+        return None
+
+def generator_is_authenticated(record):
+    expected = record.get("generator_sha256")
+    if record.get("generator") != "scripts/parity-gen-refs.sh" or not is_sha256(expected):
+        return False
+    root = os.path.dirname(os.path.dirname(os.environ["PARITY_DIR"]))
+    archived = f"scripts/parity-generators/sha256/{expected}/parity-gen-refs.sh"
+    return any(safe_digest(root, relative) == expected
+               for relative in (record["generator"], archived))
+
 try:
-    d=json.load(open('$ROOT/tests/parity/manifest/$category.json'))
-    items=d if isinstance(d,list) else d.get('fixtures',[])
-    print(next((e.get('oracle','chrome') for e in items if e.get('id')=='$base'),'chrome'))
-except Exception:
-    print('chrome')" 2>/dev/null || echo chrome)"
+    with open(os.path.join(os.environ["PARITY_DIR"], "refs.lock"), encoding="utf-8") as fh:
+        lock = json.load(fh)
+    provenance = lock["provenance"]
+    requested_pagedjs = os.environ["PAGEDJS_ENABLED"] == "1"
+    valid = (lock.get("schema") == 6 and isinstance(provenance, dict)
+             and provenance
+             and all(
+                 generator_is_authenticated(record)
+                 and record.get("font_bundle_sha256") == os.environ["FONT_SHA"]
+                 and record.get("ua_stylesheet_sha256") == os.environ["UA_SHA"]
+                 and (record.get("oracle") != "chrome"
+                      or record.get("pagedjs") == requested_pagedjs)
+                 for record in provenance.values()))
+except (OSError, KeyError, TypeError, json.JSONDecodeError):
+    valid = False
+sys.exit(0 if valid else 1)
+PY
+  then
+    FORCE=1
+    echo "parity-gen-refs: oracle-generation inputs changed; regenerating every oracle PDF" >&2
+    if [ -n "$ONLY_CATEGORY" ]; then
+      echo "parity-gen-refs: ignoring category filter because provenance is corpus-wide" >&2
+      ONLY_CATEGORY=""
+    fi
+  fi
+fi
+
+pin_ua_stylesheet() {
+  local source="$1"
+  local destination="$2"
+  PINNED_UA_CSS="$UA_CSS" python3 - "$source" "$destination" <<'PY'
+import os, sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as handle:
+    html = handle.read()
+with open(os.environ["PINNED_UA_CSS"], encoding="utf-8") as handle:
+    css = handle.read()
+lower = html.lower()
+start = lower.find("<head")
+if start < 0:
+    raise SystemExit(f"{source}: missing <head> for pinned UA stylesheet")
+end = lower.find(">", start)
+if end < 0:
+    raise SystemExit(f"{source}: unterminated <head> tag")
+pinned = html[:end + 1] + "\n<style data-parity-ua-pins>\n" + css + "\n</style>\n" + html[end + 1:]
+with open(destination, "w", encoding="utf-8") as handle:
+    handle.write(pinned)
+PY
+}
+
+render_one() {
+  local candidate_html="$1"
+  local html pinned_html rel category id oracle oracle_current oracle_pdf pdf profile validation_prefix first_page sd
+  rel="${candidate_html#"$CASES"/}"
+  category="${rel%%/*}"
+  # Existing PDFs may be skipped only when refs.lock proves that this exact HTML
+  # and PDF pair was generated under the still-current corpus-wide provenance.
+  # Merely finding a PDF at the expected path is not enough: after an HTML edit
+  # that would preserve stale pixels while the rewritten lock drops the fixture.
+  read -r id oracle html oracle_current < <(python3 - \
+    "$PARITY/manifest" "cases/$rel" "$PARITY/refs.lock" "$PARITY" <<'PY'
+import glob, hashlib, json, os, sys
+manifest_root, fixture, lock_path, parity = sys.argv[1:]
+matches = []
+for manifest in sorted(glob.glob(os.path.join(manifest_root, "**", "*.json"), recursive=True)):
+    matches.extend(entry for entry in json.load(open(manifest, encoding="utf-8"))
+                   if entry.get("file") == fixture)
+if len(matches) == 1:
+    entry = matches[0]
+    fid = entry["id"]
+    oracle = entry.get("oracle", "chrome")
+    current = False
+    try:
+        lock = json.load(open(lock_path, encoding="utf-8"))
+        locked = lock.get("fixtures", {}).get(fid, {})
+        provenance = lock.get("provenance", {})
+        html_path = os.path.join(parity, fixture)
+        reference_file = entry.get("reference_file", fixture)
+        reference_path = os.path.join(parity, reference_file)
+        pdf_rel = f"oracles/{entry['category']}/{fid}.pdf"
+        pdf_path = os.path.join(parity, pdf_rel)
+
+        def digest(path):
+            with open(path, "rb") as fh:
+                return hashlib.sha256(fh.read()).hexdigest()
+
+        expected_pdf = None if oracle == "none" else {
+            "file": pdf_rel,
+            "sha256": digest(pdf_path),
+        }
+        current = (
+            lock.get("schema") == 6
+            and locked.get("category") == entry["category"]
+            and locked.get("file") == fixture
+            and locked.get("html_sha256") == digest(html_path)
+            and locked.get("reference_file") == reference_file
+            and locked.get("reference_html_sha256") == digest(reference_path)
+            and locked.get("oracle") == oracle
+            and locked.get("pdf") == expected_pdf
+            and locked.get("provenance") in provenance
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        current = False
+    print(fid, oracle, reference_path, "1" if current else "0")
+PY
+)
+  if [ -z "${id:-}" ]; then
+    printf 'F\t%s\n' "$rel"
+    return 0
+  fi
+  if [ -n "$FIXTURE_ID" ] && [ "$id" != "$FIXTURE_ID" ]; then
+    return 0
+  fi
   if [ "$oracle" = "none" ]; then
-    echo "  no pixel oracle (skipped, UNKNOWN): $category/$base" >&2
-    echo "S"
+    printf 'N\t%s\t%s\n' "$id" "$oracle"
     return 0
   fi
 
-  # Unique scratch per job: a private Chromium profile dir (mandatory for
-  # concurrency — a shared profile lock serializes/aborts parallel runs) and a
-  # unique intermediate PDF path. Both are cleaned up on every exit path.
-  udd="$(mktemp -d "$TMP/udd.XXXXXX")"
-  pdf="$(mktemp "$TMP/ref.XXXXXX.pdf")"
-  local inj=""
-  trap 'rm -rf "$udd" "$pdf" "$inj"' RETURN
+  oracle_pdf="$ORACLES/$category/$id.pdf"
+  if [ -f "$oracle_pdf" ] && [ "$FORCE" != "1" ] && [ "$oracle_current" = "1" ]; then
+    printf 'S\t%s\t%s\n' "$id" "$oracle"
+    return 0
+  fi
+  mkdir -p "$ORACLES/$category"
+  # Keep the temporary beside its source so relative assets resolve unchanged.
+  # Chromium needs an HTML-like suffix to select its HTML parser. `.htm` does
+  # that while keeping the parallel `find -name '*.html'` corpus scan from
+  # discovering another worker's temporary input.
+  pinned_html="$(mktemp "$(dirname "$html")/.parity-pinned.XXXXXX.htm")"
+  if ! pin_ua_stylesheet "$html" "$pinned_html"; then
+    rm -f "$pinned_html"
+    printf 'F\t%s\n' "$id"
+    return 0
+  fi
+  pdf="$(mktemp "$TMP/oracle.XXXXXX.pdf")"
+  profile="$(mktemp -d "$TMP/chrome-profile.XXXXXX")"
+  validation_prefix="$(mktemp -u "$TMP/oracle-validation.XXXXXX")"
+  trap 'rm -rf "$pdf" "$profile" "$pinned_html" "$validation_prefix"-*.png' RETURN
 
   local ok=""
-  if [ "$oracle" = "weasyprint" ]; then
-    # CSS GCPM oracle. WeasyPrint honours float:footnote + position:running()/
-    # element(), which Chrome's print path drops. It reads the fixture's own @page
-    # geometry, the same box ironpress lays out against, so the rasters align.
-    local attempt
-    for attempt in 1 2 3; do
-      timeout -k 5s 120s python3 -m weasyprint "$html" "$pdf" >/dev/null 2>&1 || true
-      if [ -s "$pdf" ]; then ok=1; break; fi
-      sleep 0.5
-    done
-  elif [ "$PAGEDJS" = "1" ]; then
-    # Spec-compliant paged-media render via pagedjs-cli (Puppeteer driving the
-    # system Chromium). pagedjs-cli WAITS for Paged.js's `rendered` event before
-    # printing, so — unlike `chromium --print-to-pdf` + `--virtual-time-budget`,
-    # which races Paged.js's async pagination under parallel cold starts and
-    # silently emits BLANK pages — every page is fully laid out. `--style`
-    # forces the ironpress page geometry (Letter, 28.8pt margin) so the @page box
-    # matches `PageSize::LETTER` + `Margin::uniform(28.8)`. Retried a few times
-    # (Chromium cold starts are occasionally flaky).
-    local attempt
-    for attempt in 1 2 3; do
+  local attempt
+  for attempt in 1 2 3; do
+    rm -f "$pdf"
+    if [ "$oracle" = "weasyprint" ]; then
+      timeout -k 5s 120s python3 -m weasyprint "$pinned_html" "$pdf" >/dev/null 2>&1 || true
+    elif [ "$PAGEDJS" = "1" ]; then
       PUPPETEER_EXECUTABLE_PATH="$CHROMIUM_ABS" PUPPETEER_SKIP_DOWNLOAD=1 \
-        timeout -k 5s 120s "$PAGEDJS_BIN" -i "$html" -o "$pdf" \
+        timeout -k 5s 120s "$PAGEDJS_BIN" -i "$pinned_html" -o "$pdf" \
           --page-size Letter --style "$PAGE_CSS" \
           --browserArgs "--no-sandbox,--disable-gpu,--disable-software-rasterizer" \
           >/dev/null 2>&1 || true
-      if [ -s "$pdf" ]; then ok=1; break; fi
-      sleep 0.5
-    done
-  else
-    # Native Chrome --print-to-pdf (the legacy ad-hoc print model; PAGEDJS=0).
-    # Under concurrent snap-Chromium cold starts, --headless=new sporadically
-    # aborts on a GPU-process namespace race; retry with a FRESH profile and a
-    # short backoff, falling back to legacy --headless as a last resort.
-    local attempt
-    for attempt in 1 2 3; do
-      rm -rf "$udd"; udd="$(mktemp -d "$TMP/udd.XXXXXX")"
+    else
+      rm -rf "$profile"
+      profile="$(mktemp -d "$TMP/chrome-profile.XXXXXX")"
       timeout -k 5s 60s "$CHROMIUM" --headless=new --disable-gpu --no-sandbox \
-           --disable-software-rasterizer --user-data-dir="$udd" \
-           --no-pdf-header-footer --print-to-pdf="$pdf" "file://$html" >/dev/null 2>&1
-      pkill -9 -f "$udd" 2>/dev/null || true
-      if [ -s "$pdf" ]; then ok=1; break; fi
-      sleep 0.4
-    done
-    if [ -z "$ok" ]; then
-      rm -rf "$udd"; udd="$(mktemp -d "$TMP/udd.XXXXXX")"
-      timeout -k 5s 60s "$CHROMIUM" --headless --disable-gpu --no-sandbox \
-        --disable-software-rasterizer --user-data-dir="$udd" \
-        --no-pdf-header-footer --print-to-pdf="$pdf" "file://$html" >/dev/null 2>&1 || true
-      pkill -9 -f "$udd" 2>/dev/null || true
+        --disable-software-rasterizer --user-data-dir="$profile" \
+        --no-pdf-header-footer --print-to-pdf="$pdf" "file://$pinned_html" >/dev/null 2>&1 || true
+      pkill -9 -f "$profile" 2>/dev/null || true
     fi
-  fi
-
-  if [ ! -s "$pdf" ]; then
-    echo "  FAILED render after retries: $category/$base" >&2
-    echo "F"
+    if [ -s "$pdf" ]; then
+      ok=1
+      break
+    fi
+    sleep 0.4
+  done
+  if [ -z "$ok" ]; then
+    printf 'F\t%s\n' "$id"
     return 0
   fi
 
-  # Rasterize ALL pages so pagination is actually testable: page 1 -> <id>.png
-  # (the legacy single-page name, so the whole existing corpus is untouched),
-  # pages 2.. -> <id>.pN.png. The engine's multi-page comparison asserts the page
-  # COUNT matches Chrome and diffs every page, so references are no longer forced
-  # to a single page (the old "shrink to one page" constraint hid real pagination
-  # diffs — e.g. a trailing blank page). Render to a TEMP prefix, then atomically
-  # move each page into place so an interrupted run never leaves a partial ref.
-  local refdir="$REFS/$category"
-  # Drop stale extra-page refs for this id first (a fixture's page count may shrink).
-  rm -f "$refdir/$base".p[0-9]*.png 2>/dev/null || true
-  local tmp_prefix; tmp_prefix="$(mktemp -u "$TMP/png.XXXXXX")"
-  if timeout 90s pdftoppm -r "$DPI" -png "$pdf" "$tmp_prefix" 2>/dev/null; then
-    # pdftoppm (no -singlefile) writes <prefix>-N.png, zero-padded to the page
-    # count's width; collect in natural numeric order.
-    local pages_list; pages_list="$(ls "$tmp_prefix"-*.png 2>/dev/null | sort -V)"
-    if [ -z "$pages_list" ]; then
-      echo "  FAILED rasterize (no pages): $category/$base" >&2
-      echo "F"
-      return 0
-    fi
-    # Blank-page guard on page 1: a uniform (all-white) raster means no content
-    # (e.g. a render race). A completely uniform image has standard-deviation 0.
-    local p1; p1="$(printf '%s\n' "$pages_list" | head -1)"
-    local sd="1"
-    if command -v identify >/dev/null 2>&1; then
-      sd="$(identify -format '%[standard-deviation]' "$p1" 2>/dev/null || echo 1)"
-    fi
-    if [ "${sd%%.*}" = "0" ] && [ "$sd" != "1" ]; then
-      # shellcheck disable=SC2086
-      rm -f $pages_list 2>/dev/null || true
-      echo "  BLANK render (rejected, kept existing ref): $category/$base" >&2
-      echo "F"
-      return 0
-    fi
-    # Move page 1 -> <id>.png, pages 2.. -> <id>.pN.png.
-    local n=0 f
-    while IFS= read -r f; do
-      n=$((n + 1))
-      if [ "$n" -eq 1 ]; then
-        mv -f "$f" "$ref"
-      else
-        mv -f "$f" "$refdir/$base.p$n.png"
-      fi
-    done <<< "$pages_list"
-    echo "  generated $category/$base.png ($n page(s))" >&2
-    echo "G"
-  else
-    # shellcheck disable=SC2086
-    rm -f "$tmp_prefix"-*.png 2>/dev/null || true
-    echo "  FAILED rasterize: $category/$base" >&2
-    echo "F"
+  rm -f "$validation_prefix"-*.png
+  if ! timeout 90s pdftoppm -r "$VALIDATION_DPI" -png "$pdf" "$validation_prefix" >/dev/null 2>&1; then
+    printf 'F\t%s\n' "$id"
+    return 0
   fi
+  if ! compgen -G "$validation_prefix-*.png" >/dev/null; then
+    printf 'F\t%s\n' "$id"
+    return 0
+  fi
+  # A uniform page is not necessarily blank: several page-selection fixtures
+  # intentionally fill the whole first page with one solid colour, and some CSS
+  # features legitimately produce a white page. PDF validity plus successful
+  # all-page rasterization are the only content-independent checks we can make
+  # here; never reject an oracle from a pixel-variance heuristic.
+
+  mv -f "$pdf" "$oracle_pdf"
+  pdf=""
+  printf 'G\t%s\t%s\n' "$id" "$oracle"
 }
 
-# Export everything the worker subshells need.
-export -f render_one
-export CHROMIUM CHROMIUM_ABS CASES REFS TMP FORCE DPI ROOT PAGEDJS PAGEDJS_BIN PAGE_CSS
+export -f pin_ua_stylesheet render_one
+export CHROMIUM CHROMIUM_ABS CASES ORACLES TMP FORCE PARITY PAGEDJS PAGEDJS_BIN PAGE_CSS UA_CSS VALIDATION_DPI FIXTURE_ID
 
-# --- dispatch concurrently ---------------------------------------------------
-# Collect the matching fixtures (NUL-delimited, sorted for stable selection),
-# then fan them out over the bounded pool. Each xargs slot is a fresh bash that
-# runs render_one on a single fixture, so the per-job mktemp profiles never
-# collide. We tally the one-letter status tokens streamed back on stdout.
-status_file="$(mktemp "$TMP/status.XXXXXX")"
+status_file="$(mktemp "$TMP/oracle-status.XXXXXX")"
 trap 'rm -f "$status_file"' EXIT
+if [ -n "$ONLY_CATEGORY" ]; then
+  find "$CASES/$ONLY_CATEGORY" -type f -name '*.html' -print0 2>/dev/null | sort -z | \
+    xargs -0 -r -P "$JOBS" -I {} bash -c 'render_one "$1"' _ {} > "$status_file"
+else
+  find "$CASES" -type f -name '*.html' -print0 | sort -z | \
+    xargs -0 -r -P "$JOBS" -I {} bash -c 'render_one "$1"' _ {} > "$status_file"
+fi
 
-select_fixtures() {
-  if [ -n "$ONLY_CATEGORY" ]; then
-    find "$CASES/$ONLY_CATEGORY" -type f -name '*.html' -print0 2>/dev/null | sort -z
-  else
-    find "$CASES" -type f -name '*.html' -print0 | sort -z
-  fi
-}
+generated="$(grep -c $'^G\t' "$status_file" || true)"
+skipped="$(grep -c $'^S\t' "$status_file" || true)"
+failed="$(grep -c $'^F\t' "$status_file" || true)"
+echo "parity-gen-refs: PDFs generated=$generated skipped=$skipped failed=$failed"
+if [ -n "$FIXTURE_ID" ] && ! awk -F '\t' -v id="$FIXTURE_ID" '
+  $2 == id && ($1 == "G" || $1 == "S" || $1 == "N") { found = 1 }
+  END { exit !found }
+' "$status_file"; then
+  echo "parity-gen-refs: fixture not found: $FIXTURE_ID" >&2
+  exit 1
+fi
 
-select_fixtures | xargs -0 -P "$JOBS" -I {} bash -c 'render_one "$@"' _ {} > "$status_file"
-
-generated="$(grep -c '^G$' "$status_file" || true)"
-skipped="$(grep -c '^S$' "$status_file" || true)"
-failed="$(grep -c '^F$' "$status_file" || true)"
-
-echo "parity-gen-refs: done — generated=$generated skipped=$skipped failed=$failed"
-
-# --- refs.lock --------------------------------------------------------------
-# Record exactly which fixture CONTENT the committed references correspond to:
-# a pretty-printed JSON object mapping each fixture id -> sha256 of its
-# cases/<category>/<id>.html. CI's refs-freshness gate (parity.yml) recomputes
-# these hashes and FAILS if a fixture changed without its reference (and this
-# lock) being regenerated — that is what forces `scripts/parity-gen-refs.sh
-# --force` whenever fixtures change.
-#
-# We regenerate the WHOLE lock from every MANIFEST entry on each run (simpler and
-# always self-consistent) rather than patching only the ids touched this run. The
-# key is the manifest `id` and the value is sha256 of the fixture it points at
-# (`file` = cases/<category>/<id>.html). NOTE: the manifest id is NOT always the
-# html basename — e.g. cases/backgrounds-borders/box-shadow-offset.html has id
-# `border-box-shadow-offset` — so we MUST read the mapping from the manifests, not
-# infer it from filenames, otherwise the freshness gate would key on the wrong id.
 write_refs_lock() {
-  local lock="$PARITY/refs.lock"
-  local manifest_dir="$PARITY/manifest"
-
-  if [ ! -d "$manifest_dir" ]; then
-    echo "parity-gen-refs: no manifest dir at $manifest_dir; skipping refs.lock." >&2
-    return 0
+  local chromium_version weasyprint_version pagedjs_version
+  chromium_version="$("$CHROMIUM" --version 2>/dev/null | head -1 || true)"
+  weasyprint_version="$(python3 -m weasyprint --version 2>/dev/null | head -1 || true)"
+  if [ -n "$PAGEDJS_BIN" ]; then
+    pagedjs_version="$("$PAGEDJS_BIN" --version 2>/dev/null | head -1 || true)"
+  else
+    pagedjs_version="disabled"
   fi
+  [ -n "$chromium_version" ] || chromium_version="unknown Chromium version"
+  [ -n "$weasyprint_version" ] || weasyprint_version="unknown WeasyPrint version"
 
-  # Python builds the {id: sha256(file)} map from all manifests and writes pretty,
-  # key-sorted JSON. sha256 is computed over the exact bytes of each fixture html.
-  PARITY_DIR="$PARITY" python3 - "$lock" <<'PY'
-import glob, hashlib, json, os, sys
+  PARITY_DIR="$PARITY" STATUS_FILE="$status_file" PAGEDJS_ENABLED="$PAGEDJS" \
+    CATEGORY_FILTER="$ONLY_CATEGORY" FIXTURE_ID="$FIXTURE_ID" \
+    GENERATOR_SHA="$(sha256sum "$SCRIPT_DIR/parity-gen-refs.sh" | awk '{print $1}')" \
+    FONT_SHA="$(font_bundle_digest)" UA_SHA="$UA_SHA" CHROMIUM_VERSION="$chromium_version" \
+    WEASYPRINT_VERSION="$weasyprint_version" PAGEDJS_VERSION="$pagedjs_version" \
+    python3 - <<'PY'
+import glob, hashlib, json, os
 
-lock_path = sys.argv[1]
 parity = os.environ["PARITY_DIR"]
-manifest_glob = os.path.join(parity, "manifest", "*.json")
+lock_path = os.path.join(parity, "refs.lock")
+pagedjs = os.environ["PAGEDJS_ENABLED"] == "1"
+category_filter = os.environ.get("CATEGORY_FILTER", "")
+fixture_filter = os.environ.get("FIXTURE_ID", "")
 
-mapping = {}
-for mf in sorted(glob.glob(manifest_glob)):
-    with open(mf, "r", encoding="utf-8") as fh:
-        entries = json.load(fh)
-    for e in entries:
-        fid = e["id"]
-        rel = e["file"]  # cases/<category>/<id>.html
-        html_path = os.path.join(parity, rel)
-        try:
-            with open(html_path, "rb") as hf:
-                digest = hashlib.sha256(hf.read()).hexdigest()
-        except FileNotFoundError:
-            print(f"parity-gen-refs: WARNING fixture missing for id={fid}: {rel}",
-                  file=sys.stderr)
+def digest(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+def provenance_record(oracle):
+    if oracle == "weasyprint":
+        renderer, version, uses_pagedjs = "weasyprint", os.environ["WEASYPRINT_VERSION"], False
+    elif oracle == "none":
+        renderer, version, uses_pagedjs = "none", "not applicable", False
+    elif pagedjs:
+        renderer = "chromium+pagedjs"
+        version = os.environ["CHROMIUM_VERSION"] + "; " + os.environ["PAGEDJS_VERSION"]
+        uses_pagedjs = True
+    else:
+        renderer, version, uses_pagedjs = "chromium", os.environ["CHROMIUM_VERSION"], False
+    return {
+        "generator": "scripts/parity-gen-refs.sh",
+        "generator_sha256": os.environ["GENERATOR_SHA"],
+        "oracle": oracle,
+        "renderer": renderer,
+        "renderer_version": version,
+        "font_bundle_sha256": os.environ["FONT_SHA"],
+        "ua_stylesheet_sha256": os.environ["UA_SHA"],
+        "pagedjs": uses_pagedjs,
+    }
+
+def provenance_id(record):
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+def manifest_digest(entry):
+    identity = [
+        entry["id"], entry["category"], entry["feature"],
+        entry.get("subfeature", ""), entry.get("description", ""), entry["file"],
+        entry.get("reference_file"),
+        entry.get("interaction_of", []), entry.get("base_ids", []),
+        entry.get("sanitize", True), entry.get("kind", "feature"),
+        entry.get("depends_on", []), entry.get("expected_support", "implemented"),
+        entry.get("oracle", "chrome")
+    ]
+    if entry.get("reference", {}).get("status") == "disputed":
+        identity.append(entry["reference"])
+    identity.append({"must_differ_from": entry.get("oracle_semantics", {}).get("must_differ_from", [])})
+    canonical = json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+generated = set()
+with open(os.environ["STATUS_FILE"], encoding="utf-8") as status:
+    for line in status:
+        fields = line.rstrip("\n").split("\t")
+        if fields and fields[0] in {"G", "N"} and len(fields) >= 2:
+            generated.add(fields[1])
+
+previous_fixtures, previous_provenance = {}, {}
+try:
+    previous = json.load(open(lock_path, encoding="utf-8"))
+    if previous.get("schema") == 6:
+        previous_fixtures = previous.get("fixtures", {})
+        previous_provenance = previous.get("provenance", {})
+except (OSError, json.JSONDecodeError, AttributeError):
+    pass
+
+manifest = {}
+for path in sorted(glob.glob(os.path.join(parity, "manifest", "**", "*.json"), recursive=True)):
+    for entry in json.load(open(path, encoding="utf-8")):
+        if entry["id"] in manifest:
+            raise SystemExit(f"duplicate manifest id: {entry['id']}")
+        manifest[entry["id"]] = entry
+
+fixtures, provenance = {}, {}
+
+def in_scope(fid, entry):
+    return ((not category_filter or entry.get("category") == category_filter)
+            and (not fixture_filter or fid == fixture_filter))
+
+# A scoped generation must never erase, refresh, or otherwise conceal lock
+# entries outside its category. Preserve those records verbatim, including
+# removed or stale fixture IDs, so a later complete integrity check exposes the
+# problem instead of observing a silently shrunken corpus.
+if category_filter or fixture_filter:
+    for fid, old in previous_fixtures.items():
+        if isinstance(old, dict) and in_scope(fid, old):
             continue
-        mapping[fid] = digest
+        fixtures[fid] = old
+        key = old.get("provenance") if isinstance(old, dict) else None
+        if key in previous_provenance:
+            provenance[key] = previous_provenance[key]
 
-ordered = {k: mapping[k] for k in sorted(mapping)}
-with open(lock_path, "w", encoding="utf-8") as out:
+for fid, entry in sorted(manifest.items()):
+    if not in_scope(fid, entry):
+        continue
+    oracle = entry.get("oracle", "chrome")
+    html = os.path.join(parity, entry["file"])
+    reference_file = entry.get("reference_file", entry["file"])
+    reference_html = os.path.join(parity, reference_file)
+    pdf_rel = f"oracles/{entry['category']}/{fid}.pdf"
+    pdf_path = os.path.join(parity, pdf_rel)
+    artifact = None if oracle == "none" else (
+        {"file": pdf_rel, "sha256": digest(pdf_path)} if os.path.isfile(pdf_path) else None
+    )
+    current = {
+        "category": entry["category"],
+        "file": entry["file"],
+        "manifest_sha256": manifest_digest(entry),
+        "html_sha256": digest(html),
+        "reference_file": reference_file,
+        "reference_html_sha256": digest(reference_html),
+        "oracle": oracle,
+        "pdf": artifact,
+    }
+
+    if fid in generated:
+        if oracle != "none" and artifact is None:
+            continue
+        record = provenance_record(oracle)
+        key = provenance_id(record)
+        provenance[key] = record
+        fixtures[fid] = {**current, "provenance": key}
+        continue
+
+    old = previous_fixtures.get(fid)
+    pdf_identity_fields = (
+        "category", "file", "html_sha256", "reference_file",
+        "reference_html_sha256", "oracle", "pdf"
+    )
+    if isinstance(old, dict) and all(old.get(field) == current[field] for field in pdf_identity_fields):
+        key = old.get("provenance")
+        if key in previous_provenance:
+            fixtures[fid] = {**current, "provenance": key}
+            provenance[key] = previous_provenance[key]
+
+ordered = {
+    "schema": 6,
+    "fixtures": {key: fixtures[key] for key in sorted(fixtures)},
+    "provenance": {key: provenance[key] for key in sorted(provenance)},
+}
+temporary = lock_path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as out:
     json.dump(ordered, out, indent=2, sort_keys=True)
     out.write("\n")
-
-print(f"wrote refs.lock ({len(ordered)} entries)")
+os.replace(temporary, lock_path)
+print(f"wrote refs.lock PDF schema 6 ({len(fixtures)} fixture identities)")
 PY
 }
 
 write_refs_lock
+if [ "$failed" -ne 0 ]; then
+  echo "parity-gen-refs: $failed render(s) failed" >&2
+  exit 1
+fi
+check_refs_lock "$ONLY_CATEGORY"

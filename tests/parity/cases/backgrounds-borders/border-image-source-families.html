@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border image source families</title>
+<style>
+  @page { size: 320px 240px; margin: 0; }
+  html, body { background: #ffffff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .box {
+    position: absolute;
+    width: 120px;
+    height: 88px;
+    border: 12px solid #ff00ff;
+    background: #f1f3f5;
+  }
+  .raster {
+    left: 16px;
+    top: 16px;
+    border-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII=") 1 stretch;
+  }
+  .svg {
+    left: 160px;
+    top: 16px;
+    border-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30'%3E%3Crect width='15' height='15' fill='%23e63946'/%3E%3Crect x='15' width='15' height='15' fill='%23457b9d'/%3E%3Crect y='15' width='15' height='15' fill='%232a9d8f'/%3E%3Crect x='15' y='15' width='15' height='15' fill='%23ffbe0b'/%3E%3C/svg%3E") 10 / 12px stretch;
+  }
+  .radial {
+    left: 16px;
+    top: 136px;
+    border-image: radial-gradient(circle, #ffbe0b 0 35%, #fb5607 36% 65%, #8338ec 66%) 18% / 12px round;
+  }
+  .conic {
+    left: 160px;
+    top: 136px;
+    border-image: 1 / 12px conic-gradient(from 45deg, #3a86ff, #06d6a0, #ff006e, #3a86ff) stretch;
+  }
+</style>
+</head>
+<body>
+  <div class="box raster"></div>
+  <div class="box svg"></div>
+  <div class="box radial"></div>
+  <div class="box conic"></div>
+</body>
+</html>

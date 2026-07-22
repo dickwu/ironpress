@@ -1,17 +1,40 @@
+use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::dom::ElementNode;
 use crate::parser::png;
 use crate::parser::ttf::TtfFont;
-use crate::style::computed::{
-    ColorFilterOp, ComputedStyle, Display, FontStyle, FontWeight, VerticalAlign,
-};
+use crate::style::computed::{ComputedStyle, Display, FontWeight, VerticalAlign};
+use crate::types::Size;
 use crate::util::decode_base64;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use super::engine::{
-    ImageEffectRaster, ImageFormat, LayoutBorder, LayoutElement, PngMetadata, RasterImageAsset,
+use super::elements::{
+    Image, ImagePaint, ImageSampling, IntoLayoutNode, LayoutNode, Positioning, ReplacedGeometry,
+    Svg, SvgPaint,
 };
+use super::engine::{ImageFormat, LayoutBorder, PngMetadata, RasterImageAsset};
 use super::text::resolve_style_font_family;
+
+/// How an inline replaced element contributes the font's lower baseline extent.
+///
+/// Ordinary replaced-element flow preserves the font's fractional metrics.
+/// An atomic native inline box instead participates in the CSS inline line box,
+/// whose block-end extent is resolved on the CSS-pixel grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InlineBaselineGapRounding {
+    #[default]
+    Fractional,
+    CssPixel,
+}
+
+impl InlineBaselineGapRounding {
+    fn apply(self, gap: f32) -> f32 {
+        match self {
+            Self::Fractional => gap,
+            Self::CssPixel => crate::fonts::ceil_to_css_pixel(gap),
+        }
+    }
+}
 
 /// Load raw bytes from a `src` attribute value.
 ///
@@ -101,34 +124,34 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
         // channel rather than dropping it (which rendered transparent regions as
         // opaque black).
         if png_info.channels == 2 || png_info.channels == 4 {
-            return Some(RasterImageAsset {
-                source_width: png_info.width,
-                source_height: png_info.height,
-                data: raw,
-                format: ImageFormat::PngAlpha,
-                png_metadata: None,
-            });
+            return Some(RasterImageAsset::source(
+                raw,
+                png_info.width,
+                png_info.height,
+                ImageFormat::PngAlpha,
+                None,
+            ));
         }
         let metadata = PngMetadata {
             channels: png_info.channels,
             bit_depth: png_info.bit_depth,
         };
-        Some(RasterImageAsset {
-            data: raw,
-            source_width: png_info.width,
-            source_height: png_info.height,
-            format: ImageFormat::Png,
-            png_metadata: Some(metadata),
-        })
+        Some(RasterImageAsset::source(
+            raw,
+            png_info.width,
+            png_info.height,
+            ImageFormat::Png,
+            Some(metadata),
+        ))
     } else if raw.starts_with(&[0xFF, 0xD8]) {
         let (source_width, source_height) = crate::parser::jpeg::parse_jpeg_dimensions(&raw)?;
-        Some(RasterImageAsset {
-            data: raw,
+        Some(RasterImageAsset::source(
+            raw,
             source_width,
             source_height,
-            format: ImageFormat::Jpeg,
-            png_metadata: None,
-        })
+            ImageFormat::Jpeg,
+            None,
+        ))
     } else {
         None
     }
@@ -137,15 +160,15 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
 /// Load image data from an <img> element and return a LayoutElement.
 ///
 /// Bytes are fetched exactly once from the source.  When the content is SVG it
-/// is parsed as vector graphics (`LayoutElement::Svg`); otherwise it falls back
-/// to raster PNG/JPEG (`LayoutElement::Image`).
+/// is parsed as vector graphics ([`Svg`]); otherwise it falls back to a raster
+/// PNG/JPEG [`Image`].
 pub(crate) fn load_image_from_element(
     el: &ElementNode,
     available_width: f32,
     available_height: f32,
     style: &ComputedStyle,
-    filter_dpi: f32,
-) -> Option<LayoutElement> {
+    _filter_dpi: f32,
+) -> Option<LayoutNode> {
     let src = el.attributes.get("src")?;
 
     // Load bytes once.
@@ -175,54 +198,49 @@ pub(crate) fn load_image_from_element(
             (None, None) => intrinsic,
         };
 
-        let (width, height) = constrain_replaced_image_size(
+        let (width, height) = ReplacedBoxSize::new(
             width,
             height,
-            available_width,
-            style.max_width,
-            style.max_height,
-        );
+            html_attr_width.is_none(),
+            html_attr_height.is_none(),
+        )
+        .constrain(available_width, style.max_width, style.max_height)
+        .dimensions();
 
-        let border = LayoutBorder::from_computed(&style.border);
+        let border = LayoutBorder::from_computed(&style.border, style.color);
         let content_width = (width - border.horizontal_width()).max(0.0);
         let content_height = (height - border.vertical_width()).max(0.0);
         sync_svg_tree_to_layout_box(&mut tree, content_width, content_height);
-        return Some(LayoutElement::Svg {
-            tree,
-            width,
-            height,
-            flow_extra_bottom: 0.0,
-            margin_top: style.margin.top,
-            margin_bottom: style.margin.bottom,
-            position: if style.position == crate::style::computed::Position::Relative {
-                crate::style::computed::Position::Relative
-            } else {
-                crate::style::computed::Position::Static
-            },
-            offset_top: if style.position == crate::style::computed::Position::Relative {
-                style.top.unwrap_or(0.0)
-            } else {
-                0.0
-            },
-            offset_left: if style.position == crate::style::computed::Position::Relative {
-                style.left.unwrap_or(0.0)
-            } else {
-                0.0
-            },
-            z_index: style.z_index,
-            background_color: style.background_color.map(|c| c.to_f32_rgba()),
-            mix_blend_mode: style.mix_blend_mode,
-            border,
-        });
+        return Some(
+            Svg {
+                tree,
+                geometry: ReplacedGeometry::new(
+                    Size::new(width, height),
+                    BlockMargins::new(style.margin.top, style.margin.bottom),
+                    border,
+                ),
+                positioning: Positioning::for_replaced(style),
+                paint: SvgPaint {
+                    background_color: style.background_color,
+                    border_image: style.border_image.paint(),
+                    border_radii: style.resolve_corner_radii(width, height),
+                    group: crate::layout::elements::PaintGroup::from_style(style),
+                },
+                replaced: crate::layout::engine::SvgReplacedContent {
+                    object_fit: style.object_fit,
+                    object_position: style.object_position,
+                    ..Default::default()
+                },
+            }
+            .boxed(),
+        );
     }
 
-    // Fall back to raster image using the same bytes. `filter: blur()` /
-    // `drop-shadow()` need the decoded pixels (with the correct device sigma and
-    // transparent feather padding), so those are deferred to the filter raster
-    // path below; only the non-blur color filters are baked in here.
-    let wants_filter_raster = style.blur_radius > 0.0 || style.drop_shadow.is_some();
-    let raw_for_filter = wants_filter_raster.then(|| raw.clone());
-    let image = load_raster_image_bytes(raw, 0.0, &style.color_filters)?;
+    // The filter property applies to the complete replaced-element
+    // SourceGraphic, including its background and border. Keep image loading
+    // unfiltered; the shared post-layout filter compositor owns the operation
+    // list for every element kind.
+    let image = load_image_bytes(raw)?;
 
     // Determine dimensions: CSS width/height take precedence over the HTML
     // width/height attributes (matching the SVG path and the CSS cascade).
@@ -254,247 +272,37 @@ pub(crate) fn load_image_from_element(
         (None, None) => (available_width.min(200.0), 150.0),
     };
 
-    let (width, height) = constrain_replaced_image_size(
-        width,
-        height,
-        available_width,
-        style.max_width,
-        style.max_height,
-    );
+    let (width, height) =
+        ReplacedBoxSize::new(width, height, attr_width.is_none(), attr_height.is_none())
+            .constrain(available_width, style.max_width, style.max_height)
+            .dimensions();
 
-    // CSS `filter: blur()` / `drop-shadow()`: rasterize the (color-filtered)
-    // pixels into a padded, blurred bitmap so the effect feathers outside the
-    // content box. The displayed content box is `width`/`height` (a replaced
-    // box has no border by default in these cases); the bitmap carries the
-    // extra `blur_overflow` on every side.
-    let content_w =
-        (width - LayoutBorder::from_computed(&style.border).horizontal_width()).max(0.0);
-    let content_h = (height - LayoutBorder::from_computed(&style.border).vertical_width()).max(0.0);
-    let mut filter_effect = None;
-    let (image, blur_overflow) = match raw_for_filter {
-        Some(bytes) => match build_filter_raster(
-            &bytes,
-            content_w,
-            content_h,
-            &style.color_filters,
-            style.blur_radius,
-            style.drop_shadow,
-            filter_dpi,
-        ) {
-            Some(FilterRaster::Replacement {
-                image,
-                blur_overflow,
-            }) => (image, blur_overflow),
-            Some(FilterRaster::Shadow {
-                source_image,
-                effect,
-            }) => {
-                filter_effect = Some(effect);
-                (source_image.unwrap_or(image), 0.0)
-            }
-            None => (image, 0.0),
-        },
-        None => (image, 0.0),
-    };
-
-    Some(LayoutElement::Image {
-        image,
-        width,
-        height,
-        flow_extra_bottom: 0.0,
-        margin_top: style.margin.top,
-        margin_bottom: style.margin.bottom,
-        position: if style.position == crate::style::computed::Position::Relative {
-            crate::style::computed::Position::Relative
-        } else {
-            crate::style::computed::Position::Static
-        },
-        offset_top: if style.position == crate::style::computed::Position::Relative {
-            style.top.unwrap_or(0.0)
-        } else {
-            0.0
-        },
-        offset_left: if style.position == crate::style::computed::Position::Relative {
-            style.left.unwrap_or(0.0)
-        } else {
-            0.0
-        },
-        z_index: style.z_index,
-        object_fit: style.object_fit,
-        object_position: style.object_position,
-        background_color: style.background_color.map(|c| c.to_f32_rgba()),
-        border: LayoutBorder::from_computed(&style.border),
-        blur_overflow,
-        filter_effect,
-        src_crop: None,
-    })
-}
-
-enum FilterRaster {
-    Replacement {
-        image: RasterImageAsset,
-        blur_overflow: f32,
-    },
-    Shadow {
-        source_image: Option<RasterImageAsset>,
-        effect: ImageEffectRaster,
-    },
-}
-
-/// Decode `raw`, apply the non-blur color filters, then produce the blurred /
-/// drop-shadow raster for `filter: blur()` / `drop-shadow()`. Returns the
-/// embeddable asset plus the overflow (points per side) it adds beyond the
-/// content box, or `None` if decoding fails (caller keeps the sharp image).
-fn build_filter_raster(
-    raw: &[u8],
-    content_w_pt: f32,
-    content_h_pt: f32,
-    color_filters: &[ColorFilterOp],
-    blur_radius_pt: f32,
-    drop_shadow: Option<crate::style::computed::DropShadow>,
-    filter_dpi: f32,
-) -> Option<FilterRaster> {
-    let rgba = decode_image_for_blur(raw)?.to_rgba8();
-    if let Some(ds) = drop_shadow {
-        let has_blur_op = blur_radius_pt > 0.0
-            || color_filters
-                .iter()
-                .any(|op| matches!(op, ColorFilterOp::Blur(radius) if *radius > 0.0));
-        if !has_blur_op {
-            let mut shadow_source = rgba;
-            let mut source_image = None;
-            if color_filters
-                .iter()
-                .any(|op| !matches!(op, ColorFilterOp::Blur(_)))
-            {
-                let (filtered, _) = apply_filter_ops_rgba(
-                    &shadow_source,
-                    color_filters,
-                    content_w_pt,
-                    content_h_pt,
-                    0.0,
-                    filter_dpi,
-                )?;
-                source_image = Some(encode_rgba_subimage_as_asset(filtered.clone())?);
-                shadow_source = filtered;
-            }
-            return crate::render::blur::drop_shadow_image(
-                &shadow_source,
-                content_w_pt,
-                content_h_pt,
-                ds.dx,
-                ds.dy,
-                ds.blur,
-                ds.color,
-                filter_dpi,
-            )
-            .map(|b| FilterRaster::Shadow {
-                source_image,
-                effect: ImageEffectRaster {
-                    image: b.asset,
-                    overflow: b.overflow_pt,
-                },
-            });
+    Some(
+        Image {
+            source: image,
+            geometry: ReplacedGeometry::new(
+                Size::new(width, height),
+                BlockMargins::new(style.margin.top, style.margin.bottom),
+                LayoutBorder::from_computed(&style.border, style.color),
+            ),
+            positioning: Positioning::for_replaced(style),
+            sampling: ImageSampling {
+                object_fit: style.object_fit,
+                object_position: style.object_position,
+                rendering: style.image_rendering,
+                source_crop: None,
+            },
+            paint: ImagePaint {
+                background_color: style.background_color,
+                border_image: style.border_image.paint(),
+                border_radii: style.resolve_corner_radii(width, height),
+                filter_effect: None,
+                group: crate::layout::elements::PaintGroup::from_style(style),
+                ..Default::default()
+            },
         }
-
-        // drop-shadow operates on the (color-filtered) source.
-        let (src, _) = apply_filter_ops_rgba(
-            &rgba,
-            color_filters,
-            content_w_pt,
-            content_h_pt,
-            0.0,
-            filter_dpi,
-        )?;
-        return crate::render::blur::drop_shadow_image_with_source(
-            &src,
-            content_w_pt,
-            content_h_pt,
-            ds.dx,
-            ds.dy,
-            ds.blur,
-            ds.color,
-            filter_dpi,
-        )
-        .map(|b| FilterRaster::Replacement {
-            image: b.asset,
-            blur_overflow: b.overflow_pt,
-        });
-    }
-    if blur_radius_pt > 0.0 {
-        let (buf, overflow) = apply_filter_ops_rgba(
-            &rgba,
-            color_filters,
-            content_w_pt,
-            content_h_pt,
-            blur_radius_pt,
-            filter_dpi,
-        )?;
-        return crate::render::blur::raster_from_buffer(buf, overflow).map(|b| {
-            FilterRaster::Replacement {
-                image: b.asset,
-                blur_overflow: b.overflow_pt,
-            }
-        });
-    }
-    None
-}
-
-fn apply_filter_ops_rgba(
-    img: &image::RgbaImage,
-    ops: &[ColorFilterOp],
-    content_w_pt: f32,
-    content_h_pt: f32,
-    fallback_blur_pt: f32,
-    filter_dpi: f32,
-) -> Option<(image::RgbaImage, f32)> {
-    let mut current = img.clone();
-    let mut overflow = 0.0;
-    let mut saw_blur = false;
-    for op in ops {
-        match *op {
-            ColorFilterOp::Blur(radius) if radius > 0.0 => {
-                let display_w = content_w_pt + 2.0 * overflow;
-                let display_h = content_h_pt + 2.0 * overflow;
-                let (buf, ov) = crate::render::blur::blur_image_buffer(
-                    &current, display_w, display_h, radius, filter_dpi,
-                )?;
-                current = buf;
-                overflow += ov;
-                saw_blur = true;
-            }
-            ColorFilterOp::Blur(_) => {}
-            _ => apply_color_filters_rgba(&mut current, std::slice::from_ref(op)),
-        }
-    }
-    if !saw_blur && fallback_blur_pt > 0.0 {
-        let (buf, ov) = crate::render::blur::blur_image_buffer(
-            &current,
-            content_w_pt,
-            content_h_pt,
-            fallback_blur_pt,
-            filter_dpi,
-        )?;
-        current = buf;
-        overflow += ov;
-    }
-    Some((current, overflow))
-}
-
-/// Apply CSS `filter` color functions to an RGBA image in place, preserving the
-/// alpha channel (the RGB-only variant lives alongside the legacy in-place blur
-/// path). Mirrors `apply_color_filters` for the RGBA filter raster path.
-fn apply_color_filters_rgba(img: &mut image::RgbaImage, ops: &[ColorFilterOp]) {
-    let mut rgb = image::RgbImage::new(img.width(), img.height());
-    for (dst, src) in rgb.pixels_mut().zip(img.pixels()) {
-        *dst = image::Rgb([src[0], src[1], src[2]]);
-    }
-    apply_color_filters(&mut rgb, ops);
-    for (src, dst) in rgb.pixels().zip(img.pixels_mut()) {
-        dst[0] = src[0];
-        dst[1] = src[1];
-        dst[2] = src[2];
-    }
+        .boxed(),
+    )
 }
 
 /// Decode a PNG the lightweight parser cannot pass through (e.g. indexed/palette
@@ -511,16 +319,16 @@ fn decode_png_to_rgb_asset(raw: &[u8]) -> Option<RasterImageAsset> {
         )
         .ok()?;
     let png_info = png::parse_png(&encoded)?;
-    Some(RasterImageAsset {
-        data: encoded,
-        source_width: width,
-        source_height: height,
-        format: ImageFormat::Png,
-        png_metadata: Some(PngMetadata {
+    Some(RasterImageAsset::source(
+        encoded,
+        width,
+        height,
+        ImageFormat::Png,
+        Some(PngMetadata {
             channels: png_info.channels,
             bit_depth: png_info.bit_depth,
         }),
-    })
+    ))
 }
 
 /// Crop a raster image asset to the source-pixel sub-rectangle `[x, y, w, h]`
@@ -545,7 +353,7 @@ pub(crate) fn crop_raster_asset(
         return None;
     }
     let sub = image::imageops::crop_imm(&rgba, x, y, w, h).to_image();
-    encode_rgba_subimage_as_asset(sub)
+    encode_rgba_subimage_as_asset(sub, asset.origin)
 }
 
 /// Return a complete PNG file for decoders from either a complete PNG asset or
@@ -578,7 +386,7 @@ pub(crate) fn png_bytes_for_decoding<'a>(
 
 /// Decode a stored [`RasterImageAsset`] back to RGBA pixels regardless of its
 /// storage format.
-fn decode_asset_to_rgba(asset: &RasterImageAsset) -> Option<image::RgbaImage> {
+pub(crate) fn decode_asset_to_rgba(asset: &RasterImageAsset) -> Option<image::RgbaImage> {
     match asset.format {
         ImageFormat::Jpeg => Some(image::load_from_memory(&asset.data).ok()?.to_rgba8()),
         ImageFormat::PngAlpha => Some(decode_image_for_blur(&asset.data)?.to_rgba8()),
@@ -597,7 +405,10 @@ fn decode_asset_to_rgba(asset: &RasterImageAsset) -> Option<image::RgbaImage> {
 /// Re-encode a cropped RGBA buffer into an embeddable asset: a lossless RGB PNG
 /// when every pixel is opaque, or a full RGBA PNG (the alpha-preserving
 /// `/SMask` embedding path) otherwise.
-fn encode_rgba_subimage_as_asset(sub: image::RgbaImage) -> Option<RasterImageAsset> {
+fn encode_rgba_subimage_as_asset(
+    sub: image::RgbaImage,
+    origin: crate::layout::engine::RasterImageOrigin,
+) -> Option<RasterImageAsset> {
     let (w, h) = (sub.width(), sub.height());
     let opaque = sub.pixels().all(|p| p[3] == 255);
     if opaque {
@@ -613,16 +424,17 @@ fn encode_rgba_subimage_as_asset(sub: image::RgbaImage) -> Option<RasterImageAss
             )
             .ok()?;
         let info = png::parse_png(&encoded)?;
-        Some(RasterImageAsset {
-            data: encoded,
-            source_width: w,
-            source_height: h,
-            format: ImageFormat::Png,
-            png_metadata: Some(PngMetadata {
+        Some(RasterImageAsset::with_origin(
+            encoded,
+            w,
+            h,
+            ImageFormat::Png,
+            Some(PngMetadata {
                 channels: info.channels,
                 bit_depth: info.bit_depth,
             }),
-        })
+            origin,
+        ))
     } else {
         let mut encoded = Vec::new();
         image::DynamicImage::ImageRgba8(sub)
@@ -631,13 +443,14 @@ fn encode_rgba_subimage_as_asset(sub: image::RgbaImage) -> Option<RasterImageAss
                 image::ImageFormat::Png,
             )
             .ok()?;
-        Some(RasterImageAsset {
-            data: encoded,
-            source_width: w,
-            source_height: h,
-            format: ImageFormat::PngAlpha,
-            png_metadata: None,
-        })
+        Some(RasterImageAsset::with_origin(
+            encoded,
+            w,
+            h,
+            ImageFormat::PngAlpha,
+            None,
+            origin,
+        ))
     }
 }
 
@@ -692,24 +505,24 @@ pub(crate) struct ImagePlacement {
     pub clip: bool,
 }
 
-/// Compute where to draw a replaced image inside its box per CSS `object-fit`
-/// and `object-position`. The box is `box_w` x `box_h` points; the image's
-/// intrinsic pixel size is converted to points (1px = 0.75pt).
-pub(crate) fn compute_image_placement(
-    box_w: f32,
-    box_h: f32,
-    source_width: u32,
-    source_height: u32,
+/// Compute CSS replaced-content placement from an intrinsic size already in
+/// points. Raster and SVG elements share these `object-fit` rules.
+pub(crate) fn compute_replaced_content_placement(
+    content_box: Size,
+    intrinsic_size: Size,
     object_fit: crate::style::computed::ObjectFit,
     object_position: crate::style::computed::ObjectPosition,
 ) -> ImagePlacement {
     use crate::style::computed::ObjectFit;
 
-    // Intrinsic size in points (CSS px -> pt).
-    let intrinsic_w = source_width as f32 * 0.75;
-    let intrinsic_h = source_height as f32 * 0.75;
-
-    // Fall back to filling the box when intrinsic dimensions are unusable.
+    let Size {
+        width: box_w,
+        height: box_h,
+    } = content_box;
+    let Size {
+        width: intrinsic_w,
+        height: intrinsic_h,
+    } = intrinsic_size;
     if intrinsic_w <= 0.0 || intrinsic_h <= 0.0 || box_w <= 0.0 || box_h <= 0.0 {
         return ImagePlacement {
             width: box_w,
@@ -722,82 +535,128 @@ pub(crate) fn compute_image_placement(
 
     let contain_scale = (box_w / intrinsic_w).min(box_h / intrinsic_h);
     let cover_scale = (box_w / intrinsic_w).max(box_h / intrinsic_h);
-
-    let (draw_w, draw_h) = match object_fit {
+    let (width, height) = match object_fit {
         ObjectFit::Fill => (box_w, box_h),
         ObjectFit::Contain => (intrinsic_w * contain_scale, intrinsic_h * contain_scale),
         ObjectFit::Cover => (intrinsic_w * cover_scale, intrinsic_h * cover_scale),
         ObjectFit::None => (intrinsic_w, intrinsic_h),
         ObjectFit::ScaleDown => {
-            // The smaller of `none` and `contain`.
             let scale = contain_scale.min(1.0);
             (intrinsic_w * scale, intrinsic_h * scale)
         }
     };
-
-    // object-position aligns the drawn content within the free space (which can
-    // be negative when the content is larger than the box, i.e. cropping). A
-    // length component is an absolute start-edge offset; a fraction/percentage
-    // component scales the free space.
-    let offset_x = object_position.x.resolve(box_w - draw_w);
-    let offset_y = object_position.y.resolve(box_h - draw_h);
-
-    // Replaced content is always clipped to the content box (css-images-3 §5.5).
-    // Clip whenever any edge of the drawn content falls outside the box — either
-    // because the content is larger than the box, or because object-position
-    // (e.g. a length offset) pushes it past an edge.
-    const EPS: f32 = 0.01;
-    let clip = offset_x < -EPS
-        || offset_y < -EPS
-        || offset_x + draw_w > box_w + EPS
-        || offset_y + draw_h > box_h + EPS;
+    let offset_x = object_position.x.resolve(box_w - width);
+    let offset_y = object_position.y.resolve(box_h - height);
+    let clip =
+        offset_x < 0.0 || offset_y < 0.0 || offset_x + width > box_w || offset_y + height > box_h;
 
     ImagePlacement {
-        width: draw_w,
-        height: draw_h,
+        width,
+        height,
         offset_x,
         offset_y,
         clip,
     }
 }
 
-pub(crate) fn constrain_replaced_image_size(
+/// Compute where to draw a replaced image inside its box per CSS `object-fit`
+/// and `object-position`. The box is `box_w` x `box_h` points; the image's
+/// intrinsic pixel size is converted to points (1px = 0.75pt).
+pub(crate) fn compute_image_placement(
+    box_w: f32,
+    box_h: f32,
+    source_width: u32,
+    source_height: u32,
+    object_fit: crate::style::computed::ObjectFit,
+    object_position: crate::style::computed::ObjectPosition,
+) -> ImagePlacement {
+    compute_replaced_content_placement(
+        Size::new(box_w, box_h),
+        Size::new(source_width as f32 * 0.75, source_height as f32 * 0.75),
+        object_fit,
+        object_position,
+    )
+}
+
+/// The intrinsic viewport size used by CSS replaced-content fitting for SVG.
+pub(crate) fn svg_intrinsic_size(tree: &crate::parser::svg::SvgTree) -> Size {
+    let (width, height) = resolve_svg_size(tree, 0.0, 0.0, false, false);
+    Size::new(width, height)
+}
+
+/// The used size of a replaced element together with which dimensions remain
+/// automatic. Constraints may adjust an automatic counterpart to preserve the
+/// intrinsic ratio, but must not silently rewrite a specified CSS dimension.
+#[derive(Clone, Copy, Debug)]
+struct ReplacedBoxSize {
     width: f32,
     height: f32,
-    available_width: f32,
-    max_width: Option<f32>,
-    max_height: Option<f32>,
-) -> (f32, f32) {
-    if width <= 0.0 || height <= 0.0 {
-        return (width.max(0.0), height.max(0.0));
+    width_is_auto: bool,
+    height_is_auto: bool,
+}
+
+impl ReplacedBoxSize {
+    const fn new(width: f32, height: f32, width_is_auto: bool, height_is_auto: bool) -> Self {
+        Self {
+            width,
+            height,
+            width_is_auto,
+            height_is_auto,
+        }
     }
 
-    let mut scale: f32 = 1.0;
+    fn constrain(
+        mut self,
+        available_width: f32,
+        max_width: Option<f32>,
+        max_height: Option<f32>,
+    ) -> Self {
+        if self.width <= 0.0 || self.height <= 0.0 {
+            self.width = self.width.max(0.0);
+            self.height = self.height.max(0.0);
+            return self;
+        }
 
-    if available_width.is_finite() && available_width > 0.0 {
-        scale = scale.min(available_width / width);
+        let width_limit = available_width
+            .is_finite()
+            .then_some(available_width)
+            .filter(|limit| *limit > 0.0)
+            .into_iter()
+            .chain(max_width.filter(|limit| limit.is_finite() && *limit > 0.0))
+            .reduce(f32::min);
+        if let Some(limit) = width_limit.filter(|limit| self.width > *limit) {
+            let scale = limit / self.width;
+            self.width = limit;
+            if self.height_is_auto {
+                self.height *= scale;
+            }
+        }
+
+        if let Some(limit) = max_height
+            .filter(|limit| limit.is_finite() && *limit > 0.0)
+            .filter(|limit| self.height > *limit)
+        {
+            let scale = limit / self.height;
+            self.height = limit;
+            if self.width_is_auto {
+                self.width *= scale;
+            }
+        }
+
+        self
     }
 
-    if let Some(limit) = max_width.filter(|limit| limit.is_finite() && *limit > 0.0) {
-        scale = scale.min(limit / width);
-    }
-
-    if let Some(limit) = max_height.filter(|limit| limit.is_finite() && *limit > 0.0) {
-        scale = scale.min(limit / height);
-    }
-
-    if scale < 1.0 {
-        (width * scale, height * scale)
-    } else {
-        (width, height)
+    const fn dimensions(self) -> (f32, f32) {
+        (self.width, self.height)
     }
 }
 
 pub(crate) fn add_inline_replaced_baseline_gap(
-    element: LayoutElement,
+    mut element: LayoutNode,
     style: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
-) -> LayoutElement {
+    rounding: InlineBaselineGapRounding,
+) -> LayoutNode {
     if style.display != Display::Inline || style.vertical_align != VerticalAlign::Baseline {
         return element;
     }
@@ -806,83 +665,18 @@ pub(crate) fn add_inline_replaced_baseline_gap(
     let (_, descender_ratio) = crate::fonts::font_metrics_ratios(
         &font_family,
         style.font_weight == FontWeight::Bold,
-        style.font_style == FontStyle::Italic,
+        style.font_style.is_slanted(),
         fonts,
     );
-    let baseline_gap = descender_ratio * style.font_size;
+    let baseline_gap = rounding.apply(descender_ratio * style.font_size);
     if baseline_gap <= 0.0 {
         return element;
     }
 
-    match element {
-        LayoutElement::Image {
-            image,
-            width,
-            height,
-            flow_extra_bottom,
-            margin_top,
-            margin_bottom,
-            position,
-            offset_top,
-            offset_left,
-            z_index,
-            object_fit,
-            object_position,
-            background_color,
-            border,
-            blur_overflow,
-            filter_effect,
-            src_crop,
-        } => LayoutElement::Image {
-            image,
-            width,
-            height,
-            flow_extra_bottom: flow_extra_bottom + baseline_gap,
-            margin_top,
-            margin_bottom,
-            position,
-            offset_top,
-            offset_left,
-            z_index,
-            object_fit,
-            object_position,
-            background_color,
-            border,
-            blur_overflow,
-            filter_effect,
-            src_crop,
-        },
-        LayoutElement::Svg {
-            tree,
-            width,
-            height,
-            flow_extra_bottom,
-            margin_top,
-            margin_bottom,
-            position,
-            offset_top,
-            offset_left,
-            z_index,
-            background_color,
-            mix_blend_mode,
-            border,
-        } => LayoutElement::Svg {
-            tree,
-            width,
-            height,
-            flow_extra_bottom: flow_extra_bottom + baseline_gap,
-            margin_top,
-            margin_bottom,
-            position,
-            offset_top,
-            offset_left,
-            z_index,
-            background_color,
-            mix_blend_mode,
-            border,
-        },
-        other => other,
+    if let Some(replaced) = element.replaced_element_mut() {
+        replaced.add_baseline_gap(baseline_gap);
     }
+    element
 }
 
 pub(crate) fn parse_html_image_dimension(raw: Option<&String>) -> Option<f32> {
@@ -901,6 +695,17 @@ struct SvgSizeSource<'a> {
 
 impl<'a> SvgSizeSource<'a> {
     fn from_tree(tree: &'a crate::parser::svg::SvgTree) -> Self {
+        Self::from_tree_with_viewport_fallback(tree, true)
+    }
+
+    fn from_css_image(tree: &'a crate::parser::svg::SvgTree) -> Self {
+        Self::from_tree_with_viewport_fallback(tree, false)
+    }
+
+    fn from_tree_with_viewport_fallback(
+        tree: &'a crate::parser::svg::SvgTree,
+        use_resolved_viewport: bool,
+    ) -> Self {
         let explicit_width = tree
             .width_attr
             .as_deref()
@@ -911,10 +716,14 @@ impl<'a> SvgSizeSource<'a> {
             .as_deref()
             .and_then(crate::parser::svg::parse_absolute_length)
             .filter(|height| *height > 0.0);
-        let natural_width = explicit_width
-            .or_else(|| (tree.view_box.is_none() && tree.width > 0.0).then_some(tree.width));
-        let natural_height = explicit_height
-            .or_else(|| (tree.view_box.is_none() && tree.height > 0.0).then_some(tree.height));
+        let natural_width = explicit_width.or_else(|| {
+            (use_resolved_viewport && tree.view_box.is_none() && tree.width > 0.0)
+                .then_some(tree.width)
+        });
+        let natural_height = explicit_height.or_else(|| {
+            (use_resolved_viewport && tree.view_box.is_none() && tree.height > 0.0)
+                .then_some(tree.height)
+        });
         Self {
             width_raw: tree.width_attr.as_deref(),
             height_raw: tree.height_attr.as_deref(),
@@ -965,9 +774,10 @@ impl<'a> SvgSizeSource<'a> {
         available_height: f32,
         allow_percent_width: bool,
         allow_percent_height: bool,
+        default_object_size: Size,
     ) -> (f32, f32) {
-        const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
-        const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
+        let default_width = default_object_size.width;
+        let default_height = default_object_size.height;
         let width = resolve_svg_dimension(self.width_raw, available_width, allow_percent_width);
         let height = resolve_svg_dimension(self.height_raw, available_height, allow_percent_height);
 
@@ -977,14 +787,14 @@ impl<'a> SvgSizeSource<'a> {
                 if let Some(ratio) = self.natural_ratio {
                     (width, width * ratio)
                 } else {
-                    (width, self.natural_height.unwrap_or(DEFAULT_OBJECT_HEIGHT))
+                    (width, self.natural_height.unwrap_or(default_height))
                 }
             }
             (None, Some(height)) => {
                 if let Some(ratio) = self.natural_ratio {
                     (height / ratio.max(f32::EPSILON), height)
                 } else {
-                    (self.natural_width.unwrap_or(DEFAULT_OBJECT_WIDTH), height)
+                    (self.natural_width.unwrap_or(default_width), height)
                 }
             }
             (None, None) => {
@@ -994,18 +804,18 @@ impl<'a> SvgSizeSource<'a> {
                     } else if let Some(ratio) = self.natural_ratio {
                         (width, width * ratio)
                     } else {
-                        (width, DEFAULT_OBJECT_HEIGHT)
+                        (width, default_height)
                     }
                 } else if let Some(height) = self.natural_height {
                     if let Some(ratio) = self.natural_ratio {
                         (height / ratio.max(f32::EPSILON), height)
                     } else {
-                        (DEFAULT_OBJECT_WIDTH, height)
+                        (default_width, height)
                     }
                 } else if let Some(ratio) = self.natural_ratio {
-                    contain_default_object_size(ratio)
+                    contain_object_size(ratio, default_object_size)
                 } else {
-                    (DEFAULT_OBJECT_WIDTH, DEFAULT_OBJECT_HEIGHT)
+                    (default_width, default_height)
                 }
             }
         }
@@ -1033,15 +843,15 @@ pub(crate) fn svg_natural_ratio(
     }
 }
 
-pub(crate) fn contain_default_object_size(ratio: f32) -> (f32, f32) {
-    const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
-    const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
-
-    let default_ratio = DEFAULT_OBJECT_HEIGHT / DEFAULT_OBJECT_WIDTH;
+pub(crate) fn contain_object_size(ratio: f32, default_object_size: Size) -> (f32, f32) {
+    let default_ratio = default_object_size.height / default_object_size.width;
     if ratio > default_ratio {
-        (DEFAULT_OBJECT_HEIGHT / ratio, DEFAULT_OBJECT_HEIGHT)
+        (
+            default_object_size.height / ratio,
+            default_object_size.height,
+        )
     } else {
-        (DEFAULT_OBJECT_WIDTH, DEFAULT_OBJECT_WIDTH * ratio)
+        (default_object_size.width, default_object_size.width * ratio)
     }
 }
 
@@ -1059,7 +869,25 @@ pub(crate) fn resolve_svg_size(
         available_height,
         allow_percent_width,
         allow_percent_height,
+        Size::new(300.0, 150.0),
     )
+}
+
+/// Resolve an SVG used as a CSS image against its context-defined default
+/// object size. Unlike an inline SVG viewport, parser fallback dimensions are
+/// not treated as natural dimensions.
+pub(crate) fn resolve_svg_image_size(
+    tree: &crate::parser::svg::SvgTree,
+    default_object_size: Size,
+) -> Size {
+    let (width, height) = SvgSizeSource::from_css_image(tree).resolve(
+        default_object_size.width,
+        default_object_size.height,
+        false,
+        false,
+        default_object_size,
+    );
+    Size::new(width, height)
 }
 
 pub(crate) fn resolve_svg_element_size(
@@ -1074,6 +902,7 @@ pub(crate) fn resolve_svg_element_size(
         available_height,
         allow_percent_width,
         allow_percent_height,
+        Size::new(300.0, 150.0),
     )
 }
 
@@ -1123,7 +952,7 @@ pub(crate) fn sync_svg_tree_to_layout_box(
 
 pub(crate) fn inject_inherited_svg_color(
     tree: &mut crate::parser::svg::SvgTree,
-    inherited_color: (f32, f32, f32),
+    inherited_color: crate::types::Color,
 ) {
     let inherit_color = |style: &mut crate::parser::svg::SvgStyle| {
         style.color.get_or_insert(inherited_color);
@@ -1222,313 +1051,6 @@ pub(crate) fn raster_image_dimensions(raw: &[u8]) -> Option<(u32, u32)> {
         let image = image::load_from_memory(raw).ok()?;
         Some((image.width(), image.height()))
     }
-}
-
-pub(crate) fn load_raster_image_bytes(
-    raw: Vec<u8>,
-    blur_radius: f32,
-    color_filters: &[ColorFilterOp],
-) -> Option<RasterImageAsset> {
-    if !color_filters.is_empty() {
-        apply_image_filters(&raw, blur_radius, color_filters)
-    } else if blur_radius > 0.0 {
-        blur_image_bytes(&raw, blur_radius)
-    } else {
-        load_image_bytes(raw)
-    }
-}
-
-/// Decode an image, apply blur then the CSS color filters in order, and
-/// re-encode losslessly (RGB PNG) so flat-color filtered output stays crisp.
-fn apply_image_filters(
-    raw: &[u8],
-    blur_radius: f32,
-    color_filters: &[ColorFilterOp],
-) -> Option<RasterImageAsset> {
-    let mut decoded = decode_image_for_blur(raw)?;
-    if blur_radius > 0.0 {
-        decoded = image::DynamicImage::ImageRgba8(image::imageops::blur(&decoded, blur_radius));
-    }
-    let mut rgb = decoded.to_rgb8();
-    apply_color_filters(&mut rgb, color_filters);
-    let (width, height) = (rgb.width(), rgb.height());
-    let mut encoded = Vec::new();
-    image::DynamicImage::ImageRgb8(rgb)
-        .write_to(
-            &mut std::io::Cursor::new(&mut encoded),
-            image::ImageFormat::Png,
-        )
-        .ok()?;
-    let png_info = png::parse_png(&encoded)?;
-    Some(RasterImageAsset {
-        data: encoded,
-        source_width: width,
-        source_height: height,
-        format: ImageFormat::Png,
-        png_metadata: Some(PngMetadata {
-            channels: png_info.channels,
-            bit_depth: png_info.bit_depth,
-        }),
-    })
-}
-
-/// Apply CSS `filter` color functions to an RGB image, in order. Matrices follow
-/// the CSS Filter Effects / SVG feColorMatrix definitions.
-fn apply_color_filters(img: &mut image::RgbImage, ops: &[ColorFilterOp]) {
-    for pixel in img.pixels_mut() {
-        let (mut r, mut g, mut b) = (pixel[0] as f32, pixel[1] as f32, pixel[2] as f32);
-        for op in ops {
-            let (nr, ng, nb) = apply_one_filter(op, r, g, b);
-            r = nr.clamp(0.0, 255.0);
-            g = ng.clamp(0.0, 255.0);
-            b = nb.clamp(0.0, 255.0);
-        }
-        pixel[0] = r.round() as u8;
-        pixel[1] = g.round() as u8;
-        pixel[2] = b.round() as u8;
-    }
-}
-
-fn apply_one_filter(op: &ColorFilterOp, r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-    match *op {
-        ColorFilterOp::Brightness(k) => (r * k, g * k, b * k),
-        ColorFilterOp::Contrast(c) => (
-            (r - 127.5) * c + 127.5,
-            (g - 127.5) * c + 127.5,
-            (b - 127.5) * c + 127.5,
-        ),
-        ColorFilterOp::Invert(a) => (
-            r * (1.0 - a) + (255.0 - r) * a,
-            g * (1.0 - a) + (255.0 - g) * a,
-            b * (1.0 - a) + (255.0 - b) * a,
-        ),
-        ColorFilterOp::Grayscale(amount) => {
-            let v = 1.0 - amount;
-            (
-                (0.2126 + 0.7874 * v) * r + (0.7152 - 0.7152 * v) * g + (0.0722 - 0.0722 * v) * b,
-                (0.2126 - 0.2126 * v) * r + (0.7152 + 0.2848 * v) * g + (0.0722 - 0.0722 * v) * b,
-                (0.2126 - 0.2126 * v) * r + (0.7152 - 0.7152 * v) * g + (0.0722 + 0.9278 * v) * b,
-            )
-        }
-        ColorFilterOp::Sepia(amount) => {
-            let v = 1.0 - amount;
-            (
-                (0.393 + 0.607 * v) * r + (0.769 - 0.769 * v) * g + (0.189 - 0.189 * v) * b,
-                (0.349 - 0.349 * v) * r + (0.686 + 0.314 * v) * g + (0.168 - 0.168 * v) * b,
-                (0.272 - 0.272 * v) * r + (0.534 - 0.534 * v) * g + (0.131 + 0.869 * v) * b,
-            )
-        }
-        ColorFilterOp::Saturate(s) => (
-            (0.213 + 0.787 * s) * r + (0.715 - 0.715 * s) * g + (0.072 - 0.072 * s) * b,
-            (0.213 - 0.213 * s) * r + (0.715 + 0.285 * s) * g + (0.072 - 0.072 * s) * b,
-            (0.213 - 0.213 * s) * r + (0.715 - 0.715 * s) * g + (0.072 + 0.928 * s) * b,
-        ),
-        ColorFilterOp::HueRotate(deg) => {
-            let rad = deg.to_radians();
-            let (c, s) = (rad.cos(), rad.sin());
-            (
-                (0.213 + c * 0.787 - s * 0.213) * r
-                    + (0.715 - c * 0.715 - s * 0.715) * g
-                    + (0.072 - c * 0.072 + s * 0.928) * b,
-                (0.213 - c * 0.213 + s * 0.143) * r
-                    + (0.715 + c * 0.285 + s * 0.140) * g
-                    + (0.072 - c * 0.072 - s * 0.283) * b,
-                (0.213 - c * 0.213 - s * 0.787) * r
-                    + (0.715 - c * 0.715 + s * 0.715) * g
-                    + (0.072 + c * 0.928 + s * 0.072) * b,
-            )
-        }
-        ColorFilterOp::Matrix(m) => (
-            m[0] * r + m[1] * g + m[2] * b + m[4] * 255.0,
-            m[5] * r + m[6] * g + m[7] * b + m[9] * 255.0,
-            m[10] * r + m[11] * g + m[12] * b + m[14] * 255.0,
-        ),
-        ColorFilterOp::Flood { .. } => (r, g, b),
-        ColorFilterOp::Blur(_)
-        | ColorFilterOp::Offset { .. }
-        | ColorFilterOp::DropShadow(_)
-        | ColorFilterOp::MorphologyDilate(_) => (r, g, b),
-    }
-}
-
-/// sRGB transfer function (IEC 61966-2-1): encoded 0..1 -> linear-light 0..1.
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Inverse sRGB transfer function: linear-light 0..1 -> encoded 0..1.
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-/// Apply an ordered list of CSS/SVG color-filter ops to a single solid color,
-/// reusing the same per-pixel math (`apply_one_filter`) the image path uses.
-/// `color` is straight-alpha RGBA in 0..1 (as produced by `Color::to_f32_rgba`);
-/// the alpha channel is preserved unchanged (feColorMatrix saturate/grayscale/
-/// hue-rotate touch RGB only). When `linear_rgb` is true the math runs in
-/// linear-light (SVG `color-interpolation-filters: linearRGB`, the default for
-/// `<filter>` referenced by `filter: url(#id)`); otherwise it runs in sRGB
-/// (CSS `filter` *functions*). This lets `filter: url(#id)` recolor a solid
-/// box's background/border the same way it recolors an image's pixels.
-pub(crate) fn apply_color_filters_to_color(
-    color: (f32, f32, f32, f32),
-    ops: &[ColorFilterOp],
-    linear_rgb: bool,
-) -> (f32, f32, f32, f32) {
-    let (mut cr, mut cg, mut cb, mut a) = color;
-    if linear_rgb {
-        cr = srgb_to_linear(cr);
-        cg = srgb_to_linear(cg);
-        cb = srgb_to_linear(cb);
-    }
-    let (mut r, mut g, mut b) = (cr * 255.0, cg * 255.0, cb * 255.0);
-    for op in ops {
-        if let ColorFilterOp::Matrix(m) = op {
-            let alpha = a * 255.0;
-            let nr = m[0] * r + m[1] * g + m[2] * b + m[3] * alpha + m[4] * 255.0;
-            let ng = m[5] * r + m[6] * g + m[7] * b + m[8] * alpha + m[9] * 255.0;
-            let nb = m[10] * r + m[11] * g + m[12] * b + m[13] * alpha + m[14] * 255.0;
-            let na = m[15] * r + m[16] * g + m[17] * b + m[18] * alpha + m[19] * 255.0;
-            r = nr.clamp(0.0, 255.0);
-            g = ng.clamp(0.0, 255.0);
-            b = nb.clamp(0.0, 255.0);
-            a = (na / 255.0).clamp(0.0, 1.0);
-        } else {
-            let (nr, ng, nb) = apply_one_filter(op, r, g, b);
-            r = nr.clamp(0.0, 255.0);
-            g = ng.clamp(0.0, 255.0);
-            b = nb.clamp(0.0, 255.0);
-        }
-    }
-    let (mut or, mut og, mut ob) = (r / 255.0, g / 255.0, b / 255.0);
-    if linear_rgb {
-        or = linear_to_srgb(or);
-        og = linear_to_srgb(og);
-        ob = linear_to_srgb(ob);
-    }
-    (or, og, ob, a)
-}
-
-/// Recolor an element's self-painted surfaces (background-color and each border
-/// side color) in place through its resolved `color_filters`. Used for solid
-/// boxes carrying a CSS `filter` (color function or resolved `url(#id)`): a
-/// `<filter>`'s color-matrix recolors the box the same way it recolors an
-/// image's pixels (css-filter-effects-1 §2; SVG filter-effects feColorMatrix).
-/// Replaced-image pixels are filtered separately on the image path, so this only
-/// affects the box's own paint and never double-applies.
-pub(crate) fn apply_color_filters_to_box(style: &mut ComputedStyle, linear_rgb: bool) {
-    let ops = style.color_filters.clone();
-    let recolor = |c: crate::types::Color| -> crate::types::Color {
-        let (r, g, b, a) = apply_color_filters_to_color(c.to_f32_rgba(), &ops, linear_rgb);
-        crate::types::Color {
-            r: (r * 255.0).round().clamp(0.0, 255.0) as u8,
-            g: (g * 255.0).round().clamp(0.0, 255.0) as u8,
-            b: (b * 255.0).round().clamp(0.0, 255.0) as u8,
-            a: (a * 255.0).round().clamp(0.0, 255.0) as u8,
-        }
-    };
-    if let Some(bg) = style.background_color {
-        style.background_color = Some(recolor(bg));
-    }
-    for side in [
-        &mut style.border.top,
-        &mut style.border.right,
-        &mut style.border.bottom,
-        &mut style.border.left,
-    ] {
-        if let Some(c) = side.color {
-            side.color = Some(recolor(c));
-        }
-    }
-    for shadow in &mut style.box_shadow {
-        shadow.color = recolor(shadow.color);
-    }
-    for op in &ops {
-        match *op {
-            ColorFilterOp::Blur(radius) => {
-                style.blur_radius = style.blur_radius.max(radius);
-            }
-            ColorFilterOp::Offset {
-                dx,
-                dy,
-                keep_source,
-                ..
-            } => {
-                if let Some(bg) = style.background_color {
-                    style.box_shadow.push(crate::style::computed::BoxShadow {
-                        offset_x: dx,
-                        offset_y: dy,
-                        blur: 0.0,
-                        spread: 0.0,
-                        color: bg,
-                        inset: false,
-                    });
-                    if !keep_source {
-                        style.background_color = None;
-                    }
-                }
-            }
-            ColorFilterOp::DropShadow(shadow) => {
-                style.box_shadow.push(crate::style::computed::BoxShadow {
-                    offset_x: shadow.dx,
-                    offset_y: shadow.dy,
-                    blur: shadow.blur,
-                    spread: 0.0,
-                    color: color_from_filter_tuple(shadow.color),
-                    inset: false,
-                });
-            }
-            ColorFilterOp::MorphologyDilate(radius) => {
-                if let Some(bg) = style.background_color {
-                    style.box_shadow.push(crate::style::computed::BoxShadow {
-                        offset_x: 0.0,
-                        offset_y: 0.0,
-                        blur: 0.0,
-                        spread: radius,
-                        color: bg,
-                        inset: false,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn color_from_filter_tuple(color: (f32, f32, f32, f32)) -> crate::types::Color {
-    crate::types::Color {
-        r: (color.0 * 255.0).round().clamp(0.0, 255.0) as u8,
-        g: (color.1 * 255.0).round().clamp(0.0, 255.0) as u8,
-        b: (color.2 * 255.0).round().clamp(0.0, 255.0) as u8,
-        a: (color.3 * 255.0).round().clamp(0.0, 255.0) as u8,
-    }
-}
-
-pub(crate) fn blur_image_bytes(raw: &[u8], blur_radius: f32) -> Option<RasterImageAsset> {
-    let decoded = decode_image_for_blur(raw)?;
-    let blurred = image::imageops::blur(&decoded, blur_radius);
-    let mut encoded = Vec::new();
-    image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(blurred).to_rgb8())
-        .write_to(
-            &mut std::io::Cursor::new(&mut encoded),
-            image::ImageFormat::Jpeg,
-        )
-        .ok()?;
-    Some(RasterImageAsset {
-        data: encoded,
-        source_width: decoded.width(),
-        source_height: decoded.height(),
-        format: ImageFormat::Jpeg,
-        png_metadata: None,
-    })
 }
 
 fn decode_image_for_blur(raw: &[u8]) -> Option<image::DynamicImage> {
@@ -1644,7 +1166,67 @@ fn hex_val(b: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::parser::svg::{SvgTree, ViewBox};
+    use crate::style::computed::{ObjectFit, ObjectPosition, ObjectPositionComponent};
     use crate::util::decode_base64;
+
+    #[test]
+    fn object_fit_placement_clips_a_five_thousandth_point_overflow() {
+        let placement = compute_image_placement(
+            100.0,
+            80.0,
+            1,
+            1,
+            ObjectFit::Fill,
+            ObjectPosition {
+                x: ObjectPositionComponent::Length(0.005),
+                y: ObjectPositionComponent::Length(0.0),
+            },
+        );
+
+        assert_eq!(placement.width, 100.0);
+        assert_eq!(placement.offset_x, 0.005);
+        assert!(placement.offset_x + placement.width > 100.0);
+        assert!(placement.clip);
+    }
+
+    #[test]
+    fn object_fit_placement_does_not_clip_an_exact_fit() {
+        let placement = compute_image_placement(
+            100.0,
+            80.0,
+            1,
+            1,
+            ObjectFit::Fill,
+            ObjectPosition::default(),
+        );
+
+        assert_eq!(placement.offset_x, 0.0);
+        assert_eq!(placement.offset_y, 0.0);
+        assert_eq!(placement.offset_x + placement.width, 100.0);
+        assert_eq!(placement.offset_y + placement.height, 80.0);
+        assert!(!placement.clip);
+    }
+
+    #[test]
+    fn object_fit_placement_does_not_clip_a_subpoint_offset_inside_the_box() {
+        let placement = compute_image_placement(
+            100.0,
+            80.0,
+            100,
+            80,
+            ObjectFit::None,
+            ObjectPosition {
+                x: ObjectPositionComponent::Length(0.005),
+                y: ObjectPositionComponent::Length(0.005),
+            },
+        );
+
+        assert_eq!(placement.offset_x, 0.005);
+        assert_eq!(placement.offset_y, 0.005);
+        assert!(placement.offset_x + placement.width < 100.0);
+        assert!(placement.offset_y + placement.height < 80.0);
+        assert!(!placement.clip);
+    }
 
     #[test]
     fn try_parse_svg_bytes_accepts_utf8_bom_prefix() {
@@ -1766,44 +1348,6 @@ mod tests {
     }
 
     #[test]
-    fn drop_shadow_split_keeps_color_filtered_source_image() {
-        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200, 100, 50]));
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-
-        let result = build_filter_raster(
-            &png,
-            72.0,
-            72.0,
-            &[ColorFilterOp::Brightness(0.5)],
-            0.0,
-            Some(crate::style::computed::DropShadow {
-                dx: 0.0,
-                dy: 0.0,
-                blur: 0.0,
-                color: (0.0, 0.0, 0.0, 0.5),
-            }),
-            72.0,
-        )
-        .expect("drop-shadow filter should build");
-
-        let FilterRaster::Shadow {
-            source_image,
-            effect,
-        } = result
-        else {
-            panic!("non-blur drop-shadow should split source and shadow");
-        };
-        assert!(effect.image.source_width > 0);
-        let source_image =
-            source_image.expect("color-filtered source image should be returned with shadow");
-        let rgba = decode_asset_to_rgba(&source_image).expect("filtered source should decode");
-        assert_eq!(rgba.get_pixel(0, 0).0[..3], [100, 50, 25]);
-    }
-
-    #[test]
     fn base64_decode_roundtrip() {
         let data = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
         let encoded = base64_encode(data);
@@ -1881,6 +1425,32 @@ mod tests {
         assert_eq!(
             resolve_svg_size(&tree, 400.0, 400.0, false, false),
             (90.0, 45.0)
+        );
+    }
+
+    #[test]
+    fn css_image_svg_with_only_a_ratio_contains_within_its_default_object_size() {
+        let tree = crate::parser::svg::parse_svg_from_string(
+            r#"<svg viewBox="0 0 2 1"><rect width="2" height="1"/></svg>"#,
+        )
+        .expect("valid SVG image");
+
+        assert_eq!(
+            resolve_svg_image_size(&tree, Size::new(120.0, 120.0)),
+            Size::new(120.0, 60.0)
+        );
+    }
+
+    #[test]
+    fn css_image_svg_without_natural_dimensions_uses_its_default_object_size() {
+        let tree = crate::parser::svg::parse_svg_from_string(
+            r#"<svg><rect width="100%" height="100%"/></svg>"#,
+        )
+        .expect("valid SVG image");
+
+        assert_eq!(
+            resolve_svg_image_size(&tree, Size::new(120.0, 80.0)),
+            Size::new(120.0, 80.0)
         );
     }
 
@@ -2011,43 +1581,63 @@ mod tests {
     }
 
     #[test]
-    fn constrain_replaced_image_size_within_available_width() {
+    fn automatic_replaced_size_scales_to_available_width() {
         // Image 200x100 in 150 available width => scale down to 150x75
-        let (w, h) = constrain_replaced_image_size(200.0, 100.0, 150.0, None, None);
+        let (w, h) = ReplacedBoxSize::new(200.0, 100.0, true, true)
+            .constrain(150.0, None, None)
+            .dimensions();
         assert!((w - 150.0).abs() < 0.01);
         assert!((h - 75.0).abs() < 0.01);
     }
 
     #[test]
-    fn constrain_replaced_image_size_with_max_width() {
+    fn automatic_replaced_size_scales_to_max_width() {
         // Image 200x100, available 300, max_width 100 => scale to 100x50
-        let (w, h) = constrain_replaced_image_size(200.0, 100.0, 300.0, Some(100.0), None);
+        let (w, h) = ReplacedBoxSize::new(200.0, 100.0, true, true)
+            .constrain(300.0, Some(100.0), None)
+            .dimensions();
         assert!((w - 100.0).abs() < 0.01);
         assert!((h - 50.0).abs() < 0.01);
     }
 
     #[test]
-    fn constrain_replaced_image_size_with_max_height() {
+    fn automatic_replaced_size_scales_to_max_height() {
         // Image 200x100, max_height 40 => scale to 80x40
-        let (w, h) = constrain_replaced_image_size(200.0, 100.0, 500.0, None, Some(40.0));
+        let (w, h) = ReplacedBoxSize::new(200.0, 100.0, true, true)
+            .constrain(500.0, None, Some(40.0))
+            .dimensions();
         assert!((w - 80.0).abs() < 0.01);
         assert!((h - 40.0).abs() < 0.01);
     }
 
     #[test]
-    fn constrain_replaced_image_size_zero_dimensions() {
+    fn replaced_size_clamps_zero_dimensions() {
         // Zero width/height should return (0, 0)
-        let (w, h) = constrain_replaced_image_size(0.0, 100.0, 500.0, None, None);
+        let (w, h) = ReplacedBoxSize::new(0.0, 100.0, true, true)
+            .constrain(500.0, None, None)
+            .dimensions();
         assert_eq!(w, 0.0);
         assert_eq!(h, 100.0);
     }
 
     #[test]
-    fn constrain_replaced_image_size_no_scaling_needed() {
+    fn replaced_size_does_not_scale_when_unconstrained() {
         // Image fits within available width, no max constraints
-        let (w, h) = constrain_replaced_image_size(100.0, 50.0, 500.0, None, None);
+        let (w, h) = ReplacedBoxSize::new(100.0, 50.0, true, true)
+            .constrain(500.0, None, None)
+            .dimensions();
         assert_eq!(w, 100.0);
         assert_eq!(h, 50.0);
+    }
+
+    #[test]
+    fn max_height_preserves_a_specified_width() {
+        let (w, h) = ReplacedBoxSize::new(16.5, 91.666_67, false, true)
+            .constrain(159.0, None, Some(88.5))
+            .dimensions();
+
+        assert_eq!(w, 16.5);
+        assert_eq!(h, 88.5);
     }
 
     #[test]
@@ -2104,7 +1694,7 @@ mod tests {
     #[test]
     fn contain_default_object_size_tall_ratio() {
         // ratio > default_ratio (0.5): height-constrained
-        let (w, h) = contain_default_object_size(2.0);
+        let (w, h) = contain_object_size(2.0, Size::new(300.0, 150.0));
         assert!((h - 150.0).abs() < 0.01);
         assert!((w - 75.0).abs() < 0.01);
     }
@@ -2112,7 +1702,7 @@ mod tests {
     #[test]
     fn contain_default_object_size_wide_ratio() {
         // ratio < default_ratio (0.5): width-constrained
-        let (w, h) = contain_default_object_size(0.25);
+        let (w, h) = contain_object_size(0.25, Size::new(300.0, 150.0));
         assert!((w - 300.0).abs() < 0.01);
         assert!((h - 75.0).abs() < 0.01);
     }

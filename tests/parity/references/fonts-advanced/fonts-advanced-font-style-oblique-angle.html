@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>font-style oblique angle — standards-derived reference</title>
+<style>
+  @page { size: 304px 152px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 12px; font-size: 36px; }
+  .o {
+    width: max-content;
+    color: #111111;
+    /*
+     * CSS Fonts 4 section 5.2 requires fallback synthesis by geometric
+     * shearing to the specified oblique value. Chromium computes
+     * `oblique 20deg` but prints this upright when no oblique face exists.
+     * Materialize the required glyph-local shear around this line's baseline.
+     */
+    transform: skewX(-20deg);
+    transform-origin: 0 39px;
+  }
+  .n { color: #d7263d; }
+</style>
+</head>
+<body>
+  <div class="o">Slanted</div>
+  <div class="n">Slanted</div>
+</body>
+</html>

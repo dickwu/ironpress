@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-x",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-y",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale-x",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale-y",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-rotate",
@@ -113,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-skew",
@@ -130,10 +109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-matrix",
@@ -147,10 +123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-top-left",
@@ -164,10 +137,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-compound-rotate-translate",
@@ -181,10 +151,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-percent",
@@ -198,10 +165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-x-percent",
@@ -215,10 +179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-y-percent",
@@ -232,10 +193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate-em",
@@ -249,10 +207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale-negative",
@@ -266,10 +221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale-omitted",
@@ -283,10 +235,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-rotate-turn",
@@ -300,10 +249,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-rotate-rad",
@@ -317,10 +263,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-rotate-negative",
@@ -334,10 +277,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-skew-x",
@@ -351,10 +291,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-skew-y",
@@ -368,10 +305,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-bottom-right",
@@ -385,10 +319,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-length",
@@ -402,10 +333,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-percent",
@@ -419,10 +347,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-keyword-length",
@@ -436,10 +361,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-scale-corner",
@@ -453,10 +375,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-compound-order",
@@ -470,10 +389,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-compound-scale-translate",
@@ -487,10 +403,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-none-reset",
@@ -504,10 +417,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-individual-transform-box-content",
@@ -521,10 +431,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale-percent",
@@ -539,10 +446,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-perspective-rotate-x",
@@ -557,10 +461,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-perspective-translate-z",
@@ -575,10 +476,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-rotate3d-axis",
@@ -593,10 +491,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-matrix3d-translate",
@@ -611,10 +506,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-preserve-3d-depth-order",
@@ -629,10 +521,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-perspective-origin",
@@ -647,10 +536,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-translate3d-perspective",
@@ -665,10 +551,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-scale3d-rotate-y",
@@ -683,10 +566,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "transforms-origin-z-offset",
@@ -701,9 +581,57 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-invalid-unitless-angle-is-ignored",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "invalid-unitless-angle",
+    "description": "A non-zero unitless rotate() angle is syntactically invalid, so the declaration is discarded and the green target stays over the red reference. Catches permissive parsers that reinterpret rotate(45) as rotate(45deg).",
+    "file": "cases/transforms/transforms-invalid-unitless-angle-is-ignored.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-invalid-unitless-translation-is-ignored",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "invalid-unitless-translation",
+    "description": "A non-zero unitless translate() component is syntactically invalid, so the declaration is discarded and the green target stays over the red reference. Catches treating bare translation numbers as points or pixels.",
+    "file": "cases/transforms/transforms-invalid-unitless-translation-is-ignored.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotated-repeating-background",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotated-repeating-background",
+    "description": "A rotated and non-uniformly scaled box keeps its repeating image cell in the element's transformed coordinate space; catches page-space pattern resources that ignore the element CTM.",
+    "file": "cases/transforms/transforms-rotated-repeating-background.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "transform",
+      "background-repeat",
+      "background-image"
     ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-color-swatch"
+    ]
   }
 ]

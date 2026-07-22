@@ -1,90 +1,19 @@
 use super::{
-    CssRule, CssValue, FontFaceRule, MarginBox, MarginBoxPosition, MarginContentToken, PageRule,
-    PageSelector, extract_url_path,
-    model::{FontFaceSource, FootnoteAreaStyle, UnicodeRange},
-    parse_inline_style, preprocess_media_queries,
+    CssValue, FontFaceRule, MarginBox, MarginBoxPosition, MarginContentToken, PageRule,
+    PageSelector, PageTextStyle, SpecifiedColor, extract_url_path,
+    model::{FontFaceSource, FontStretch, FootnoteAreaStyle, PageCounterControl, UnicodeRange},
+    preprocess_media_queries,
 };
 
 /// Parse a CSS stylesheet and extract `@page` rules.
 pub fn parse_page_rules(css: &str) -> Vec<PageRule> {
     let preprocessed = preprocess_media_queries(css);
-    CssRule::begin_counter_style_stylesheet_scan();
-    CssRule::register_counter_style_rules(extract_counter_style_rules(&preprocessed));
-    let mut rules = extract_page_rules(&preprocessed);
-    rules.extend(
-        extract_footnote_area_rules(&preprocessed)
-            .into_iter()
-            .map(|area| PageRule {
-                footnote_max_height: area.max_height,
-                footnote_padding_top: Some(area.padding_top),
-                footnote_border_top_width: Some(area.border_top_width),
-                footnote_border_top_color: area.border_top_color,
-                ..PageRule::default()
-            }),
-    );
+    let rules = extract_page_rules(&preprocessed);
+    // `@footnote` is a page-context rule. In particular, do not silently
+    // accept a stylesheet-level `@footnote`: doing so turns an invalid source
+    // into a document-wide footnote style and makes reference engines that
+    // reject it appear wrong.
     rules
-}
-
-fn extract_counter_style_rules(css: &str) -> Vec<CssRule> {
-    let mut rules = Vec::new();
-    let mut remaining = css;
-
-    while let Some(at_pos) = remaining.to_ascii_lowercase().find("@counter-style") {
-        let Some(after_at) = remaining.get(at_pos + "@counter-style".len()..) else {
-            break;
-        };
-        let Some(brace_pos) = after_at.find('{') else {
-            break;
-        };
-        let name = after_at[..brace_pos].trim();
-        let Some(after_brace) = after_at.get(brace_pos + 1..) else {
-            break;
-        };
-        let Some(close_pos) = matching_rule_close(after_brace) else {
-            break;
-        };
-        let declarations = parse_inline_style(&after_brace[..close_pos]);
-        if !name.is_empty() && !declarations.properties.is_empty() {
-            rules.push(CssRule {
-                selector: format!("@counter-style {}", name.to_ascii_lowercase()),
-                declarations,
-                pseudo_element: None,
-            });
-        }
-        remaining = &after_brace[close_pos + 1..];
-    }
-
-    rules
-}
-
-fn matching_rule_close(body: &str) -> Option<usize> {
-    let mut depth = 1usize;
-    let mut quote = None;
-    let mut escape = false;
-    for (index, ch) in body.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if quote.is_some() && ch == '\\' {
-            escape = true;
-            continue;
-        }
-        match (quote, ch) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(ch),
-            (None, '{') => depth += 1,
-            (None, '}') => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Parse a CSS stylesheet and extract `@font-face` rules.
@@ -130,6 +59,7 @@ pub(crate) fn parse_font_face_declarations(decls: &str) -> Option<FontFaceRule> 
     let mut sources: Vec<FontFaceSource> = Vec::new();
     let mut font_weight_bold = false;
     let mut font_style_italic = false;
+    let mut font_stretch = FontStretch::default();
     let mut size_adjust = 1.0;
     let mut unicode_ranges = Vec::new();
 
@@ -159,6 +89,11 @@ pub(crate) fn parse_font_face_declarations(decls: &str) -> Option<FontFaceRule> 
                 "font-style" => {
                     font_style_italic = parse_font_face_style(val);
                 }
+                "font-stretch" | "font-width" => {
+                    if let Some(stretch) = FontStretch::from_css(val) {
+                        font_stretch = stretch;
+                    }
+                }
                 "size-adjust" => {
                     size_adjust = parse_size_adjust_descriptor(val).unwrap_or(1.0);
                 }
@@ -176,6 +111,7 @@ pub(crate) fn parse_font_face_declarations(decls: &str) -> Option<FontFaceRule> 
             sources,
             font_weight_bold,
             font_style_italic,
+            font_stretch,
             size_adjust,
             unicode_ranges,
         }),
@@ -397,33 +333,32 @@ pub(crate) fn extract_page_rules(css: &str) -> Vec<PageRule> {
             break;
         };
         let declarations = &after_brace[..close_pos];
-        // Pull the nested page-margin at-rules (`@top-center { … }`, CSS Paged
-        // Media 3 §5) out FIRST so they do not corrupt the `;`-split + lowercase
-        // pass in `parse_page_declarations`; `clean_decls` is the size/margin/
-        // background remainder.
+        // Pull nested page-context rules out before `;`-splitting the ordinary
+        // declarations. This preserves both page-margin boxes and the GCPM
+        // footnote area without treating a top-level `@footnote` as valid CSS.
         let selector = classify_page_selector(selector_text);
-        let (mut margin_boxes, clean_decls) = split_margin_boxes(declarations);
+        let (mut margin_boxes, footnote_area, clean_decls) = split_page_at_rules(declarations);
         match parse_page_declarations(&clean_decls) {
             Some(mut rule) => {
                 rule.selector = selector.clone();
+                rule.footnote_area = footnote_area;
                 for mb in &mut margin_boxes {
                     mb.selector = selector.clone();
-                    mb.page_counter_reset = rule.page_counter_reset;
-                    mb.page_counter_increment = rule.page_counter_increment;
+                    mb.page_counter = rule.page_counter;
                 }
                 rule.margin_boxes = margin_boxes.clone();
                 page_rules.push(rule);
             }
-            None if !margin_boxes.is_empty() => {
+            None if !margin_boxes.is_empty() || footnote_area.is_some() => {
                 for mb in &mut margin_boxes {
                     mb.selector = selector.clone();
                 }
-                // A `@page` rule carrying ONLY margin boxes (no size/margin/
-                // background) must still be retained so the running header/footer
-                // is not dropped.
+                // A `@page` rule carrying only nested page-context rules must
+                // still be retained so the generated content is not dropped.
                 page_rules.push(PageRule {
                     selector: selector.clone(),
                     margin_boxes: margin_boxes.clone(),
+                    footnote_area,
                     ..PageRule::default()
                 });
             }
@@ -437,45 +372,6 @@ pub(crate) fn extract_page_rules(css: &str) -> Vec<PageRule> {
     page_rules
 }
 
-pub(crate) fn extract_footnote_area_rules(css: &str) -> Vec<FootnoteAreaStyle> {
-    let mut rules = Vec::new();
-    let mut remaining = css;
-
-    while let Some(at_pos) = remaining.to_ascii_lowercase().find("@footnote") {
-        let Some(after_at) = remaining.get(at_pos + 9..) else {
-            break;
-        };
-        let Some(brace_pos) = after_at.find('{') else {
-            break;
-        };
-        let Some(after_brace) = after_at.get(brace_pos + 1..) else {
-            break;
-        };
-        let mut depth = 1usize;
-        let mut close_pos = None;
-        for (i, ch) in after_brace.char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close_pos = Some(i);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(close_pos) = close_pos else {
-            break;
-        };
-        rules.push(parse_footnote_area_declarations(&after_brace[..close_pos]));
-        remaining = &after_brace[close_pos + 1..];
-    }
-
-    rules
-}
-
 fn parse_footnote_area_declarations(decls: &str) -> FootnoteAreaStyle {
     let mut style = FootnoteAreaStyle::default();
     for declaration in decls.split(';') {
@@ -486,29 +382,47 @@ fn parse_footnote_area_declarations(decls: &str) -> FootnoteAreaStyle {
         let val = val.trim();
         match prop.as_str() {
             "max-height" => {
-                style.max_height = parse_page_length(val);
+                style.max_height = parse_nonnegative_page_length(val);
             }
             "padding" => {
-                if let Some(top) = val.split_whitespace().next().and_then(parse_page_length) {
-                    style.padding_top = top;
+                if let Some(padding) = parse_footnote_padding(val) {
+                    style.padding = padding.into();
                 }
             }
             "padding-top" => {
-                if let Some(top) = parse_page_length(val) {
-                    style.padding_top = top;
+                if let Some(value) = parse_nonnegative_page_length(val) {
+                    style.padding.top = Some(value);
+                }
+            }
+            "padding-right" => {
+                if let Some(value) = parse_nonnegative_page_length(val) {
+                    style.padding.right = Some(value);
+                }
+            }
+            "padding-bottom" => {
+                if let Some(value) = parse_nonnegative_page_length(val) {
+                    style.padding.bottom = Some(value);
+                }
+            }
+            "padding-left" => {
+                if let Some(value) = parse_nonnegative_page_length(val) {
+                    style.padding.left = Some(value);
                 }
             }
             "border-top" => {
                 parse_footnote_border_top(val, &mut style);
             }
             "border-top-width" => {
-                if let Some(width) = parse_page_length(val) {
-                    style.border_top_width = width;
+                if let Some(width) = parse_nonnegative_page_length(val) {
+                    style.separator.width = Some(width);
                 }
             }
             "border-top-color" => {
                 if let Some(CssValue::Color(color)) = super::parse_color(val) {
-                    style.border_top_color = Some(color);
+                    // The footnote area has no separately modelled `color`
+                    // declaration yet, so its inherited/initial current color is
+                    // the page-context initial black at this used-value boundary.
+                    style.separator.color = Some(color.resolve(crate::types::Color::BLACK));
                 }
             }
             _ => {}
@@ -517,12 +431,37 @@ fn parse_footnote_area_declarations(decls: &str) -> FootnoteAreaStyle {
     style
 }
 
+fn parse_nonnegative_page_length(value: &str) -> Option<f32> {
+    parse_page_length(value).filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn parse_footnote_padding(value: &str) -> Option<crate::types::EdgeSizes> {
+    let values = value
+        .split_whitespace()
+        .map(parse_nonnegative_page_length)
+        .collect::<Option<Vec<_>>>()?;
+    match values.as_slice() {
+        [all] => Some(crate::types::EdgeSizes::uniform(*all)),
+        [vertical, horizontal] => Some(crate::types::EdgeSizes::axes(*horizontal, *vertical)),
+        [top, horizontal, bottom] => Some(crate::types::EdgeSizes::new(
+            *top,
+            *horizontal,
+            *bottom,
+            *horizontal,
+        )),
+        [top, right, bottom, left] => {
+            Some(crate::types::EdgeSizes::new(*top, *right, *bottom, *left))
+        }
+        _ => None,
+    }
+}
+
 fn parse_footnote_border_top(value: &str, style: &mut FootnoteAreaStyle) {
     for token in value.split_whitespace() {
-        if let Some(width) = parse_page_length(token) {
-            style.border_top_width = width;
+        if let Some(width) = parse_nonnegative_page_length(token) {
+            style.separator.width = Some(width);
         } else if let Some(CssValue::Color(color)) = super::parse_color(token) {
-            style.border_top_color = Some(color);
+            style.separator.color = Some(color.resolve(crate::types::Color::BLACK));
         }
     }
 }
@@ -613,12 +552,14 @@ fn cascade_page_margin(
     }
 }
 
-/// Split the page-margin at-rules (`@top-center { … }`, CSS Paged Media 3 §5)
-/// out of an `@page` declaration block. Returns the parsed margin boxes plus the
-/// remaining declarations (size/margin/background) with the nested at-rules
-/// removed, so the remainder is safe to `;`-split.
-pub(crate) fn split_margin_boxes(decls: &str) -> (Vec<MarginBox>, String) {
+/// Split nested at-rules from an `@page` declaration block. The returned
+/// declaration text has every recognized page-context rule removed and remains
+/// safe to `;`-split.
+pub(crate) fn split_page_at_rules(
+    decls: &str,
+) -> (Vec<MarginBox>, Option<FootnoteAreaStyle>, String) {
     let mut boxes = Vec::new();
+    let mut footnote_area = None;
     let mut leftover = String::new();
     let mut i = 0;
     while i < decls.len() {
@@ -659,40 +600,52 @@ pub(crate) fn split_margin_boxes(decls: &str) -> (Vec<MarginBox>, String) {
             break;
         };
         if let Some(position) = MarginBoxPosition::from_at_name(name) {
-            if let Some((content, color, background_color, font_size)) =
+            if let Some((content, color, background_color, text_style, width)) =
                 extract_margin_box_decls(&body_region[..close])
             {
                 boxes.push(MarginBox {
                     position,
                     selector: PageSelector::None,
-                    page_counter_reset: None,
-                    page_counter_increment: None,
+                    page_counter: PageCounterControl::default(),
                     color,
                     background_color,
-                    font_size,
+                    text_style,
+                    width,
                     content,
                 });
             }
+        } else if name.eq_ignore_ascii_case("footnote") {
+            let later = parse_footnote_area_declarations(&body_region[..close]);
+            footnote_area
+                .get_or_insert_with(FootnoteAreaStyle::default)
+                .cascade(later);
+        } else {
+            // Keep unknown nested rules out of the normal declaration parser
+            // only when we understand their complete balanced extent. They
+            // remain source text rather than being silently misclassified as a
+            // page declaration.
+            leftover.push_str(&decls[at..body_start + close + 1]);
         }
         // Resume after the at-rule's matching `}` (drop it from `leftover`).
         i = body_start + close + 1;
     }
-    (boxes, leftover)
+    (boxes, footnote_area, leftover)
 }
 
 type ParsedMarginBoxDecls = (
     Vec<MarginContentToken>,
     Option<crate::types::Color>,
     Option<crate::types::Color>,
+    PageTextStyle,
     Option<f32>,
 );
 
 /// Find supported declarations inside a margin-box body and parse them.
 fn extract_margin_box_decls(body: &str) -> Option<ParsedMarginBoxDecls> {
     let mut content = None;
-    let mut color = None;
-    let mut background_color = None;
-    let mut font_size = None;
+    let mut specified_color: Option<SpecifiedColor> = None;
+    let mut specified_background_color: Option<SpecifiedColor> = None;
+    let mut width = None;
     for decl in body.split(';') {
         if let Some((prop, val)) = decl.split_once(':') {
             let prop = prop.trim();
@@ -701,20 +654,39 @@ fn extract_margin_box_decls(body: &str) -> Option<ParsedMarginBoxDecls> {
                 content = Some(parse_margin_box_content(val));
             } else if prop.eq_ignore_ascii_case("color") {
                 if let Some(CssValue::Color(c)) = super::parse_color(val) {
-                    color = Some(c);
+                    specified_color = Some(c);
                 }
             } else if prop.eq_ignore_ascii_case("background")
                 || prop.eq_ignore_ascii_case("background-color")
             {
                 if let Some(CssValue::Color(c)) = super::parse_color(val) {
-                    background_color = Some(c);
+                    specified_background_color = Some(c);
                 }
-            } else if prop.eq_ignore_ascii_case("font-size") {
-                font_size = parse_page_length(val);
+            } else if prop.eq_ignore_ascii_case("width") {
+                width = parse_nonnegative_page_length(val);
             }
         }
     }
-    content.map(|content| (content, color, background_color, font_size))
+    // Resolve after collecting all declarations: `background-color:
+    // currentColor` observes the box's computed `color` regardless of source
+    // order. `currentColor` on `color` itself inherits the page-context color;
+    // until page-level `color` is modelled that explicit inherited value is the
+    // CSS initial black.
+    let inherited_color = crate::types::Color::BLACK;
+    let color = specified_color.map(|color| color.resolve(inherited_color));
+    let current_color = color.unwrap_or(inherited_color);
+    let background_color = specified_background_color.map(|color| color.resolve(current_color));
+    content.map(|content| {
+        (
+            content,
+            color,
+            background_color,
+            PageTextStyle {
+                declarations: super::parse_inline_style(body),
+            },
+            width,
+        )
+    })
 }
 
 /// Parse a margin-box `content` value (CSS Paged Media 3 §5.3) into a token
@@ -725,7 +697,9 @@ pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
     let mut i = 0;
     while i < val.len() {
         let rest = &val[i..];
-        let c = rest.chars().next().unwrap();
+        let Some(c) = rest.chars().next() else {
+            break;
+        };
         if c.is_whitespace() {
             i += c.len_utf8();
             continue;
@@ -803,6 +777,9 @@ pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
 pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
     let mut rule = PageRule::default();
     let mut has_any = false;
+    let text_style = PageTextStyle {
+        declarations: super::parse_inline_style(decls),
+    };
     let declarations: Vec<(String, String)> = decls
         .split(';')
         .filter_map(|declaration| {
@@ -925,14 +902,14 @@ pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
                 has_any = true;
             }
             "counter-reset" => {
-                if let Some(value) = parse_page_counter_op(val, "page") {
-                    rule.page_counter_reset = Some(value);
+                if let Some(value) = parse_page_counter_op(val, "page", 0) {
+                    rule.page_counter.reset = Some(value);
                     has_any = true;
                 }
             }
             "counter-increment" => {
-                if let Some(value) = parse_page_counter_op(val, "page") {
-                    rule.page_counter_increment = Some(value);
+                if let Some(value) = parse_page_counter_op(val, "page", 1) {
+                    rule.page_counter.increment = Some(value);
                     has_any = true;
                 }
             }
@@ -943,6 +920,11 @@ pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
         }
     }
 
+    if !text_style.is_empty() {
+        rule.text_style = text_style;
+        has_any = true;
+    }
+
     if has_any {
         rule.raw_declarations = Some(decls.to_string());
         Some(rule)
@@ -951,13 +933,18 @@ pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
     }
 }
 
-fn parse_page_counter_op(val: &str, name: &str) -> Option<i32> {
+fn parse_page_counter_op(val: &str, name: &str, default: i32) -> Option<i32> {
     let mut parts = val.split_whitespace();
     let counter = parts.next()?.trim().to_ascii_lowercase();
     if counter != name {
         return None;
     }
-    Some(parts.next().and_then(|v| v.parse().ok()).unwrap_or(0))
+    Some(
+        parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default),
+    )
 }
 
 /// Parse a page size value. Returns (width, height) in points.
@@ -1206,6 +1193,7 @@ mod tests {
                 src: local("Parity Serif"), url("fallback.ttf");
                 font-weight: 700;
                 font-style: italic;
+                font-width: condensed;
                 size-adjust: 150%;
                 unicode-range: U+0041, U+0100-017F, U+4??;
             "#,
@@ -1221,6 +1209,7 @@ mod tests {
         );
         assert!(rule.font_weight_bold);
         assert!(rule.font_style_italic);
+        assert_eq!(rule.font_stretch, FontStretch::Condensed);
         assert!((rule.size_adjust - 1.5).abs() < f32::EPSILON);
         assert_eq!(
             rule.unicode_ranges,
@@ -1385,6 +1374,102 @@ mod tests {
     }
 
     #[test]
+    fn page_counter_controls_propagate_to_margin_boxes() {
+        let rules = extract_page_rules(
+            r#"@page { counter-reset: page 7; counter-increment: page 2; @top-center { content: counter(page) } }"#,
+        );
+        let counter = rules[0].margin_boxes[0].page_counter;
+        assert_eq!(counter.reset, Some(7));
+        assert_eq!(counter.increment, Some(2));
+    }
+
+    #[test]
+    fn page_counter_operations_use_their_css_defaults() {
+        assert_eq!(parse_page_counter_op("page", "page", 0), Some(0));
+        assert_eq!(parse_page_counter_op("page", "page", 1), Some(1));
+    }
+
+    #[test]
+    fn margin_box_current_color_resolves_after_color_cascade() {
+        let rules = extract_page_rules(
+            r#"@page { @top-center { content: "x"; background-color: currentColor; color: rgb(20 40 60) } }"#,
+        );
+        let margin_box = &rules[0].margin_boxes[0];
+        let expected = crate::types::Color::rgb(20, 40, 60);
+        assert_eq!(margin_box.color, Some(expected));
+        assert_eq!(margin_box.background_color, Some(expected));
+    }
+
+    #[test]
+    fn margin_box_width_uses_page_length_units_and_rejects_negative_values() {
+        let rules = extract_page_rules(
+            r#"@page { @top-center { content: "x"; width: 160px } @bottom-center { content: "x"; width: -1px } }"#,
+        );
+        assert_eq!(rules[0].margin_boxes[0].width, Some(120.0));
+        assert_eq!(rules[0].margin_boxes[1].width, None);
+    }
+
+    #[test]
+    fn footnote_border_current_color_resolves_without_a_sentinel() {
+        let rules = parse_page_rules("@page { @footnote { border-top: 1pt solid currentColor } }");
+        assert_eq!(
+            rules[0].footnote_area.unwrap().separator.color,
+            Some(crate::types::Color::BLACK)
+        );
+    }
+
+    #[test]
+    fn footnote_padding_shorthand_and_longhand_keep_physical_edges() {
+        let rules = parse_page_rules(
+            "@page { @footnote { padding: 1pt 2pt 3pt 4pt; padding-right: 5pt } }",
+        );
+        let padding = rules[0].footnote_area.unwrap().padding;
+        assert_eq!(padding.top, Some(1.0));
+        assert_eq!(padding.right, Some(5.0));
+        assert_eq!(padding.bottom, Some(3.0));
+        assert_eq!(padding.left, Some(4.0));
+    }
+
+    #[test]
+    fn invalid_footnote_padding_shorthand_is_atomic() {
+        let rules = parse_page_rules(
+            "@page { @footnote { max-height: -1pt; padding: 1pt 2pt bogus 4pt; padding-left: 7pt } }",
+        );
+        let area = rules[0].footnote_area.unwrap();
+        assert_eq!(area.max_height, None);
+        assert_eq!(area.padding.top, None);
+        assert_eq!(area.padding.right, None);
+        assert_eq!(area.padding.bottom, None);
+        assert_eq!(area.padding.left, Some(7.0));
+    }
+
+    #[test]
+    fn later_footnote_rule_retains_omitted_declaration_state() {
+        let rules = parse_page_rules(
+            "@page {\
+                 @footnote { padding: 1pt 2pt 3pt 4pt; border-top: 2pt solid red }\
+                 @footnote { max-height: 20pt; padding-right: 9pt }\
+             }",
+        );
+        let area = rules[0].footnote_area.unwrap();
+        assert_eq!(area.padding.top, Some(1.0));
+        assert_eq!(area.padding.right, Some(9.0));
+        assert_eq!(area.padding.bottom, Some(3.0));
+        assert_eq!(area.padding.left, Some(4.0));
+        assert_eq!(area.separator.width, Some(2.0));
+        assert_eq!(
+            area.separator.color,
+            Some(crate::types::Color::rgb(255, 0, 0))
+        );
+        assert_eq!(area.max_height, Some(20.0));
+    }
+
+    #[test]
+    fn top_level_footnote_rule_is_not_a_page_context_rule() {
+        assert!(parse_page_rules("@footnote { border-top: 2pt solid red }").is_empty());
+    }
+
+    #[test]
     fn extract_page_rules_margin_box_with_geometry() {
         // Margin boxes coexist with size/margin in the same @page block.
         let rules = extract_page_rules(
@@ -1455,7 +1540,15 @@ mod tests {
         );
         assert_eq!(
             MarginBoxPosition::TopRightCorner.align(),
+            crate::parser::css::MarginBoxAlign::Left
+        );
+        assert_eq!(
+            MarginBoxPosition::TopLeftCorner.align(),
             crate::parser::css::MarginBoxAlign::Right
+        );
+        assert_eq!(
+            MarginBoxPosition::RightMiddle.align(),
+            crate::parser::css::MarginBoxAlign::Center
         );
     }
 

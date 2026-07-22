@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rounded per-side border geometry</title>
+<style>
+  @page { size: 256px 160px; margin: 0; }
+  html, body { background: #ffffff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  .box {
+    width: 208px;
+    height: 128px;
+    margin: 16px 24px;
+    background: #f7f7f7;
+    border-top: 8px solid #c62828;
+    border-right: 12px solid #2e7d32;
+    border-bottom: 16px solid #1565c0;
+    border-left: 20px solid #ef6c00;
+    border-radius: 44px 28px / 36px 24px;
+  }
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

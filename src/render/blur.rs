@@ -4,36 +4,69 @@
 //! `filter` property (css-filter-effects-1 §2) instead operates on the
 //! *rasterized* output of the element: a gaussian blur (or drop-shadow) is
 //! applied to the painted pixels and feathers *outside* the element's border
-//! box. To match Chrome we rasterize the element's paint into a pixel buffer
-//! padded with transparency, gaussian-blur it (reusing `image::imageops::blur`,
-//! which is a true separable gaussian with `sigma = stdDeviation`), and embed
-//! the result as a PDF image XObject positioned so the padded buffer feathers
-//! beyond the original box.
+//! box. We rasterize the element's paint into a pixel buffer
+//! padded with transparency, blur it with the same discrete three-box
+//! approximation used by Chromium's Skia path at practical filter sizes, and
+//! embed the result as a PDF image XObject positioned so the padded buffer
+//! feathers beyond the original box.
 //!
 //! Per css-filter-effects-1 §4.1, `blur(<length>)` uses a gaussian with
-//! `stdDeviation` equal to that length. We rasterize at the parity device scale
-//! so the embedded bitmap matches the final 300-DPI raster resolution, then the
-//! sigma in *buffer* pixels is `radius_css_px * filter_dpi/96`.
+//! `stdDeviation` equal to that length. `filter_dpi` controls only the sampling
+//! resolution of the embedded bitmap; PDF placement remains in authored points.
 
 use crate::layout::engine::{ImageFormat, LayoutBorder, RasterImageAsset};
+use crate::parser::ttf::TtfFont;
+use crate::style::computed::{BoxShadow, DropShadow, ImageRendering};
+use crate::types::{CornerRadii, EdgeSizes};
 
 /// Points per CSS pixel (1px = 0.75pt). `blur_radius` is stored in points.
 const PT_PER_PX: f32 = 0.75;
-const IMAGE_BLUR_SIGMA_SCALE: f32 = 0.97;
-const INSET_SPREAD_SHADOW_SIGMA_SCALE: f32 = 1.22;
-const INSET_SHADOW_ALPHA_SCALE: f32 = 0.932;
-const INSET_SHADOW_ALPHA_CUTOFF: f32 = 0.07;
-const INSET_SHADOW_MID_ALPHA_BOOST: f32 = 1.08;
-const INSET_SHADOW_ALPHA_CAP: f32 = 0.71;
-const INSET_SHADOW_CORNER_ALPHA_CAP: f32 = 0.73;
-const INSET_SHADOW_BOOST_START: f32 = 0.22;
-const INSET_SHADOW_BOOST_END: f32 = 0.32;
-const INSET_SHADOW_RADIUS_SPREAD_SCALE: f32 = 1.5;
-const INSET_SHADOW_CLIP_RADIUS_ADJUST_PT: f32 = 0.68;
-const TEXT_SHADOW_ALPHA_SCALE: f32 = 1.0;
+/// Maximum device-pixel shortfall treated as arithmetic noise at a half-pixel
+/// raster boundary.
+const FILTER_RASTER_HALF_PIXEL_TOLERANCE: f64 = 0.01;
 
 fn filter_dpi_scale(filter_dpi: f32) -> f32 {
-    filter_dpi.max(1.0) / 96.0
+    crate::style::raster_quality::raster_dpi_at_least(filter_dpi, 1.0) / 96.0
+}
+
+/// One authored filter extent represented both by the backing-pixel bound and
+/// the unquantized paint extent within that bound.
+#[derive(Clone, Copy)]
+struct FilterRasterAxis {
+    pixels: u32,
+    paint_px: f32,
+}
+
+/// Quantize a positive authored point length for a filter backing image.
+///
+/// CSS dimensions commonly land exactly on half a device pixel (for example,
+/// 140 CSS px at 300 DPI). Layout's `f32` arithmetic can represent that as a
+/// less than one hundredth of a device pixel below the half and round it down. Resolve
+/// only that floating-point tie noise so the raster's coverage has the same
+/// authored dimensions as its vector placement.
+fn filter_raster_axis(points: f32, scale: f32) -> Option<FilterRasterAxis> {
+    let pixels = f64::from(points) / f64::from(PT_PER_PX) * f64::from(scale);
+    Some(FilterRasterAxis {
+        pixels: quantize_filter_raster_pixels(pixels)?,
+        paint_px: pixels as f32,
+    })
+}
+
+fn quantize_filter_raster_pixels(pixels: f64) -> Option<u32> {
+    if !pixels.is_finite() || pixels <= 0.0 {
+        return None;
+    }
+    let rounded = (pixels + 0.5 + FILTER_RASTER_HALF_PIXEL_TOLERANCE).floor();
+    (rounded <= f64::from(u32::MAX)).then_some(rounded as u32)
+}
+
+fn filter_raster_pixels(points: f32, scale: f32) -> Option<u32> {
+    Some(filter_raster_axis(points, scale)?.pixels)
+}
+
+/// Raster pixels for a point extent at the configured filter sampling density.
+pub(crate) fn filter_raster_pixels_at_dpi(points: f32, filter_dpi: f32) -> Option<u32> {
+    filter_raster_pixels(points, filter_dpi_scale(filter_dpi))
 }
 
 /// A blurred raster ready for embedding plus the overflow it adds outside the
@@ -44,32 +77,277 @@ pub(crate) struct BlurredRaster {
     pub overflow_pt: f32,
 }
 
+/// Device-quantized paint overflow of a blurred CSS box shadow.
+///
+/// Box-shadow uses half the authored blur radius as its gaussian sigma. Keep
+/// this calculation beside the shadow rasterizer so source-graphic allocation
+/// and actual shadow painting cannot disagree about the required padding.
+pub(crate) fn box_shadow_blur_overflow(blur_radius_pt: f32, filter_dpi: f32) -> Option<f32> {
+    if blur_radius_pt <= 0.0 {
+        return Some(0.0);
+    }
+    let scale = filter_dpi_scale(filter_dpi);
+    let sigma = (blur_radius_pt / PT_PER_PX) * scale / 2.0;
+    let padding = pad_pixels(sigma)?;
+    Some(padding as f32 / scale * PT_PER_PX)
+}
+
 /// Number of padding pixels to add on each side so a gaussian with the given
 /// sigma can feather without clipping (3σ captures ~99.7% of the kernel).
-fn pad_pixels(sigma: f32) -> u32 {
-    (sigma * 3.0).ceil().max(1.0) as u32
+fn pad_pixels(sigma: f32) -> Option<u32> {
+    if !sigma.is_finite() || sigma < 0.0 {
+        return None;
+    }
+    let pixels = (f64::from(sigma) * 3.0).ceil().max(1.0);
+    (pixels <= f64::from(u32::MAX)).then_some(pixels as u32)
+}
+
+fn padded_pixels(content_pixels: u32, padding_pixels: u32) -> Option<u32> {
+    content_pixels.checked_add(padding_pixels.checked_mul(2)?)
+}
+
+fn nonnegative_pixel_ceil(value: f32) -> Option<u32> {
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    let pixels = f64::from(value).ceil();
+    (pixels <= f64::from(u32::MAX)).then_some(pixels as u32)
+}
+
+/// A three-pass box approximation to a CSS gaussian at one raster resolution.
+///
+/// Chromium's Skia mask blur uses this plan for `sigma >= 2`: derive one base
+/// box width from the CSS standard deviation, then use a final box one pixel
+/// wider when the base width is even. That keeps the aggregate kernel centred.
+#[derive(Clone, Copy, Debug)]
+struct DiscreteGaussianPlan {
+    pass_widths: [u32; 3],
+}
+
+impl DiscreteGaussianPlan {
+    fn from_sigma(sigma_px: f32) -> Option<Self> {
+        if !sigma_px.is_normal() || sigma_px < 2.0 {
+            return None;
+        }
+        let width =
+            (f64::from(sigma_px) * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor();
+        if !(1.0..=f64::from(u32::MAX - 1)).contains(&width) {
+            return None;
+        }
+        let width = width as u32;
+        Some(Self {
+            pass_widths: [width, width, width + u32::from(width % 2 == 0)],
+        })
+    }
+}
+
+/// The sampling method used for one CSS filter blur.
+#[derive(Clone, Copy, Debug)]
+enum FilterBlurSampling {
+    SmallGaussian { sigma_px: f32 },
+    ThreeBox(DiscreteGaussianPlan),
+}
+
+/// A CSS filter blur expressed in the pixels of its raster backing image.
+#[derive(Clone, Copy)]
+pub(crate) struct FilterBlurKernel {
+    pub padding_px: u32,
+    sampling: FilterBlurSampling,
+}
+
+impl FilterBlurKernel {
+    pub(crate) fn new(blur_radius_pt: f32, filter_dpi: f32) -> Option<Self> {
+        let nominal_sigma = blur_radius_pt / PT_PER_PX * filter_dpi_scale(filter_dpi);
+        if !nominal_sigma.is_normal() || nominal_sigma <= 0.0 {
+            return None;
+        }
+        let sampling = DiscreteGaussianPlan::from_sigma(nominal_sigma)
+            .map(FilterBlurSampling::ThreeBox)
+            .unwrap_or(FilterBlurSampling::SmallGaussian {
+                sigma_px: nominal_sigma,
+            });
+        Some(Self {
+            padding_px: pad_pixels(nominal_sigma)?,
+            sampling,
+        })
+    }
+}
+
+/// Blur a CSS filter buffer with its discrete sampling plan.
+pub(crate) fn blur_css_filter(
+    img: &image::RgbaImage,
+    kernel: FilterBlurKernel,
+) -> Option<image::RgbaImage> {
+    let premultiplied = premultiply_rgba(img);
+    let blurred = blur_css_filter_premultiplied(&premultiplied, kernel)?;
+    Some(unpremultiply_rgba(&blurred))
+}
+
+/// Blur an already-premultiplied CSS filter buffer and preserve that encoding.
+///
+/// Vector paint sources from tiny-skia are premultiplied already. Keeping them
+/// that way avoids throwing away low-alpha colour precision before filtering.
+fn blur_css_filter_premultiplied(
+    premultiplied: &image::RgbaImage,
+    kernel: FilterBlurKernel,
+) -> Option<image::RgbaImage> {
+    match kernel.sampling {
+        FilterBlurSampling::SmallGaussian { sigma_px } => {
+            Some(image::imageops::blur(premultiplied, sigma_px))
+        }
+        FilterBlurSampling::ThreeBox(plan) => box_blur_axes(premultiplied, plan.pass_widths),
+    }
 }
 
 /// Gaussian-blur a straight-alpha RGBA buffer correctly: `image::imageops::blur`
 /// blurs each channel independently, so transparent (0,0,0,0) padding would
 /// bleed black into the feathered edge. Premultiply first, blur, then
 /// un-premultiply so only visible colour contributes.
-fn blur_premultiplied(img: &image::RgbaImage, sigma: f32) -> image::RgbaImage {
-    let mut pre = img.clone();
-    for px in pre.pixels_mut() {
-        let a = px[3] as u16;
-        px[0] = (px[0] as u16 * a / 255) as u8;
-        px[1] = (px[1] as u16 * a / 255) as u8;
-        px[2] = (px[2] as u16 * a / 255) as u8;
+fn gaussian_blur_premultiplied(img: &image::RgbaImage, sigma: f32) -> Option<image::RgbaImage> {
+    if !sigma.is_normal() || sigma <= 0.0 {
+        return None;
     }
-    let mut blurred = image::imageops::blur(&pre, sigma);
-    for px in blurred.pixels_mut() {
-        let a = px[3] as u32;
-        px[0] = ((px[0] as u32 * 255).checked_div(a).unwrap_or(0).min(255)) as u8;
-        px[1] = ((px[1] as u32 * 255).checked_div(a).unwrap_or(0).min(255)) as u8;
-        px[2] = ((px[2] as u32 * 255).checked_div(a).unwrap_or(0).min(255)) as u8;
+    let premultiplied = premultiply_rgba(img);
+    let blurred = blur_premultiplied_at_sigma(&premultiplied, sigma)?;
+    Some(unpremultiply_rgba(&blurred))
+}
+
+/// Apply the discrete Gaussian sampling Chromium uses for sufficiently broad
+/// mask blurs, retaining a direct Gaussian for the small-radius case.
+///
+/// Shadow and filter sources arrive through different paint paths, but their
+/// CSS blur radii describe the same visual kernel. Keeping the choice here
+/// prevents those paths from drifting apart at high raster resolutions.
+fn blur_premultiplied_at_sigma(
+    premultiplied: &image::RgbaImage,
+    sigma: f32,
+) -> Option<image::RgbaImage> {
+    if !sigma.is_normal() || sigma <= 0.0 {
+        return None;
     }
-    blurred
+    match DiscreteGaussianPlan::from_sigma(sigma) {
+        Some(plan) => box_blur_axes(premultiplied, plan.pass_widths),
+        None => Some(image::imageops::blur(premultiplied, sigma)),
+    }
+}
+
+/// Apply three box passes on each axis without quantizing between passes.
+///
+/// Skia quantizes after completing one axis, not after each individual box
+/// pass. Keeping the intermediate pixels as floats preserves that discrete
+/// kernel while the final eight-bit image remains a normal PDF soft mask.
+fn box_blur_axes(img: &image::RgbaImage, pass_widths: [u32; 3]) -> Option<image::RgbaImage> {
+    let horizontal = box_blur_axis(img, pass_widths, true)?;
+    box_blur_axis(&horizontal, pass_widths, false)
+}
+
+fn box_blur_axis(
+    img: &image::RgbaImage,
+    pass_widths: [u32; 3],
+    horizontal: bool,
+) -> Option<image::RgbaImage> {
+    let (width, height) = img.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let pixel_count = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?;
+    let channel_count = pixel_count.checked_mul(4)?;
+    let mut current = Vec::new();
+    current.try_reserve_exact(channel_count).ok()?;
+    current.extend(img.as_raw().iter().map(|&channel| f32::from(channel)));
+    let mut next = Vec::new();
+    next.try_reserve_exact(channel_count).ok()?;
+    next.resize(channel_count, 0.0);
+
+    let (line_length, line_count) = if horizontal {
+        (usize::try_from(width).ok()?, usize::try_from(height).ok()?)
+    } else {
+        (usize::try_from(height).ok()?, usize::try_from(width).ok()?)
+    };
+    for pass_width in pass_widths {
+        let pass_width = usize::try_from(pass_width).ok()?;
+        if pass_width == 0 {
+            return None;
+        }
+        let left_radius = (pass_width - 1) / 2;
+        let right_radius = pass_width - left_radius - 1;
+        for line in 0..line_count {
+            let mut sums = [0.0; 4];
+            for index in 0..=right_radius.min(line_length - 1) {
+                let pixel = axis_pixel_index(index, line, width, horizontal);
+                let offset = pixel.checked_mul(4)?;
+                for channel in 0..4 {
+                    sums[channel] += current[offset + channel];
+                }
+            }
+            for index in 0..line_length {
+                let pixel = axis_pixel_index(index, line, width, horizontal);
+                let offset = pixel.checked_mul(4)?;
+                for channel in 0..4 {
+                    next[offset + channel] = sums[channel] / pass_width as f32;
+                }
+                if index >= left_radius {
+                    let removed = axis_pixel_index(index - left_radius, line, width, horizontal);
+                    let offset = removed.checked_mul(4)?;
+                    for channel in 0..4 {
+                        sums[channel] -= current[offset + channel];
+                    }
+                }
+                if let Some(added_index) = index.checked_add(right_radius + 1)
+                    && added_index < line_length
+                {
+                    let added = axis_pixel_index(added_index, line, width, horizontal);
+                    let offset = added.checked_mul(4)?;
+                    for channel in 0..4 {
+                        sums[channel] += current[offset + channel];
+                    }
+                }
+            }
+        }
+        std::mem::swap(&mut current, &mut next);
+    }
+
+    let bytes = current
+        .into_iter()
+        .map(|channel| channel.round().clamp(0.0, 255.0) as u8)
+        .collect();
+    image::RgbaImage::from_raw(width, height, bytes)
+}
+
+fn axis_pixel_index(index: usize, line: usize, width: u32, horizontal: bool) -> usize {
+    let width = width as usize;
+    if horizontal {
+        line * width + index
+    } else {
+        index * width + line
+    }
+}
+
+fn premultiply_rgba(img: &image::RgbaImage) -> image::RgbaImage {
+    let mut premultiplied = img.clone();
+    for pixel in premultiplied.pixels_mut() {
+        let alpha = u16::from(pixel[3]);
+        for channel in &mut pixel.0[..3] {
+            *channel = (u16::from(*channel) * alpha / 255) as u8;
+        }
+    }
+    premultiplied
+}
+
+fn unpremultiply_rgba(img: &image::RgbaImage) -> image::RgbaImage {
+    let mut unpremultiplied = img.clone();
+    for pixel in unpremultiplied.pixels_mut() {
+        let alpha = u32::from(pixel[3]);
+        for channel in &mut pixel.0[..3] {
+            *channel = ((u32::from(*channel) * 255)
+                .checked_div(alpha)
+                .unwrap_or(0)
+                .min(255)) as u8;
+        }
+    }
+    unpremultiplied
 }
 
 /// Encode a (possibly padded) RGBA buffer as a full PNG file and wrap it in a
@@ -84,13 +362,13 @@ pub(crate) fn rgba_to_png_alpha_asset(img: image::RgbaImage) -> Option<RasterIma
             image::ImageFormat::Png,
         )
         .ok()?;
-    Some(RasterImageAsset {
-        data: encoded,
-        source_width: width,
-        source_height: height,
-        format: ImageFormat::PngAlpha,
-        png_metadata: None,
-    })
+    Some(RasterImageAsset::rendered(
+        encoded,
+        width,
+        height,
+        ImageFormat::PngAlpha,
+        None,
+    ))
 }
 
 /// Rasterize a (rounded) `box-shadow` rectangle into a transparent, padded RGBA
@@ -98,23 +376,21 @@ pub(crate) fn rgba_to_png_alpha_asset(img: image::RgbaImage) -> Option<RasterIma
 /// it adds beyond each edge of the shadow rect.
 ///
 /// `width_pt`/`height_pt` are the shadow rect size in points (border box grown
-/// by `spread`). `radius_pt` is the corner radius (0 for square). `blur_pt` is
-/// the CSS `box-shadow` blur radius in points; css-backgrounds-3 §7.1.1 defines
-/// the blur as a gaussian whose standard deviation is *half* the blur radius
-/// (`sigma = blur / 2`). `color` is straight-alpha sRGB. The returned overflow
+/// by `spread`). `radii` are its resolved corner radii. `shadow.blur` is the CSS
+/// `box-shadow` blur radius in points; css-backgrounds-3 §7.1.1 defines the blur
+/// as a gaussian whose standard deviation is *half* the blur radius
+/// (`sigma = blur / 2`). The returned overflow
 /// is the per-side padding in points: the buffer feathers symmetrically beyond
 /// the shadow rect, so the caller positions the image at the shadow rect minus
 /// `overflow_pt` on each side. Returns `None` when nothing would paint.
 pub(crate) fn blur_shadow_rect(
     width_pt: f32,
     height_pt: f32,
-    radius_pt: f32,
-    radius_y_pt: f32,
-    blur_pt: f32,
-    color: (f32, f32, f32, f32),
+    radii: CornerRadii,
+    shadow: &BoxShadow,
     filter_dpi: f32,
 ) -> Option<BlurredRaster> {
-    let (_, _, _, a) = color;
+    let (r, g, b, a) = shadow.color.to_f32_rgba();
     if width_pt <= 0.0 || height_pt <= 0.0 || a <= 0.0 {
         return None;
     }
@@ -123,35 +399,25 @@ pub(crate) fn blur_shadow_rect(
 
     // css-backgrounds-3: blur radius is 2σ, so σ = blur/2. Map to buffer pixels.
     let s = filter_dpi_scale(filter_dpi);
-    let sigma = (blur_pt / PT_PER_PX) * s / 2.0;
-    let pad = pad_pixels(sigma);
-    let box_w = (width_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let box_h = (height_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let buf_w = box_w + 2 * pad;
-    let buf_h = box_h + 2 * pad;
+    let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
+    let pad = pad_pixels(sigma)?;
+    let box_x = filter_raster_axis(width_pt, s)?;
+    let box_y = filter_raster_axis(height_pt, s)?;
+    let buf_w = padded_pixels(box_x.pixels, pad)?;
+    let buf_h = padded_pixels(box_y.pixels, pad)?;
 
     let mut pixmap = tiny_skia::Pixmap::new(buf_w, buf_h)?;
     let ox = pad as f32;
     let oy = pad as f32;
 
-    let (r, g, b, _) = color;
     let mut paint = tiny_skia::Paint::default();
     paint.set_color(color8(r, g, b, a));
     paint.anti_alias = true;
 
-    let radius_px = (radius_pt / PT_PER_PX * s).min(box_w as f32 / 2.0);
-    let radius_y_px = (radius_y_pt / PT_PER_PX * s).min(box_h as f32 / 2.0);
-    if radius_px > 0.5 || radius_y_px > 0.5 {
+    let radii_px = radii.fit_to(width_pt, height_pt) * (s / PT_PER_PX);
+    if !radii_px.is_zero() {
         let mut pb = tiny_skia::PathBuilder::new();
-        append_rounded_box_path(
-            &mut pb,
-            ox,
-            oy,
-            box_w as f32,
-            box_h as f32,
-            [radius_px; 4],
-            [radius_y_px; 4],
-        );
+        append_rounded_box_path(&mut pb, ox, oy, box_x.paint_px, box_y.paint_px, radii_px);
         if let Some(path) = pb.finish() {
             pixmap.fill_path(
                 &path,
@@ -161,36 +427,30 @@ pub(crate) fn blur_shadow_rect(
                 None,
             );
         }
-    } else if let Some(rect) = tiny_skia::Rect::from_xywh(ox, oy, box_w as f32, box_h as f32) {
+    } else if let Some(rect) = tiny_skia::Rect::from_xywh(ox, oy, box_x.paint_px, box_y.paint_px) {
         pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
 
     let rgba = pixmap_to_rgba(&pixmap, buf_w, buf_h);
     let rgba = if sigma > 0.0 {
-        blur_premultiplied(&rgba, sigma)
+        gaussian_blur_premultiplied(&rgba, sigma)?
     } else {
         rgba
     };
 
-    let overflow_pt = pad as f32 / s * PT_PER_PX;
+    let overflow_pt = box_shadow_blur_overflow(shadow.blur, filter_dpi)?;
     let asset = rgba_to_png_alpha_asset(rgba)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn blur_inset_shadow_rect(
     width_pt: f32,
     height_pt: f32,
-    radii_pt: [f32; 4],
-    radii_y_pt: [f32; 4],
-    blur_pt: f32,
-    spread_pt: f32,
-    offset_x_pt: f32,
-    offset_y_pt: f32,
-    color: (f32, f32, f32, f32),
+    radii: CornerRadii,
+    shadow: &BoxShadow,
     filter_dpi: f32,
 ) -> Option<BlurredRaster> {
-    let (_, _, _, a) = color;
+    let (r, g, b, a) = shadow.color.to_f32_rgba();
     if width_pt <= 0.0 || height_pt <= 0.0 || a <= 0.0 {
         return None;
     }
@@ -198,31 +458,25 @@ pub(crate) fn blur_inset_shadow_rect(
     use resvg::tiny_skia;
 
     let s = filter_dpi_scale(filter_dpi);
-    let spread_sigma = if spread_pt.abs() > f32::EPSILON {
-        INSET_SPREAD_SHADOW_SIGMA_SCALE
-    } else {
-        1.0
-    };
-    let sigma = (blur_pt / PT_PER_PX) * s / 2.0 * spread_sigma;
-    let pad = pad_pixels(sigma);
-    let box_w = (width_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let box_h = (height_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let buf_w = box_w + 2 * pad;
-    let buf_h = box_h + 2 * pad;
+    // Spread changes the shadow shape, not the blur kernel.
+    let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
+    let pad = pad_pixels(sigma)?;
+    let box_x = filter_raster_axis(width_pt, s)?;
+    let box_y = filter_raster_axis(height_pt, s)?;
+    let buf_w = padded_pixels(box_x.pixels, pad)?;
+    let buf_h = padded_pixels(box_y.pixels, pad)?;
 
     let mut pixmap = tiny_skia::Pixmap::new(buf_w, buf_h)?;
-    let (r, g, b, _) = color;
-    let a = a * INSET_SHADOW_ALPHA_SCALE;
     let mut paint = tiny_skia::Paint::default();
     paint.set_color(color8(r, g, b, a));
-    paint.anti_alias = false;
+    paint.anti_alias = true;
 
     let pt_to_px = s / PT_PER_PX;
-    let spread_px = spread_pt * pt_to_px;
-    let hole_x = pad as f32 + offset_x_pt * pt_to_px + spread_px;
-    let hole_y = pad as f32 + offset_y_pt * pt_to_px + spread_px;
-    let hole_w = box_w as f32 - 2.0 * spread_px;
-    let hole_h = box_h as f32 - 2.0 * spread_px;
+    let spread_px = shadow.spread * pt_to_px;
+    let hole_x = pad as f32 + shadow.offset_x * pt_to_px + spread_px;
+    let hole_y = pad as f32 + shadow.offset_y * pt_to_px + spread_px;
+    let hole_w = box_x.paint_px - 2.0 * spread_px;
+    let hole_h = box_y.paint_px - 2.0 * spread_px;
 
     let mut pb = tiny_skia::PathBuilder::new();
     pb.move_to(0.0, 0.0);
@@ -231,10 +485,8 @@ pub(crate) fn blur_inset_shadow_rect(
     pb.line_to(0.0, buf_h as f32);
     pb.close();
     if hole_w > 0.0 && hole_h > 0.0 {
-        let radius_spread = spread_pt * INSET_SHADOW_RADIUS_SPREAD_SCALE;
-        let hole_rx = radii_pt.map(|r| (r - radius_spread).max(0.0) * pt_to_px);
-        let hole_ry = radii_y_pt.map(|r| (r - radius_spread).max(0.0) * pt_to_px);
-        append_rounded_box_path(&mut pb, hole_x, hole_y, hole_w, hole_h, hole_rx, hole_ry);
+        let hole_radii = radii.grow(-shadow.spread) * pt_to_px;
+        append_rounded_box_path(&mut pb, hole_x, hole_y, hole_w, hole_h, hole_radii);
     }
     if let Some(path) = pb.finish() {
         pixmap.fill_path(
@@ -248,99 +500,21 @@ pub(crate) fn blur_inset_shadow_rect(
 
     let rgba = pixmap_to_rgba(&pixmap, buf_w, buf_h);
     let mut rgba = if sigma > 0.0 {
-        blur_premultiplied(&rgba, sigma)
+        gaussian_blur_premultiplied(&rgba, sigma)?
     } else {
         rgba
     };
-    let outer_rx = radii_pt.map(|r| (r - INSET_SHADOW_CLIP_RADIUS_ADJUST_PT).max(0.0) * pt_to_px);
-    let outer_ry = radii_y_pt.map(|r| (r - INSET_SHADOW_CLIP_RADIUS_ADJUST_PT).max(0.0) * pt_to_px);
     clip_alpha_to_rounded_box(
         &mut rgba,
         pad as f32,
         pad as f32,
-        box_w as f32,
-        box_h as f32,
-        outer_rx,
-        outer_ry,
+        box_x.paint_px,
+        box_y.paint_px,
+        radii * pt_to_px,
     )?;
-    normalize_inset_shadow_alpha(
-        &mut rgba,
-        pad as f32,
-        pad as f32,
-        box_w as f32,
-        box_h as f32,
-        outer_rx,
-        outer_ry,
-    );
-
     let overflow_pt = pad as f32 / s * PT_PER_PX;
     let asset = rgba_to_png_alpha_asset(rgba)?;
     Some(BlurredRaster { asset, overflow_pt })
-}
-
-fn normalize_inset_shadow_alpha(
-    img: &mut image::RgbaImage,
-    clip_x: f32,
-    clip_y: f32,
-    clip_w: f32,
-    clip_h: f32,
-    rx: [f32; 4],
-    ry: [f32; 4],
-) {
-    let clip = InsetCornerClip {
-        x: clip_x,
-        y: clip_y,
-        w: clip_w,
-        h: clip_h,
-        rx,
-        ry,
-    };
-    for y in 0..img.height() {
-        for x in 0..img.width() {
-            let px = img.get_pixel_mut(x, y);
-            let alpha = px[3] as f32 / 255.0;
-            if alpha <= INSET_SHADOW_ALPHA_CUTOFF {
-                px[3] = 0;
-                continue;
-            }
-            let tail = ((alpha - INSET_SHADOW_ALPHA_CUTOFF) / (1.0 - INSET_SHADOW_ALPHA_CUTOFF))
-                .clamp(0.0, 1.0);
-            let cap = if in_inset_corner(x as f32 + 0.5, y as f32 + 0.5, &clip) {
-                INSET_SHADOW_CORNER_ALPHA_CAP
-            } else {
-                INSET_SHADOW_ALPHA_CAP
-            };
-            let boosted = (alpha * INSET_SHADOW_MID_ALPHA_BOOST).min(cap);
-            let t = smoothstep(INSET_SHADOW_BOOST_START, INSET_SHADOW_BOOST_END, alpha);
-            let shaped = tail + (boosted - tail) * t;
-            px[3] = (shaped * 255.0).round().clamp(0.0, 255.0) as u8;
-        }
-    }
-}
-
-struct InsetCornerClip {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    rx: [f32; 4],
-    ry: [f32; 4],
-}
-
-fn in_inset_corner(px: f32, py: f32, clip: &InsetCornerClip) -> bool {
-    let left = px - clip.x;
-    let right = clip.x + clip.w - px;
-    let top = py - clip.y;
-    let bottom = clip.y + clip.h - py;
-    (left >= 0.0 && top >= 0.0 && left < clip.rx[0] && top < clip.ry[0])
-        || (right >= 0.0 && top >= 0.0 && right < clip.rx[1] && top < clip.ry[1])
-        || (right >= 0.0 && bottom >= 0.0 && right < clip.rx[2] && bottom < clip.ry[2])
-        || (left >= 0.0 && bottom >= 0.0 && left < clip.rx[3] && bottom < clip.ry[3])
-}
-
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn clip_alpha_to_rounded_box(
@@ -349,14 +523,13 @@ fn clip_alpha_to_rounded_box(
     y: f32,
     w: f32,
     h: f32,
-    rx: [f32; 4],
-    ry: [f32; 4],
+    radii: CornerRadii,
 ) -> Option<()> {
     use resvg::tiny_skia;
 
     let mut mask = tiny_skia::Pixmap::new(img.width(), img.height())?;
     let mut pb = tiny_skia::PathBuilder::new();
-    append_rounded_box_path(&mut pb, x, y, w, h, rx, ry);
+    append_rounded_box_path(&mut pb, x, y, w, h, radii);
     let path = pb.finish()?;
     let mut paint = tiny_skia::Paint::default();
     paint.set_color(tiny_skia::Color::WHITE);
@@ -381,50 +554,21 @@ fn append_rounded_box_path(
     y: f32,
     w: f32,
     h: f32,
-    rx: [f32; 4],
-    ry: [f32; 4],
+    radii: CornerRadii,
 ) {
-    let mut rx = [
-        rx[0].max(0.0),
-        rx[1].max(0.0),
-        rx[2].max(0.0),
-        rx[3].max(0.0),
-    ];
-    let mut ry = [
-        ry[0].max(0.0),
-        ry[1].max(0.0),
-        ry[2].max(0.0),
-        ry[3].max(0.0),
-    ];
-    if rx.iter().all(|r| *r <= 0.5) && ry.iter().all(|r| *r <= 0.5) {
+    let radii = radii.fit_to(w, h);
+    if radii.is_zero() {
         append_rounded_path(pb, x, y, w, h, 0.0, 0.0);
         return;
-    }
-
-    let mut scale = 1.0f32;
-    let edges = [
-        (rx[0] + rx[1], w),
-        (rx[3] + rx[2], w),
-        (ry[0] + ry[3], h),
-        (ry[1] + ry[2], h),
-    ];
-    for (sum, len) in edges {
-        if sum > len && sum > 0.0 {
-            scale = scale.min(len / sum);
-        }
-    }
-    if scale < 1.0 {
-        for i in 0..4 {
-            rx[i] *= scale;
-            ry[i] *= scale;
-        }
     }
 
     let k = 0.552_284_8;
     let (x0, y0) = (x, y);
     let (x1, y1) = (x + w, y + h);
-    let (tlx, trx, brx, blx) = (rx[0], rx[1], rx[2], rx[3]);
-    let (tly, try_, bry, bly) = (ry[0], ry[1], ry[2], ry[3]);
+    let (tlx, tly) = (radii.top_left.x, radii.top_left.y);
+    let (trx, try_) = (radii.top_right.x, radii.top_right.y);
+    let (brx, bry) = (radii.bottom_right.x, radii.bottom_right.y);
+    let (blx, bly) = (radii.bottom_left.x, radii.bottom_left.y);
 
     pb.move_to(x0 + tlx, y0);
     pb.line_to(x1 - trx, y0);
@@ -454,7 +598,7 @@ fn append_rounded_path(
     rx: f32,
     ry: f32,
 ) {
-    if rx <= 0.5 && ry <= 0.5 {
+    if rx <= 0.0 && ry <= 0.0 {
         pb.move_to(x, y);
         pb.line_to(x + w, y);
         pb.line_to(x + w, y + h);
@@ -502,9 +646,9 @@ pub(crate) fn blur_shadow_alpha_mask(
 
     let s = filter_dpi_scale(filter_dpi);
     let sigma = (blur_pt / PT_PER_PX) * s / 2.0;
-    let pad = pad_pixels(sigma);
-    let buf_w = mw + 2 * pad;
-    let buf_h = mh + 2 * pad;
+    let pad = pad_pixels(sigma)?;
+    let buf_w = padded_pixels(mw, pad)?;
+    let buf_h = padded_pixels(mh, pad)?;
 
     let (r8, g8, b8) = (
         (cr.clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -520,12 +664,7 @@ pub(crate) fn blur_shadow_alpha_mask(
                 continue;
             }
             any = true;
-            let alpha_scale = if blur_pt > 0.0 {
-                TEXT_SHADOW_ALPHA_SCALE
-            } else {
-                1.0
-            };
-            let out_a = (cov as f32 * ca * alpha_scale).round().clamp(0.0, 255.0) as u8;
+            let out_a = (cov as f32 * ca).round().clamp(0.0, 255.0) as u8;
             tinted.put_pixel(x + pad, y + pad, image::Rgba([r8, g8, b8, out_a]));
         }
     }
@@ -533,7 +672,7 @@ pub(crate) fn blur_shadow_alpha_mask(
         return None;
     }
     let blurred = if sigma > 0.0 {
-        blur_premultiplied(&tinted, sigma)
+        gaussian_blur_premultiplied(&tinted, sigma)?
     } else {
         tinted
     };
@@ -541,29 +680,6 @@ pub(crate) fn blur_shadow_alpha_mask(
     let overflow_pt = pad as f32 / s * PT_PER_PX;
     let asset = rgba_to_png_alpha_asset(blurred)?;
     Some((BlurredRaster { asset, overflow_pt }, pad))
-}
-
-pub(crate) fn dilate_alpha_mask(mask: &image::GrayImage, radius: u32) -> image::GrayImage {
-    if radius == 0 {
-        return mask.clone();
-    }
-    let mut out = image::GrayImage::new(mask.width(), mask.height());
-    for y in 0..mask.height() {
-        for x in 0..mask.width() {
-            let x0 = x.saturating_sub(radius);
-            let y0 = y.saturating_sub(radius);
-            let x1 = (x + radius).min(mask.width().saturating_sub(1));
-            let y1 = (y + radius).min(mask.height().saturating_sub(1));
-            let mut max_a = 0;
-            for yy in y0..=y1 {
-                for xx in x0..=x1 {
-                    max_a = max_a.max(mask.get_pixel(xx, yy)[0]);
-                }
-            }
-            out.put_pixel(x, y, image::Luma([max_a]));
-        }
-    }
-    out
 }
 
 /// A rasterized text run's alpha coverage plus where the text origin (baseline,
@@ -576,33 +692,48 @@ pub(crate) struct GlyphRaster {
     pub baseline_y_px: f32,
 }
 
+/// Synthetic face effects applied while rasterizing one shaped glyph run.
+///
+/// Keeping these together prevents filter, shadow, and PDF raster paths from
+/// independently dropping one part of the resolved font presentation.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct GlyphRasterStyle {
+    pub(crate) embolden: f32,
+    pub(crate) outline: f32,
+    pub(crate) shear: f32,
+}
+
+/// Complete semantic input for one glyph-outline rasterization.
+pub(crate) struct GlyphRasterRequest<'a> {
+    pub(crate) font: &'a TtfFont,
+    pub(crate) font_size: f32,
+    pub(crate) glyphs: &'a [crate::text::ShapedGlyph],
+    pub(crate) style: GlyphRasterStyle,
+    pub(crate) dpi: f32,
+}
+
 /// Rasterize a run's shaped glyph outlines into an 8-bit alpha coverage mask at
 /// `DEVICE_SCALE`, for use as a `text-shadow` blur source. `font_data` is the
 /// raw TTF/OTF bytes; `units_per_em` is the font's em scale; `font_size_pt` is
 /// the run's font size in points; `glyphs` is the shaped run. Returns the mask
 /// plus the text-origin position inside it, or `None` when the font can't be
 /// parsed or nothing is drawn (so the caller falls back to a sharp copy).
-pub(crate) fn rasterize_run_alpha(
-    font_data: &[u8],
-    units_per_em: u16,
-    font_size_pt: f32,
-    glyphs: &[crate::text::ShapedGlyph],
-    embolden_pt: f32,
-    filter_dpi: f32,
-    stroke_width_px: f32,
-) -> Option<GlyphRaster> {
+pub(crate) fn rasterize_run_alpha(request: GlyphRasterRequest<'_>) -> Option<GlyphRaster> {
     use resvg::tiny_skia;
 
-    if units_per_em == 0 || font_size_pt <= 0.0 || glyphs.is_empty() {
+    if request.font.units_per_em == 0 || request.font_size <= 0.0 || request.glyphs.is_empty() {
         return None;
     }
-    let face = rustybuzz::ttf_parser::Face::parse(font_data, 0).ok()?;
+
+    let face =
+        rustybuzz::ttf_parser::Face::parse(&request.font.data, request.font.face_index.get())
+            .ok()?;
 
     // Glyph font units -> device pixels: (units/upem) * font_size_pt(px-equiv)
     // * filter_dpi/96. font_size is in points; CSS px = pt / PT_PER_PX.
-    let s = filter_dpi_scale(filter_dpi);
-    let upem = units_per_em as f32;
-    let px_per_unit = (font_size_pt / PT_PER_PX) * s / upem;
+    let s = filter_dpi_scale(request.dpi);
+    let upem = request.font.units_per_em as f32;
+    let px_per_unit = (request.font_size / PT_PER_PX) * s / upem;
     // Advances/offsets from shaping are already in points; -> device px.
     let pt_to_px = s / PT_PER_PX;
 
@@ -614,35 +745,36 @@ pub(crate) fn rasterize_run_alpha(
         pen_x: f32,
         baseline_y: f32,
         scale: f32,
+        shear: f32,
     }
     impl rustybuzz::ttf_parser::OutlineBuilder for Builder<'_> {
         fn move_to(&mut self, x: f32, y: f32) {
             self.pb.move_to(
-                self.pen_x + x * self.scale,
+                self.pen_x + (x + self.shear * y) * self.scale,
                 self.baseline_y - y * self.scale,
             );
         }
         fn line_to(&mut self, x: f32, y: f32) {
             self.pb.line_to(
-                self.pen_x + x * self.scale,
+                self.pen_x + (x + self.shear * y) * self.scale,
                 self.baseline_y - y * self.scale,
             );
         }
         fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
             self.pb.quad_to(
-                self.pen_x + x1 * self.scale,
+                self.pen_x + (x1 + self.shear * y1) * self.scale,
                 self.baseline_y - y1 * self.scale,
-                self.pen_x + x * self.scale,
+                self.pen_x + (x + self.shear * y) * self.scale,
                 self.baseline_y - y * self.scale,
             );
         }
         fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
             self.pb.cubic_to(
-                self.pen_x + x1 * self.scale,
+                self.pen_x + (x1 + self.shear * y1) * self.scale,
                 self.baseline_y - y1 * self.scale,
-                self.pen_x + x2 * self.scale,
+                self.pen_x + (x2 + self.shear * y2) * self.scale,
                 self.baseline_y - y2 * self.scale,
-                self.pen_x + x * self.scale,
+                self.pen_x + (x + self.shear * y) * self.scale,
                 self.baseline_y - y * self.scale,
             );
         }
@@ -654,13 +786,14 @@ pub(crate) fn rasterize_run_alpha(
     // Provisional baseline at y=0; we measure bounds then re-anchor.
     let mut pb = tiny_skia::PathBuilder::new();
     let mut pen_x = 0.0f32;
-    for g in glyphs {
+    for g in request.glyphs {
         let gid = rustybuzz::ttf_parser::GlyphId(g.glyph_id);
         let mut b = Builder {
             pb: &mut pb,
             pen_x: pen_x + g.x_offset * pt_to_px,
             baseline_y: -g.y_offset * pt_to_px,
             scale: px_per_unit,
+            shear: request.style.shear,
         };
         let _ = face.outline_glyph(gid, &mut b);
         pen_x += g.x_advance * pt_to_px;
@@ -669,9 +802,9 @@ pub(crate) fn rasterize_run_alpha(
     let bounds = path.bounds();
 
     // Margin so the outline anti-aliasing isn't clipped at the buffer edge.
-    let embolden_px = (embolden_pt * pt_to_px).max(0.0);
-    let stroke_width_px = stroke_width_px.max(0.0);
-    let stroke_px = embolden_px.max(stroke_width_px);
+    let embolden_px = (request.style.embolden * pt_to_px).max(0.0);
+    let outline_px = (request.style.outline * pt_to_px).max(0.0);
+    let stroke_px = embolden_px.max(outline_px);
     let margin = 2.0f32 + stroke_px / 2.0;
     let min_x = bounds.left() - margin;
     let min_y = bounds.top() - margin;
@@ -714,9 +847,9 @@ pub(crate) fn rasterize_run_alpha(
     })
 }
 
-/// Device pixels per point, for callers converting blur overflow / positions.
-pub(crate) fn px_per_pt_at_filter_dpi(filter_dpi: f32) -> f32 {
-    filter_dpi_scale(filter_dpi) / PT_PER_PX
+/// Device pixels per point at one physical raster resolution.
+pub(crate) fn px_per_pt_at_dpi(dpi: f32) -> f32 {
+    filter_dpi_scale(dpi) / PT_PER_PX
 }
 
 /// Rasterize a solid-fill box (background colour + border) into a transparent,
@@ -724,12 +857,12 @@ pub(crate) fn px_per_pt_at_filter_dpi(filter_dpi: f32) -> f32 {
 /// the overflow it adds outside the border box.
 ///
 /// `width_pt`/`height_pt` are the border-box size in points. `blur_radius_pt`
-/// is `ComputedStyle::blur_radius` (already in points). Returns `None` when the
+/// is `ComputedStyle::filter.blur_radius` (already in points). Returns `None` when the
 /// element paints nothing (so the caller falls back to its normal path).
 pub(crate) fn blur_box(
     width_pt: f32,
     height_pt: f32,
-    background: Option<(f32, f32, f32, f32)>,
+    background: Option<crate::types::Color>,
     border: &LayoutBorder,
     blur_radius_pt: f32,
     filter_dpi: f32,
@@ -737,7 +870,7 @@ pub(crate) fn blur_box(
     if blur_radius_pt <= 0.0 || width_pt <= 0.0 || height_pt <= 0.0 {
         return None;
     }
-    let has_bg = background.is_some_and(|(_, _, _, a)| a > 0.0);
+    let has_bg = background.is_some_and(|color| color.alpha() > 0.0);
     if !has_bg && !border.has_visible() {
         return None;
     }
@@ -747,35 +880,44 @@ pub(crate) fn blur_box(
     // Buffer geometry: box at device scale plus transparent padding for the
     // gaussian to feather into.
     let s = filter_dpi_scale(filter_dpi);
-    let sigma = (blur_radius_pt / PT_PER_PX) * s;
-    let pad = pad_pixels(sigma);
-    let box_w = (width_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let box_h = (height_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let buf_w = box_w + 2 * pad;
-    let buf_h = box_h + 2 * pad;
+    let kernel = FilterBlurKernel::new(blur_radius_pt, filter_dpi)?;
+    let pad = kernel.padding_px;
+    let box_x = filter_raster_axis(width_pt, s)?;
+    let box_y = filter_raster_axis(height_pt, s)?;
+    let buf_w = padded_pixels(box_x.pixels, pad)?;
+    let buf_h = padded_pixels(box_y.pixels, pad)?;
 
     let mut pixmap = tiny_skia::Pixmap::new(buf_w, buf_h)?;
     let ox = pad as f32;
     let oy = pad as f32;
 
     // Background fill covers the whole border box.
-    if let Some((r, g, b, a)) = background
-        && a > 0.0
+    if let Some(color) = background
+        && color.alpha() > 0.0
     {
+        let (r, g, b, a) = color.to_f32_rgba();
         let mut paint = tiny_skia::Paint::default();
         paint.set_color(color8(r, g, b, a));
         paint.anti_alias = true;
-        let rect = tiny_skia::Rect::from_xywh(ox, oy, box_w as f32, box_h as f32)?;
+        let rect = tiny_skia::Rect::from_xywh(ox, oy, box_x.paint_px, box_y.paint_px)?;
         pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
 
     // Borders paint INSIDE the border box (the declared size is the border box).
     // Fill each visible side as a rectangle so a uniform solid frame matches the
     // vector painter; the gaussian then softens both fill and frame edge.
-    paint_border_rects(&mut pixmap, border, ox, oy, box_w as f32, box_h as f32, s);
+    paint_border_rects(
+        &mut pixmap,
+        border,
+        ox,
+        oy,
+        box_x.paint_px,
+        box_y.paint_px,
+        s,
+    );
 
-    let rgba = pixmap_to_rgba(&pixmap, buf_w, buf_h);
-    let rgba = blur_premultiplied(&rgba, sigma);
+    let premultiplied = pixmap_to_premultiplied_rgba(&pixmap, buf_w, buf_h);
+    let rgba = unpremultiply_rgba(&blur_css_filter_premultiplied(&premultiplied, kernel)?);
 
     let overflow_pt = pad as f32 / s * PT_PER_PX;
     let asset = rgba_to_png_alpha_asset(rgba)?;
@@ -830,8 +972,8 @@ fn paint_border_rects(
             continue;
         }
         let mut paint = tiny_skia::Paint::default();
-        let (r, g, b) = side.color;
-        paint.set_color(color8(r, g, b, side.alpha));
+        let (r, g, b) = side.color.to_f32_rgb();
+        paint.set_color(color8(r, g, b, side.color.alpha()));
         paint.anti_alias = true;
         if let Some(rect) = tiny_skia::Rect::from_xywh(ox + x, oy + y, w, h) {
             pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
@@ -839,51 +981,182 @@ fn paint_border_rects(
     }
 }
 
-/// Gaussian-blur an already-decoded source image with the CSS-correct sigma and
-/// transparent padding so the blur feathers *outside* the element's content box
-/// (css-filter-effects-1 §4.1: `blur(<length>)` → gaussian `stdDeviation =
-/// length`).
-///
-/// Chrome composites the element at display resolution and blurs *there*, so we
-/// upscale the source to the rendered content size at the device scale (nearest
-/// neighbour, matching `image-rendering: pixelated`) and apply the gaussian with
-/// `sigma = radius_css_px * DEVICE_SCALE` in that buffer. This reproduces the
-/// full feather magnitude regardless of how small the source bitmap is.
-/// Returns the blurred RGBA buffer (not yet encoded) plus the per-side overflow
-/// in points, so callers can apply later filter-list functions (e.g.
-/// `brightness` in `blur(...) brightness(...)`) to the blurred pixels —
-/// including the feathered edge — before encoding, matching the CSS filter
-/// pipeline order (css-filter-effects-1 §2: functions apply in order).
-pub(crate) fn blur_image_buffer(
+/// Rasterize a decoded image at its painted content-box size and the configured
+/// filter resolution. CSS filter functions operate on this painted image, not
+/// on the source bitmap's intrinsic pixel grid.
+pub(crate) fn rasterize_image_buffer(
     source: &image::RgbaImage,
     display_w_pt: f32,
     display_h_pt: f32,
-    blur_radius_pt: f32,
+    image_rendering: ImageRendering,
     filter_dpi: f32,
-) -> Option<(image::RgbaImage, f32)> {
-    let (sw, sh) = (source.width(), source.height());
-    if sw == 0 || sh == 0 || blur_radius_pt <= 0.0 || display_w_pt <= 0.0 || display_h_pt <= 0.0 {
+) -> Option<image::RgbaImage> {
+    if source.width() == 0 || source.height() == 0 || display_w_pt <= 0.0 || display_h_pt <= 0.0 {
         return None;
     }
-    // Render the image at device resolution (display CSS px × DEVICE_SCALE).
-    let s = filter_dpi_scale(filter_dpi);
-    let dev_w = (display_w_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let dev_h = (display_h_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let upscaled = resize_nearest_center(source, dev_w, dev_h);
+    let scale = filter_dpi_scale(filter_dpi);
+    let width = filter_raster_pixels(display_w_pt, scale)?;
+    let height = filter_raster_pixels(display_h_pt, scale)?;
+    let css_scaled = if image_rendering.is_pixelated() {
+        pixelated_image_at_css_size(source, display_w_pt, display_h_pt)?
+    } else {
+        source.clone()
+    };
+    Some(resize_image_for_display(
+        &css_scaled,
+        width,
+        height,
+        image_rendering,
+    ))
+}
 
-    let sigma = (blur_radius_pt / PT_PER_PX) * s * IMAGE_BLUR_SIGMA_SCALE;
-    let pad = pad_pixels(sigma);
-    let mut padded = image::RgbaImage::new(dev_w + 2 * pad, dev_h + 2 * pad);
-    image::imageops::replace(&mut padded, &upscaled, pad as i64, pad as i64);
-    let mut blurred = blur_premultiplied(&padded, sigma);
-    for px in blurred.pixels_mut() {
-        if px[3] <= 1 {
-            *px = image::Rgba([0, 0, 0, 0]);
+/// Apply CSS Images' `pixelated` operation in CSS image coordinates. The
+/// physical PDF/filter backing scale is intentionally applied later: it is an
+/// output-quality decision, not a second CSS resize.
+pub(crate) fn pixelated_image_at_css_size(
+    source: &image::RgbaImage,
+    display_w_pt: f32,
+    display_h_pt: f32,
+) -> Option<image::RgbaImage> {
+    if source.width() == 0 || source.height() == 0 || display_w_pt <= 0.0 || display_h_pt <= 0.0 {
+        return None;
+    }
+    let target_width = css_image_pixels(display_w_pt)?;
+    let target_height = css_image_pixels(display_h_pt)?;
+    let integer_width = nearest_pixelated_multiple(source.width(), display_w_pt);
+    let integer_height = nearest_pixelated_multiple(source.height(), display_h_pt);
+    let integer_scaled = image::imageops::resize(
+        source,
+        integer_width,
+        integer_height,
+        image::imageops::FilterType::Nearest,
+    );
+    Some(resize_rgba_smooth(
+        &integer_scaled,
+        target_width,
+        target_height,
+    ))
+}
+
+/// Smoothly resize a transparent raster in CSS image coordinates.
+///
+/// The `image` crate's triangle kernel samples just beyond an exactly aligned
+/// transparent edge when shrinking. CSS Images' `pixelated` algorithm requires
+/// its second stage to be smooth, but it must not grow a source alpha silhouette
+/// whose integral-multiple boundary maps exactly to the target grid. Sampling
+/// pixel centres with premultiplied bilinear interpolation preserves that
+/// boundary and prevents transparent RGB from creating a coloured fringe.
+fn resize_rgba_smooth(
+    source: &image::RgbaImage,
+    target_width: u32,
+    target_height: u32,
+) -> image::RgbaImage {
+    let (source_width, source_height) = source.dimensions();
+    if (source_width, source_height) == (target_width, target_height) {
+        return source.clone();
+    }
+    let mut output = image::RgbaImage::new(target_width, target_height);
+    for y in 0..target_height {
+        let (top, bottom, vertical) = bilinear_axis(source_height, target_height, y);
+        for x in 0..target_width {
+            let (left, right, horizontal) = bilinear_axis(source_width, target_width, x);
+            let top_left = premultiplied_pixel(source.get_pixel(left, top));
+            let top_right = premultiplied_pixel(source.get_pixel(right, top));
+            let bottom_left = premultiplied_pixel(source.get_pixel(left, bottom));
+            let bottom_right = premultiplied_pixel(source.get_pixel(right, bottom));
+            let top = interpolate_premultiplied(top_left, top_right, horizontal);
+            let bottom = interpolate_premultiplied(bottom_left, bottom_right, horizontal);
+            output.put_pixel(
+                x,
+                y,
+                unpremultiply_pixel(interpolate_premultiplied(top, bottom, vertical)),
+            );
         }
     }
+    output
+}
 
-    let overflow_pt = pad as f32 / s * PT_PER_PX;
-    Some((blurred, overflow_pt))
+/// Return the source pixels surrounding a destination pixel centre and the
+/// interpolation weight toward the latter one.
+fn bilinear_axis(source_len: u32, target_len: u32, target_index: u32) -> (u32, u32, f32) {
+    if source_len <= 1 || target_len == 0 {
+        return (0, 0, 0.0);
+    }
+    let position = (((target_index as f32 + 0.5) * source_len as f32 / target_len as f32) - 0.5)
+        .clamp(0.0, source_len.saturating_sub(1) as f32);
+    let first = position.floor() as u32;
+    let second = (first + 1).min(source_len - 1);
+    (first, second, position - first as f32)
+}
+
+fn premultiplied_pixel(pixel: &image::Rgba<u8>) -> [f32; 4] {
+    let alpha = f32::from(pixel[3]) / 255.0;
+    [
+        f32::from(pixel[0]) * alpha,
+        f32::from(pixel[1]) * alpha,
+        f32::from(pixel[2]) * alpha,
+        alpha,
+    ]
+}
+
+fn interpolate_premultiplied(start: [f32; 4], end: [f32; 4], amount: f32) -> [f32; 4] {
+    std::array::from_fn(|channel| start[channel] + (end[channel] - start[channel]) * amount)
+}
+
+fn unpremultiply_pixel(pixel: [f32; 4]) -> image::Rgba<u8> {
+    let alpha = pixel[3].clamp(0.0, 1.0);
+    if alpha == 0.0 {
+        return image::Rgba([0, 0, 0, 0]);
+    }
+    image::Rgba([
+        (pixel[0] / alpha).round().clamp(0.0, 255.0) as u8,
+        (pixel[1] / alpha).round().clamp(0.0, 255.0) as u8,
+        (pixel[2] / alpha).round().clamp(0.0, 255.0) as u8,
+        (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+    ])
+}
+
+fn css_image_pixels(display_axis_pt: f32) -> Option<u32> {
+    let pixels = display_axis_pt / PT_PER_PX;
+    (pixels.is_finite() && pixels > 0.0).then(|| pixels.round().clamp(1.0, u32::MAX as f32) as u32)
+}
+
+/// Rasterize a CSS-scaled image into a physical target surface.
+pub(crate) fn resize_image_for_display(
+    source: &image::RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    image_rendering: ImageRendering,
+) -> image::RgbaImage {
+    match image_rendering {
+        ImageRendering::Pixelated | ImageRendering::CrispEdges => {
+            resize_nearest_center(source, target_width, target_height)
+        }
+        ImageRendering::Smooth => image::imageops::resize(
+            source,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Triangle,
+        ),
+        ImageRendering::HighQuality => image::imageops::resize(
+            source,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Lanczos3,
+        ),
+        // CSS leaves the UA's `auto` algorithm open. Retain Ironpress's
+        // established nearest-centre choice so this new property does not alter
+        // existing documents that did not opt into a scaling preference.
+        ImageRendering::Auto => resize_nearest_center(source, target_width, target_height),
+    }
+}
+
+fn nearest_pixelated_multiple(source_axis: u32, display_axis_pt: f32) -> u32 {
+    let target_css_px = display_axis_pt / PT_PER_PX;
+    let multiple = (target_css_px / source_axis as f32).round().max(1.0);
+    (source_axis as f32 * multiple)
+        .round()
+        .clamp(1.0, u32::MAX as f32) as u32
 }
 
 /// Encode an already-built blurred RGBA buffer + overflow into a `BlurredRaster`.
@@ -922,11 +1195,13 @@ pub(crate) fn blur_painted_buffer_to_rgba(
         return None;
     }
     let s = filter_dpi_scale(filter_dpi);
-    let sigma = (blur_radius_pt / PT_PER_PX) * s;
-    let pad = pad_pixels(sigma);
-    let mut padded = image::RgbaImage::new(source.width() + 2 * pad, source.height() + 2 * pad);
+    let kernel = FilterBlurKernel::new(blur_radius_pt, filter_dpi)?;
+    let pad = kernel.padding_px;
+    let padded_w = padded_pixels(source.width(), pad)?;
+    let padded_h = padded_pixels(source.height(), pad)?;
+    let mut padded = image::RgbaImage::new(padded_w, padded_h);
     image::imageops::replace(&mut padded, source, pad as i64, pad as i64);
-    let blurred = blur_premultiplied(&padded, sigma);
+    let blurred = blur_css_filter(&padded, kernel)?;
     let overflow_pt = pad as f32 / s * PT_PER_PX;
     Some((blurred, overflow_pt))
 }
@@ -945,58 +1220,6 @@ pub(crate) fn blur_painted_buffer(
     raster_from_buffer(blurred, overflow_pt)
 }
 
-/// Apply an ordered CSS/SVG filter operation list to composited RGBA pixels.
-/// Geometry-producing operations that this helper does not rasterize (offset,
-/// flood, morphology, drop-shadow) are ignored here because their existing
-/// specialized layout/render paths handle them before callers reach this group
-/// raster fallback.
-pub(crate) fn apply_ordered_filter_ops_rgba(
-    source: &image::RgbaImage,
-    ops: &[crate::style::computed::ColorFilterOp],
-    linear_rgb: bool,
-    filter_dpi: f32,
-) -> Option<(image::RgbaImage, f32)> {
-    let mut current = source.clone();
-    let mut overflow = 0.0;
-    for op in ops {
-        match *op {
-            crate::style::computed::ColorFilterOp::Blur(radius) if radius > 0.0 => {
-                let (buf, ov) = blur_painted_buffer_to_rgba(&current, radius * 0.95, filter_dpi)?;
-                current = buf;
-                overflow += ov;
-            }
-            crate::style::computed::ColorFilterOp::Blur(_)
-            | crate::style::computed::ColorFilterOp::Flood { .. }
-            | crate::style::computed::ColorFilterOp::Offset { .. }
-            | crate::style::computed::ColorFilterOp::DropShadow(_)
-            | crate::style::computed::ColorFilterOp::MorphologyDilate(_) => {}
-            _ => apply_color_filter_rgba(&mut current, std::slice::from_ref(op), linear_rgb),
-        }
-    }
-    Some((current, overflow))
-}
-
-fn apply_color_filter_rgba(
-    img: &mut image::RgbaImage,
-    ops: &[crate::style::computed::ColorFilterOp],
-    linear_rgb: bool,
-) {
-    for px in img.pixels_mut() {
-        let rgba = (
-            px[0] as f32 / 255.0,
-            px[1] as f32 / 255.0,
-            px[2] as f32 / 255.0,
-            px[3] as f32 / 255.0,
-        );
-        let (r, g, b, a) =
-            crate::layout::images::apply_color_filters_to_color(rgba, ops, linear_rgb);
-        px[0] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
-        px[1] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
-        px[2] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
-        px[3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-}
-
 pub(crate) struct SvgTurbulenceDisplacement {
     pub base_frequency_x: f64,
     pub base_frequency_y: f64,
@@ -1006,38 +1229,40 @@ pub(crate) struct SvgTurbulenceDisplacement {
     pub scale: f32,
     pub x_channel: usize,
     pub y_channel: usize,
-    /// Symmetric source-graphic overflow in SVG user units.
-    pub overflow: f32,
+    /// Filter-region extent beyond the source graphic, in SVG user units.
+    pub filter_region_overflow: EdgeSizes,
+}
+
+/// A rasterized SVG filter result with its directional paint extent.
+pub(crate) struct SvgFilterRaster {
+    pub asset: RasterImageAsset,
+    pub raster_overflow: EdgeSizes,
 }
 
 pub(crate) fn turbulence_displacement_rect(
     width_pt: f32,
     height_pt: f32,
-    color: (f32, f32, f32, f32),
+    color: crate::types::Color,
     spec: &SvgTurbulenceDisplacement,
     filter_dpi: f32,
-) -> Option<BlurredRaster> {
-    if width_pt <= 0.0 || height_pt <= 0.0 || color.3 <= 0.0 {
+) -> Option<SvgFilterRaster> {
+    if width_pt <= 0.0 || height_pt <= 0.0 || color.a <= 0.0 {
         return None;
     }
     let scale = filter_dpi_scale(filter_dpi);
     let width_css = width_pt / PT_PER_PX;
     let height_css = height_pt / PT_PER_PX;
-    let canvas_w_css = width_css + 2.0 * spec.overflow;
-    let canvas_h_css = height_css + 2.0 * spec.overflow;
+    let overflow = spec.filter_region_overflow;
+    let canvas_w_css = width_css + overflow.horizontal();
+    let canvas_h_css = height_css + overflow.vertical();
     let px_w = (canvas_w_css * scale).round().max(1.0) as u32;
     let px_h = (canvas_h_css * scale).round().max(1.0) as u32;
-    let ox = (spec.overflow * scale).round() as i32;
-    let oy = (spec.overflow * scale).round() as i32;
+    let ox = (overflow.left * scale).round() as i32;
+    let oy = (overflow.top * scale).round() as i32;
     let rect_w = (width_css * scale).round().max(1.0) as i32;
     let rect_h = (height_css * scale).round().max(1.0) as i32;
 
-    let fill = image::Rgba([
-        (color.0 * 255.0).round().clamp(0.0, 255.0) as u8,
-        (color.1 * 255.0).round().clamp(0.0, 255.0) as u8,
-        (color.2 * 255.0).round().clamp(0.0, 255.0) as u8,
-        (color.3 * 255.0).round().clamp(0.0, 255.0) as u8,
-    ]);
+    let fill = image::Rgba(color.to_rgba8());
     let mut source = image::RgbaImage::new(px_w, px_h);
     for y in oy.max(0)..(oy + rect_h).min(px_h as i32) {
         for x in ox.max(0)..(ox + rect_w).min(px_w as i32) {
@@ -1047,8 +1272,8 @@ pub(crate) fn turbulence_displacement_rect(
 
     let noise = SvgTurbulence::new(spec.seed);
     let mut out = image::RgbaImage::new(px_w, px_h);
-    let view_x = -spec.overflow as f64;
-    let view_y = -spec.overflow as f64;
+    let view_x = -f64::from(overflow.left);
+    let view_y = -f64::from(overflow.top);
     let disp_scale = spec.scale * scale;
     for y in 0..px_h {
         for x in 0..px_w {
@@ -1078,8 +1303,10 @@ pub(crate) fn turbulence_displacement_rect(
         }
     }
 
-    let overflow_pt = spec.overflow * PT_PER_PX;
-    raster_from_buffer(out, overflow_pt)
+    Some(SvgFilterRaster {
+        asset: rgba_to_png_alpha_asset(out)?,
+        raster_overflow: overflow * PT_PER_PX,
+    })
 }
 
 const SVG_RAND_M: i32 = 2147483647;
@@ -1093,35 +1320,36 @@ const SVG_BM: i32 = 0xff;
 const SVG_PERLIN_N: i32 = 0x1000;
 
 struct SvgTurbulence {
-    lattice: Vec<usize>,
-    gradient: Vec<Vec<Vec<f64>>>,
+    lattice: [usize; SVG_B_LEN],
+    gradient: [[[f64; 2]; SVG_B_LEN]; 4],
 }
 
 impl SvgTurbulence {
     fn new(mut seed: i32) -> Self {
-        let mut lattice = vec![0; SVG_B_LEN];
-        let mut gradient = vec![vec![vec![0.0; 2]; SVG_B_LEN]; 4];
+        let mut lattice = [0; SVG_B_LEN];
+        let mut gradient = [[[0.0; 2]; SVG_B_LEN]; 4];
         if seed <= 0 {
             seed = -seed % (SVG_RAND_M - 1) + 1;
         }
         if seed > SVG_RAND_M - 1 {
             seed = SVG_RAND_M - 1;
         }
-        for channel_gradient in gradient.iter_mut().take(4) {
+        for channel_gradient in &mut gradient {
             for i in 0..SVG_B_SIZE {
                 lattice[i] = i;
-                for component in channel_gradient[i].iter_mut().take(2) {
+                loop {
                     seed = svg_turbulence_random(seed);
-                    *component = ((seed % (SVG_B_SIZE_I32 + SVG_B_SIZE_I32)) - SVG_B_SIZE_I32)
-                        as f64
+                    let x = ((seed % (SVG_B_SIZE_I32 + SVG_B_SIZE_I32)) - SVG_B_SIZE_I32) as f64
                         / SVG_B_SIZE_I32 as f64;
-                }
-                let len = (channel_gradient[i][0] * channel_gradient[i][0]
-                    + channel_gradient[i][1] * channel_gradient[i][1])
-                    .sqrt();
-                if len > 0.0 {
-                    channel_gradient[i][0] /= len;
-                    channel_gradient[i][1] /= len;
+                    seed = svg_turbulence_random(seed);
+                    let y = ((seed % (SVG_B_SIZE_I32 + SVG_B_SIZE_I32)) - SVG_B_SIZE_I32) as f64
+                        / SVG_B_SIZE_I32 as f64;
+                    let length = (x * x + y * y).sqrt();
+                    if length == 0.0 || length > 1.0 {
+                        continue;
+                    }
+                    channel_gradient[i] = [x / length, y / length];
+                    break;
                 }
             }
         }
@@ -1134,9 +1362,8 @@ impl SvgTurbulence {
         }
         for i in 0..SVG_B_SIZE + 2 {
             lattice[SVG_B_SIZE + i] = lattice[i];
-            for channel_gradient in gradient.iter_mut().take(4) {
-                channel_gradient[SVG_B_SIZE + i][0] = channel_gradient[i][0];
-                channel_gradient[SVG_B_SIZE + i][1] = channel_gradient[i][1];
+            for channel_gradient in &mut gradient {
+                channel_gradient[SVG_B_SIZE + i] = channel_gradient[i];
             }
         }
         Self { lattice, gradient }
@@ -1218,150 +1445,199 @@ fn svg_lerp(t: f64, a: f64, b: f64) -> f64 {
     a + t * (b - a)
 }
 
-/// Build a `drop-shadow(dx dy blur color)` raster from an already-decoded source
-/// image: take the source alpha, blur it, and tint it with the shadow colour.
-/// The source image itself is rendered separately so image pixels follow image
-/// DPI while this shadow raster follows filter DPI.
-///
-/// `display_w_pt`/`display_h_pt` are the rendered image-content size in points.
-/// `dx_pt`/`dy_pt` are the shadow offsets (points; +y is downward). Returns the
-/// shadow raster plus the overflow it adds beyond each border-box edge.
-#[allow(clippy::too_many_arguments)]
+struct DropShadowSurface {
+    painted: image::RgbaImage,
+    kernel: Option<FilterBlurKernel>,
+    offset: DeviceOffset,
+    padding: u32,
+    width: u32,
+    height: u32,
+    scale: f32,
+}
+
+impl DropShadowSurface {
+    fn new(
+        source: &image::RgbaImage,
+        display_w_pt: f32,
+        display_h_pt: f32,
+        shadow: DropShadow,
+        image_rendering: ImageRendering,
+        filter_dpi: f32,
+    ) -> Option<Self> {
+        if display_w_pt <= 0.0
+            || display_h_pt <= 0.0
+            || !shadow.blur.is_finite()
+            || !shadow.dx.is_finite()
+            || !shadow.dy.is_finite()
+            || source.width() == 0
+            || source.height() == 0
+        {
+            return None;
+        }
+        let scale = filter_dpi_scale(filter_dpi);
+        let content_width = filter_raster_pixels(display_w_pt, scale)?;
+        let content_height = filter_raster_pixels(display_h_pt, scale)?;
+        let painted = rasterize_image_buffer(
+            source,
+            display_w_pt,
+            display_h_pt,
+            image_rendering,
+            filter_dpi,
+        )?;
+        let kernel = (shadow.blur > 0.0)
+            .then(|| FilterBlurKernel::new(shadow.blur, filter_dpi))
+            .flatten();
+        let offset = DeviceOffset::from_points(shadow.dx, shadow.dy, scale);
+        let padding = kernel
+            .map_or(1, |kernel| kernel.padding_px)
+            .max(offset.padding()?)
+            .checked_add(1)?;
+        Some(Self {
+            painted,
+            kernel,
+            offset,
+            padding,
+            width: padded_pixels(content_width, padding)?,
+            height: padded_pixels(content_height, padding)?,
+            scale,
+        })
+    }
+
+    fn shadow_layer(self, shadow: DropShadow) -> Option<(image::RgbaImage, Self)> {
+        let mut layer = image::RgbaImage::new(self.width, self.height);
+        let [r, g, b, alpha] = shadow.color.to_rgba8();
+        let color = [r, g, b];
+        paint_translated_alpha(
+            &mut layer,
+            &self.painted,
+            self.padding,
+            self.offset,
+            color,
+            f32::from(alpha) / 255.0,
+        );
+        let layer = match self.kernel {
+            Some(kernel) => blur_css_filter(&layer, kernel)?,
+            None => layer,
+        };
+        Some((layer, self))
+    }
+
+    fn overflow_pt(&self) -> f32 {
+        self.padding as f32 / self.scale * PT_PER_PX
+    }
+}
+
+/// Build a `drop-shadow()` replacement raster containing both the shadow and the
+/// source image on one configured-resolution filter surface.
 pub(crate) fn drop_shadow_image(
     source: &image::RgbaImage,
     display_w_pt: f32,
     display_h_pt: f32,
-    dx_pt: f32,
-    dy_pt: f32,
-    blur_radius_pt: f32,
-    color: (f32, f32, f32, f32),
+    shadow: DropShadow,
+    image_rendering: ImageRendering,
     filter_dpi: f32,
 ) -> Option<BlurredRaster> {
-    drop_shadow_image_impl(
+    let (mut composed, surface) = DropShadowSurface::new(
         source,
         display_w_pt,
         display_h_pt,
-        dx_pt,
-        dy_pt,
-        blur_radius_pt,
-        color,
+        shadow,
+        image_rendering,
         filter_dpi,
-        false,
-    )
-}
+    )?
+    .shadow_layer(shadow)?;
 
-/// Build a `drop-shadow()` replacement raster containing both the shadow and the
-/// source image, used when prior filter ops have already rasterized the source.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn drop_shadow_image_with_source(
-    source: &image::RgbaImage,
-    display_w_pt: f32,
-    display_h_pt: f32,
-    dx_pt: f32,
-    dy_pt: f32,
-    blur_radius_pt: f32,
-    color: (f32, f32, f32, f32),
-    filter_dpi: f32,
-) -> Option<BlurredRaster> {
-    drop_shadow_image_impl(
-        source,
-        display_w_pt,
-        display_h_pt,
-        dx_pt,
-        dy_pt,
-        blur_radius_pt,
-        color,
-        filter_dpi,
-        true,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn drop_shadow_image_impl(
-    source: &image::RgbaImage,
-    display_w_pt: f32,
-    display_h_pt: f32,
-    dx_pt: f32,
-    dy_pt: f32,
-    blur_radius_pt: f32,
-    color: (f32, f32, f32, f32),
-    filter_dpi: f32,
-    composite_source: bool,
-) -> Option<BlurredRaster> {
-    if display_w_pt <= 0.0 || display_h_pt <= 0.0 {
-        return None;
-    }
-    let (sw, sh) = (source.width(), source.height());
-    if sw == 0 || sh == 0 {
-        return None;
-    }
-    // CSS filters operate on the painted element. Build the shadow surface at
-    // the displayed image resolution so a scaled image's alpha silhouette has
-    // the same pixel grid Chrome filters.
-    let s = filter_dpi_scale(filter_dpi);
-    let dev_w = (display_w_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let dev_h = (display_h_pt / PT_PER_PX * s).round().max(1.0) as u32;
-    let painted =
-        image::imageops::resize(source, dev_w, dev_h, image::imageops::FilterType::Nearest);
-    let sigma = (blur_radius_pt / PT_PER_PX) * s;
-    let dx = dx_pt / PT_PER_PX * s;
-    let dy = dy_pt / PT_PER_PX * s;
-
-    // Padding must cover the blur feather AND the shadow offset so nothing clips.
-    let pad = pad_pixels(sigma)
-        .max(dx.abs().ceil() as u32)
-        .max(dy.abs().ceil() as u32)
-        + 1;
-    let buf_w = dev_w + 2 * pad;
-    let buf_h = dev_h + 2 * pad;
-
-    // Shadow layer: source alpha, tinted, offset, then blurred.
-    let mut shadow = image::RgbaImage::new(buf_w, buf_h);
-    let (sr, sg, sb, sa) = color;
-    let (cr, cg, cb) = (
-        (sr * 255.0).round() as u8,
-        (sg * 255.0).round() as u8,
-        (sb * 255.0).round() as u8,
-    );
-    for y in 0..dev_h {
-        for x in 0..dev_w {
-            let a = painted.get_pixel(x, y)[3];
-            if a == 0 {
+    for y in 0..surface.painted.height() {
+        for x in 0..surface.painted.width() {
+            let src = *surface.painted.get_pixel(x, y);
+            if src[3] == 0 {
                 continue;
             }
-            let tx = x as i32 + pad as i32 + dx.round() as i32;
-            let ty = y as i32 + pad as i32 + dy.round() as i32;
-            if tx < 0 || ty < 0 || tx >= buf_w as i32 || ty >= buf_h as i32 {
-                continue;
-            }
-            let out_a = (a as f32 * sa).round() as u8;
-            shadow.put_pixel(tx as u32, ty as u32, image::Rgba([cr, cg, cb, out_a]));
-        }
-    }
-    let mut composed = if sigma > 0.0 {
-        blur_premultiplied(&shadow, sigma)
-    } else {
-        shadow
-    };
-
-    if composite_source {
-        for y in 0..dev_h {
-            for x in 0..dev_w {
-                let src = *painted.get_pixel(x, y);
-                if src[3] == 0 {
-                    continue;
-                }
-                let dx0 = x + pad;
-                let dy0 = y + pad;
-                let bg = *composed.get_pixel(dx0, dy0);
-                composed.put_pixel(dx0, dy0, over(src, bg));
-            }
+            let dx0 = x + surface.padding;
+            let dy0 = y + surface.padding;
+            let bg = *composed.get_pixel(dx0, dy0);
+            composed.put_pixel(dx0, dy0, over(src, bg));
         }
     }
 
-    let overflow_pt = pad as f32 / s * PT_PER_PX;
+    let overflow_pt = surface.overflow_pt();
     let asset = rgba_to_png_alpha_asset(composed)?;
     Some(BlurredRaster { asset, overflow_pt })
+}
+
+/// A CSS filter offset converted to the device-pixel coordinates of its filter
+/// surface. Keeping both axes together prevents accidental mixed rounding.
+#[derive(Clone, Copy)]
+struct DeviceOffset {
+    x: f32,
+    y: f32,
+}
+
+impl DeviceOffset {
+    fn from_points(x: f32, y: f32, device_scale: f32) -> Self {
+        Self {
+            x: x / PT_PER_PX * device_scale,
+            y: y / PT_PER_PX * device_scale,
+        }
+    }
+
+    fn padding(self) -> Option<u32> {
+        nonnegative_pixel_ceil(self.x.abs())
+            .zip(nonnegative_pixel_ceil(self.y.abs()))
+            .map(|(horizontal, vertical)| horizontal.max(vertical))
+    }
+}
+
+/// Translate a source alpha field without discarding fractional device-pixel
+/// offsets. Depositing each source sample into its four destination neighbours
+/// is bilinear resampling of the alpha field; a single rounded placement makes
+/// a 0.5-pixel CSS offset visibly wider on opposite sides of a hard shadow.
+fn paint_translated_alpha(
+    target: &mut image::RgbaImage,
+    source: &image::RgbaImage,
+    padding: u32,
+    offset: DeviceOffset,
+    color: [u8; 3],
+    opacity: f32,
+) {
+    let width = target.width();
+    let height = target.height();
+    let mut alpha = vec![0.0; target.pixels().len()];
+    for y in 0..source.height() {
+        for x in 0..source.width() {
+            let coverage = f32::from(source.get_pixel(x, y)[3]) / 255.0 * opacity;
+            if coverage == 0.0 {
+                continue;
+            }
+            let destination_x = x as f32 + padding as f32 + offset.x;
+            let destination_y = y as f32 + padding as f32 + offset.y;
+            let left = destination_x.floor() as i32;
+            let top = destination_y.floor() as i32;
+            let horizontal = destination_x - left as f32;
+            let vertical = destination_y - top as f32;
+            for (dy, vertical_weight) in [(0, 1.0 - vertical), (1, vertical)] {
+                for (dx, horizontal_weight) in [(0, 1.0 - horizontal), (1, horizontal)] {
+                    let target_x = left + dx;
+                    let target_y = top + dy;
+                    if target_x < 0
+                        || target_y < 0
+                        || target_x >= width as i32
+                        || target_y >= height as i32
+                    {
+                        continue;
+                    }
+                    let index = target_y as usize * width as usize + target_x as usize;
+                    alpha[index] += coverage * horizontal_weight * vertical_weight;
+                }
+            }
+        }
+    }
+    for (pixel, coverage) in target.pixels_mut().zip(alpha) {
+        let alpha = (coverage.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if alpha != 0 {
+            *pixel = image::Rgba([color[0], color[1], color[2], alpha]);
+        }
+    }
 }
 
 /// Source-over composite of `src` onto `bg`, both straight-alpha RGBA8.
@@ -1409,4 +1685,245 @@ fn pixmap_to_rgba(pixmap: &resvg::tiny_skia::Pixmap, w: u32, h: u32) -> image::R
         out.put_pixel(x, y, image::Rgba([c.red(), c.green(), c.blue(), c.alpha()]));
     }
     out
+}
+
+/// Keep a tiny-skia pixmap's premultiplied channels intact for filter input.
+fn pixmap_to_premultiplied_rgba(
+    pixmap: &resvg::tiny_skia::Pixmap,
+    w: u32,
+    h: u32,
+) -> image::RgbaImage {
+    let mut out = image::RgbaImage::new(w, h);
+    for (i, pixel) in pixmap.pixels().iter().enumerate() {
+        let x = (i as u32) % w;
+        let y = (i as u32) / w;
+        out.put_pixel(
+            x,
+            y,
+            image::Rgba([pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]),
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{CornerRadius, EdgeSizes};
+
+    #[test]
+    fn pixelated_css_scaling_keeps_a_natural_size_image_unmodified() {
+        let source = image::RgbaImage::from_raw(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255])
+            .expect("test image dimensions are valid");
+
+        let scaled = pixelated_image_at_css_size(&source, 2.0 * PT_PER_PX, PT_PER_PX)
+            .expect("positive CSS image size should rasterize");
+
+        assert_eq!(scaled, source);
+    }
+
+    #[test]
+    fn pixelated_css_scaling_smooths_only_after_the_integer_stage() {
+        let source = image::RgbaImage::from_raw(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255])
+            .expect("test image dimensions are valid");
+
+        let scaled = pixelated_image_at_css_size(&source, 5.0 * PT_PER_PX, PT_PER_PX)
+            .expect("positive CSS image size should rasterize");
+
+        assert_eq!(scaled.dimensions(), (5, 1));
+        assert_eq!(scaled.get_pixel(0, 0)[0], 0);
+        assert_eq!(scaled.get_pixel(4, 0)[0], 255);
+        assert!(
+            (0..255).contains(&scaled.get_pixel(2, 0)[0]),
+            "the non-integer remainder should be smoothly resampled"
+        );
+    }
+
+    #[test]
+    fn pixelated_css_scaling_preserves_an_integral_alpha_boundary() {
+        let source = image::RgbaImage::from_fn(64, 64, |x, y| {
+            if (4..60).contains(&x) && (4..60).contains(&y) {
+                image::Rgba([220, 40, 40, 255])
+            } else {
+                image::Rgba([220, 40, 40, 0])
+            }
+        });
+
+        let scaled = pixelated_image_at_css_size(&source, 160.0 * PT_PER_PX, 160.0 * PT_PER_PX)
+            .expect("positive CSS image size should rasterize");
+        let alpha_bounds = scaled
+            .enumerate_pixels()
+            .filter_map(|(x, y, pixel)| (pixel[3] != 0).then_some((x, y)))
+            .fold(
+                None::<(u32, u32, u32, u32)>,
+                |bounds, (x, y)| match bounds {
+                    Some((left, top, right, bottom)) => {
+                        Some((left.min(x), top.min(y), right.max(x), bottom.max(y)))
+                    }
+                    None => Some((x, y, x, y)),
+                },
+            );
+
+        assert_eq!(alpha_bounds, Some((10, 10, 149, 149)));
+    }
+
+    #[test]
+    fn svg_displacement_raster_preserves_directional_filter_region() {
+        let raster = turbulence_displacement_rect(
+            90.0 * PT_PER_PX,
+            58.0 * PT_PER_PX,
+            crate::types::Color::from_srgb(0.83, 0.0, 0.0, 1.0),
+            &SvgTurbulenceDisplacement {
+                base_frequency_x: 0.08,
+                base_frequency_y: 0.08,
+                num_octaves: 1,
+                seed: 7,
+                scale: 18.0,
+                x_channel: 0,
+                y_channel: 1,
+                filter_region_overflow: EdgeSizes::new(11.6, 18.0, 11.6, 18.0),
+            },
+            300.0,
+        )
+        .expect("filter region produces a raster");
+
+        assert_eq!(
+            (raster.asset.source_width, raster.asset.source_height),
+            (394, 254)
+        );
+        let expected_overflow = EdgeSizes::new(11.6, 18.0, 11.6, 18.0) * PT_PER_PX;
+        assert_eq!(raster.raster_overflow, expected_overflow);
+    }
+
+    #[test]
+    fn svg_turbulence_uses_filter_effects_rejection_sampling() {
+        let turbulence = SvgTurbulence::new(7);
+        // Filter Effects 1 §9.21 supplies this exact pseudo-random sequence.
+        // Rejection sampling changes the subsequent lattice permutation, so
+        // this catches the tempting but non-conforming "normalize everything"
+        // implementation too.
+        assert_eq!(&turbulence.lattice[..8], &[0, 78, 89, 7, 57, 173, 142, 40]);
+        let [x, y] = turbulence.gradient[0][0];
+        assert!((x - 0.809_942_121_543_021_1).abs() < 1e-15);
+        assert!((y + 0.586_509_812_151_842_8).abs() < 1e-15);
+    }
+
+    #[test]
+    fn filter_raster_pixel_rounding_ignores_half_pixel_float_noise() {
+        assert_eq!(filter_raster_pixels(105.0, 3.125), Some(438));
+        assert_eq!(filter_raster_pixels(104.999_99, 3.125), Some(438));
+        assert_eq!(filter_raster_pixels(104.997, 3.125), Some(437));
+    }
+
+    #[test]
+    fn filter_raster_axis_keeps_fractional_paint_extent_inside_rounded_backing() {
+        let axis = filter_raster_axis(135.0, 3.125).expect("finite positive extent");
+        assert_eq!(axis.pixels, 563);
+        assert_eq!(axis.paint_px, 562.5);
+    }
+
+    #[test]
+    fn blur_buffer_dimensions_reject_overflow() {
+        assert_eq!(padded_pixels(u32::MAX, 1), None);
+        assert_eq!(pad_pixels(f32::INFINITY), None);
+        assert_eq!(nonnegative_pixel_ceil(f32::NAN), None);
+    }
+
+    #[test]
+    fn css_filter_kernel_keeps_authored_overflow_and_selects_three_boxes() {
+        let kernel = FilterBlurKernel::new(4.5, 300.0).unwrap();
+        assert_eq!(kernel.padding_px, 57); // 3 × 6 CSS px × 300 / 96.
+        assert!(matches!(
+            kernel.sampling,
+            FilterBlurSampling::ThreeBox(DiscreteGaussianPlan {
+                pass_widths: [35, 35, 35]
+            })
+        ));
+    }
+
+    #[test]
+    fn css_filter_kernel_rejects_non_finite_input() {
+        assert!(FilterBlurKernel::new(f32::INFINITY, 300.0).is_none());
+        assert!(FilterBlurKernel::new(4.5, f32::NAN).is_some());
+    }
+
+    #[test]
+    fn discrete_gaussian_matches_chromium_pdf_alpha_profile() {
+        let plan = DiscreteGaussianPlan::from_sigma(15.625).expect("finite sigma has a plan");
+        assert_eq!(plan.pass_widths, [29, 29, 29]);
+
+        let mut source = image::RgbaImage::new(594, 594);
+        for y in 47..547 {
+            for x in 47..547 {
+                source.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        let blurred = box_blur_axes(&source, plan.pass_widths)
+            .expect("valid image and plan produce a blurred image");
+        let expected = [
+            (10, 1),
+            (15, 3),
+            (20, 9),
+            (25, 19),
+            (30, 34),
+            (35, 57),
+            (40, 86),
+            (45, 118),
+            (46, 124),
+            (47, 131),
+            (48, 137),
+            (50, 150),
+        ];
+        for (x, alpha) in expected {
+            assert_eq!(blurred.get_pixel(x, 300)[3], alpha, "x={x}");
+        }
+    }
+
+    fn rounded_box_pixels(radii: CornerRadii) -> Vec<u8> {
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(8, 8).unwrap();
+        let mut builder = resvg::tiny_skia::PathBuilder::new();
+        append_rounded_box_path(&mut builder, 1.0, 1.0, 6.0, 6.0, radii);
+        let path = builder.finish().unwrap();
+        let mut paint = resvg::tiny_skia::Paint::default();
+        paint.set_color_rgba8(0, 0, 0, 255);
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &path,
+            &paint,
+            resvg::tiny_skia::FillRule::Winding,
+            resvg::tiny_skia::Transform::identity(),
+            None,
+        );
+        pixmap.data().to_vec()
+    }
+
+    #[test]
+    fn positive_subpixel_corner_radius_is_not_squared_off() {
+        assert_ne!(
+            rounded_box_pixels(CornerRadii::circular(0.49)),
+            rounded_box_pixels(CornerRadii::ZERO)
+        );
+    }
+
+    #[test]
+    fn zero_radius_axis_makes_the_corner_square() {
+        assert_eq!(
+            rounded_box_pixels(CornerRadii::uniform(CornerRadius::new(2.0, 0.0))),
+            rounded_box_pixels(CornerRadii::ZERO)
+        );
+    }
+
+    #[test]
+    fn rounded_box_path_preserves_per_corner_ellipses() {
+        let radii = CornerRadii::new(
+            CornerRadius::new(1.0, 2.0),
+            CornerRadius::new(2.0, 1.0),
+            CornerRadius::new(3.0, 1.0),
+            CornerRadius::new(1.0, 3.0),
+        );
+        assert_ne!(
+            rounded_box_pixels(radii),
+            rounded_box_pixels(CornerRadii::circular(1.0))
+        );
+    }
 }

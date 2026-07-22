@@ -2,13 +2,8 @@
 //!
 //! Hand-rolled CIEDE2000 — NO `palette` dependency. The pipeline is the standard
 //! sRGB8 -> linear -> XYZ (D65) -> CIELab, then the CIE-recommended ΔE2000 colour
-//! difference (Sharma, Wu & Dalal 2005). ΔE2000 is perceptually uniform (JND ~2.3)
-//! so the verdict can put principled bounds on colour error (`COLOR_DE_PASS` /
-//! `COLOR_DE_FAIL`) where the legacy YIQ delta could not.
-//!
-//! The YIQ primitives (`color_delta`, `rgb2y/i/q`) stay in `compare/mod.rs`: they
-//! remain the per-pixel match/AA budget metric (`t_match`/`t_aa`). ΔE2000 is the
-//! region-level colour-severity metric only.
+//! difference (Sharma, Wu & Dalal 2005). Delta-E is diagnostic only; exact pixel
+//! equality decides the raster verdict.
 
 /// CIELab colour (D65 reference white).
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +11,91 @@ pub(crate) struct Lab {
     pub(crate) l: f64,
     pub(crate) a: f64,
     pub(crate) b: f64,
+}
+
+/// Maximum L1 difference between normalized ink vectors measured from paper.
+const COLOUR_FAMILY_SHAPE_DELTA: f64 = 0.20;
+/// Maximum RGB chroma still treated as a neutral coverage sample.
+const NEUTRAL_CHROMA: u8 = 16;
+
+/// Whether two same-coordinate samples retain one ink direction from white
+/// paper. Different coverage of the same neutral or coloured paint satisfies
+/// this; a chromatic swap does not.
+pub(super) fn same_colour_family(candidate: [u8; 4], reference: [u8; 4]) -> bool {
+    if same_chroma_family(candidate, reference) {
+        return true;
+    }
+    let ink_shape = |color: [u8; 4]| {
+        let ink = [
+            f64::from(u8::MAX - color[0]),
+            f64::from(u8::MAX - color[1]),
+            f64::from(u8::MAX - color[2]),
+        ];
+        let total = ink.iter().sum::<f64>();
+        (total > 0.0).then(|| ink.map(|channel| channel / total))
+    };
+    let (Some(candidate), Some(reference)) = (ink_shape(candidate), ink_shape(reference)) else {
+        return false;
+    };
+    candidate
+        .iter()
+        .zip(reference)
+        .map(|(candidate, reference)| (candidate - reference).abs())
+        .sum::<f64>()
+        <= COLOUR_FAMILY_SHAPE_DELTA
+}
+
+fn same_chroma_family(candidate: [u8; 4], reference: [u8; 4]) -> bool {
+    let channel_bounds =
+        |[red, green, blue, _]: [u8; 4]| (red.min(green).min(blue), red.max(green).max(blue));
+    let (candidate_min, candidate_max) = channel_bounds(candidate);
+    let (reference_min, reference_max) = channel_bounds(reference);
+    let candidate_chroma = candidate_max - candidate_min;
+    let reference_chroma = reference_max - reference_min;
+    if candidate_chroma <= NEUTRAL_CHROMA && reference_chroma <= NEUTRAL_CHROMA {
+        return true;
+    }
+    if candidate_chroma <= NEUTRAL_CHROMA || reference_chroma <= NEUTRAL_CHROMA {
+        return false;
+    }
+    candidate[..3]
+        .iter()
+        .zip(reference[..3].iter())
+        .map(|(&candidate, &reference)| {
+            let candidate = f64::from(candidate - candidate_min) / f64::from(candidate_chroma);
+            let reference = f64::from(reference - reference_min) / f64::from(reference_chroma);
+            (candidate - reference).abs()
+        })
+        .sum::<f64>()
+        <= COLOUR_FAMILY_SHAPE_DELTA
+}
+
+/// Signed and absolute RGB difference energy for one direct colour region.
+/// Coverage phase produces complementary signed samples; a coherent recolour
+/// retains a large directional bias.
+#[derive(Default)]
+pub(crate) struct ColorEnergy {
+    signed: [i64; 3],
+    absolute: [u64; 3],
+}
+
+impl ColorEnergy {
+    pub(crate) fn add(&mut self, delta: [i16; 3]) {
+        for (channel, value) in delta.into_iter().enumerate() {
+            self.signed[channel] += i64::from(value);
+            self.absolute[channel] += u64::from(value.unsigned_abs());
+        }
+    }
+
+    pub(crate) fn bias(&self) -> f64 {
+        self.signed
+            .iter()
+            .zip(self.absolute)
+            .filter_map(|(signed, absolute)| {
+                (absolute != 0).then_some(signed.unsigned_abs() as f64 / absolute as f64)
+            })
+            .fold(0.0_f64, f64::max)
+    }
 }
 
 /// sRGB 8-bit channel -> linear-light [0,1] (IEC 61966-2-1).
@@ -165,6 +245,25 @@ fn hue_deg(b: f64, ap: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neutral_and_same_hue_coverage_samples_share_a_colour_family() {
+        assert!(same_colour_family([48, 48, 48, 255], [176, 176, 176, 255]));
+        assert!(same_colour_family([0, 0, 0, 255], [240, 245, 250, 255]));
+        assert!(same_colour_family(
+            [175, 206, 254, 255],
+            [191, 219, 254, 255]
+        ));
+        assert!(same_colour_family(
+            [251, 233, 236, 255],
+            [243, 190, 197, 255]
+        ));
+    }
+
+    #[test]
+    fn chromatic_swap_does_not_share_a_colour_family() {
+        assert!(!same_colour_family([25, 118, 210, 255], [198, 40, 40, 255]));
+    }
 
     /// CIEDE2000 against the published Sharma, Wu & Dalal (2005) test vectors.
     /// The formula is asserted DIRECTLY on Lab inputs (so it does not depend on
@@ -341,11 +440,8 @@ mod tests {
         let grey = srgb_to_lab([119, 119, 119]);
         assert!((grey.l - 50.0).abs() < 3.0, "mid grey L = {}", grey.l);
 
-        // #cc0000 vs #dd0000 — a real recolour. Its ΔE2000 is ~3.56: above the
-        // JND (COLOR_DE_PASS 2.5) so it IS a perceptible colour error, but BELOW
-        // COLOR_DE_FAIL (6.0) — so it fails on ColorErr AREA, not the hard-colour
-        // gate. (The brief's prose claims ">6" for this pair; the real value is
-        // ~3.56 — reported to the orchestrator.)
+        // #cc0000 vs #dd0000 — a real recolour with Delta-E around 3.56. The
+        // magnitude is diagnostic; exact inequality decides the verdict.
         let c = srgb_to_lab([0xcc, 0, 0]);
         let d = srgb_to_lab([0xdd, 0, 0]);
         let de = ciede2000(c, d);

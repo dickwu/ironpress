@@ -3,25 +3,20 @@
 <head>
 <meta charset="utf-8">
 <style>
-  /* CSS GCPM running elements: `position: running(name)` removes a box from the
-     normal flow and parks it in a named slot; `@top-center { content:
-     element(name) }` then renders it as a running header in the page margin box.
-     This GCPM behavior is validated against WeasyPrint because Chrome
-     --print-to-pdf does not implement running elements. */
+  /* A geometry-only GCPM probe: the navy box must move from normal flow into
+     the centered top margin box, leaving the gold flow box at the content top. */
   @page {
     size: 400px 300px;
-    margin: 1.2cm;
+    margin: 48px 24px 24px;
     @top-center { content: element(runhead); }
   }
   * { margin: 0; box-sizing: border-box; }
-  html { font-family: ParitySans; line-height: 1.5; background: #ffffff; color: #111111; }
-  h1 { position: running(runhead); font-size: 18px; color: #11305f; }
-  p { font-size: 16px; }
+  .runhead { position: running(runhead); width: 160px; height: 24px; background: #11305f; }
+  .body-probe { height: 32px; background: #f4b942; }
 </style>
 </head>
 <body>
-  <h1>Chapter Title</h1>
-  <p>Body paragraph one of the chapter.</p>
-  <p>Body paragraph two of the chapter.</p>
+  <div class="runhead"></div>
+  <div class="body-probe"></div>
 </body>
 </html>

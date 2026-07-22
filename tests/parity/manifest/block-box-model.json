@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-width-height-explicit",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-width-auto-fills-parent",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-padding-all-sides",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-border-width-thick",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-border-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-auto-centering",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-adjacent",
@@ -113,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-box-sizing-border-box",
@@ -129,10 +108,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-box-sizing-content-box",
@@ -145,10 +121,7 @@
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-display-inline-block-row",
@@ -162,10 +135,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-display-block-stacking",
@@ -179,10 +149,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-max-width-clamp",
@@ -196,10 +163,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-min-width-floor",
@@ -213,10 +177,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-width-percent",
@@ -230,10 +191,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-nested-containment",
@@ -247,10 +205,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-offsets",
@@ -264,10 +219,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-parent-first-child",
@@ -281,10 +233,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-parent-last-child",
@@ -298,10 +247,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-empty",
@@ -315,10 +261,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-negative-mixed",
@@ -332,10 +275,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-all-negative",
@@ -349,10 +289,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-prevented-padding",
@@ -366,10 +303,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-prevented-height",
@@ -383,10 +317,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-prevented-overflow",
@@ -400,10 +331,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-prevented-bfc-sibling",
@@ -417,10 +345,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-collapse-prevented-flex",
@@ -434,10 +359,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-descendant-protrudes",
@@ -451,10 +373,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-negative-offset",
@@ -468,10 +387,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-padding-asymmetric",
@@ -485,10 +401,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-padding-percent",
@@ -502,10 +415,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-box-sizing-padding-exceeds",
@@ -519,10 +429,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-box-sizing-border-box-auto-width",
@@ -536,10 +443,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-auto-single-side",
@@ -553,10 +457,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-margin-auto-no-width",
@@ -570,10 +471,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-min-max-width-conflict",
@@ -587,10 +485,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-max-width-percent",
@@ -604,10 +499,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-height-auto-from-children",
@@ -621,10 +513,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-height-percent-definite-parent",
@@ -638,10 +527,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-height-percent-auto-parent",
@@ -655,10 +541,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-min-height-floor",
@@ -672,10 +555,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-max-height-clamp",
@@ -689,10 +569,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-inline-block-baseline",
@@ -706,10 +583,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-inline-block-wrap",
@@ -723,10 +597,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-width-fit-content",
@@ -740,27 +611,25 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "paragraph-splits-across-pages",
     "category": "block-box-model",
     "feature": "fragmentation",
     "subfeature": "paragraph-split-across-pages",
-    "description": "A single paragraph far taller than the 200px page is SPLIT across page boundaries (CSS Fragmentation 3 \u00a73): 24 lines at 16px/1.5 (18pt each, 8 per 150pt page) span THREE pages. The multi-page harness asserts the page COUNT (3) and diffs every page against Chrome, so any clipping or off-by-one split fails \u2014 the first fixture that validates layout-level fragmentation (line-box splitting), not just a forced break. Text-bearing on every page, so it carries the text/AA threshold class (6/18%) shared by the typography/inline-text corpus: each page matches Chrome exactly once the global ~0.32px text-baseline AA offset (see probe-text-baseline) is set aside.",
+    "description": "A single paragraph far taller than the 200px page is split across page boundaries (CSS Fragmentation 3 §3): 24 lines at 16px/1.5 span three pages. The harness asserts the page count and compares every page exactly, so clipping, an off-by-one split, or misplaced text is visible.",
     "file": "cases/block-box-model/paragraph-splits-across-pages.html",
     "kind": "feature",
     "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Fragmentation requires this paragraph to break at line boxes, but does not prescribe a cross-engine font-baseline quantization. Chrome, WeasyPrint 69, and Ironpress all paginate eight lines on each of three pages. Chrome places the first baseline at 12.75pt; WeasyPrint preserves the fractional 13.154297pt position. The Chrome raster is retained, but is not a unique normative geometry reference."
+    },
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "container-splits-across-pages",
@@ -774,10 +643,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-decoration-break-slice",
@@ -791,10 +657,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-decoration-break-clone",
@@ -808,27 +671,40 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "box-decoration-break-slice-radius",
     "category": "block-box-model",
     "feature": "fragmentation",
     "subfeature": "box-decoration-break-slice-radius",
-    "description": "box-decoration-break:slice with border-radius across a page break. Per CSS Fragmentation 3 §5.4 the cut edge of each fragment must be SQUARE: only the box's real corners are rounded (top corners on page 1, bottom corners on page 2). ironpress now drops the radius on each fragment's cut edge and strokes the present border sides along the rounded (non-cut) corners as an open path, so page 1 rounds only its top corners and page 2 only its bottom — matching Chrome. The clone-radius companion (all corners rounded per fragment) still passes. The multi-page harness asserts the page COUNT (2) and diffs both pages.",
+    "description": "box-decoration-break:slice with border-radius across a page break. Per CSS Fragmentation 3 §5.4 the cut edge of each fragment must be square: only the box's real corners are rounded (top corners on page 1, bottom corners on page 2). Ironpress removes the cut-edge widths and radii before the canonical border-ring partition paints the remaining sides. The clone-radius companion keeps all corners rounded per fragment. The multi-page harness asserts the page count and diffs both pages.",
     "file": "cases/block-box-model/box-decoration-break-slice-radius.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
+    ]
+  },
+  {
+    "id": "box-decoration-break-slice-border-image-shadow",
+    "category": "block-box-model",
+    "feature": "fragmentation",
+    "subfeature": "slice-border-image-background-shadow-continuation",
+    "description": "A two-page slice fragment combines a vertical background gradient, vertical border-image gradient, rounded real corners, and an offset hard shadow. All three decorations use one reassembled reference box: gradients continue rather than restart, cut edges remain undecorated, and the shadow is absent at the page break while remaining visible at the real outer edges.",
+    "file": "cases/block-box-model/box-decoration-break-slice-border-image-shadow.html",
+    "reference_file": "references/block-box-model/box-decoration-break-slice-border-image-shadow.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "backgrounds-borders",
+      "block-box-model"
     ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "box-decoration-break-clone-radius",
@@ -842,10 +718,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-exact-fill-no-extra-page",
@@ -859,10 +732,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "block-subpoint-height-continuation",
+    "category": "block-box-model",
+    "feature": "fragmentation",
+    "subfeature": "subpoint-continuation",
+    "description": "A painted block whose overflow is less than one point retains its nonzero continuation on page two.",
+    "file": "cases/block-box-model/block-subpoint-height-continuation.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "block-display-contents",
@@ -876,10 +760,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-flow-root-float-containment",
@@ -893,10 +774,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "block-min-width-max-content",
@@ -908,10 +786,11 @@
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
   },
   {
     "id": "block-display-inline-grid",
@@ -923,10 +802,10 @@
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "block-display-list-item",
@@ -938,10 +817,11 @@
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
   },
   {
     "id": "block-max-width-min-content",
@@ -953,9 +833,10 @@
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
   }
 ]

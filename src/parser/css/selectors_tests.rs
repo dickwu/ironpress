@@ -54,6 +54,23 @@ fn selector_matches_descendant_and_child_combinators() {
         &HashMap::new(),
         &child_ctx,
     ));
+
+    assert!(selector_matches_with_context(
+        "div>p",
+        "p",
+        &[],
+        None,
+        &HashMap::new(),
+        &child_ctx,
+    ));
+    assert!(!selector_matches_with_context(
+        ".node>.node",
+        "div",
+        &["node"],
+        None,
+        &HashMap::new(),
+        &SelectorContext::default(),
+    ));
 }
 
 #[test]

@@ -1,6 +1,11 @@
 use crate::render::pdf::{ImageRef, PdfWriter};
 use crate::render::svg_geometry::SvgViewportBox;
 use crate::style::computed::{BackgroundPosition, BackgroundRepeat, BackgroundSize};
+use crate::types::CornerRadii;
+
+mod tiles;
+
+pub(crate) use tiles::{BackgroundRepeatModes, BackgroundTilePattern};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct SvgVisualOverflow {
@@ -11,6 +16,14 @@ pub(crate) struct SvgVisualOverflow {
 }
 
 impl SvgVisualOverflow {
+    pub const fn horizontal(self) -> f32 {
+        self.left + self.right
+    }
+
+    pub const fn vertical(self) -> f32 {
+        self.top + self.bottom
+    }
+
     pub fn scale(self, scale_x: f32, scale_y: f32) -> Self {
         Self {
             left: self.left * scale_x,
@@ -26,9 +39,7 @@ pub(crate) struct BackgroundPaintContext {
     pub reference_box: SvgViewportBox,
     pub clip_box: SvgViewportBox,
     blur_canvas_box: Option<SvgViewportBox>,
-    pub border_radius: f32,
-    pub border_radii: [f32; 4],
-    pub border_radii_y: [f32; 4],
+    pub border_radii: CornerRadii,
     pub blur_radius: f32,
     pub size: BackgroundSize,
     pub position: BackgroundPosition,
@@ -39,7 +50,7 @@ impl BackgroundPaintContext {
     pub fn new(
         reference_box: SvgViewportBox,
         clip_box: SvgViewportBox,
-        border_radius: f32,
+        border_radii: CornerRadii,
         blur_radius: f32,
         size: BackgroundSize,
         position: BackgroundPosition,
@@ -49,9 +60,7 @@ impl BackgroundPaintContext {
             reference_box,
             clip_box,
             blur_canvas_box: None,
-            border_radius,
-            border_radii: [border_radius; 4],
-            border_radii_y: [border_radius; 4],
+            border_radii,
             blur_radius,
             size,
             position,
@@ -65,12 +74,7 @@ impl BackgroundPaintContext {
         self
     }
 
-    pub fn with_border_radii(mut self, border_radii: [f32; 4], border_radii_y: [f32; 4]) -> Self {
-        self.border_radii = border_radii;
-        self.border_radii_y = border_radii_y;
-        self
-    }
-
+    #[cfg(test)]
     pub fn tile_origin(self, offset_x: f32, offset_y: f32) -> SvgViewportBox {
         self.reference_box.translate(offset_x, -offset_y)
     }
@@ -103,8 +107,8 @@ pub(crate) fn viewport_box_from_overflow(
     SvgViewportBox::new(
         viewport.x - overflow.left,
         viewport.y - overflow.bottom,
-        viewport.width + overflow.left + overflow.right,
-        viewport.height + overflow.top + overflow.bottom,
+        viewport.width + overflow.horizontal(),
+        viewport.height + overflow.vertical(),
     )
 }
 
@@ -200,6 +204,7 @@ pub(crate) struct RasterBackgroundRequest {
 pub(crate) struct RegisteredBackgroundImage {
     pub name: String,
     pub draw_box: Option<SvgViewportBox>,
+    pub pixel_dimensions: crate::util::RasterDimensions,
 }
 
 pub(crate) fn synthetic_raster_background(
@@ -241,10 +246,6 @@ pub(crate) fn synthetic_raster_background(
     }
 }
 
-fn blur_padding_pixels(blur_sigma_pixels: f32) -> u32 {
-    (blur_sigma_pixels.max(0.0) * 2.5).ceil() as u32
-}
-
 fn points_to_filtered_background_pixels(points: f32, filter_dpi: f32) -> u32 {
     ((points.max(0.0) * filter_dpi.max(1.0) / 72.0)
         .round()
@@ -266,48 +267,6 @@ fn pad_rgba_image(image: &image::RgbaImage, padding: u32) -> Option<image::RgbaI
         image::RgbaImage::from_pixel(padded_width, padded_height, image::Rgba([0, 0, 0, 0]));
     image::imageops::overlay(&mut padded, image, i64::from(padding), i64::from(padding));
     Some(padded)
-}
-
-fn premultiply_rgba(image: &image::RgbaImage) -> image::RgbaImage {
-    let mut premultiplied = image::RgbaImage::new(image.width(), image.height());
-    for (x, y, pixel) in image.enumerate_pixels() {
-        let alpha = u16::from(pixel[3]);
-        let premultiply = |channel: u8| -> u8 { ((u16::from(channel) * alpha + 127) / 255) as u8 };
-        premultiplied.put_pixel(
-            x,
-            y,
-            image::Rgba([
-                premultiply(pixel[0]),
-                premultiply(pixel[1]),
-                premultiply(pixel[2]),
-                pixel[3],
-            ]),
-        );
-    }
-    premultiplied
-}
-
-fn unpremultiply_rgba(image: &image::RgbaImage) -> image::RgbaImage {
-    let mut unpremultiplied = image::RgbaImage::new(image.width(), image.height());
-    for (x, y, pixel) in image.enumerate_pixels() {
-        let alpha = u16::from(pixel[3]);
-        let unpremultiply = |channel: u8| -> u8 {
-            (u16::from(channel) * 255 + (alpha / 2))
-                .checked_div(alpha)
-                .map_or(0, |v| v.min(255) as u8)
-        };
-        unpremultiplied.put_pixel(
-            x,
-            y,
-            image::Rgba([
-                unpremultiply(pixel[0]),
-                unpremultiply(pixel[1]),
-                unpremultiply(pixel[2]),
-                pixel[3],
-            ]),
-        );
-    }
-    unpremultiplied
 }
 
 fn encode_rgba_png(image: &image::RgbaImage) -> Option<Vec<u8>> {
@@ -351,12 +310,11 @@ fn encode_blurred_png_for_background(
     let image_y = ((request.image_box.y - request.canvas_box.y) * filter_dpi / 72.0).round() as i64;
     image::imageops::overlay(&mut canvas, &resized, image_x, image_y);
 
-    let blur_pixels = (request.blur_radius * filter_dpi / 72.0).max(0.0);
-    let padding = blur_padding_pixels(blur_pixels);
-    let premultiplied = premultiply_rgba(&canvas);
-    let padded = pad_rgba_image(&premultiplied, padding)?;
-    let blurred = image::imageops::blur(&image::DynamicImage::ImageRgba8(padded), blur_pixels);
-    let encoded = encode_rgba_png(&unpremultiply_rgba(&blurred))?;
+    let kernel = crate::render::blur::FilterBlurKernel::new(request.blur_radius, filter_dpi)?;
+    let padding = kernel.padding_px;
+    let padded = pad_rgba_image(&canvas, padding)?;
+    let blurred = crate::render::blur::blur_css_filter(&padded, kernel)?;
+    let encoded = encode_rgba_png(&blurred)?;
     let padding_points = filtered_background_pixels_to_points(padding, filter_dpi);
     let draw_box = SvgViewportBox::new(
         request.canvas_box.x - padding_points,
@@ -429,7 +387,12 @@ pub(crate) fn register_background_image(
         name: name.clone(),
         obj_id,
     });
-    Some(RegisteredBackgroundImage { name, draw_box })
+    let pixel_dimensions = pdf_writer.image_dimensions(obj_id)?;
+    Some(RegisteredBackgroundImage {
+        name,
+        draw_box,
+        pixel_dimensions,
+    })
 }
 
 #[cfg(test)]
@@ -437,6 +400,7 @@ mod tests {
     use super::*;
     use crate::render::svg_geometry::SvgViewportBox;
     use crate::style::computed::{BackgroundPosition, BackgroundRepeat, BackgroundSize};
+    use crate::types::CornerRadius;
 
     // ── SvgVisualOverflow::scale ─────────────────────────────────────────────
 
@@ -478,7 +442,7 @@ mod tests {
         BackgroundPaintContext::new(
             reference_box,
             clip_box,
-            0.0,
+            CornerRadii::ZERO,
             0.0,
             BackgroundSize::Auto,
             BackgroundPosition::default(),
@@ -515,6 +479,28 @@ mod tests {
         assert_eq!(local.height, 100.0);
     }
 
+    #[test]
+    fn background_paint_context_keeps_resolved_corner_radii_together() {
+        let radii = CornerRadii::new(
+            CornerRadius::new(1.0, 2.0),
+            CornerRadius::new(3.0, 4.0),
+            CornerRadius::new(5.0, 6.0),
+            CornerRadius::new(7.0, 8.0),
+        );
+        let reference_box = SvgViewportBox::new(0.0, 0.0, 100.0, 50.0);
+        let ctx = BackgroundPaintContext::new(
+            reference_box,
+            reference_box,
+            radii,
+            0.0,
+            BackgroundSize::Auto,
+            BackgroundPosition::default(),
+            BackgroundRepeat::NoRepeat,
+        );
+
+        assert_eq!(ctx.border_radii, radii);
+    }
+
     // ── viewport_box_from_overflow / overflow_from_viewport_box symmetry ─────
 
     #[test]
@@ -547,30 +533,6 @@ mod tests {
         assert_eq!(overflow.bottom, 0.0);
     }
 
-    // ── blur_padding_pixels ──────────────────────────────────────────────────
-
-    #[test]
-    fn blur_padding_pixels_zero_sigma() {
-        assert_eq!(blur_padding_pixels(0.0), 0);
-    }
-
-    #[test]
-    fn blur_padding_pixels_negative_sigma_clamps_to_zero() {
-        assert_eq!(blur_padding_pixels(-5.0), 0);
-    }
-
-    #[test]
-    fn blur_padding_pixels_sigma_one() {
-        // ceil(1.0 * 2.5) = 3
-        assert_eq!(blur_padding_pixels(1.0), 3);
-    }
-
-    #[test]
-    fn blur_padding_pixels_sigma_ten() {
-        // ceil(10.0 * 2.5) = 25
-        assert_eq!(blur_padding_pixels(10.0), 25);
-    }
-
     // ── points_to_filtered_background_pixels / filtered_background_pixels_to_points roundtrip
 
     #[test]
@@ -591,60 +553,12 @@ mod tests {
         assert_eq!(points_to_filtered_background_pixels(-100.0, 300.0), 1);
     }
 
-    // ── premultiply_rgba / unpremultiply_rgba roundtrip ──────────────────────
-
     fn make_solid_image(r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {
         let mut img = image::RgbaImage::new(2, 2);
         for pixel in img.pixels_mut() {
             *pixel = image::Rgba([r, g, b, a]);
         }
         img
-    }
-
-    #[test]
-    fn premultiply_unpremultiply_roundtrip_fully_opaque() {
-        let original = make_solid_image(200, 100, 50, 255);
-        let premul = premultiply_rgba(&original);
-        let recovered = unpremultiply_rgba(&premul);
-        for (orig, rec) in original.pixels().zip(recovered.pixels()) {
-            // Fully opaque: channels should survive the roundtrip exactly.
-            assert_eq!(orig[0], rec[0]);
-            assert_eq!(orig[1], rec[1]);
-            assert_eq!(orig[2], rec[2]);
-            assert_eq!(orig[3], rec[3]);
-        }
-    }
-
-    #[test]
-    fn premultiply_unpremultiply_roundtrip_semitransparent() {
-        let original = make_solid_image(200, 100, 50, 128);
-        let premul = premultiply_rgba(&original);
-        let recovered = unpremultiply_rgba(&premul);
-        for (orig, rec) in original.pixels().zip(recovered.pixels()) {
-            // Semi-transparent: allow ±1 rounding error per channel.
-            assert!((i16::from(orig[0]) - i16::from(rec[0])).abs() <= 1);
-            assert!((i16::from(orig[1]) - i16::from(rec[1])).abs() <= 1);
-            assert!((i16::from(orig[2]) - i16::from(rec[2])).abs() <= 1);
-            assert_eq!(orig[3], rec[3]);
-        }
-    }
-
-    #[test]
-    fn premultiply_unpremultiply_fully_transparent() {
-        let original = make_solid_image(200, 100, 50, 0);
-        let premul = premultiply_rgba(&original);
-        // All channels must be zeroed when alpha == 0.
-        for pixel in premul.pixels() {
-            assert_eq!(pixel[0], 0);
-            assert_eq!(pixel[1], 0);
-            assert_eq!(pixel[2], 0);
-            assert_eq!(pixel[3], 0);
-        }
-        let recovered = unpremultiply_rgba(&premul);
-        // Channels are 0 when alpha == 0.
-        for pixel in recovered.pixels() {
-            assert_eq!(pixel[0], 0);
-        }
     }
 
     // ── pad_rgba_image ───────────────────────────────────────────────────────

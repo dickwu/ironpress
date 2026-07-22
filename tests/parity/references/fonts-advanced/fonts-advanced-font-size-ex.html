@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>font-size ex unit — outline-metric reference</title>
+<style>
+  @page { size: 480px 112px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .region {
+    width: 360px;
+    margin: 20px;
+    padding: 10px;
+    border: 2px solid #000000;
+    background: #ffadad;
+    font-size: 20px;
+  }
+  .t {
+    font-family: ParitySans;
+    /*
+     * CSS Values 4 defines ex as the used x-height. ParitySans has no OS/2
+     * sxHeight, so its x glyph outline (1120 / 2048 em) is the reliable
+     * metric: 4 × 20px × 1120 / 2048 = 43.75px. Chrome's print path rounds
+     * that metric to 11px after hinting; this source preserves the outline
+     * metric required by the standards-derived reference.
+     */
+    font-size: 43.75px;
+    line-height: 1;
+    color: #6a040f;
+  }
+</style>
+</head>
+<body>
+  <div class="region">
+    <div class="t">Ex unit 4ex</div>
+  </div>
+</body>
+</html>

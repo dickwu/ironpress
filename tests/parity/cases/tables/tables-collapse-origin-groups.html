@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>collapsed border origins across table groups</title>
+<style>
+  @page { size: 416px 224px; margin: 0; }
+  html, body { width: 416px; height: 224px; margin: 0; padding: 0; background: #fff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  table { position: absolute; border-collapse: collapse; border-spacing: 0; table-layout: fixed; border: 2px solid #212529; }
+  td { width: 58px; height: 36px; padding: 0; border: none; background: #edf6f9; }
+
+  .rows { left: 24px; top: 24px; }
+  .rows tr { border: 8px solid #d62828; }
+
+  .row-group { left: 24px; top: 118px; }
+  .row-group tbody { border: 8px solid #7b2cbf; }
+  .row-group tr { border: 5px solid #f77f00; }
+
+  .columns { left: 224px; top: 24px; }
+  .columns colgroup { border: 5px solid #2a9d8f; }
+  .columns col { border: 8px solid #1d4ed8; }
+</style>
+</head>
+<body>
+  <table class="rows"><tr><td></td><td></td></tr><tr><td></td><td></td></tr></table>
+  <table class="row-group"><tbody><tr><td></td><td></td></tr><tr><td></td><td></td></tr></tbody></table>
+  <table class="columns"><colgroup><col><col></colgroup><tr><td></td><td></td></tr><tr><td></td><td></td></tr></table>
+</body>
+</html>

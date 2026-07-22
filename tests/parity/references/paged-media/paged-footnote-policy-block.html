@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-footnote-policy-block.
+
+  CSS GCPM footnote-policy:block moves the entire paragraph containing the
+  first call to the next page when its footnote cannot fit on the source page.
+  The 64px lead leaves room for the 40px paragraph itself, but not for its
+  two-line footnote body; this distinguishes the policy from ordinary overflow.
+  Each observable edge is an eight-CSS-pixel multiple, so it is exactly
+  representable by the fixed 300-DPI evidence grid.
+  The fixture deliberately makes the call and body visually blank: the two
+  coloured blocks make that required page break directly observable without
+  depending on a renderer's unsupported footnote pseudo-element typography.
+  This static materialization does not use candidate output or raster edits.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>footnote block policy reference</title>
+  <style>
+    @page { size: 200px 144px; margin: 16px; }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .lead { height: 64px; background: #dbeafe; }
+    .page { position: relative; height: 112px; break-before: page; }
+    .content { height: 40px; background: #fde68a; }
+  </style>
+</head>
+<body>
+  <div class="lead"></div>
+  <div class="page">
+    <div class="content"></div>
+  </div>
+</body>
+</html>

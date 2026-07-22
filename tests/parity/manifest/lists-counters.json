@@ -6,7 +6,6 @@
     "subfeature": "disc",
     "description": "Unordered list rendering filled disc markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-disc.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -14,9 +13,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-decimal",
@@ -25,7 +22,6 @@
     "subfeature": "decimal",
     "description": "Ordered list rendering 1./2./3. decimal markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-decimal.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -33,9 +29,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-lower-alpha",
@@ -44,7 +38,6 @@
     "subfeature": "lower-alpha",
     "description": "Ordered list rendering a./b./c. lower-alpha markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-lower-alpha.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -52,9 +45,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-upper-roman",
@@ -63,7 +54,6 @@
     "subfeature": "upper-roman",
     "description": "Ordered list rendering I./II./III. upper-roman markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-upper-roman.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -71,9 +61,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-none",
@@ -82,7 +70,6 @@
     "subfeature": "none",
     "description": "Unordered list with markers suppressed via list-style-type:none.",
     "file": "cases/lists-counters/list-style-type-none.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -90,9 +77,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-position-inside",
@@ -101,7 +86,6 @@
     "subfeature": "inside",
     "description": "Ordered list with markers flowed inside the content box (list-style-position:inside).",
     "file": "cases/lists-counters/list-style-position-inside.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -109,9 +93,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-position-outside",
@@ -120,7 +102,6 @@
     "subfeature": "outside",
     "description": "Ordered list with markers hung outside the content box (list-style-position:outside).",
     "file": "cases/lists-counters/list-style-position-outside.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -128,9 +109,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-image-data-uri",
@@ -139,7 +118,6 @@
     "subfeature": "data-uri-png",
     "description": "Unordered list using a data-URI PNG as the marker image (list-style-image:url()).",
     "file": "cases/lists-counters/list-style-image-data-uri.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -148,9 +126,7 @@
       "probe-block-flow",
       "probe-text-baseline",
       "probe-image-render"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "marker-pseudo-color",
@@ -159,7 +135,6 @@
     "subfeature": "color",
     "description": "Ordered list whose markers are recolored and bolded via the ::marker pseudo-element.",
     "file": "cases/lists-counters/marker-pseudo-color.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -167,9 +142,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "counter-reset-increment",
@@ -178,7 +151,6 @@
     "subfeature": "reset-increment-content",
     "description": "counter-reset and counter-increment feeding content:counter() in ::before across three rows.",
     "file": "cases/lists-counters/counter-reset-increment.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -186,9 +158,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "counter-content-roman",
@@ -197,7 +167,6 @@
     "subfeature": "counter-style-argument",
     "description": "content:counter(x, upper-roman) rendering counter values in an explicit counter style.",
     "file": "cases/lists-counters/counter-content-roman.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "partial",
     "depends_on": [
@@ -205,9 +174,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "counters-nested",
@@ -216,7 +183,6 @@
     "subfeature": "counters-function-nested",
     "description": "Nested ordered lists numbered with content:counters(x, '.') producing 1, 2, 2.1, 2.2, 3.",
     "file": "cases/lists-counters/counters-nested.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -224,9 +190,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-circle",
@@ -235,7 +199,6 @@
     "subfeature": "circle",
     "description": "Unordered list rendering hollow circle markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-circle.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -243,9 +206,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-square",
@@ -254,7 +215,6 @@
     "subfeature": "square",
     "description": "Unordered list rendering filled square markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-square.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -262,9 +222,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-decimal-leading-zero",
@@ -273,7 +231,6 @@
     "subfeature": "decimal-leading-zero",
     "description": "Ordered list rendering 01./02./03. zero-padded decimal markers on three items.",
     "file": "cases/lists-counters/list-style-type-decimal-leading-zero.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -281,9 +238,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-lower-roman",
@@ -292,7 +247,6 @@
     "subfeature": "lower-roman",
     "description": "Ordered list rendering i./ii./iii. lower-roman markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-lower-roman.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -300,9 +254,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-type-upper-alpha",
@@ -311,7 +263,6 @@
     "subfeature": "upper-alpha",
     "description": "Ordered list rendering A./B./C. upper-alpha markers on three short text items.",
     "file": "cases/lists-counters/list-style-type-upper-alpha.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -319,9 +270,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "list-style-shorthand",
@@ -330,7 +279,6 @@
     "subfeature": "shorthand-type-position",
     "description": "list-style shorthand setting lower-alpha type and inside position in one declaration.",
     "file": "cases/lists-counters/list-style-shorthand.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -338,9 +286,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "ol-start-attribute",
@@ -349,7 +295,6 @@
     "subfeature": "ol-start",
     "description": "Ordered list whose markers begin at 5 via the <ol start> attribute (5./6./7.).",
     "file": "cases/lists-counters/ol-start-attribute.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -357,18 +302,15 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "ol-decimal-markers",
     "category": "lists-counters",
     "feature": "list-style-type",
     "subfeature": "ol-default-decimal",
-    "description": "An <ol> with no explicit list-style renders the default decimal markers (1./2./3.); a nested <ol> restarts its own decimal sequence (UA stylesheet ol { list-style-type: decimal }).",
+    "description": "An <ol> inherits the authenticated parity baseline's explicit decimal marker style (1./2./3.); a nested <ol> restarts its own sequence.",
     "file": "cases/lists-counters/ol-decimal-markers.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -376,9 +318,7 @@
       "probe-border-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "ol-continues-across-page-break",
@@ -389,14 +329,15 @@
     "file": "cases/lists-counters/ol-continues-across-page-break.html",
     "kind": "feature",
     "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "Chrome, WeasyPrint, and Ironpress all produce two pages and continuously number the markers 1 through 10. The raw shared-pdftoppm difference is glyph placement/antialiasing; Ironpress is closer to WeasyPrint on both pages (8,292 and 8,143 changed pixels) than Chrome and WeasyPrint are to one another (12,613 and 12,131). Raw evidence remains reported."
+    },
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "lists-counters-list-style-image-data-uri",
@@ -405,16 +346,13 @@
     "subfeature": "data-png-marker",
     "description": "list-style-image:url(data:png) replaces disc bullets with the intrinsic image marker; catches fallback to list-style-type markers.",
     "file": "cases/lists-counters/lists-counters-list-style-image-data-uri.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline",
       "probe-image-render"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "lists-counters-counter-set",
@@ -423,15 +361,16 @@
     "subfeature": "assign-existing-counter",
     "description": "counter-set:item 7 assigns the existing counter so generated labels read 1, 7, 8; catches counter-reset/increment-only support.",
     "file": "cases/lists-counters/lists-counters-counter-set.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "Ironpress, Chrome, and WeasyPrint render the required counter sequence 1, 7, 8 with the same row backgrounds and marker colouring. Ironpress's normal-text geometry is close to WeasyPrint (text x=29.989675pt versus 29.987549pt) and its shared-pdftoppm raw AE is lower against Chrome than Chrome is against WeasyPrint (8,902 versus 10,936 pixels). Chrome's Type 3 marker boxes differ from Ironpress/WeasyPrint CID TrueType bounds, causing contour-only raw residue; this is not a counter-set semantic failure. Raw evidence remains reported."
+    },
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "lists-counters-list-style-type-string",
@@ -440,9 +379,6 @@
     "subfeature": "list-style-type-string",
     "description": "A ul sets list-style-type:'-- ' so each marker is a literal two-dash string instead of a disc. Catches: A built-in-only list-style parser falls unknown types back to disc and passes disc/circle/square fixtures.",
     "file": "cases/lists-counters/lists-counters-list-style-type-string.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -460,12 +396,13 @@
     "subfeature": "list-style-type-cjk-decimal",
     "description": "An ordered list uses cjk-decimal markers, which render CJK decimal digits rather than western 1/2/3. Catches: An implementation limited to latin/roman built-ins passes existing list-style-type coverage but falls back to disc or decimal for international styles.",
     "file": "cases/lists-counters/lists-counters-list-style-type-cjk-decimal.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "Chrome, WeasyPrint, and Ironpress all emit the required CJK decimal markers 一、, 二、, 三、. Ironpress uses the same Noto Sans CJK JP fallback as Chrome, but the PDFs use different CJK font representations (Ironpress/Chrome Type 3, WeasyPrint CID), so raw outline pixels are not a list-style semantic failure. Raw shared-pdftoppm evidence remains reported."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -480,9 +417,6 @@
     "subfeature": "counter-style-cyclic",
     "description": "A custom @counter-style named checks cycles through two literal symbols for list markers. Catches: Ignoring @counter-style passes built-in marker tests but falls back to disc for author-defined styles.",
     "file": "cases/lists-counters/lists-counters-counter-style-cyclic.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -500,12 +434,13 @@
     "subfeature": "counter-style-pad-prefix-suffix",
     "description": "A custom counter style extends decimal with pad:2 '0', prefix '[' and suffix '] '. Catches: A decimal-only formatter passes decimal-leading-zero and roman fixtures but ignores custom style descriptors.",
     "file": "cases/lists-counters/lists-counters-counter-style-pad-prefix-suffix.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "Ironpress and Chrome correctly apply ol start=8 plus the custom extends-decimal counter style, producing [08], [09], [10] with the requested pad, prefix, and suffix. WeasyPrint 69 instead produces [01], [02], [03], so it is not a semantic counter-oracle. The Chrome raw diff is contour-only Type 3 versus CID TrueType coverage, not a missing custom counter-style descriptor. Raw evidence remains reported."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -520,12 +455,13 @@
     "subfeature": "counter-style-negative",
     "description": "A generated counter starts at -2 and uses a custom negative descriptor to wrap negative values. Catches: A counter implementation that only formats positive decimal/roman cases passes current fixtures but mishandles negative custom styles.",
     "file": "cases/lists-counters/lists-counters-counter-style-negative.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "Ironpress, Chrome, and WeasyPrint render the required custom negative-counter labels (2), (1), and 0 with the same text and row sequence. Ironpress's normal-text geometry is close to WeasyPrint, and its shared-pdftoppm raw AE against Chrome (12,356 pixels) is lower than Chrome versus WeasyPrint (14,581 pixels). Chrome's Type 3 marker glyph boxes differ from Ironpress/WeasyPrint CID TrueType bounds, causing contour-only raw residue rather than a custom negative descriptor failure. Raw evidence remains reported."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -538,14 +474,15 @@
     "category": "lists-counters",
     "feature": "marker-side:match-parent",
     "subfeature": "marker-side-match-parent",
-    "description": "A vertical list sets marker-side:match-parent so markers use the parent's side rather than each list item's self side. Catches: A list renderer with fixed outside-left markers passes horizontal list fixtures but places markers on the wrong side in vertical writing flows.",
+    "description": "Compatibility canary for vertical outside-marker placement. The current fixture gives every item the same directionality as its parent, so it cannot distinguish marker-side:match-parent from match-self; a future semantic fixture must contrast the two directions without treating an exact outside-marker position as normative.",
     "file": "cases/lists-counters/lists-counters-marker-side-match-parent.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
-    "expected_support": "implemented",
+    "expected_support": "partial",
     "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Lists 3 leaves the exact position of outside marker boxes undefined. This fixture does not vary list-item directionality, so match-parent has no observable effect. Chromium 150 reports CSS.supports('marker-side: match-parent') as false and an empty computed value; its PDF is an unsupported-feature compatibility canary, not a normative oracle."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -560,9 +497,6 @@
     "subfeature": "marker-content-counter",
     "description": "An ordered list replaces default decimal markers with a generated counter wrapped in square brackets through ::marker content. Catches: A ::marker color-only implementation passes marker styling tests but still emits default 1./2. markers.",
     "file": "cases/lists-counters/lists-counters-marker-content-counter.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -580,9 +514,6 @@
     "subfeature": "marker-font-size",
     "description": "A list styles only ::marker with a 36px font-size while item text remains 20px. Catches: A marker renderer that only recolors markers passes marker color tests but misses marker font metrics.",
     "file": "cases/lists-counters/lists-counters-marker-font-size.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -600,9 +531,6 @@
     "subfeature": "ol-reversed",
     "description": "A three-item ordered list with the reversed attribute should render 3, 2, 1 markers. Catches: An ol implementation that only handles start passes start fixtures but always counts upward.",
     "file": "cases/lists-counters/lists-counters-ol-reversed.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -620,12 +548,13 @@
     "subfeature": "li-value",
     "description": "The middle li value='7' changes that marker and subsequent items continue from 8. Catches: An ordered-list context that only tracks a running index passes default and start fixtures but ignores per-item value overrides.",
     "file": "cases/lists-counters/lists-counters-li-value.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "Ironpress and Chrome correctly apply <li value='7'>, producing 1, 7, 8. WeasyPrint 69 instead renders 1, 2, 3, contrary to the authored value override, so it is not a semantic counter-oracle. The remaining Chrome raw evidence is Type 3 versus CID TrueType contour coverage; marker/text positions and row sequence are otherwise the same. Raw evidence remains reported."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -640,9 +569,6 @@
     "subfeature": "counter-list-item-after",
     "description": "Each li appends generated text using counter(list-item), matching its ordered-list marker number. Catches: A renderer with an internal list index can paint markers but still resolves counter(list-item) to 0 in content.",
     "file": "cases/lists-counters/lists-counters-counter-list-item-after.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
@@ -660,9 +586,6 @@
     "subfeature": "list-item-increment-step",
     "description": "An ordered list increments list-item by 2 so markers advance 2, 4, 6. Catches: A list renderer with hard-coded +1 indices passes normal lists but ignores author counter-increment on list-item.",
     "file": "cases/lists-counters/lists-counters-list-item-increment-step.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",

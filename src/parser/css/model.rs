@@ -1,15 +1,6 @@
 use crate::parser::dom::ElementNode;
-use crate::types::Color;
-use std::cell::RefCell;
+use crate::types::{Color, EdgeSizes};
 use std::collections::HashMap;
-
-const BACKGROUND_LAYER_SOURCES: &str = "background-layer-sources";
-const BACKGROUND_LAYER_RECORD_SEP: char = '\x1f';
-const BACKGROUND_LAYER_FIELD_SEP: char = '\x1e';
-
-thread_local! {
-    static BACKGROUND_LAYER_CAPTURE: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
-}
 
 /// Context for evaluating CSS media queries against the target page.
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +49,23 @@ pub struct SelectorContext<'a> {
     pub is_empty: bool,
 }
 
+impl<'a> SelectorContext<'a> {
+    /// Preserve this element's complete selector position when descending into
+    /// its children. Descendant matching must retain both sibling directions;
+    /// rebuilding an ancestor with zeroed indices makes structural selectors
+    /// change meaning at deeper inline-layout levels.
+    pub(crate) fn as_ancestor(&self, element: &'a ElementNode) -> AncestorInfo<'a> {
+        AncestorInfo {
+            element,
+            child_index: self.child_index,
+            sibling_count: self.sibling_count,
+            preceding_siblings: self.preceding_siblings.clone(),
+            following_siblings: self.following_siblings.clone(),
+            is_empty: self.is_empty,
+        }
+    }
+}
+
 /// An operator in a calc() expression.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CalcOp {
@@ -90,11 +98,37 @@ pub enum CalcToken {
     Op(CalcOp),
 }
 
+/// A specified CSS color before `currentColor` has been bound to a used
+/// foreground color.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpecifiedColor {
+    Absolute(Color),
+    CurrentColor,
+}
+
+impl SpecifiedColor {
+    /// Resolve the CSS `currentColor` keyword against the applicable used
+    /// foreground color. Callers handling the `color` property itself pass the
+    /// parent's resolved color; every other property passes the element's.
+    pub fn resolve(self, current_color: Color) -> Color {
+        match self {
+            Self::Absolute(color) => color,
+            Self::CurrentColor => current_color,
+        }
+    }
+}
+
+impl From<Color> for SpecifiedColor {
+    fn from(color: Color) -> Self {
+        Self::Absolute(color)
+    }
+}
+
 /// Parsed CSS property value.
 #[derive(Debug, Clone)]
 pub enum CssValue {
     Length(f32),
-    Color(Color),
+    Color(SpecifiedColor),
     Keyword(String),
     Number(f32),
     /// Percentage value (0-100 range, e.g. 50% stored as 50.0).
@@ -124,6 +158,20 @@ pub enum CssValue {
     Clamp(Box<CssValue>, Box<CssValue>, Box<CssValue>),
     /// A var() reference: (variable_name, optional_fallback).
     Var(String, Option<String>),
+    /// Ordered, typed sources from a comma-separated `background-image` value.
+    /// This stays inside its owning `StyleMap`; no parser-global capture state is
+    /// involved.
+    BackgroundLayers(Vec<BackgroundLayerSource>),
+}
+
+#[derive(Debug, Clone)]
+pub enum BackgroundLayerSource {
+    Raster(String),
+    Svg(String),
+    Linear(String),
+    Radial(String),
+    Conic(String),
+    None,
 }
 
 /// A map of CSS property names to values.
@@ -131,6 +179,11 @@ pub enum CssValue {
 pub struct StyleMap {
     pub properties: HashMap<String, CssValue>,
     pub important: HashMap<String, bool>,
+    /// Accepted declaration winners in source order. Replacing a property moves
+    /// it to the new declaration position; an ignored lower-priority declaration
+    /// leaves the existing position intact. This is required for order-sensitive
+    /// shorthands such as `all`.
+    pub(crate) declaration_order: Vec<String>,
 }
 
 impl StyleMap {
@@ -146,28 +199,21 @@ impl StyleMap {
         if self.is_important(key) && !is_important {
             return;
         }
-        capture_background_layer_source(key, &value);
+        self.declaration_order.retain(|existing| existing != key);
+        self.declaration_order.push(key.to_string());
         self.properties.insert(key.to_string(), value);
         self.important.insert(key.to_string(), is_important);
         if key == "font"
             && let Some(CssValue::Keyword(font)) = self.properties.get(key)
             && let Some(family) = font_shorthand_family(font)
         {
+            self.declaration_order
+                .retain(|existing| existing != "font-family");
+            self.declaration_order.push("font-family".to_string());
             self.properties
                 .insert("font-family".to_string(), CssValue::Keyword(family));
             self.important
                 .insert("font-family".to_string(), is_important);
-        }
-        if key == "background-layer-slots"
-            && let Some(CssValue::Keyword(slots)) = self.properties.get(key)
-            && let Some(sources) = captured_background_layer_sources(slots)
-        {
-            self.properties.insert(
-                BACKGROUND_LAYER_SOURCES.to_string(),
-                CssValue::Keyword(sources),
-            );
-            self.important
-                .insert(BACKGROUND_LAYER_SOURCES.to_string(), is_important);
         }
     }
 
@@ -178,18 +224,7 @@ impl StyleMap {
     pub fn remove(&mut self, key: &str) {
         self.properties.remove(key);
         self.important.remove(key);
-        if matches!(
-            key,
-            "background-image"
-                | "background-svg"
-                | "background-gradient"
-                | "background-radial-gradient"
-                | "background-conic-gradient"
-                | "background-layer-slots"
-        ) {
-            self.properties.remove(BACKGROUND_LAYER_SOURCES);
-            self.important.remove(BACKGROUND_LAYER_SOURCES);
-        }
+        self.declaration_order.retain(|existing| existing != key);
     }
 
     pub fn is_important(&self, key: &str) -> bool {
@@ -198,67 +233,14 @@ impl StyleMap {
 
     #[allow(dead_code)]
     pub fn merge(&mut self, other: &StyleMap) {
-        for (key, value) in &other.properties {
-            let is_important = other.is_important(key);
-            if self.is_important(key) && !is_important {
+        for key in &other.declaration_order {
+            let Some(value) = other.properties.get(key) else {
                 continue;
-            }
-            self.properties.insert(key.clone(), value.clone());
-            self.important.insert(key.clone(), is_important);
-            if key == "font"
-                && let Some(CssValue::Keyword(font)) = self.properties.get(key)
-                && let Some(family) = font_shorthand_family(font)
-            {
-                self.properties
-                    .insert("font-family".to_string(), CssValue::Keyword(family));
-                self.important
-                    .insert("font-family".to_string(), is_important);
-            }
+            };
+            let is_important = other.is_important(key);
+            self.set_with_importance(key, value.clone(), is_important);
         }
     }
-}
-
-fn capture_background_layer_source(key: &str, value: &CssValue) {
-    let kind = match key {
-        "background-image"
-        | "background-svg"
-        | "background-gradient"
-        | "background-radial-gradient"
-        | "background-conic-gradient" => key,
-        _ => return,
-    };
-    let CssValue::Keyword(raw) = value else {
-        return;
-    };
-    BACKGROUND_LAYER_CAPTURE.with(|capture| {
-        capture
-            .borrow_mut()
-            .push((kind.to_string(), raw.to_string()));
-    });
-}
-
-fn captured_background_layer_sources(slots: &str) -> Option<String> {
-    let layer_count = slots
-        .split(',')
-        .filter(|slot| !slot.trim().is_empty())
-        .count();
-    if layer_count <= 1 {
-        return None;
-    }
-    BACKGROUND_LAYER_CAPTURE.with(|capture| {
-        let capture = capture.borrow();
-        if capture.len() < layer_count {
-            return None;
-        }
-        let start = capture.len() - layer_count;
-        Some(
-            capture[start..]
-                .iter()
-                .map(|(kind, raw)| format!("{kind}{BACKGROUND_LAYER_FIELD_SEP}{raw}"))
-                .collect::<Vec<_>>()
-                .join(&BACKGROUND_LAYER_RECORD_SEP.to_string()),
-        )
-    })
 }
 
 fn font_shorthand_family(value: &str) -> Option<String> {
@@ -311,7 +293,7 @@ fn css_font_size_token(token: &str) -> bool {
         )
 }
 
-/// Pseudo-element type for `::before`, `::after`, and `::marker`.
+/// Pseudo-element type supported by the CSS cascade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PseudoElement {
     Before,
@@ -319,6 +301,10 @@ pub enum PseudoElement {
     /// The list-item marker box (`::marker`). Only a limited set of properties
     /// apply (color, font, content); see `compute_pseudo_element_style`.
     Marker,
+    /// The generated in-flow reference for a GCPM `float: footnote` element.
+    FootnoteCall,
+    /// The generated marker at the beginning of a GCPM footnote body.
+    FootnoteMarker,
     /// The first formatted line of a block container (`::first-line`).
     /// Restyles the runs that land on the first wrapped line. Per
     /// css-pseudo-4 §2.1 only a restricted property subset applies.
@@ -338,51 +324,16 @@ pub struct CssRule {
     pub pseudo_element: Option<PseudoElement>,
 }
 
-struct CounterStyleRuleRegistry {
-    rules: Vec<CssRule>,
-    collecting: bool,
-}
-
-thread_local! {
-    static COUNTER_STYLE_RULES: RefCell<CounterStyleRuleRegistry> = const {
-        RefCell::new(CounterStyleRuleRegistry { rules: Vec::new(), collecting: false })
-    };
-}
-
 impl CssRule {
-    pub(crate) fn begin_counter_style_stylesheet_scan() {
-        COUNTER_STYLE_RULES.with(|registry| {
-            let mut registry = registry.borrow_mut();
-            if !registry.collecting {
-                registry.rules.clear();
-                registry.collecting = true;
-            }
-        });
-    }
-
-    pub(crate) fn register_counter_style_rules(rules: impl IntoIterator<Item = CssRule>) {
-        COUNTER_STYLE_RULES.with(|registry| {
-            registry.borrow_mut().rules.extend(rules);
-        });
-    }
-
-    pub(crate) fn finish_counter_style_stylesheet_scan() {
-        COUNTER_STYLE_RULES.with(|registry| {
-            registry.borrow_mut().collecting = false;
-        });
-    }
-
-    pub(crate) fn registered_counter_style_declarations(name: &str) -> Option<StyleMap> {
-        let selector = format!("@counter-style {}", name.to_ascii_lowercase());
-        COUNTER_STYLE_RULES.with(|registry| {
-            registry
-                .borrow()
-                .rules
-                .iter()
-                .rev()
-                .find(|rule| rule.selector.trim().to_ascii_lowercase() == selector)
-                .map(|rule| rule.declarations.clone())
-        })
+    pub(crate) fn counter_style_name(&self) -> Option<&str> {
+        const AT_RULE: &str = "@counter-style";
+        let selector = self.selector.trim();
+        let (at_rule, rest) = selector.split_at_checked(AT_RULE.len())?;
+        if !at_rule.eq_ignore_ascii_case(AT_RULE) || !rest.chars().next()?.is_whitespace() {
+            return None;
+        }
+        let name = rest.trim();
+        (!name.is_empty()).then_some(name)
     }
 }
 
@@ -412,6 +363,165 @@ impl UnicodeRange {
     }
 }
 
+/// CSS Fonts width class used by the legacy `font-stretch` alias and the
+/// `@font-face` descriptor. The declaration values form the discrete part of
+/// the CSS Fonts width scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStretch {
+    UltraCondensed,
+    ExtraCondensed,
+    Condensed,
+    SemiCondensed,
+    #[default]
+    Normal,
+    SemiExpanded,
+    Expanded,
+    ExtraExpanded,
+    UltraExpanded,
+}
+
+impl FontStretch {
+    pub(crate) fn from_css(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "ultra-condensed" => Some(Self::UltraCondensed),
+            "extra-condensed" => Some(Self::ExtraCondensed),
+            "condensed" => Some(Self::Condensed),
+            "semi-condensed" => Some(Self::SemiCondensed),
+            "normal" => Some(Self::Normal),
+            "semi-expanded" => Some(Self::SemiExpanded),
+            "expanded" => Some(Self::Expanded),
+            "extra-expanded" => Some(Self::ExtraExpanded),
+            "ultra-expanded" => Some(Self::UltraExpanded),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn key_suffix(self) -> Option<&'static str> {
+        match self {
+            Self::UltraCondensed => Some("ultra_condensed"),
+            Self::ExtraCondensed => Some("extra_condensed"),
+            Self::Condensed => Some("condensed"),
+            Self::SemiCondensed => Some("semi_condensed"),
+            Self::Normal => None,
+            Self::SemiExpanded => Some("semi_expanded"),
+            Self::Expanded => Some("expanded"),
+            Self::ExtraExpanded => Some("extra_expanded"),
+            Self::UltraExpanded => Some("ultra_expanded"),
+        }
+    }
+
+    /// Width search order for a family with discrete faces.
+    ///
+    /// CSS Fonts matches width before style and weight. A request at or below
+    /// normal first searches narrower widths; an expanded request first
+    /// searches wider widths. The requested width remains first in either
+    /// direction, so an exact face always wins.
+    pub(crate) const fn matching_order(self) -> [Self; 9] {
+        use FontStretch::*;
+        match self {
+            UltraCondensed => [
+                UltraCondensed,
+                ExtraCondensed,
+                Condensed,
+                SemiCondensed,
+                Normal,
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+            ],
+            ExtraCondensed => [
+                ExtraCondensed,
+                UltraCondensed,
+                Condensed,
+                SemiCondensed,
+                Normal,
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+            ],
+            Condensed => [
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+                SemiCondensed,
+                Normal,
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+            ],
+            SemiCondensed => [
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+                Normal,
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+            ],
+            Normal => [
+                Normal,
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+            ],
+            SemiExpanded => [
+                SemiExpanded,
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+                Normal,
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+            ],
+            Expanded => [
+                Expanded,
+                ExtraExpanded,
+                UltraExpanded,
+                SemiExpanded,
+                Normal,
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+            ],
+            ExtraExpanded => [
+                ExtraExpanded,
+                UltraExpanded,
+                Expanded,
+                SemiExpanded,
+                Normal,
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+            ],
+            UltraExpanded => [
+                UltraExpanded,
+                ExtraExpanded,
+                Expanded,
+                SemiExpanded,
+                Normal,
+                SemiCondensed,
+                Condensed,
+                ExtraCondensed,
+                UltraCondensed,
+            ],
+        }
+    }
+}
+
 /// A parsed `@font-face` rule with font-family name, source list, and descriptors.
 #[derive(Debug, Clone)]
 pub struct FontFaceRule {
@@ -423,6 +533,8 @@ pub struct FontFaceRule {
     pub font_weight_bold: bool,
     /// Whether the face descriptor declares italic/oblique style.
     pub font_style_italic: bool,
+    /// Width class advertised by the face's `font-stretch` descriptor.
+    pub font_stretch: FontStretch,
     /// CSS Fonts `size-adjust` descriptor as a multiplier (`normal` = 1.0).
     pub size_adjust: f32,
     /// The `unicode-range` intervals. Empty means the default full Unicode range.
@@ -472,6 +584,58 @@ pub enum PageSelector {
     Blank,
     /// `@page <name> { }` — a named page targeted by the `page` property.
     Named(String),
+}
+
+/// The physical-page facts against which an [`PageSelector`] is matched.
+///
+/// Keeping this independent from layout's `Page` type lets parsing, pagination,
+/// and PDF painting share the same selector semantics without a module cycle.
+#[derive(Debug, Clone, Copy)]
+pub struct PageSelectorContext<'a> {
+    pub page_number: usize,
+    pub is_blank: bool,
+    pub page_name: Option<&'a str>,
+}
+
+impl PageSelector {
+    /// Whether this selector applies to a physical page.
+    pub fn applies_to(&self, page: PageSelectorContext<'_>) -> bool {
+        match self {
+            Self::None => true,
+            Self::First => page.page_number == 1,
+            Self::Left => page.page_number.is_multiple_of(2),
+            Self::Right => !page.page_number.is_multiple_of(2),
+            Self::Blank => page.is_blank,
+            Self::Named(name) => page.page_name == Some(name.as_str()),
+        }
+    }
+
+    /// CSS Paged Media's `(f, g, h)` page-selector specificity.
+    pub const fn specificity(&self) -> (u8, u8, u8) {
+        match self {
+            Self::None => (0, 0, 0),
+            Self::Named(_) => (1, 0, 0),
+            Self::First | Self::Blank => (0, 1, 0),
+            Self::Left | Self::Right => (0, 0, 1),
+        }
+    }
+}
+
+/// Declarations that participate in the inherited text style of an `@page`
+/// context or a nested page-margin box.
+///
+/// The shared declaration map deliberately retains standard font shorthands
+/// and relative values so they are resolved through the same computed-style
+/// machinery as document text, after the applicable page selector is known.
+#[derive(Debug, Clone, Default)]
+pub struct PageTextStyle {
+    pub declarations: StyleMap,
+}
+
+impl PageTextStyle {
+    pub fn is_empty(&self) -> bool {
+        self.declarations.properties.is_empty()
+    }
 }
 
 /// The position of a page-margin box inside the `@page` context
@@ -559,11 +723,17 @@ impl MarginBoxPosition {
     /// The horizontal alignment of this box within its band.
     pub fn align(self) -> MarginBoxAlign {
         match self {
-            Self::TopLeftCorner | Self::TopLeft | Self::BottomLeftCorner | Self::BottomLeft => {
-                MarginBoxAlign::Left
-            }
+            Self::TopLeftCorner | Self::BottomLeftCorner => MarginBoxAlign::Right,
+            Self::TopLeft | Self::BottomLeft => MarginBoxAlign::Left,
             Self::TopCenter | Self::BottomCenter => MarginBoxAlign::Center,
-            _ => MarginBoxAlign::Right,
+            Self::TopRight | Self::BottomRight => MarginBoxAlign::Right,
+            Self::TopRightCorner | Self::BottomRightCorner => MarginBoxAlign::Left,
+            Self::LeftTop
+            | Self::LeftMiddle
+            | Self::LeftBottom
+            | Self::RightTop
+            | Self::RightMiddle
+            | Self::RightBottom => MarginBoxAlign::Center,
         }
     }
 }
@@ -594,23 +764,180 @@ pub struct MarginBox {
     pub position: MarginBoxPosition,
     /// The page selector that owns this margin box.
     pub selector: PageSelector,
-    pub page_counter_reset: Option<i32>,
-    pub page_counter_increment: Option<i32>,
+    /// Page-context controls for the implicit `page` counter.
+    pub page_counter: PageCounterControl,
     pub color: Option<Color>,
     pub background_color: Option<Color>,
-    pub font_size: Option<f32>,
+    /// Text declarations in this margin context. They override inherited page
+    /// context values just as declarations on ordinary generated content do.
+    pub text_style: PageTextStyle,
+    /// The used inline size when `width` is explicitly declared, in points.
+    /// `None` retains the Page 3 automatic margin-box dimension algorithm.
+    pub width: Option<f32>,
     /// The `content` value parsed into a token list (literals + counters).
     pub content: Vec<MarginContentToken>,
+}
+
+/// CSS page-context operations on the implicit `page` counter.
+///
+/// Page contexts are established separately for every physical page. A reset
+/// consequently applies anew on each page; it is not a document-global origin.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PageCounterControl {
+    /// The value established by `counter-reset: page <integer>`.
+    pub reset: Option<i32>,
+    /// The value added by `counter-increment: page <integer>`.
+    pub increment: Option<i32>,
+}
+
+impl PageCounterControl {
+    /// Resolve the implicit `page` counter for a one-based physical page.
+    ///
+    /// Without a reset, the implicit counter progresses across pages. A reset
+    /// belongs to each independently established page context, so it starts
+    /// every page at the same value. Only an explicit increment then modifies
+    /// that page-local reset.
+    pub fn value_on_page(self, page_number: usize) -> usize {
+        let value = match self.reset {
+            Some(reset) => i128::from(reset) + i128::from(self.increment.unwrap_or(0)),
+            None => {
+                let page_number = i128::try_from(page_number).unwrap_or(i128::MAX);
+                i128::from(self.increment.unwrap_or(1)) * page_number
+            }
+        };
+        usize::try_from(value.max(0)).unwrap_or(usize::MAX)
+    }
+}
+
+#[cfg(test)]
+mod page_counter_control_tests {
+    use super::PageCounterControl;
+
+    #[test]
+    fn reset_applies_to_each_page_context() {
+        let counter = PageCounterControl {
+            reset: Some(7),
+            ..PageCounterControl::default()
+        };
+        assert_eq!(counter.value_on_page(1), 7);
+        assert_eq!(counter.value_on_page(2), 7);
+    }
+
+    #[test]
+    fn explicit_increment_replaces_the_implicit_step() {
+        let counter = PageCounterControl {
+            increment: Some(2),
+            ..PageCounterControl::default()
+        };
+        assert_eq!(counter.value_on_page(1), 2);
+        assert_eq!(counter.value_on_page(3), 6);
+    }
+
+    #[test]
+    fn explicit_increment_follows_a_page_local_reset() {
+        let counter = PageCounterControl {
+            reset: Some(7),
+            increment: Some(2),
+        };
+        assert_eq!(counter.value_on_page(1), 9);
+        assert_eq!(counter.value_on_page(3), 9);
+    }
+}
+
+/// Physical edge declarations that retain whether each CSS longhand was
+/// specified. This lets independently cascaded rules overlay only the edges
+/// they actually declare before resolving to [`EdgeSizes`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct SpecifiedEdgeSizes {
+    pub top: Option<f32>,
+    pub right: Option<f32>,
+    pub bottom: Option<f32>,
+    pub left: Option<f32>,
+}
+
+impl From<EdgeSizes> for SpecifiedEdgeSizes {
+    fn from(edges: EdgeSizes) -> Self {
+        Self {
+            top: Some(edges.top),
+            right: Some(edges.right),
+            bottom: Some(edges.bottom),
+            left: Some(edges.left),
+        }
+    }
+}
+
+impl SpecifiedEdgeSizes {
+    /// Cascade later declarations over this set without inventing unspecified
+    /// physical edges.
+    pub(crate) fn cascade(&mut self, later: Self) {
+        if later.top.is_some() {
+            self.top = later.top;
+        }
+        if later.right.is_some() {
+            self.right = later.right;
+        }
+        if later.bottom.is_some() {
+            self.bottom = later.bottom;
+        }
+        if later.left.is_some() {
+            self.left = later.left;
+        }
+    }
+
+    /// Overlay the declared edges onto already-resolved values.
+    pub(crate) fn apply_to(self, resolved: &mut EdgeSizes) {
+        if let Some(value) = self.top {
+            resolved.top = value;
+        }
+        if let Some(value) = self.right {
+            resolved.right = value;
+        }
+        if let Some(value) = self.bottom {
+            resolved.bottom = value;
+        }
+        if let Some(value) = self.left {
+            resolved.left = value;
+        }
+    }
+}
+
+/// Declarations for the top separator between page content and footnotes.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FootnoteSeparatorStyle {
+    pub width: Option<f32>,
+    pub color: Option<Color>,
+}
+
+impl FootnoteSeparatorStyle {
+    /// Cascade later separator declarations over this one.
+    pub(crate) fn cascade(&mut self, later: Self) {
+        if later.width.is_some() {
+            self.width = later.width;
+        }
+        if later.color.is_some() {
+            self.color = later.color;
+        }
+    }
 }
 
 /// Declarations from the GCPM `@footnote` area rule that affect pagination and
 /// painting of the footnote area.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FootnoteAreaStyle {
+pub(crate) struct FootnoteAreaStyle {
     pub max_height: Option<f32>,
-    pub padding_top: f32,
-    pub border_top_width: f32,
-    pub border_top_color: Option<Color>,
+    pub padding: SpecifiedEdgeSizes,
+    pub separator: FootnoteSeparatorStyle,
+}
+
+impl FootnoteAreaStyle {
+    /// Cascade a later `@footnote` rule in the same page context.
+    pub(crate) fn cascade(&mut self, later: Self) {
+        if later.max_height.is_some() {
+            self.max_height = later.max_height;
+        }
+        self.padding.cascade(later.padding);
+        self.separator.cascade(later.separator);
+    }
 }
 
 /// A parsed `@page` rule with page size and margin overrides.
@@ -632,18 +959,13 @@ pub struct PageRule {
     pub margin_bottom: Option<f32>,
     /// Left margin in points (if specified).
     pub margin_left: Option<f32>,
-    /// `counter-reset: page <n>` in the page context.
-    pub page_counter_reset: Option<i32>,
-    /// `counter-increment: page <n>` in the page context.
-    pub page_counter_increment: Option<i32>,
-    /// `@footnote { max-height: ... }` from CSS GCPM.
-    pub footnote_max_height: Option<f32>,
-    /// `@footnote { padding-top: ... }` from CSS GCPM.
-    pub footnote_padding_top: Option<f32>,
-    /// `@footnote { border-top-width: ... }` from CSS GCPM.
-    pub footnote_border_top_width: Option<f32>,
-    /// `@footnote { border-top-color: ... }` from CSS GCPM.
-    pub footnote_border_top_color: Option<Color>,
+    /// Controls for the implicit `page` counter in this page context.
+    pub page_counter: PageCounterControl,
+    /// Text declarations in this page context, inherited by its page-margin
+    /// boxes after the page-selector cascade has selected this physical page.
+    pub text_style: PageTextStyle,
+    /// Declarations from a GCPM `@footnote` area rule.
+    pub(crate) footnote_area: Option<FootnoteAreaStyle>,
     /// The raw declaration block of the `@page` rule (the text between `{` and
     /// `}`), retained verbatim so a CSS-aware parser can later extract the
     /// `@page` background (CSS Paged Media 3 §3.1 bleed-area background). Kept

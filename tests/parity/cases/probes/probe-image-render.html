@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <title>probe image render</title>
 <style>
-  @page { size: 158px 81px; margin: 0; }
+  @page { size: 160px 88px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
-  /* Substrate canary: a small data:-URI PNG placed at a known size.
-     Tests raster image decode + placement. The source PNG is an
-     80x80 solid #1565c0 swatch, displayed at 80x80. */
+  /* Exact-output canary: a small data:-URI PNG placed at a known size.
+     A mismatch measures emitted PDF image/edge encoding; it is not, by itself,
+     evidence of incorrect CSS sizing or decoding. The source is an 80x80 solid
+     #1565c0 swatch, displayed at 80x80. */
   .img {
     display: block;
     width: 80px;

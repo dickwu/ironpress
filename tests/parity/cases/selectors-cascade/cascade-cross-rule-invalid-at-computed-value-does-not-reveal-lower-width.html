@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cross-rule invalid at computed value does not reveal lower width</title>
+<style>
+  @page { size: 280px 144px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage {
+    width: 240px;
+    height: 100px;
+    margin: 20px;
+    padding: 10px;
+    border: 3px solid #111111;
+    background: #e8eaf6;
+  }
+  .target {
+    width: 150px;
+    height: 74px;
+    background: #1565c0;
+  }
+  .stage .target { width: var(--missing-width); }
+</style>
+</head>
+<body><div class="stage"><div class="target"></div></div></body>
+</html>

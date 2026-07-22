@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rounded translucent border side joins</title>
+<style>
+  @page { size: 256px 160px; margin: 0; }
+  html, body { background: #d7dee8; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  .box {
+    width: 208px;
+    height: 128px;
+    margin: 16px 24px;
+    background: #ffffff;
+    border-width: 18px 14px 22px 10px;
+    border-style: solid;
+    border-color: rgba(213, 0, 0, .58) rgba(0, 121, 107, .58)
+                  rgba(41, 98, 255, .58) rgba(255, 109, 0, .58);
+    border-radius: 52px 28px / 36px 48px;
+  }
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

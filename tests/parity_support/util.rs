@@ -1,15 +1,10 @@
 //! Small dependency-free helpers shared across the engine: rounding, byte-slice
-//! search, comment stripping, SHA-256 hex, and the `pdftoppm` presence probe.
+//! search, comment stripping, and SHA-256 hex.
 //!
 //! Extracted verbatim from the former monolithic `mod.rs` (C1 mechanical split).
 
-use std::process::Command;
-
 pub(crate) fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
-}
-pub(crate) fn round4(v: f64) -> f64 {
-    (v * 10000.0).round() / 10000.0
 }
 
 pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -31,17 +26,4 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
-}
-
-pub(crate) fn which(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("-v")
-        .output()
-        .map(|_| true)
-        .unwrap_or(false)
-        || Command::new("which")
-            .arg(bin)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
 }

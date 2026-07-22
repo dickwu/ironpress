@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-columns-fr-mix",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-columns-percent",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-columns-repeat",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-columns-minmax",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-columns-auto",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-rows",
@@ -113,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-gap",
@@ -130,10 +109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-flow-column",
@@ -147,10 +123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-column-span",
@@ -164,10 +137,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-row-span",
@@ -181,10 +151,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-place-items-center",
@@ -198,10 +165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-justify-items-end",
@@ -215,10 +179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-align-items-start",
@@ -232,10 +193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-named-lines-basic",
@@ -249,10 +207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-implicit-tracks",
@@ -266,10 +221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-column-line-numbers",
@@ -283,10 +235,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-row-line-numbers",
@@ -300,10 +249,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-column-span-to-line",
@@ -317,10 +263,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-named-line-placement",
@@ -334,10 +277,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-area-line-form",
@@ -351,10 +291,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-areas-basic",
@@ -368,10 +305,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-areas-dot",
@@ -385,10 +319,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-area-span-rows",
@@ -402,10 +333,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-repeat-auto-fill-count",
@@ -419,10 +347,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-repeat-auto-fit-collapse",
@@ -436,10 +361,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-fit-content-track",
@@ -454,10 +376,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-intrinsic-track-keywords",
@@ -472,10 +391,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-columns-implicit",
@@ -489,10 +405,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-flow-dense",
@@ -506,10 +419,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-order-auto-placement",
@@ -523,10 +433,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-overlap-z-index",
@@ -540,10 +447,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-placement-longhands",
@@ -557,10 +461,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-shorthand",
@@ -574,10 +475,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-subgrid-columns",
@@ -591,10 +489,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-invalid-template-areas",
@@ -608,10 +503,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-inline-grid-participates-in-inline-flow",
@@ -627,10 +519,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-direct-text-creates-anonymous-grid-items",
@@ -646,10 +535,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-display-contents-flattens-children-into-grid",
@@ -664,10 +550,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-inline-child-grid-item-is-blockified",
@@ -683,10 +566,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-item-margins-inset-the-item-box",
@@ -701,10 +581,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-item-percentage-margins-use-grid-area-inline-size",
@@ -719,10 +596,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-fr-rows-divide-definite-grid-height",
@@ -737,10 +611,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-percentage-rows-resolve-against-grid-height",
@@ -755,10 +626,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-rows-use-wrapped-content-height",
@@ -774,10 +642,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-spanning-item-contributes-to-auto-columns",
@@ -793,10 +658,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-minmax-fixed-max-caps-the-track",
@@ -811,10 +673,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-minmax-auto-minimum-honors-content",
@@ -830,10 +689,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-minmax-intrinsic-endpoints-are-distinct",
@@ -849,10 +705,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-calc-track-sizes-are-parsed-in-grid-templates",
@@ -867,10 +720,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-repeat-expands-multi-track-patterns",
@@ -885,10 +735,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-repeated-named-lines-resolve-nth-occurrence",
@@ -903,10 +750,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-area-names-generate-start-and-end-lines",
@@ -921,10 +765,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-explicit-start-end-lines-create-an-implicit-named-area",
@@ -939,10 +780,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-shorthand-defines-auto-flow-rows",
@@ -957,10 +795,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-shorthand-resets-omitted-implicit-grid-properties",
@@ -975,10 +810,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-rows-repeats-a-track-size-pattern",
@@ -993,10 +825,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-columns-repeats-a-track-size-pattern",
@@ -1011,10 +840,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-template-areas-create-implicit-tracks-when-track-lists-are-omitted",
@@ -1029,10 +855,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-placement-handles-definite-row-only",
@@ -1047,10 +870,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-placement-handles-definite-column-only",
@@ -1065,10 +885,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-column-dense-auto-placement-backfills-holes",
@@ -1083,10 +900,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-order-modified-placement-also-applies-to-dense-packing",
@@ -1101,10 +915,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-negative-grid-line-numbers-count-from-the-end",
@@ -1119,10 +930,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-span-named-line-searches-to-matching-line",
@@ -1137,10 +945,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-span-integer-named-line-syntax-is-honored",
@@ -1155,10 +960,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-area-omitted-end-sides-default-correctly",
@@ -1173,10 +975,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-absolute-grid-child-does-not-consume-an-auto-placement-cell",
@@ -1191,28 +990,23 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-absolute-grid-child-positions-against-its-specified-grid-area",
     "category": "grid",
     "feature": "absolute-positioning",
     "subfeature": "grid-area-containing-block",
-    "description": "An abspos child with grid-column:2 / 3 and grid-row:2 / 3 should use that grid area as its containing block; catches laying every absolute child against the grid padding box passes out-of-flow tests that do not set grid placement.",
+    "description": "An abspos child with grid-column:2 / 3 and grid-row:2 / 3 should use that grid area as its containing block; catches laying every absolute child against the grid padding box. The authenticated standards-derived reference compensates Chromium print-to-PDF's loss of the grid's static offset for this case.",
     "file": "cases/grid/grid-absolute-grid-child-positions-against-its-specified-grid-area.html",
+    "reference_file": "references/grid/grid-absolute-grid-child-positions-against-its-specified-grid-area.html",
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-legacy-grid-row-and-column-gap-aliases-apply-separately",
@@ -1227,10 +1021,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-percentage-grid-gaps-resolve-from-container-size",
@@ -1245,10 +1036,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-place-self-overrides-both-item-alignment-axes",
@@ -1263,10 +1051,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-items-baseline-align-across-a-row",
@@ -1282,10 +1067,7 @@
       "probe-fill-box",
       "probe-block-flow",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-justify-content-centers-the-grid-tracks",
@@ -1300,10 +1082,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-justify-content-distributes-free-space-between-tracks",
@@ -1318,10 +1097,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-align-content-positions-grid-rows-in-a-tall-container",
@@ -1336,10 +1112,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-place-content-sets-block-and-inline-grid-distribution",
@@ -1354,10 +1127,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-auto-margins-align-grid-items-before-self-alignment",
@@ -1372,10 +1142,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-rtl-direction-reverses-grid-column-line-start",
@@ -1390,10 +1157,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-vertical-writing-mode-changes-grid-physical-axes",
@@ -1408,10 +1172,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-unequal-grid-template-areas-row-lengths-invalidate-declaration",
@@ -1426,10 +1187,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-subgrid-adopts-parent-row-tracks",
@@ -1444,10 +1202,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-subgrid-augments-and-exposes-line-names",
@@ -1462,10 +1217,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-subgrid-inherits-parent-gutters-on-subgridded-axis",
@@ -1480,10 +1232,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-rows-fragment-between-pages",
@@ -1498,10 +1247,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-tall-grid-item-fragments-inside-its-grid-area",
@@ -1516,10 +1262,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-row-spanning-grid-item-fragments-across-spanned-rows",
@@ -1534,10 +1277,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-container-pseudo-elements-are-grid-items",
@@ -1552,10 +1292,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "grid-safe-alignment-falls-back-to-start-on-grid-overflow",
@@ -1570,9 +1307,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "grid-span-counts-only-matching-named-lines",
+    "category": "grid",
+    "feature": "grid-column",
+    "subfeature": "span-integer-named-line-counting",
+    "description": "grid-column: start / span 2 target counts only lines named target, so the item crosses three tracks to the second matching line. Catches reducing span N <custom-ident> to either span N tracks or the first named line.",
+    "file": "cases/grid/grid-span-counts-only-matching-named-lines.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   }
 ]

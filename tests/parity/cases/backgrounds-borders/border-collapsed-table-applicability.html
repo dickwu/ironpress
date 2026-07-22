@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>collapsed table border image and radius applicability</title>
+<style>
+  @page { size: 304px 184px; margin: 0; }
+  html, body { width: 300px; height: 180px; background: #fff; }
+  html, body, table, tbody, tr, td { box-sizing: border-box; margin: 0; padding: 0; }
+  table { position: absolute; left: 40px; top: 30px; width: 220px; height: 120px; table-layout: fixed; border-collapse: collapse; border: 8px solid #264653; border-radius: 28px; background: #f4f6f8; }
+  td { border: 10px solid #2a9d8f; border-radius: 24px; border-image: linear-gradient(90deg, #e63946, #ffbe0b) 1; }
+  td.blue { border-color: #457b9d; }
+</style>
+</head>
+<body>
+  <table><tbody><tr><td></td><td class="blue"></td></tr><tr><td></td><td class="blue"></td></tr></tbody></table>
+</body>
+</html>

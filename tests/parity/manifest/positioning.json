@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-position-relative-offset",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-position-absolute-top-left",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-position-absolute-bottom-right",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-position-absolute-stretch-inset",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-absolute-containing-block-relative-ancestor",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-fixed-top-left",
@@ -113,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-z-index-stacking",
@@ -130,10 +109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-z-index-source-order-overlap",
@@ -147,10 +123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-overflow-hidden-clip",
@@ -164,10 +137,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-overflow-visible-no-clip",
@@ -181,10 +151,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-overflow-hidden-absolute-child-clip",
@@ -198,10 +165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-transform-establishes-containing-block",
@@ -215,10 +179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-inset-negative-offset",
@@ -232,10 +193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-float-left",
@@ -249,10 +207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-clear-both",
@@ -266,10 +221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-fixed-repeats-pages",
@@ -283,10 +235,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-inset-shorthand-stretch",
@@ -301,10 +250,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-logical-insets-horizontal",
@@ -319,10 +265,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-absolute-percent-insets",
@@ -337,10 +280,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-z-index-negative-behind-flow",
@@ -355,10 +295,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "positioning-relative-percent-offset",
@@ -373,9 +310,6 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   }
 ]

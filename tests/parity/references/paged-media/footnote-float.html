@@ -1,0 +1,46 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for footnote-float.
+
+  CSS GCPM §2.2 removes the footnote float, inserts a call at its source, and
+  places its body in the page footnote area. This source materializes only
+  that structural relocation; it expresses the §2.6 call styles directly.
+  CSS Fonts 4 §6.5 requires the `super` variant to leave the line box
+  unchanged, but intentionally leaves any synthetic glyph metrics to the
+  renderer. No candidate output, raster edit, cropping, or registration is
+  used to construct this oracle.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: 400px 300px; margin: 1cm; }
+    * { margin: 0; box-sizing: border-box; }
+    html { font-family: ParitySans; line-height: 1.5; background: #ffffff; color: #111111; }
+    p { font-size: 16px; }
+    .page { position: relative; height: calc(300px - 2cm); }
+    .footnote-call {
+      color: #b00020;
+      vertical-align: baseline;
+      font-size: 100%;
+      line-height: inherit;
+      font-variant-position: super;
+    }
+    .footnote-area {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      color: #b00020;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <p>Body text with a reference.<span class="footnote-call">1</span> More body text follows the call.</p>
+    <div class="footnote-area">1. This belongs in the footnote area.</div>
+  </div>
+</body>
+</html>

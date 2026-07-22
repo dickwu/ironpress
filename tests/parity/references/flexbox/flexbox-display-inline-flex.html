@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  Standards-derived print oracle for display:inline-flex.
+
+  CSS Display 3 §2.6 defines inline-flex as an inline-level flex container,
+  and CSS 2.2 §9.4.2 requires inline-level boxes in an inline formatting
+  context to be laid out horizontally one after another. In Chromium 150,
+  the live DOM has the correct positions (L: 24px wide by 13.375px; chip:
+  x=37.375px, width=120px; R: x=157.375px), but its print-to-PDF path paints
+  the chip at x=37px while leaving R at its correct DOM position. This source
+  materializes the required final geometry directly in SVG so the authenticated
+  Chrome PDF oracle tests CSS layout rather than that PDF-export defect.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @font-face { font-family: ParitySans; src: url("../../fonts/ParitySans.ttf"); }
+    @page { size: 320px 160px; margin: 0; }
+    * { margin: 0; box-sizing: border-box; }
+    svg { display: block; }
+  </style>
+</head>
+<body>
+  <svg width="320" height="160" viewBox="0 0 320 160" xmlns="http://www.w3.org/2000/svg">
+    <text x="24" y="50" font-family="ParitySans" font-size="24">L</text>
+    <rect x="37.375" y="24" width="120" height="42" fill="#d6dde2"/>
+    <rect x="37.375" y="24" width="55" height="42" fill="#c0392b"/>
+    <rect x="102.375" y="24" width="55" height="42" fill="#2980b9"/>
+    <text x="157.375" y="50" font-family="ParitySans" font-size="24">R</text>
+  </svg>
+</body>
+</html>

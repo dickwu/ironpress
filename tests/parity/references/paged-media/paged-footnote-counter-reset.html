@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-footnote-counter-reset.
+
+  CSS GCPM inserts a call at each float:footnote source location and gives its
+  marker the current footnote counter. CSS Fonts 4 keeps a synthesized
+  font-variant-position:super glyph baseline-aligned, so the call is
+  materialized as a relatively positioned reduced glyph that does not alter
+  the paragraph line box. The bottom-aligned area is the normal footnote area
+  for two block-displayed footnotes. No candidate output is used here.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>footnote counter reset reference</title>
+  <style>
+    @page { size: 200px 152px; margin: 10px; }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .page { position: relative; height: 132px; }
+    .content { background: #e0f2fe; }
+    .footnote-call {
+      font-size: 80%;
+      line-height: inherit;
+      position: relative;
+      bottom: 4.56px;
+    }
+    .footnote-area { position: absolute; right: 0; bottom: 0; left: 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <p class="content">One<span class="footnote-call">5</span> two<span class="footnote-call">6</span>.</p>
+    <div class="footnote-area">5. first note<br>6. second note</div>
+  </div>
+</body>
+</html>

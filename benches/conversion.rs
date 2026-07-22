@@ -124,6 +124,16 @@ fn main() {
 *Last updated: 2026*
 "#;
 
+fn emphasized_text_html(run_count: usize) -> String {
+    let mut runs = String::with_capacity(run_count * 40);
+    for _ in 0..run_count {
+        runs.push_str("<span class=\"em\">重要事項</span>");
+    }
+    format!(
+        "<style>@page{{size:letter;margin:36px}}body{{font-family:Arial,sans-serif;font-size:18px;line-height:1.5}}.em{{text-emphasis:filled dot #d7263d}}</style><p>{runs}</p>"
+    )
+}
+
 fn bench_simple(c: &mut Criterion) {
     c.bench_function("simple_html", |b| {
         b.iter(|| ironpress::html_to_pdf(black_box(SIMPLE_HTML)).unwrap())
@@ -166,6 +176,16 @@ fn bench_with_header_footer(c: &mut Criterion) {
     });
 }
 
+fn bench_text_emphasis(c: &mut Criterion) {
+    // Many independent spans exercise the final-run cache, which is where an
+    // uncached implementation repeatedly resolves selected font metrics while
+    // laying out and painting every emphasis annotation.
+    let html = emphasized_text_html(200);
+    c.bench_function("text_emphasis_200_runs", |b| {
+        b.iter(|| ironpress::html_to_pdf(black_box(&html)).unwrap())
+    });
+}
+
 criterion_group!(
     benches,
     bench_simple,
@@ -174,5 +194,6 @@ criterion_group!(
     bench_full_document,
     bench_markdown,
     bench_with_header_footer,
+    bench_text_emphasis,
 );
 criterion_main!(benches);

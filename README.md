@@ -70,16 +70,26 @@ echo '<h1>Hello</h1>' | ironpress --stdin output.pdf
 ## Builder API
 
 ```rust
-use ironpress::{HtmlConverter, PageSize, Margin};
+use ironpress::{HtmlConverter, Margin, PageSize, RasterQuality};
 
 let pdf = HtmlConverter::new()
     .page_size(PageSize::LETTER)
     .margin(Margin::uniform(54.0))
+    .raster_quality(RasterQuality {
+        background_dpi: 144.0,
+        ..RasterQuality::default()
+    })
     .header("My Document")
     .footer("Page {page} of {pages}")
     .convert("<h1>Custom page</h1>")
     .unwrap();
 ```
+
+`RasterQuality` keeps source-image, filter, and flattened-background resolution
+in one physical-DPI policy. Its default preserves sharp source/filter output
+while using 192 DPI for flattened synthetic backgrounds; lowering one field
+does not change page geometry. The CLI exposes the same controls through
+`--image-dpi`, `--filter-dpi`, and `--background-raster-dpi`.
 
 ## Features at a glance
 
@@ -166,38 +176,36 @@ See [Architecture](../../wiki/Architecture) for the full pipeline.
 
 ## Visual parity harness
 
-`tests/parity/` is a granular Chrome-parity test suite: one isolated fixture per
-CSS feature/value (plus feature-interaction fixtures), each rendered by ironpress
-**and** by headless Chrome, then compared with a perceptual **SSIM** metric
-(`image-compare`, anti-aliasing-robust) at 300 DPI. It tracks a per-feature /
-per-category / overall implementation score and pinpoints whether a failure is
-**REAL** (the feature itself) or **CONFOUNDED** (a substrate it depends on, via
-"probe" fixtures).
+`tests/parity/` is an adversarial HTML/CSS corpus with one focused fixture per
+feature, value, or interaction. Ironpress produces the candidate PDF; the
+declared oracle renderer's PDF is committed. At test time both PDFs go through the
+same discovered `pdftoppm` executable with the same 300 DPI arguments. A fixture
+passes only when a fixed, same-coordinate human-visibility policy finds no
+visible defect. Every raw RGBA difference remains in the evidence; the harness
+never translates, registers, or fixture-tunes either raster.
 
 ```bash
-scripts/parity.sh                 # run the engine: cargo test --test feature_parity
-scripts/parity-gen-refs.sh --force  # regenerate the committed Chrome references (needs Chromium)
+scripts/parity.sh                       # run the complete exact parity gate
+scripts/parity-gen-refs.sh <category>   # regenerate oracle PDFs explicitly
+scripts/parity-gen-refs.sh --check      # authenticate the complete corpus
 ```
 
-- **Run it:** `cargo test --test feature_parity` — renders each fixture in-process,
-  rasterizes via `pdftoppm`, diffs against the committed reference, and writes
-  `tests/parity/report.json` + `REPORT.md` + the per-category visual reports.
-- **Read it:** open `tests/parity/reports/index.html` — it summarizes every
-  category and links a page per category, grouped by feature (anchored, scored),
-  each fixture showing **Chrome ref ∣ ironpress ∣ SSIM diff**. (GitHub serves
-  committed HTML as source; view the rendered report via the `htmlpreview` link the
-  PR bot posts, the GitHub Pages site, or locally.)
-- **References are committed** (Git LFS) so the suite runs without Chrome. When you
-  change a fixture you must regenerate its reference: `scripts/parity-gen-refs.sh
-  --force` then commit `tests/parity/{refs,refs.lock}`. CI's freshness gate
-  (`refs.lock` = sha256 of every fixture) fails the build if a fixture changed
-  without its reference being regenerated.
-- **CI:** `.github/workflows/parity.yml` is the deterministic gate (no Chrome,
-  runs against committed refs + freshness check); `parity-visuals.yml` regenerates
-  refs with a pinned Chromium on PRs and posts a comment linking the rendered
-  report index.
-- **Git LFS** stores the reference/candidate/diff PNGs and bundled fonts — run
-  `git lfs install` once after cloning.
+- **Run it:** `cargo test --test feature_parity` renders every fixture in-process,
+  rasterizes the candidate and oracle PDFs symmetrically, and applies the exact
+  raw-pixel evidence plus the fixed visibility verdict.
+- **Read it:** `tests/parity/REPORT.md` is the compact, problem-first report;
+  `tests/parity/report.json` contains the complete machine result; and
+  `tests/parity/reports/index.html` provides the visual evidence.
+- **Oracles:** committed PDFs are the source of truth. Oracle-preview, candidate,
+  and diff PNGs are generated report evidence and are intentionally ignored.
+  `refs.lock` authenticates each fixture, oracle PDF, manifest entry, renderer,
+  fonts, and generator provenance.
+- **Baseline:** `tests/parity/baseline.json` is a separately reviewed regression
+  baseline. Updating it is explicit and cannot bless a visibility regression or
+  hide raw evidence.
+- **CI:** `.github/workflows/parity.yml` runs the same browser-free gate, checks
+  `refs.lock`, and uploads the current report and evidence even when defects make
+  the gate fail.
 
 ## License
 

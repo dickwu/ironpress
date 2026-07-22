@@ -11,10 +11,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-direction-column",
@@ -28,10 +25,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-space-between",
@@ -45,10 +39,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-center",
@@ -62,10 +53,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-space-around",
@@ -79,10 +67,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-center",
@@ -96,10 +81,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-stretch",
@@ -113,10 +95,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-percent-height-stretch",
@@ -130,10 +109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-basis-content",
@@ -147,10 +123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-self-flex-end",
@@ -164,10 +137,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-grow",
@@ -181,10 +151,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-shrink",
@@ -198,10 +165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis",
@@ -215,10 +179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-wrap",
@@ -232,10 +193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-gap",
@@ -249,10 +207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-order",
@@ -266,10 +221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-nested-flex",
@@ -283,10 +235,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-min-width-constraint",
@@ -300,10 +249,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-direction-row-reverse",
@@ -317,10 +263,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-direction-column-reverse",
@@ -334,10 +277,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-wrap-nowrap",
@@ -351,10 +291,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-wrap-wrap-reverse",
@@ -368,10 +305,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-flow",
@@ -385,10 +319,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-flex-start",
@@ -402,10 +333,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-flex-end",
@@ -419,10 +347,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-content-space-evenly",
@@ -436,10 +361,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-flex-start",
@@ -453,10 +375,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-flex-end",
@@ -470,10 +389,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-baseline",
@@ -487,10 +403,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-self-center",
@@ -504,10 +417,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-self-baseline",
@@ -521,10 +431,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-flex-start",
@@ -538,10 +445,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-flex-end",
@@ -555,10 +459,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-center",
@@ -572,10 +473,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-space-between",
@@ -589,10 +487,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-space-around",
@@ -606,10 +501,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-space-evenly",
@@ -623,10 +515,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-stretch",
@@ -640,10 +529,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-grow-basis-auto",
@@ -657,10 +543,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-shrink-zero",
@@ -674,10 +557,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-auto",
@@ -691,10 +571,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-zero",
@@ -708,10 +585,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-percentage",
@@ -725,10 +599,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-shorthand-keywords",
@@ -742,10 +613,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-order-negative",
@@ -759,10 +627,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-gap-two-value",
@@ -776,10 +641,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-row-column-gap",
@@ -793,10 +655,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-max-width-clamp",
@@ -810,10 +669,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-min-height-column",
@@ -827,10 +683,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-nested-row-in-row",
@@ -844,10 +697,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-nested-column-bg",
@@ -861,10 +711,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-nested-column-stretch",
@@ -878,112 +725,91 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-margin-auto-main-end",
     "category": "flexbox",
     "feature": "margin",
     "subfeature": "auto-main-end",
-    "description": "An item with margin-left:auto absorbs the positive main free space and is pushed to the main-end edge, overriding the default flex-start packing (css-flexbox-1 \u00a78.1).",
+    "description": "An item with margin-left:auto absorbs the positive main free space and is pushed to the main-end edge, overriding the default flex-start packing (css-flexbox-1 §8.1).",
     "file": "cases/flexbox/flexbox-margin-auto-main-end.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-margin-auto-center",
     "category": "flexbox",
     "feature": "margin",
     "subfeature": "auto-center",
-    "description": "An item with margin:auto centers on both axes: the main-axis auto margins split the free space to center it horizontally and the cross-axis auto margins center it vertically, suppressing the default stretch (css-flexbox-1 \u00a78.1).",
+    "description": "An item with margin:auto centers on both axes: the main-axis auto margins split the free space to center it horizontally and the cross-axis auto margins center it vertically, suppressing the default stretch (css-flexbox-1 §8.1).",
     "file": "cases/flexbox/flexbox-margin-auto-center.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-margin-auto-split",
     "category": "flexbox",
     "feature": "margin",
     "subfeature": "auto-split",
-    "description": "With two items, margin-left:auto on the second pins the first to the main-start and pushes the second to the main-end, splitting the line (nav-bar idiom, css-flexbox-1 \u00a78.1).",
+    "description": "With two items, margin-left:auto on the second pins the first to the main-start and pushes the second to the main-end, splitting the line (nav-bar idiom, css-flexbox-1 §8.1).",
     "file": "cases/flexbox/flexbox-margin-auto-split.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-min-content-no-overflow",
     "category": "flexbox",
     "feature": "min-width",
     "subfeature": "auto-content-min",
-    "description": "Flex items with min-width:auto floor at their content-based minimum size: two shrinking text items stop at min-content and sit side by side without overlapping (css-flexbox-1 \u00a74.5).",
+    "description": "Flex items with min-width:auto floor at their content-based minimum size: two shrinking text items stop at min-content and sit side by side without overlapping (css-flexbox-1 §4.5).",
     "file": "cases/flexbox/flexbox-min-content-no-overflow.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-grow-fractional",
     "category": "flexbox",
     "feature": "flex-grow",
     "subfeature": "fractional-sum",
-    "description": "When the flex-grow factors sum to less than 1, only that fraction of the positive free space is distributed, leaving the remainder unfilled (css-flexbox-1 \u00a79.7 step 4.b).",
+    "description": "When the flex-grow factors sum to less than 1, only that fraction of the positive free space is distributed, leaving the remainder unfilled (css-flexbox-1 §9.7 step 4.b).",
     "file": "cases/flexbox/flexbox-grow-fractional.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-shrink-fractional",
     "category": "flexbox",
     "feature": "flex-shrink",
     "subfeature": "fractional-sum",
-    "description": "When the flex-shrink factors sum to less than 1, only that fraction of the negative free space is absorbed, so the items overflow the container (css-flexbox-1 \u00a79.7 step 4.b).",
+    "description": "When the flex-shrink factors sum to less than 1, only that fraction of the negative free space is absorbed, so the items overflow the container (css-flexbox-1 §9.7 step 4.b).",
     "file": "cases/flexbox/flexbox-shrink-fractional.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-center-overflow",
@@ -997,10 +823,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-stretch-max-height",
@@ -1014,10 +837,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-min-height",
@@ -1031,10 +851,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-gap-percentage",
@@ -1048,10 +865,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-safe-center",
@@ -1065,10 +879,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-wrap-reverse-edge",
@@ -1082,10 +893,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-item-margin",
@@ -1094,12 +902,9 @@
     "subfeature": "item-margin",
     "description": "Flex item margin: honored during placement/paint.",
     "file": "cases/flexbox/flexbox-item-margin.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": [],
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": []
   },
   {
     "id": "flexbox-item-relative-offset",
@@ -1108,12 +913,9 @@
     "subfeature": "item-relative-offset",
     "description": "Flex item relative-offset: honored during placement/paint.",
     "file": "cases/flexbox/flexbox-item-relative-offset.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": [],
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": []
   },
   {
     "id": "flexbox-column-wrap",
@@ -1122,12 +924,9 @@
     "subfeature": "column-wrap",
     "description": "flex-direction:column with flex-wrap:wrap starts additional columns when items exceed the container height.",
     "file": "cases/flexbox/flexbox-column-wrap.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": [],
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": []
   },
   {
     "id": "flexbox-z-index-static",
@@ -1136,29 +935,27 @@
     "subfeature": "static-flex-item-z-index",
     "description": "Static flex items paint in z-index order; overlapping items expose incorrect source-order painting.",
     "file": "cases/flexbox/flexbox-z-index-static.html",
-    "weight": 1,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": [],
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    "depends_on": []
   },
   {
     "id": "flexbox-display-inline-flex",
     "category": "flexbox",
     "feature": "display",
     "subfeature": "inline-flex",
-    "description": "display:inline-flex creates an inline-level flex container that shares the line with surrounding text; catches parsers that only recognize block-level display:flex.",
+    "description": "display:inline-flex creates an inline-level flex container that shares the line with surrounding text; catches parsers that only recognize block-level display:flex. The standards-derived Chrome reference corrects Chromium print-to-PDF's separate sub-CSS-pixel atomic-inline paint offset after its live DOM has laid out the same box correctly.",
     "file": "cases/flexbox/flexbox-display-inline-flex.html",
+    "reference_file": "references/flexbox/flexbox-display-inline-flex.html",
+    "reference": {
+      "status": "verified"
+    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "flexbox-anonymous-text-items",
@@ -1172,10 +969,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "flexbox-direction-rtl-row",
@@ -1189,10 +983,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-justify-safe-center-overflow",
@@ -1206,10 +997,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-max-content",
@@ -1223,10 +1011,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "flexbox-baseline-empty-synthesis",
@@ -1240,10 +1025,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "flexbox-abspos-static-position",
@@ -1257,27 +1039,21 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-fragmentation-wrap-pages",
     "category": "flexbox",
     "feature": "fragmentation",
     "subfeature": "wrapped-lines-across-pages",
-    "description": "A wrapped row flex container whose lines exceed one page fragments between flex lines; catches paginators that paint the flex layout as one overflowing atomic row.",
+    "description": "break-before:page on a wrapped row flex item propagates to its flex line, forcing a page break between lines rather than inside a sibling item.",
     "file": "cases/flexbox/flexbox-fragmentation-wrap-pages.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-min-width-zero-auto-min",
@@ -1291,10 +1067,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0
+    ]
   },
   {
     "id": "flexbox-column-wrap-align-content",
@@ -1308,10 +1081,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-aspect-ratio-grow-cross-size",
@@ -1325,10 +1095,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-cross-auto-margin-one-sided",
@@ -1342,10 +1109,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-overflow-hidden-auto-min",
@@ -1359,10 +1123,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-percentage-flex-basis",
@@ -1376,10 +1137,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-display-block-flex",
@@ -1393,10 +1151,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-display-inline-flex-two-keyword",
@@ -1410,10 +1165,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-display-contents-items",
@@ -1427,10 +1179,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-inline-item-blockification",
@@ -1444,10 +1193,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-float-clear-ignored",
@@ -1461,10 +1207,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-vertical-align-ignored",
@@ -1478,10 +1221,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-row-reverse-rtl",
@@ -1495,10 +1235,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-writing-mode-vertical-rl-row",
@@ -1512,10 +1249,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-writing-mode-vertical-rl-column",
@@ -1529,10 +1263,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-writing-mode-vertical-lr-row",
@@ -1546,10 +1277,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-single-line-noop",
@@ -1563,10 +1291,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-first-baseline",
@@ -1580,10 +1305,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-last-baseline",
@@ -1597,10 +1319,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-items-safe-center",
@@ -1614,10 +1333,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-self-safe-center",
@@ -1631,10 +1347,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-align-content-safe-center",
@@ -1648,10 +1361,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-place-content-justify",
@@ -1665,10 +1375,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-place-items-center",
@@ -1682,10 +1389,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-place-self-end",
@@ -1699,10 +1403,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-grid-gap-alias",
@@ -1716,10 +1417,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-gap-calc",
@@ -1733,10 +1431,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-row-gap-percentage-height",
@@ -1750,10 +1445,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 3.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-min-content",
@@ -1767,10 +1459,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-fit-content",
@@ -1784,10 +1473,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-basis-calc-percent",
@@ -1801,10 +1487,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-shorthand-basis-only",
@@ -1818,10 +1501,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-flex-shorthand-grow-basis",
@@ -1835,10 +1515,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-order-decimal-invalid",
@@ -1852,10 +1529,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-order-paint-overlap",
@@ -1869,10 +1543,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 3.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-abspos-order-paint",
@@ -1886,10 +1557,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-flex-grow",
@@ -1903,10 +1571,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-flex-shrink",
@@ -1920,10 +1585,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-justify-center",
@@ -1937,10 +1599,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-align-items-center",
@@ -1954,10 +1613,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-row-gap-main-axis",
@@ -1971,10 +1627,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-container-width-max-content",
@@ -1988,10 +1641,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-container-width-min-content",
@@ -2005,10 +1655,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-aspect-ratio-height-transfer",
@@ -2022,10 +1669,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-overflow-wrap-anywhere-auto-min",
@@ -2039,10 +1683,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-auto-margin-negative-free-space",
@@ -2056,10 +1697,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-column-min-height-auto",
@@ -2073,10 +1711,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-break-before-item",
@@ -2090,10 +1725,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-break-after-item",
@@ -2107,10 +1739,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-item-raster-img-child",
@@ -2125,10 +1754,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-image-render"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-item-inline-svg-child",
@@ -2142,10 +1768,7 @@
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
   },
   {
     "id": "flexbox-item-img-sizing-child",
@@ -2160,9 +1783,51 @@
     "depends_on": [
       "probe-fill-box",
       "probe-image-render"
-    ],
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0
+    ]
+  },
+  {
+    "id": "flexbox-invalid-justify-content-preserves-prior-value",
+    "category": "flexbox",
+    "feature": "justify-content",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A later invalid justify-content declaration is discarded, so the earlier flex-end value continues to align the item at the inline end.",
+    "file": "cases/flexbox/flexbox-invalid-justify-content-preserves-prior-value.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "flexbox-invalid-align-items-preserves-prior-value",
+    "category": "flexbox",
+    "feature": "align-items",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A later invalid align-items declaration is discarded, so the earlier flex-end value continues to align the item at the cross end.",
+    "file": "cases/flexbox/flexbox-invalid-align-items-preserves-prior-value.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "flexbox-invalid-negative-flex-grow-preserves-prior-value",
+    "category": "flexbox",
+    "feature": "flex-grow",
+    "subfeature": "invalid-negative-declaration-discard",
+    "description": "A negative flex-grow is invalid and must be discarded, leaving the earlier flex-grow:1 to absorb the available main-axis space.",
+    "file": "cases/flexbox/flexbox-invalid-negative-flex-grow-preserves-prior-value.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   }
 ]

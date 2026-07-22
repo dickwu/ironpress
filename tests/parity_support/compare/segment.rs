@@ -1,91 +1,657 @@
-//! Region segmentation (spec §1.8): a hand-rolled 4-connectivity flood fill over
-//! all real-diff pixels (every class except `Match`/`AaEdge`), each labelled with
-//! its dominant class, magnitude, and a per-region translation diagnosis.
-//!
-//! The shift diagnosis (`is_translation`/`shift_css`) runs AFTER the verdict
-//! pixels are counted, so it can describe a displacement but can never reduce the
-//! score.
+//! Region segmentation: a hand-rolled 4-connectivity flood fill over each
+//! directly observed same-coordinate class. A ColorErr pixel never joins an
+//! adjacent Missing/Extra component merely because it touches it.
 
 use image::RgbaImage;
 
 use super::super::config::{
-    CSS_PX, EDGE_JITTER_PX, REGION_MIN_AREA_PX, RESIDUAL_JITTER_PX, SHIFT_SEARCH_PX,
+    COVERAGE_RAMP_CHANNEL_TOLERANCE, CSS_PX, VISUAL_BALANCED_AGGREGATE_RAMP_MIN_PROVEN_RATIO,
+    VISUAL_BALANCED_EDGE_COMPONENT_MAX_BIAS, VISUAL_BALANCED_EDGE_COMPONENT_MAX_SPAN_CSS_PX,
+    VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2, VISUAL_COLOR_JND,
+    VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO, VISUAL_LAYERED_COVERAGE_MAX_DEPTH_CSS_PX,
+    VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2, VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX,
+    VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2, VISUAL_STRAIGHT_DEVICE_EDGE_MIN_SPAN_CSS_PX,
+    VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_AREA_CSS_PX2,
+    VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_TOTAL_CSS_PX2,
 };
+use super::super::geom::is_content;
 use super::classify::{ClassMap, PixelClass};
-use super::color::{ciede2000, srgb_to_lab};
+use super::color::{ColorEnergy, ciede2000, same_colour_family, srgb_to_lab};
 use super::masks::StructuralMasks;
 
-/// One connected blob of real-diff pixels with its diagnosis. Several fields
-/// (`bbox_css`, `fill_ratio`, `modal_drgb`) are populated now but consumed by the
-/// C4 diagnosis and C5 region-table/overlay — kept on the struct so the pipeline
-/// is complete and the goldens lock the full shape.
+/// Keep enough worst-first examples for useful visual diagnosis without letting
+/// a checkerboard page allocate one report object per connected pixel. Complete
+/// counts and magnitudes live in [`RegionAggregate`] and are never truncated.
+pub(crate) const REGION_EXAMPLE_LIMIT: usize = 64;
+
+/// One connected blob of directly observed non-matching pixels.
 #[allow(dead_code)]
 pub(crate) struct DiffRegion {
     /// Bounding box in CSS px [x0, y0, x1, y1], relative to the union crop origin.
     pub(crate) bbox_css: [f64; 4],
-    pub(crate) dominant: PixelClass,
+    pub(crate) class: PixelClass,
     pub(crate) area_px: u32,
+    /// Longest inclusive pixel span of this exact-class component.
+    pub(crate) longest_span_px: u32,
     pub(crate) area_pct: f64,
-    /// `area_px / bbox_area` — discriminates a thin line from a solid blob.
-    pub(crate) fill_ratio: f64,
     /// Median (cand − ref) over the region's `ColorErr` pixels (0..255 signed).
-    pub(crate) modal_drgb: [i16; 3],
+    pub(crate) modal_drgba: [i16; 4],
     /// Median CIEDE2000 over the region's INTERIOR (non-edge-band) `ColorErr`
     /// pixels — the solid-recolour signal. A robust statistic (median, not mean)
-    /// so a low-ΔE AA fringe cannot dilute a hard recolour core below the FAIL
-    /// bound (review #17), and INTERIOR-only so a geometry-boundary / curved-AA
-    /// ring (correct colours, moved boundary) does not inflate it (review §1-B).
+    /// so a low-Delta-E boundary fringe cannot dilute a hard recolour core.
     pub(crate) delta_e: f64,
     /// Count of INTERIOR (non-edge-band) `ColorErr` pixels in this region — the
     /// area a solid recolour actually occupies (edge-band ColorErr excluded).
     pub(crate) interior_color_px: u32,
-    /// Dominant translation (CSS px) for `GeomShift` regions.
-    pub(crate) shift_css: (f64, f64),
-    /// Whether a single consistent shift > `RESIDUAL_JITTER_PX` explains the region.
-    pub(crate) is_translation: bool,
+    /// Direct same-coordinate evidence about this component's coverage phase.
+    pub(crate) coverage: CoverageEvidence,
+    /// This independently visible ColorErr component has balanced signed colour
+    /// energy, rather than a coherent recolour in one direction.
+    pub(crate) large_color_component_is_balanced: bool,
+    /// Largest direct CIEDE2000 difference in this component. Presence regions
+    /// retain this separately from `delta_e`, whose median is intentionally a
+    /// ColorErr-only solid-recolour diagnostic.
+    pub(crate) max_direct_delta_e: f64,
 }
 
-#[inline]
-fn is_real_diff(c: PixelClass) -> bool {
-    !matches!(c, PixelClass::Match | PixelClass::AaEdge)
+/// Direct evidence that a mismatch is a coverage residual, rather than an
+/// inferred registration. Presence and colour proofs deliberately live
+/// together: a mixed phase needs both forms of evidence.
+#[derive(Default)]
+pub(crate) struct CoverageEvidence {
+    /// One physical pixel thick at the outer boundary of the union content.
+    pub(crate) outer_device_edge_fringe: bool,
+    /// A sub-CSS-pixel band on a shared painted outline.
+    pub(crate) sub_css_presence_residue: bool,
+    /// Exactly one device pixel wide on a shared outline.
+    pub(crate) one_device_pixel_presence_residue: bool,
+    /// A long, sparse one-device-pixel shared contour.
+    pub(crate) long_device_edge_residue: bool,
+    /// A whole component is a narrow colour ramp between shared endpoints.
+    pub(crate) shared_color_ramp: bool,
+    pub(crate) color_ramp_proven_px: u32,
+    pub(crate) color_ramp_total_px: u32,
+    pub(crate) compact_color_ramp_remainder: bool,
+    /// Endpoint-less, same-family fragment below one CSS px squared and one
+    /// colour JND. It is usable only beside a mostly direct ramp proof.
+    pub(crate) sub_visibility_unproven_color_fragment: bool,
 }
 
-/// Flood-fill the real-diff pixels into 4-connected regions, drop specks, and
-/// diagnose each survivor.
+/// Lossless aggregate for every connected component with the same exact raster
+/// class. These values include even one-pixel components that are not in
+/// the bounded representative list.
+pub(crate) struct RegionAggregate {
+    pub(crate) class: PixelClass,
+    pub(crate) region_count: u64,
+    pub(crate) total_area_px: u64,
+    pub(crate) total_area_pct: f64,
+    pub(crate) union_bbox_css: [f64; 4],
+    pub(crate) largest_area_px: u32,
+    pub(crate) largest_area_pct: f64,
+    pub(crate) largest_span_px: u32,
+    pub(crate) max_delta_e: f64,
+    pub(crate) color_de_weight: f64,
+    pub(crate) color_de_area: u64,
+    pub(crate) interior_color_px: u64,
+    pub(crate) interior_de_weight: f64,
+    pub(crate) coverage: CoverageAggregate,
+    pub(crate) non_long_edge_presence: PresenceAggregate,
+    pub(crate) unproven_presence: PresenceAggregate,
+    pub(crate) unproven_color_ramp_px: u64,
+    pub(crate) sub_visibility_unproven_color_fragment_px: u64,
+    pub(crate) all_unproven_color_ramps_compact: bool,
+    /// Direct shared-endpoint coverage samples retained across every ColorErr
+    /// component, including partial proofs inside a component whose entire
+    /// boundary cannot expose both endpoints.
+    pub(crate) color_ramp_proven_px: u64,
+    pub(crate) color_ramp_total_px: u64,
+    /// Every independently visible ColorErr component has balanced signed colour
+    /// energy, so two separate recolours cannot cancel only at page scope.
+    pub(crate) all_large_color_components_balanced: bool,
+    pub(crate) max_direct_delta_e: f64,
+}
+
+/// Lossless all-component aggregation of [`CoverageEvidence`].
+pub(crate) struct CoverageAggregate {
+    pub(crate) all_outer_device_edge_fringes: bool,
+    pub(crate) all_sub_css_presence_residues: bool,
+    pub(crate) all_one_device_pixel_presence_residues: bool,
+    pub(crate) all_shared_color_ramps: bool,
+}
+
+/// Direct-presence census after long one-device shared edges are removed.
+/// The remaining curved or two-dimensional evidence retains its own complete
+/// component and topology totals for the visibility budget.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PresenceAggregate {
+    pub(crate) region_count: u64,
+    pub(crate) total_area_px: u64,
+    pub(crate) largest_area_px: u32,
+    pub(crate) largest_span_px: u32,
+}
+
+/// Complete semantic region census plus a bounded worst-first detail sample.
+#[derive(Default)]
+pub(crate) struct RegionSet {
+    pub(crate) total_count: u64,
+    pub(crate) aggregates: Vec<RegionAggregate>,
+    pub(crate) examples: Vec<DiffRegion>,
+}
+
+impl RegionSet {
+    pub(crate) fn record(&mut self, region: DiffRegion) {
+        self.total_count += 1;
+        if let Some(aggregate) = self
+            .aggregates
+            .iter_mut()
+            .find(|aggregate| aggregate.class == region.class)
+        {
+            aggregate.record(&region);
+        } else {
+            self.aggregates.push(RegionAggregate::from_region(&region));
+        }
+
+        if self.examples.len() < REGION_EXAMPLE_LIMIT {
+            self.examples.push(region);
+            self.examples.sort_by(region_priority);
+        } else if self
+            .examples
+            .last()
+            .is_some_and(|last| region_priority(&region, last).is_lt())
+        {
+            self.examples.pop();
+            self.examples.push(region);
+            self.examples.sort_by(region_priority);
+        }
+    }
+
+    /// Largest exact-class component, or zero if that class has no diff region.
+    pub(crate) fn largest_area(&self, class: PixelClass) -> u32 {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .map_or(0, |aggregate| aggregate.largest_area_px)
+    }
+
+    /// Longest component edge for one exact raster class.
+    pub(crate) fn largest_span(&self, class: PixelClass) -> u32 {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .map_or(0, |aggregate| aggregate.largest_span_px)
+    }
+
+    /// Complete component count for one exact raster class.
+    pub(crate) fn region_count(&self, class: PixelClass) -> u64 {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .map_or(0, |aggregate| aggregate.region_count)
+    }
+
+    /// Whether every component of this direct-presence class is one physical
+    /// pixel thick at the outer edge of the union content.
+    pub(crate) fn only_outer_device_edge_fringes(&self, class: PixelClass) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .is_some_and(|aggregate| aggregate.coverage.all_outer_device_edge_fringes)
+    }
+
+    /// Whether every direct-presence component for `class` is a sub-CSS-pixel
+    /// shared-outline coverage band.
+    pub(crate) fn only_sub_css_coverage_residues(&self, class: PixelClass) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .is_some_and(|aggregate| aggregate.coverage.all_sub_css_presence_residues)
+    }
+
+    /// Whether every direct-presence component for `class` is exactly one
+    /// device pixel wide on a shared outline.
+    pub(crate) fn only_one_device_pixel_shared_coverage_residues(&self, class: PixelClass) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .is_some_and(|aggregate| aggregate.coverage.all_one_device_pixel_presence_residues)
+    }
+
+    /// Whether every authored-scale presence component is a directly proven
+    /// sub-CSS shared contour. Endpoint-less fragments may accompany that
+    /// proof only while each fragment and their complete aggregate remain
+    /// below the ordinary visibility floors.
+    pub(crate) fn only_sub_css_presence_with_compact_remainder(&self, class: PixelClass) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .is_some_and(|aggregate| {
+                aggregate.coverage.all_sub_css_presence_residues
+                    || aggregate.unproven_presence.is_compact()
+            })
+    }
+
+    pub(crate) fn presence_without_long_device_edges(
+        &self,
+        class: PixelClass,
+    ) -> PresenceAggregate {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == class)
+            .map_or_else(PresenceAggregate::default, |aggregate| {
+                aggregate.non_long_edge_presence
+            })
+    }
+
+    /// Whether every direct-presence component is a sub-CSS-pixel shared
+    /// outline residue. This is useful when explaining an accepted verdict;
+    /// colour-only residuals intentionally do not participate.
+    pub(crate) fn only_sub_css_coverage_presence_residues(&self) -> bool {
+        let mut saw_presence = false;
+        for aggregate in &self.aggregates {
+            if matches!(aggregate.class, PixelClass::Missing | PixelClass::Extra) {
+                saw_presence = true;
+                if !aggregate.coverage.all_sub_css_presence_residues {
+                    return false;
+                }
+            }
+        }
+        saw_presence
+    }
+
+    /// Whether all directly observed colour errors are sub-CSS-pixel coverage
+    /// ramps between unchanged local endpoint colours.
+    pub(crate) fn only_shared_coverage_color_residues(&self) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == PixelClass::ColorErr)
+            .is_some_and(|aggregate| aggregate.coverage.all_shared_color_ramps)
+    }
+
+    /// Whether shared-endpoint ramps cover the complete colour residual except
+    /// for bounded components that contain some direct ramp evidence, have no
+    /// interior pixels, and remain below the independent visibility floor.
+    pub(crate) fn shared_coverage_color_with_compact_remainder(&self) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == PixelClass::ColorErr)
+            .is_some_and(|aggregate| {
+                if aggregate.coverage.all_shared_color_ramps {
+                    return true;
+                }
+                let proven = aggregate
+                    .total_area_px
+                    .saturating_sub(aggregate.unproven_color_ramp_px);
+                aggregate.all_unproven_color_ramps_compact
+                    && aggregate.total_area_px > 0
+                    && (aggregate.sub_visibility_unproven_color_fragment_px as f64)
+                        < VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_TOTAL_CSS_PX2 * CSS_PX * CSS_PX
+                    && proven as f64 / aggregate.total_area_px as f64
+                        >= VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO
+            })
+    }
+
+    /// Whether each ColorErr component large enough for separate perception has
+    /// complementary coverage energy on its own.
+    pub(crate) fn large_color_components_are_balanced(&self) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == PixelClass::ColorErr)
+            .is_some_and(|aggregate| aggregate.all_large_color_components_balanced)
+    }
+
+    /// Whether direct shared-endpoint samples prove the configured majority of
+    /// all colour-boundary evidence, including partial component proofs.
+    pub(crate) fn predominantly_shared_coverage_color(&self) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == PixelClass::ColorErr)
+            .is_some_and(|aggregate| {
+                is_predominantly_shared_coverage(
+                    aggregate.color_ramp_proven_px,
+                    aggregate.color_ramp_total_px,
+                )
+            })
+    }
+}
+
+fn is_predominantly_shared_coverage(proven: u64, total: u64) -> bool {
+    total > 0 && proven as f64 / total as f64 >= VISUAL_BALANCED_AGGREGATE_RAMP_MIN_PROVEN_RATIO
+}
+
+impl RegionAggregate {
+    fn from_region(region: &DiffRegion) -> Self {
+        let (color_de_weight, color_de_area) =
+            if region.class == PixelClass::ColorErr && region.delta_e > 0.0 {
+                (
+                    region.delta_e * f64::from(region.area_px),
+                    u64::from(region.area_px),
+                )
+            } else {
+                (0.0, 0)
+            };
+        Self {
+            class: region.class,
+            region_count: 1,
+            total_area_px: u64::from(region.area_px),
+            total_area_pct: region.area_pct,
+            union_bbox_css: region.bbox_css,
+            largest_area_px: region.area_px,
+            largest_area_pct: region.area_pct,
+            largest_span_px: region.longest_span_px,
+            max_delta_e: region.delta_e,
+            color_de_weight,
+            color_de_area,
+            interior_color_px: u64::from(region.interior_color_px),
+            interior_de_weight: region.delta_e * f64::from(region.interior_color_px),
+            coverage: CoverageAggregate::from(&region.coverage),
+            non_long_edge_presence: PresenceAggregate::from_region(region),
+            unproven_presence: PresenceAggregate::from_unproven_region(region),
+            unproven_color_ramp_px: if region.class == PixelClass::ColorErr
+                && !region.coverage.shared_color_ramp
+            {
+                u64::from(region.area_px)
+            } else {
+                0
+            },
+            sub_visibility_unproven_color_fragment_px: if region
+                .coverage
+                .sub_visibility_unproven_color_fragment
+            {
+                u64::from(region.area_px)
+            } else {
+                0
+            },
+            all_unproven_color_ramps_compact: region.class != PixelClass::ColorErr
+                || region.coverage.shared_color_ramp
+                || region.coverage.compact_color_ramp_remainder,
+            color_ramp_proven_px: u64::from(region.coverage.color_ramp_proven_px),
+            color_ramp_total_px: u64::from(region.coverage.color_ramp_total_px),
+            all_large_color_components_balanced: region.large_color_component_is_balanced,
+            max_direct_delta_e: region.max_direct_delta_e,
+        }
+    }
+
+    fn record(&mut self, region: &DiffRegion) {
+        self.region_count += 1;
+        self.total_area_px += u64::from(region.area_px);
+        self.total_area_pct += region.area_pct;
+        self.union_bbox_css[0] = self.union_bbox_css[0].min(region.bbox_css[0]);
+        self.union_bbox_css[1] = self.union_bbox_css[1].min(region.bbox_css[1]);
+        self.union_bbox_css[2] = self.union_bbox_css[2].max(region.bbox_css[2]);
+        self.union_bbox_css[3] = self.union_bbox_css[3].max(region.bbox_css[3]);
+        if region.area_px > self.largest_area_px {
+            self.largest_area_px = region.area_px;
+            self.largest_area_pct = region.area_pct;
+        }
+        self.largest_span_px = self.largest_span_px.max(region.longest_span_px);
+        self.max_delta_e = self.max_delta_e.max(region.delta_e);
+        if region.class == PixelClass::ColorErr && region.delta_e > 0.0 {
+            self.color_de_weight += region.delta_e * f64::from(region.area_px);
+            self.color_de_area += u64::from(region.area_px);
+        }
+        self.interior_color_px += u64::from(region.interior_color_px);
+        self.interior_de_weight += region.delta_e * f64::from(region.interior_color_px);
+        self.coverage.record(&region.coverage);
+        self.non_long_edge_presence.record(region);
+        self.unproven_presence.record_unproven(region);
+        if region.class == PixelClass::ColorErr && !region.coverage.shared_color_ramp {
+            self.unproven_color_ramp_px += u64::from(region.area_px);
+            self.all_unproven_color_ramps_compact &= region.coverage.compact_color_ramp_remainder;
+        }
+        if region.coverage.sub_visibility_unproven_color_fragment {
+            self.sub_visibility_unproven_color_fragment_px += u64::from(region.area_px);
+        }
+        self.color_ramp_proven_px += u64::from(region.coverage.color_ramp_proven_px);
+        self.color_ramp_total_px += u64::from(region.coverage.color_ramp_total_px);
+        self.all_large_color_components_balanced &= region.large_color_component_is_balanced;
+        self.max_direct_delta_e = self.max_direct_delta_e.max(region.max_direct_delta_e);
+    }
+}
+
+impl PresenceAggregate {
+    fn from_region(region: &DiffRegion) -> Self {
+        let mut aggregate = Self::default();
+        aggregate.record(region);
+        aggregate
+    }
+
+    fn record(&mut self, region: &DiffRegion) {
+        if region.coverage.long_device_edge_residue
+            || !matches!(region.class, PixelClass::Missing | PixelClass::Extra)
+        {
+            return;
+        }
+        self.region_count += 1;
+        self.total_area_px += u64::from(region.area_px);
+        self.largest_area_px = self.largest_area_px.max(region.area_px);
+        self.largest_span_px = self.largest_span_px.max(region.longest_span_px);
+    }
+
+    fn from_unproven_region(region: &DiffRegion) -> Self {
+        let mut aggregate = Self::default();
+        aggregate.record_unproven(region);
+        aggregate
+    }
+
+    fn record_unproven(&mut self, region: &DiffRegion) {
+        if !matches!(region.class, PixelClass::Missing | PixelClass::Extra)
+            || region.coverage.sub_css_presence_residue
+        {
+            return;
+        }
+        self.region_count += 1;
+        self.total_area_px += u64::from(region.area_px);
+        self.largest_area_px = self.largest_area_px.max(region.area_px);
+        self.largest_span_px = self.largest_span_px.max(region.longest_span_px);
+    }
+
+    fn is_compact(self) -> bool {
+        self.region_count > 0
+            && (self.largest_area_px as f64)
+                < VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2 * CSS_PX * CSS_PX
+            && (self.largest_span_px as f64) < VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX * CSS_PX
+            && (self.total_area_px as f64) < VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2 * CSS_PX * CSS_PX
+    }
+}
+
+impl CoverageAggregate {
+    fn from(coverage: &CoverageEvidence) -> Self {
+        Self {
+            all_outer_device_edge_fringes: coverage.outer_device_edge_fringe,
+            all_sub_css_presence_residues: coverage.sub_css_presence_residue,
+            all_one_device_pixel_presence_residues: coverage.one_device_pixel_presence_residue,
+            all_shared_color_ramps: coverage.shared_color_ramp,
+        }
+    }
+
+    fn record(&mut self, coverage: &CoverageEvidence) {
+        self.all_outer_device_edge_fringes &= coverage.outer_device_edge_fringe;
+        self.all_sub_css_presence_residues &= coverage.sub_css_presence_residue;
+        self.all_one_device_pixel_presence_residues &= coverage.one_device_pixel_presence_residue;
+        self.all_shared_color_ramps &= coverage.shared_color_ramp;
+    }
+}
+
+fn region_priority(left: &DiffRegion, right: &DiffRegion) -> std::cmp::Ordering {
+    right
+        .area_px
+        .cmp(&left.area_px)
+        .then_with(|| class_priority(right.class).cmp(&class_priority(left.class)))
+        .then_with(|| {
+            left.bbox_css[1]
+                .partial_cmp(&right.bbox_css[1])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| {
+            left.bbox_css[0]
+                .partial_cmp(&right.bbox_css[0])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+fn class_priority(class: PixelClass) -> u8 {
+    match class {
+        PixelClass::Missing => 4,
+        PixelClass::Extra => 3,
+        PixelClass::ColorErr => 2,
+        PixelClass::Match => 0,
+    }
+}
+
+/// Bounds and population count for one cross-section of a narrow outline band.
+type CrossSection = (usize, usize, usize);
+
+#[derive(Clone, Copy, Default)]
+struct ColorRampProof {
+    strict_proven: usize,
+    layered_proven: usize,
+    total: usize,
+}
+
+/// Bounded exact shared colours observed on one local edge normal. Solid
+/// stacked paint needs only paper, foreground, and one or two substrates; a
+/// larger palette is conservatively ineligible for this fallback proof.
+struct SharedColorSet {
+    colors: [image::Rgba<u8>; 8],
+    len: usize,
+}
+
+impl Default for SharedColorSet {
+    fn default() -> Self {
+        Self {
+            colors: [image::Rgba([0; 4]); 8],
+            len: 0,
+        }
+    }
+}
+
+impl SharedColorSet {
+    fn insert(&mut self, color: image::Rgba<u8>) -> bool {
+        if self.iter().any(|existing| existing == color) {
+            return true;
+        }
+        let Some(slot) = self.colors.get_mut(self.len) else {
+            return false;
+        };
+        *slot = color;
+        self.len += 1;
+        true
+    }
+
+    fn contains(&self, color: image::Rgba<u8>) -> bool {
+        self.iter().any(|existing| existing == color)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = image::Rgba<u8>> + '_ {
+        self.colors[..self.len].iter().copied()
+    }
+}
+
+impl ColorRampProof {
+    fn has_direct_sample(&self) -> bool {
+        self.strict_proven > 0
+    }
+
+    fn proven(&self) -> usize {
+        self.strict_proven + self.layered_proven
+    }
+
+    fn covers_component(&self) -> bool {
+        if self.total == 0 {
+            return false;
+        }
+        let proven = self.proven();
+        let unproven = self.total - proven;
+        let maximum_unproven =
+            (VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2 * CSS_PX * CSS_PX) as usize;
+        proven == self.total
+            || (proven as f64 / self.total as f64 >= VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO
+                && unproven < maximum_unproven)
+    }
+}
+
+/// Per-page scratch storage for one region's colour statistics and local
+/// topology. Reusing it keeps adversarially fragmented pages linear in their
+/// pixels instead of allocating one or more vectors for every component.
+#[derive(Default)]
+struct RegionDiagnostics {
+    dr: Vec<i16>,
+    dg: Vec<i16>,
+    db: Vec<i16>,
+    da: Vec<i16>,
+    interior_de: Vec<f64>,
+    cross_sections: Vec<CrossSection>,
+    component_pixels: ComponentPixels,
+}
+
+impl RegionDiagnostics {
+    fn clear_color_samples(&mut self) {
+        self.dr.clear();
+        self.dg.clear();
+        self.db.clear();
+        self.da.clear();
+        self.interior_de.clear();
+    }
+
+    fn reset_cross_sections(&mut self, length: usize) -> bool {
+        if length > self.cross_sections.capacity()
+            && self
+                .cross_sections
+                .try_reserve_exact(length.saturating_sub(self.cross_sections.len()))
+                .is_err()
+        {
+            return false;
+        }
+        self.cross_sections.clear();
+        self.cross_sections.resize(length, (usize::MAX, 0, 0));
+        true
+    }
+}
+
+/// Flood-fill each real-diff class into 4-connected regions. Even a one-pixel
+/// defect is semantic report data and must remain searchable downstream.
 pub(crate) fn segment(
     cm: &ClassMap,
     cand: &RgbaImage,
     reference: &RgbaImage,
     masks: &StructuralMasks,
-) -> Vec<DiffRegion> {
+) -> RegionSet {
     let w = cm.w as usize;
     let h = cm.h as usize;
     let total = w * h;
     if total == 0 {
-        return Vec::new();
+        return RegionSet::default();
     }
     let total_px = total as f64;
 
     let mut visited = vec![false; total];
-    let mut regions: Vec<DiffRegion> = Vec::new();
+    let mut regions = RegionSet::default();
     let mut stack: Vec<usize> = Vec::new();
+    let mut members: Vec<usize> = Vec::new();
+    // Coverage topology needs a local component-membership map for curved
+    // outlines. Reuse one fallible workspace across every component so a
+    // checkerboard residual cannot allocate one bitmap per pixel.
+    let mut diagnostics = RegionDiagnostics::default();
 
     for start in 0..total {
-        if visited[start] || !is_real_diff(cm.px[start]) {
+        let class = cm.px[start];
+        if visited[start] || class == PixelClass::Match {
             continue;
         }
-        // BFS/DFS flood fill collecting the connected blob's pixel indices.
+        // BFS/DFS flood fill collecting one exact-class component. Reuse the
+        // owned member buffer across components so checkerboard diagnostics do
+        // not allocate one Vec per pixel.
         stack.clear();
+        members.clear();
         stack.push(start);
         visited[start] = true;
-        let mut members: Vec<usize> = Vec::new();
         while let Some(i) = stack.pop() {
             members.push(i);
             let x = i % w;
             let y = i / w;
             let push = |nx: usize, ny: usize, stack: &mut Vec<usize>, visited: &mut [bool]| {
                 let ni = ny * w + nx;
-                if !visited[ni] && is_real_diff(cm.px[ni]) {
+                if !visited[ni] && cm.px[ni] == class {
                     visited[ni] = true;
                     stack.push(ni);
                 }
@@ -104,53 +670,41 @@ pub(crate) fn segment(
             }
         }
 
-        if (members.len() as u32) < REGION_MIN_AREA_PX {
-            continue;
-        }
-
-        regions.push(diagnose_region(
-            &members, cm, cand, reference, masks, w, total_px,
+        regions.record(diagnose_region(
+            &members,
+            class,
+            cm,
+            cand,
+            reference,
+            masks,
+            w,
+            total_px,
+            CSS_PX,
+            &mut diagnostics,
         ));
     }
-
-    // Worst-first by area for stable, useful ordering downstream.
-    regions.sort_by(|a, b| {
-        b.area_pct
-            .partial_cmp(&a.area_pct)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
     regions
 }
 
 fn diagnose_region(
     members: &[usize],
+    class: PixelClass,
     cm: &ClassMap,
     cand: &RgbaImage,
     reference: &RgbaImage,
     masks: &StructuralMasks,
     w: usize,
     total_px: f64,
+    pixels_per_css_px: f64,
+    diagnostics: &mut RegionDiagnostics,
 ) -> DiffRegion {
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
-    let mut counts = [0u32; 6];
     // Per-channel deltas over ALL the region's ColorErr px (modal hue, for the
     // diagnosis headline) + per-pixel ΔE over INTERIOR (non-edge-band) ColorErr px
-    // only (the solid-recolour signal that gates hard_color, robust via median).
-    let mut dr: Vec<i16> = Vec::new();
-    let mut dg: Vec<i16> = Vec::new();
-    let mut db: Vec<i16> = Vec::new();
-    let mut interior_de: Vec<f64> = Vec::new();
-    // Shift estimate: average (ref-position - matching-cand-position) is implicit;
-    // we instead accumulate the per-pixel displacement that best matched, plus the
-    // sum of squares so we can measure AGREEMENT (a real translation has all pixels
-    // shifting the SAME way -> low variance; a curved AA ring / scattered edge has
-    // divergent per-pixel matches -> high variance, and must NOT read as a shift).
-    let mut shift_dx_sum = 0.0;
-    let mut shift_dy_sum = 0.0;
-    let mut shift_dx_sq = 0.0;
-    let mut shift_dy_sq = 0.0;
-    let mut shift_n = 0u32;
-
+    // only (the robust solid-recolour diagnostic, via median).
+    diagnostics.clear_color_samples();
+    let mut color_energy = ColorEnergy::default();
+    let mut max_direct_delta_e = 0.0_f64;
     for &i in members {
         let x = i % w;
         let y = i / w;
@@ -158,171 +712,969 @@ fn diagnose_region(
         y0 = y0.min(y);
         x1 = x1.max(x);
         y1 = y1.max(y);
-        let cls = cm.px[i];
-        counts[class_index(cls)] += 1;
-
         let c = cand.get_pixel(x as u32, y as u32).0;
         let r = reference.get_pixel(x as u32, y as u32).0;
+        max_direct_delta_e = max_direct_delta_e.max(ciede2000(
+            srgb_to_lab([r[0], r[1], r[2]]),
+            srgb_to_lab([c[0], c[1], c[2]]),
+        ));
 
-        if cls == PixelClass::ColorErr {
-            dr.push(c[0] as i16 - r[0] as i16);
-            dg.push(c[1] as i16 - r[1] as i16);
-            db.push(c[2] as i16 - r[2] as i16);
-            // INTERIOR ColorErr only: a structural-boundary ColorErr (a moved/
-            // resized fill abutting a different background — colours CORRECT, the
-            // boundary moved — or a curved/coloured AA ring) lies in the edge band
-            // and is NOT a recolour, so it is excluded from the hard-colour ΔE.
+        if class == PixelClass::ColorErr {
+            let delta = [
+                c[0] as i16 - r[0] as i16,
+                c[1] as i16 - r[1] as i16,
+                c[2] as i16 - r[2] as i16,
+            ];
+            diagnostics.dr.push(delta[0]);
+            diagnostics.dg.push(delta[1]);
+            diagnostics.db.push(delta[2]);
+            diagnostics.da.push(c[3] as i16 - r[3] as i16);
+            color_energy.add(delta);
+            // Interior ColorErr only: boundary pixels remain exact mismatches but
+            // do not dominate the solid-fill colour summary.
             if !masks.in_edge_band(x as u32, y as u32) {
-                interior_de.push(ciede2000(
+                diagnostics.interior_de.push(ciede2000(
                     srgb_to_lab([r[0], r[1], r[2]]),
                     srgb_to_lab([c[0], c[1], c[2]]),
                 ));
             }
         }
-        if cls == PixelClass::GeomShift {
-            if let Some((sx, sy)) = best_local_shift(cand, reference, x as u32, y as u32) {
-                shift_dx_sum += sx as f64;
-                shift_dy_sum += sy as f64;
-                shift_dx_sq += (sx * sx) as f64;
-                shift_dy_sq += (sy * sy) as f64;
-                shift_n += 1;
-            }
-        }
     }
 
-    let dominant = dominant_class(&counts);
     let area_px = members.len() as u32;
-    let bbox_w = (x1 - x0 + 1) as f64;
-    let bbox_h = (y1 - y0 + 1) as f64;
-    let fill_ratio = area_px as f64 / (bbox_w * bbox_h);
-
-    let modal_drgb = [median(&mut dr), median(&mut dg), median(&mut db)];
-    let interior_color_px = interior_de.len() as u32;
+    let longest_span_px = (x1 - x0 + 1).max(y1 - y0 + 1) as u32;
+    let modal_drgba = [
+        median(&mut diagnostics.dr),
+        median(&mut diagnostics.dg),
+        median(&mut diagnostics.db),
+        median(&mut diagnostics.da),
+    ];
+    let interior_color_px = diagnostics.interior_de.len() as u32;
     // MEDIAN ΔE over interior ColorErr (review #17): a low-ΔE fringe cannot drag a
-    // hard recolour core under COLOR_DE_FAIL. Zero interior ColorErr => 0 (a region
+    // hard recolour core. Zero interior ColorErr => 0 (a region
     // whose only ColorErr is on the structural boundary is NOT a solid recolour).
-    let delta_e = median_f64(&mut interior_de);
-
-    // Phase-correlation lite: the average matched local displacement. A single
-    // dominant shift > residual jitter marks a translation. For pure 1px boundary
-    // noise the average displacement stays at/below the residual band.
-    let (shift_x, shift_y) = if shift_n > 0 {
-        (shift_dx_sum / shift_n as f64, shift_dy_sum / shift_n as f64)
-    } else {
-        (0.0, 0.0)
-    };
-    let shift_mag = (shift_x * shift_x + shift_y * shift_y).sqrt();
-    // AGREEMENT gate (review #7 follow-on): only a CONSISTENT displacement is a
-    // translation. The per-pixel shift standard deviation must be small — a real
-    // residual translation moves every GeomShift pixel the SAME way (σ≈0), whereas a
-    // curved AA ring (border-radius-circle) or a scattered glyph edge yields
-    // divergent per-pixel best-matches (large σ) that the wider SHIFT_SEARCH_PX now
-    // surfaces. Without this, the revived gate would false-FAIL curved/AA perimeters.
-    let shift_std = if shift_n > 0 {
-        let n = shift_n as f64;
-        let var_x = (shift_dx_sq / n - shift_x * shift_x).max(0.0);
-        let var_y = (shift_dy_sq / n - shift_y * shift_y).max(0.0);
-        (var_x + var_y).sqrt()
-    } else {
-        0.0
-    };
-    // σ bound = the GeomShift admission radius (EDGE_JITTER_PX): per-pixel jitter up
-    // to the classification radius is expected even for a true translation; beyond it
-    // the matches are incoherent (a curve/scatter), not a single displacement.
-    let consistent = shift_std <= EDGE_JITTER_PX as f64;
-    let is_translation = shift_mag > RESIDUAL_JITTER_PX as f64 && consistent;
-    let shift_css = (shift_x / CSS_PX, shift_y / CSS_PX);
-
+    let delta_e = median_f64(&mut diagnostics.interior_de);
+    let outer_device_edge_fringe = matches!(class, PixelClass::Missing | PixelClass::Extra)
+        && is_one_device_pixel_thick(members, class, cm)
+        && members
+            .iter()
+            .all(|&index| is_union_content_boundary(index, cand, reference, w));
+    let sub_css_presence_residue = is_sub_css_coverage_residue(
+        members,
+        class,
+        cand,
+        reference,
+        w,
+        x0,
+        y0,
+        x1,
+        y1,
+        diagnostics,
+    );
+    let one_device_pixel_presence_residue = is_one_device_pixel_shared_coverage_residue(
+        members,
+        class,
+        cand,
+        reference,
+        w,
+        x0,
+        y0,
+        x1,
+        y1,
+        &mut diagnostics.component_pixels,
+    );
+    let long_device_edge_residue = one_device_pixel_presence_residue
+        && f64::from(longest_span_px) >= VISUAL_STRAIGHT_DEVICE_EDGE_MIN_SPAN_CSS_PX * CSS_PX;
+    let color_ramp_proof = (class == PixelClass::ColorErr).then(|| {
+        sub_css_shared_coverage_color_proof(
+            members,
+            cand,
+            reference,
+            w,
+            x0,
+            y0,
+            x1,
+            y1,
+            &mut diagnostics.component_pixels,
+        )
+    });
+    let shared_color_ramp = color_ramp_proof.is_some_and(|proof| {
+        proof.covers_component()
+            || (interior_color_px == 0
+                && proof.has_direct_sample()
+                && is_sub_visibility_same_family_edge(members, cand, reference, w))
+    });
+    let compact_color_ramp_remainder = class == PixelClass::ColorErr
+        && !shared_color_ramp
+        && interior_color_px == 0
+        && color_ramp_proof.is_some_and(|proof| proof.has_direct_sample())
+        && (area_px as f64) < VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2 * CSS_PX * CSS_PX;
+    let sub_visibility_unproven_color_fragment = class == PixelClass::ColorErr
+        && !shared_color_ramp
+        && (area_px as f64) < VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_AREA_CSS_PX2 * CSS_PX * CSS_PX
+        && delta_e <= VISUAL_COLOR_JND
+        && is_sub_visibility_same_family_edge(members, cand, reference, w);
+    let compact_color_ramp_remainder =
+        compact_color_ramp_remainder || sub_visibility_unproven_color_fragment;
+    let independently_visible_color_component = (area_px as f64)
+        >= VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2 * CSS_PX * CSS_PX
+        || (longest_span_px as f64) >= VISUAL_BALANCED_EDGE_COMPONENT_MAX_SPAN_CSS_PX * CSS_PX;
+    let large_color_component_is_balanced = class != PixelClass::ColorErr
+        || !independently_visible_color_component
+        || color_energy.bias() <= VISUAL_BALANCED_EDGE_COMPONENT_MAX_BIAS;
     DiffRegion {
         bbox_css: [
-            x0 as f64 / CSS_PX,
-            y0 as f64 / CSS_PX,
-            x1 as f64 / CSS_PX,
-            y1 as f64 / CSS_PX,
+            x0 as f64 / pixels_per_css_px,
+            y0 as f64 / pixels_per_css_px,
+            x1 as f64 / pixels_per_css_px,
+            y1 as f64 / pixels_per_css_px,
         ],
-        dominant,
+        class,
         area_px,
+        longest_span_px,
         area_pct: 100.0 * area_px as f64 / total_px,
-        fill_ratio,
-        modal_drgb,
+        modal_drgba,
         delta_e,
         interior_color_px,
-        shift_css,
-        is_translation,
+        coverage: CoverageEvidence {
+            outer_device_edge_fringe,
+            sub_css_presence_residue,
+            one_device_pixel_presence_residue,
+            long_device_edge_residue,
+            shared_color_ramp,
+            color_ramp_proven_px: color_ramp_proof.map_or(0, |proof| proof.proven() as u32),
+            color_ramp_total_px: color_ramp_proof.map_or(0, |proof| proof.total as u32),
+            compact_color_ramp_remainder,
+            sub_visibility_unproven_color_fragment,
+        },
+        large_color_component_is_balanced,
+        max_direct_delta_e,
     }
 }
 
-/// The integer displacement (dx,dy) within ±`SHIFT_SEARCH_PX` that makes the
-/// reference at `(x,y)` reappear in the candidate (i.e. how far the candidate
-/// boundary moved).
-///
-/// The search radius is `SHIFT_SEARCH_PX` (device px), DECOUPLED from
-/// `RESIDUAL_JITTER_PX` (review #2/#3/#6): the old radius `RESIDUAL_JITTER_PX = 1`
-/// capped `shift_max_css` at `1/CSS_PX ≈ 0.32` per axis, BELOW the `G_SHIFT_CSS`
-/// PASS bound (1.0), so the shift gate could never escalate — it was structurally
-/// dead. `SHIFT_SEARCH_PX` is wide enough (≥ device-px equivalent of the 1.0/4.0
-/// CSS-px bounds) that a real residual translation is measurable and the FAIL bound
-/// is reachable. NOTE: this measures a residual translation AFTER the fixed -4,-4
-/// page-origin calibration; it does NOT move any candidate pixel before scoring (no
-/// best-shift masking) — the pixels were already classified; this only diagnoses how
-/// far an already-counted GeomShift boundary moved.
-///
-/// Ties (equal colour delta) break toward the SMALLEST `|dx|+|dy|` (review #7): the
-/// old strict-min kept the first-seen top-left offset, fabricating a (-1,-1)
-/// directional shift on a symmetric AA ramp. Preferring the zero/centre offset means
-/// a symmetric ramp yields ~(0,0), not a phantom diagonal shift.
-fn best_local_shift(cand: &RgbaImage, reference: &RgbaImage, x: u32, y: u32) -> Option<(i32, i32)> {
-    let (w, h) = cand.dimensions();
-    let r = reference.get_pixel(x, y);
-    // (colour delta, |dx|+|dy|, dx, dy) — lexicographic: lowest delta, then nearest.
-    let mut best: Option<(f64, i32, i32, i32)> = None;
-    let radius = SHIFT_SEARCH_PX;
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if nx < 0 || ny < 0 || nx as u32 >= w || ny as u32 >= h {
-                continue;
-            }
-            let d = super::color_delta(r, cand.get_pixel(nx as u32, ny as u32), false).abs();
-            let manhattan = dx.abs() + dy.abs();
-            let cand_key = (d, manhattan, dx, dy);
-            match best {
-                // Replace only on a strictly-lower delta, or an equal delta with a
-                // strictly-smaller |dx|+|dy| (tie-break toward the centre offset).
-                Some((bd, bm, _, _)) if d > bd || (d == bd && manhattan >= bm) => {}
-                _ => best = Some(cand_key),
+/// A compact boundary-only component can be too small to expose both exact
+/// endpoints along every glyph normal. It is still a coverage residual when
+/// every same-coordinate pair retains one ink direction from paper and the
+/// complete component stays below the independent visibility area floor.
+fn is_sub_visibility_same_family_edge(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+) -> bool {
+    (members.len() as f64) < VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2 * CSS_PX * CSS_PX
+        && members.iter().all(|index| {
+            let x = (*index % width) as u32;
+            let y = (*index / width) as u32;
+            same_colour_family(cand.get_pixel(x, y).0, reference.get_pixel(x, y).0)
+        })
+}
+
+/// A direct-presence component may reach fixed CSS-scale observation only as a
+/// sub-CSS-pixel shared-outline band. Every cross-section must be an exact-class
+/// contiguous strip and must directly separate shared paper from shared painted
+/// content. The test never searches for an offset, shifts, crops, or
+/// substitutes pixels; raw class evidence remains intact.
+fn is_sub_css_coverage_residue(
+    members: &[usize],
+    class: PixelClass,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    diagnostics: &mut RegionDiagnostics,
+) -> bool {
+    matches!(class, PixelClass::Missing | PixelClass::Extra)
+        && (is_narrow_shared_outline_band(
+            members,
+            cand,
+            reference,
+            width,
+            x0,
+            y0,
+            x1,
+            y1,
+            diagnostics,
+        ) || is_narrow_shared_contour_band(
+            members,
+            cand,
+            reference,
+            width,
+            x0,
+            y0,
+            x1,
+            y1,
+            &mut diagnostics.component_pixels,
+        ))
+}
+
+/// One-sided coverage residue is intentionally stricter than paired sampling
+/// phase: each component pixel must have a one-device-pixel normal cross
+/// section between shared paper and shared content. This accepts a connected
+/// L at a fractional rectangle corner, but rejects a two-device-pixel strip.
+fn is_one_device_pixel_shared_coverage_residue(
+    members: &[usize],
+    class: PixelClass,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> bool {
+    matches!(class, PixelClass::Missing | PixelClass::Extra)
+        && is_one_device_pixel_shared_contour_band(
+            members, cand, reference, width, x0, y0, x1, y1, component,
+        )
+}
+
+/// A direct-presence band may be up to one authored CSS pixel wide, but every
+/// cross-section must separate shared paper from shared painted content. That
+/// excludes an interior cut whose endpoints happen to reach paper elsewhere.
+fn is_narrow_shared_outline_band(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    diagnostics: &mut RegionDiagnostics,
+) -> bool {
+    if !is_sub_css_pixel_thick(x0, y0, x1, y1) {
+        return false;
+    }
+    let component_width = x1 - x0 + 1;
+    let component_height = y1 - y0 + 1;
+    if component_width == component_height {
+        return false;
+    }
+
+    let (long_start, long_end, cross_section_len, vertical) = if component_width < component_height
+    {
+        (y0, y1, component_height, true)
+    } else {
+        (x0, x1, component_width, false)
+    };
+    if !diagnostics.reset_cross_sections(cross_section_len) {
+        return false;
+    }
+    let cross_sections = &mut diagnostics.cross_sections;
+    for &index in members {
+        let x = index % width;
+        let y = index / width;
+        let (long, narrow) = if vertical { (y, x) } else { (x, y) };
+        let bounds = &mut cross_sections[long - long_start];
+        bounds.0 = bounds.0.min(narrow);
+        bounds.1 = bounds.1.max(narrow);
+        bounds.2 += 1;
+    }
+
+    (long_start..=long_end).all(|long| {
+        let (narrow_start, narrow_end, member_count) = cross_sections[long - long_start];
+        narrow_start != usize::MAX
+            && member_count == narrow_end - narrow_start + 1
+            && shared_outline_transition(
+                cand,
+                reference,
+                if vertical {
+                    (narrow_start, long, -1, 0)
+                } else {
+                    (long, narrow_start, 0, -1)
+                },
+                if vertical {
+                    (narrow_end, long, 1, 0)
+                } else {
+                    (long, narrow_end, 0, 1)
+                },
+            )
+    })
+}
+
+/// A direct-presence component can represent a subdevice PDF coverage residual
+/// only when its narrow axis stays below one authored CSS pixel. Long edges are
+/// permitted; their visibility is decided exclusively by the fixed CSS-scale
+/// observation, never by offset registration.
+fn is_sub_css_pixel_thick(x0: usize, y0: usize, x1: usize, y1: usize) -> bool {
+    let width = x1 - x0 + 1;
+    let height = y1 - y0 + 1;
+    (width.min(height) as f64) < CSS_PX
+}
+
+/// A reusable compact membership map for one exact-class component. It lets
+/// the curved contour test inspect a local normal without ever treating a
+/// nearby component as part of this residual. Its allocation grows only when a
+/// page contains a larger component bounding box than any prior component.
+#[derive(Default)]
+struct ComponentPixels {
+    x0: usize,
+    y0: usize,
+    width: usize,
+    height: usize,
+    members: Vec<bool>,
+}
+
+impl ComponentPixels {
+    /// Rebuild the local membership map without allocating once the workspace
+    /// has reached this component's bounding-box capacity. Capacity and index
+    /// arithmetic are fallible, so an unusably large diagnostic component is
+    /// conservatively treated as ineligible for coverage forgiveness.
+    fn reset(
+        &mut self,
+        indices: &[usize],
+        image_width: usize,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+    ) -> bool {
+        let Some(width) = x1.checked_sub(x0).and_then(|value| value.checked_add(1)) else {
+            return false;
+        };
+        let Some(height) = y1.checked_sub(y0).and_then(|value| value.checked_add(1)) else {
+            return false;
+        };
+        let Some(size) = width.checked_mul(height) else {
+            return false;
+        };
+        if size > self.members.capacity()
+            && self
+                .members
+                .try_reserve_exact(size.saturating_sub(self.members.len()))
+                .is_err()
+        {
+            return false;
+        }
+        self.members.clear();
+        self.members.resize(size, false);
+        for &index in indices {
+            let x = index % image_width;
+            let y = index / image_width;
+            let Some(local_x) = x.checked_sub(x0) else {
+                return false;
+            };
+            let Some(local_y) = y.checked_sub(y0) else {
+                return false;
+            };
+            let Some(slot) = local_y
+                .checked_mul(width)
+                .and_then(|row| row.checked_add(local_x))
+            else {
+                return false;
+            };
+            let Some(member) = self.members.get_mut(slot) else {
+                return false;
+            };
+            *member = true;
+        }
+        self.x0 = x0;
+        self.y0 = y0;
+        self.width = width;
+        self.height = height;
+        true
+    }
+
+    fn contains(&self, x: isize, y: isize) -> bool {
+        let local_x = x - self.x0 as isize;
+        let local_y = y - self.y0 as isize;
+        if local_x < 0
+            || local_y < 0
+            || local_x >= self.width as isize
+            || local_y >= self.height as isize
+        {
+            return false;
+        }
+        local_y
+            .checked_mul(self.width as isize)
+            .and_then(|row| row.checked_add(local_x))
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.members.get(index))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Count the contiguous exact-class pixels from a point along one normal.
+    /// `None` means the component exceeds the fixed sub-CSS aperture.
+    fn run_length(
+        &self,
+        x: isize,
+        y: isize,
+        dx: isize,
+        dy: isize,
+        maximum: usize,
+    ) -> Option<usize> {
+        for distance in 1..=maximum + 1 {
+            let sample_x = x + dx * distance as isize;
+            let sample_y = y + dy * distance as isize;
+            if !self.contains(sample_x, sample_y) {
+                return Some(distance - 1);
             }
         }
-    }
-    best.map(|(_, _, dx, dy)| (dx, dy))
-}
-
-#[inline]
-fn class_index(c: PixelClass) -> usize {
-    match c {
-        PixelClass::Match => 0,
-        PixelClass::AaEdge => 1,
-        PixelClass::ColorErr => 2,
-        PixelClass::GeomShift => 3,
-        PixelClass::Missing => 4,
-        PixelClass::Extra => 5,
+        None
     }
 }
 
-/// The dominant real-diff class in a region (Match/AaEdge never dominate).
-fn dominant_class(counts: &[u32; 6]) -> PixelClass {
-    let candidates = [
-        (PixelClass::ColorErr, counts[2]),
-        (PixelClass::GeomShift, counts[3]),
-        (PixelClass::Missing, counts[4]),
-        (PixelClass::Extra, counts[5]),
+/// Test the four undirected device-grid normals. A diagonal normal is needed
+/// for the stair-step coverage residue at an elliptical corner.
+const CONTOUR_NORMALS: [(isize, isize); 4] = [(1, 0), (0, 1), (1, 1), (1, -1)];
+
+/// A curved direct-presence residual may reach authored-scale observation when
+/// every one of its pixels is in a sub-CSS normal band between shared paper and
+/// shared painted content. This is a same-coordinate topology check: it does
+/// not search for a shifted shape, borrow a different component, or turn an
+/// interior cut into an edge merely because paper exists elsewhere on the page.
+fn is_narrow_shared_contour_band(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> bool {
+    if !component.reset(members, width, x0, y0, x1, y1) {
+        return false;
+    }
+    members.iter().all(|&index| {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        CONTOUR_NORMALS
+            .into_iter()
+            .any(|(dx, dy)| shared_contour_normal(&component, cand, reference, x, y, dx, dy))
+    })
+}
+
+/// The one-device-pixel counterpart to [`is_narrow_shared_contour_band`].
+/// A diagonal normal is retained so a one-pixel L corner remains a coverage
+/// band rather than being misclassified as a two-dimensional loss.
+fn is_one_device_pixel_shared_contour_band(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> bool {
+    if !component.reset(members, width, x0, y0, x1, y1) {
+        return false;
+    }
+    members.iter().all(|&index| {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
+            one_device_pixel_shared_contour_normal(&component, cand, reference, x, y, dx, dy)
+        })
+    })
+}
+
+/// A direct colour-error component is imperceptible only when it is a narrow
+/// antialiasing ramp between two exact, unchanged local colours. This is a
+/// same-coordinate proof: it does not shift, crop, or substitute either image.
+/// It only examines directly shared endpoint samples on the same local normal.
+/// Curved corners and narrow stems may leave a bounded unproven remainder, but
+/// only when at least three quarters of the component proves the ramp and the
+/// remainder stays below the fixed independent-visibility area floor.
+fn sub_css_shared_coverage_color_proof(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> ColorRampProof {
+    if !component.reset(members, width, x0, y0, x1, y1) {
+        return ColorRampProof::default();
+    }
+    let mut proof = ColorRampProof {
+        total: members.len(),
+        ..Default::default()
+    };
+    for &index in members {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        if CONTOUR_NORMALS
+            .into_iter()
+            .any(|(dx, dy)| shared_coverage_color_normal(&component, cand, reference, x, y, dx, dy))
+        {
+            proof.strict_proven += 1;
+        } else if CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
+            shared_layered_coverage_color_normal(&component, cand, reference, x, y, dx, dy)
+        }) {
+            proof.layered_proven += 1;
+        }
+    }
+    proof
+}
+
+/// One local normal cross-section through a curved coverage component.
+fn shared_contour_normal(
+    component: &ComponentPixels,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> bool {
+    let Some(((before_x, before_y), (after_x, after_y))) =
+        sub_css_normal_boundaries(component, x, y, dx, dy)
+    else {
+        return false;
+    };
+    shared_outline_transition(
+        cand,
+        reference,
+        (before_x, before_y, -dx, -dy),
+        (after_x, after_y, dx, dy),
+    )
+}
+
+/// Check one local normal through a colour-error component. The entire direct
+/// class run must remain narrower than one authored CSS pixel; its two nearby
+/// endpoint pixels must be byte-identical across candidate and reference, and
+/// each changed value must be a rounded mixture on that same endpoint segment.
+fn shared_coverage_color_normal(
+    component: &ComponentPixels,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> bool {
+    let Some(((before_x, before_y), (after_x, after_y))) =
+        sub_css_normal_boundaries(component, x, y, dx, dy)
+    else {
+        return false;
+    };
+    let pixel = (x as usize, y as usize);
+    let before = (before_x, before_y, -dx, -dy);
+    let after = (after_x, after_y, dx, dy);
+    shared_coverage_color_transition(cand, reference, pixel, before, after)
+}
+
+fn shared_layered_coverage_color_normal(
+    component: &ComponentPixels,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> bool {
+    let Some(((before_x, before_y), (after_x, after_y))) =
+        sub_css_normal_boundaries(component, x, y, dx, dy)
+    else {
+        return false;
+    };
+    shared_layered_coverage_color_transition(
+        cand,
+        reference,
+        (x as usize, y as usize),
+        (before_x, before_y, -dx, -dy),
+        (after_x, after_y, dx, dy),
+    )
+}
+
+/// Boundary points immediately outside a component's sub-CSS normal run.
+fn sub_css_normal_boundaries(
+    component: &ComponentPixels,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> Option<((usize, usize), (usize, usize))> {
+    let device_distance = ((dx * dx + dy * dy) as f64).sqrt();
+    let maximum = (CSS_PX / device_distance).floor() as usize;
+    if maximum == 0 {
+        return None;
+    }
+    let before = component.run_length(x, y, -dx, -dy, maximum)?;
+    let after = component.run_length(x, y, dx, dy, maximum)?;
+    if (before + after + 1) as f64 * device_distance >= CSS_PX {
+        return None;
+    }
+    Some((
+        offset_grid_point(x, y, -dx, -dy, before)?,
+        offset_grid_point(x, y, dx, dy, after)?,
+    ))
+}
+
+/// A local shared-outline transition whose exact-class run is one device
+/// pixel. `run_length(..., 1)` returns `None` for a two-pixel run, which makes
+/// the width rule explicit rather than inferring it from authored CSS scale.
+fn one_device_pixel_shared_contour_normal(
+    component: &ComponentPixels,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> bool {
+    let (Some(before), Some(after)) = (
+        component.run_length(x, y, -dx, -dy, 1),
+        component.run_length(x, y, dx, dy, 1),
+    ) else {
+        return false;
+    };
+    if before + after + 1 != 1 {
+        return false;
+    }
+    shared_outline_transition(
+        cand,
+        reference,
+        (x as usize, y as usize, -dx, -dy),
+        (x as usize, y as usize, dx, dy),
+    )
+}
+
+/// Prove that the changed pixel is an antialiased mixture of two distinct,
+/// directly shared colours. A colour error cannot use merely similar samples:
+/// both endpoints must be byte-identical in the original shared raster.
+fn shared_coverage_color_transition(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    pixel: (usize, usize),
+    before: (usize, usize, isize, isize),
+    after: (usize, usize, isize, isize),
+) -> bool {
+    let (Some(before_color), Some(after_color)) = (
+        nearest_exact_color(cand, reference, before),
+        nearest_exact_color(cand, reference, after),
+    ) else {
+        return false;
+    };
+    before_color != after_color
+        && is_coverage_ramp_color(
+            cand.get_pixel(pixel.0 as u32, pixel.1 as u32),
+            before_color,
+            after_color,
+        )
+        && is_coverage_ramp_color(
+            reference.get_pixel(pixel.0 as u32, pixel.1 as u32),
+            before_color,
+            after_color,
+        )
+}
+
+/// Prove coverage at an edge where the same foreground is composited over two
+/// different shared substrates. This occurs when a background paints beneath
+/// a border: one PDF edge sample can mix foreground with paper while the other
+/// mixes that foreground with the shared background. Both direct samples must
+/// lie on a segment from the same nearby shared content colour; an authored
+/// red/blue edge swap has no such common paint and remains visible.
+fn shared_layered_coverage_color_transition(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    pixel: (usize, usize),
+    before: (usize, usize, isize, isize),
+    after: (usize, usize, isize, isize),
+) -> bool {
+    let mut nearby = SharedColorSet::default();
+    let near_distance = CSS_PX.ceil() as usize;
+    if !collect_shared_colors_on_ray(cand, reference, before, near_distance, &mut nearby)
+        || !collect_shared_colors_on_ray(cand, reference, after, near_distance, &mut nearby)
+    {
+        return false;
+    }
+
+    let mut palette = SharedColorSet::default();
+    let maximum_distance = (VISUAL_LAYERED_COVERAGE_MAX_DEPTH_CSS_PX * CSS_PX).ceil() as usize;
+    if !collect_shared_colors_on_ray(cand, reference, before, maximum_distance, &mut palette)
+        || !collect_shared_colors_on_ray(cand, reference, after, maximum_distance, &mut palette)
+    {
+        return false;
+    }
+
+    let candidate = *cand.get_pixel(pixel.0 as u32, pixel.1 as u32);
+    let oracle = *reference.get_pixel(pixel.0 as u32, pixel.1 as u32);
+    if candidate != oracle && palette.contains(candidate) && palette.contains(oracle) {
+        return false;
+    }
+
+    nearby.iter().filter(is_content).any(|paint| {
+        if !nearby.iter().any(|substrate| substrate != paint) {
+            return false;
+        }
+        let candidate_is_coverage = palette.iter().any(|substrate| {
+            substrate != paint && is_coverage_ramp_color(&candidate, paint, substrate)
+        });
+        let oracle_is_coverage = palette.iter().any(|substrate| {
+            substrate != paint && is_coverage_ramp_color(&oracle, paint, substrate)
+        });
+        candidate_is_coverage && oracle_is_coverage
+    })
+}
+
+fn collect_shared_colors_on_ray(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    (x, y, dx, dy): (usize, usize, isize, isize),
+    maximum_distance: usize,
+    colors: &mut SharedColorSet,
+) -> bool {
+    for distance in 1..=maximum_distance {
+        let next_x = x as isize + dx * distance as isize;
+        let next_y = y as isize + dy * distance as isize;
+        if next_x < 0
+            || next_y < 0
+            || next_x >= cand.width() as isize
+            || next_y >= cand.height() as isize
+        {
+            return colors.insert(image::Rgba([255; 4]));
+        }
+        let candidate = cand.get_pixel(next_x as u32, next_y as u32);
+        let oracle = reference.get_pixel(next_x as u32, next_y as u32);
+        if candidate == oracle && !colors.insert(*candidate) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Find the first byte-identical colour on a direct ray no longer than one CSS
+/// pixel. This observes the immediate coverage transition; it is not a
+/// neighbourhood search for a better match.
+fn nearest_exact_color(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    (x, y, dx, dy): (usize, usize, isize, isize),
+) -> Option<image::Rgba<u8>> {
+    let maximum_distance = CSS_PX.ceil() as isize;
+    for distance in 1..=maximum_distance {
+        let next_x = x as isize + dx * distance;
+        let next_y = y as isize + dy * distance;
+        if next_x < 0
+            || next_y < 0
+            || next_x >= cand.width() as isize
+            || next_y >= cand.height() as isize
+        {
+            return Some(image::Rgba([255; 4]));
+        }
+        let candidate = cand.get_pixel(next_x as u32, next_y as u32);
+        let oracle = reference.get_pixel(next_x as u32, next_y as u32);
+        if candidate == oracle {
+            return Some(*candidate);
+        }
+    }
+    None
+}
+
+/// Whether a raster colour is on the straight coverage segment between two
+/// shared endpoints, within channel rounding. Projection avoids treating a
+/// chromatic authored recolour as grayscale antialiasing merely because every
+/// channel falls between the endpoint minima and maxima.
+fn is_coverage_ramp_color(
+    sample: &image::Rgba<u8>,
+    start: image::Rgba<u8>,
+    end: image::Rgba<u8>,
+) -> bool {
+    let direction = [
+        f64::from(end[0]) - f64::from(start[0]),
+        f64::from(end[1]) - f64::from(start[1]),
+        f64::from(end[2]) - f64::from(start[2]),
     ];
-    candidates
+    let denominator = direction.iter().map(|value| value * value).sum::<f64>();
+    if denominator == 0.0 {
+        return false;
+    }
+    let displacement = [
+        f64::from(sample[0]) - f64::from(start[0]),
+        f64::from(sample[1]) - f64::from(start[1]),
+        f64::from(sample[2]) - f64::from(start[2]),
+    ];
+    let position = displacement
         .iter()
-        .max_by_key(|(_, n)| *n)
-        .map(|(c, _)| *c)
-        .unwrap_or(PixelClass::ColorErr)
+        .zip(direction)
+        .map(|(delta, direction)| delta * direction)
+        .sum::<f64>()
+        / denominator;
+    if !(-0.01..=1.01).contains(&position) {
+        return false;
+    }
+    displacement
+        .iter()
+        .zip(direction)
+        .all(|(delta, direction)| {
+            (delta - position * direction).abs() <= COVERAGE_RAMP_CHANNEL_TOLERANCE
+        })
+}
+
+/// Move an in-bounds component point along a device-grid normal without
+/// relying on a wrapping signed-to-unsigned conversion.
+fn offset_grid_point(
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+    distance: usize,
+) -> Option<(usize, usize)> {
+    let distance = isize::try_from(distance).ok()?;
+    let x = x.checked_add(dx.checked_mul(distance)?)?;
+    let y = y.checked_add(dy.checked_mul(distance)?)?;
+    Some((usize::try_from(x).ok()?, usize::try_from(y).ok()?))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SharedSurface {
+    Paper,
+    Content,
+}
+
+/// Whether the two rays on opposite sides of a residual cross-section encounter
+/// shared paper and shared painted content, in either order. At most two device
+/// pixels are examined to cross a fractional coverage ramp; this is local
+/// classification evidence, never a search for a shifted match.
+fn shared_outline_transition(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    before: (usize, usize, isize, isize),
+    after: (usize, usize, isize, isize),
+) -> bool {
+    matches!(
+        (
+            nearest_shared_surface(cand, reference, before),
+            nearest_shared_surface(cand, reference, after),
+        ),
+        (Some(SharedSurface::Paper), Some(SharedSurface::Content))
+            | (Some(SharedSurface::Content), Some(SharedSurface::Paper))
+    )
+}
+
+/// Whether the two normal rays reach two distinct appearances that are already
+/// identical between candidate and reference at their current coordinates.
+/// This extends the paper/content outline check to an inner border edge (for
+/// example gray border against red padding-box background) without accepting a
+/// cut through a uniformly painted shape.
+/// First shared surface along one normal ray, within the fractional-coverage
+/// aperture. A paper or content sample on the near side takes precedence over
+/// a farther sample, so an interior cut surrounded by shared content cannot
+/// borrow paper from the far side of the same stem.
+fn nearest_shared_surface(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    (x, y, dx, dy): (usize, usize, isize, isize),
+) -> Option<SharedSurface> {
+    for distance in 1..=2 {
+        let next_x = x as isize + dx * distance;
+        let next_y = y as isize + dy * distance;
+        if next_x < 0
+            || next_y < 0
+            || next_x >= cand.width() as isize
+            || next_y >= cand.height() as isize
+        {
+            return Some(SharedSurface::Paper);
+        }
+        let neighbor = (next_x as usize, next_y as usize, true);
+        if shared_paper(cand, reference, neighbor) {
+            return Some(SharedSurface::Paper);
+        }
+        if shared_content(cand, reference, neighbor) {
+            return Some(SharedSurface::Content);
+        }
+    }
+    None
+}
+
+fn shared_paper(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    (x, y, in_bounds): (usize, usize, bool),
+) -> bool {
+    !in_bounds
+        || (!is_content(cand.get_pixel(x as u32, y as u32))
+            && !is_content(reference.get_pixel(x as u32, y as u32)))
+}
+
+fn shared_content(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    (x, y, in_bounds): (usize, usize, bool),
+) -> bool {
+    in_bounds
+        && is_content(cand.get_pixel(x as u32, y as u32))
+        && is_content(reference.get_pixel(x as u32, y as u32))
+}
+
+/// A connected residual is one device pixel thick only if every cross-section
+/// perpendicular to its long axis contains one exact-class pixel. Square and
+/// diagonal/stair-step components are rejected: their width has no unambiguous
+/// single-pixel normal direction.
+fn is_one_device_pixel_thick(members: &[usize], class: PixelClass, cm: &ClassMap) -> bool {
+    let width = cm.w as usize;
+    let height = cm.h as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    for &index in members {
+        x0 = x0.min(index % width);
+        y0 = y0.min(index / width);
+        x1 = x1.max(index % width);
+        y1 = y1.max(index / width);
+    }
+    let component_width = x1 - x0 + 1;
+    let component_height = y1 - y0 + 1;
+    if component_width == component_height {
+        return false;
+    }
+    if component_width < component_height {
+        !members
+            .iter()
+            .any(|&index| index % width + 1 < width && cm.px[index + 1] == class)
+    } else {
+        !members
+            .iter()
+            .any(|&index| index / width + 1 < height && cm.px[index + width] == class)
+    }
+}
+
+/// Whether a pixel is attached to content in both pages while touching paper
+/// outside the union of candidate and oracle content. Both conditions matter:
+/// an isolated paint speck or a displaced one-pixel glyph stem touches paper,
+/// but is not an outer coverage fringe of a shared painted shape. The shared
+/// content need not be byte-identical: a rasterized gradient's adjacent
+/// interior pixels may differ slightly while still describing the same edge.
+fn is_union_content_boundary(
+    index: usize,
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+) -> bool {
+    let x = index % width;
+    let y = index / width;
+    let height = cand.height() as usize;
+    let mut touches_paper = false;
+    let mut touches_matching_content = false;
+    for (neighbor_x, neighbor_y, in_bounds) in [
+        (x.wrapping_sub(1), y, x > 0),
+        (x + 1, y, x + 1 < width),
+        (x, y.wrapping_sub(1), y > 0),
+        (x, y + 1, y + 1 < height),
+    ] {
+        if !in_bounds {
+            touches_paper = true;
+            continue;
+        }
+        let candidate_neighbor = cand.get_pixel(neighbor_x as u32, neighbor_y as u32);
+        let reference_neighbor = reference.get_pixel(neighbor_x as u32, neighbor_y as u32);
+        touches_paper |= !is_content(candidate_neighbor) && !is_content(reference_neighbor);
+        touches_matching_content |=
+            is_content(candidate_neighbor) && is_content(reference_neighbor);
+    }
+    touches_paper && touches_matching_content
 }
 
 /// Median of a signed-channel sample, clamped to i16. Empty -> 0.
@@ -343,117 +1695,64 @@ fn median_f64(v: &mut [f64]) -> f64 {
     v[v.len() / 2]
 }
 
-// ===========================================================================
-// Unit tests for the REVIVED shift gate (review #2/#3/#6/#7). These prove the
-// shift estimator can now measure a real residual translation (the old radius=1
-// capped it at ~0.32 CSS px, below every G_SHIFT_CSS bound — a dead gate) and that
-// its tie-break no longer fabricates a directional shift on a symmetric ramp.
-// ===========================================================================
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use image::{ImageBuffer, Rgba, RgbaImage};
+    use super::{ColorRampProof, ComponentPixels, is_predominantly_shared_coverage};
 
-    fn white(w: u32, h: u32) -> RgbaImage {
-        ImageBuffer::from_pixel(w, h, Rgba([255, 255, 255, 255]))
+    #[test]
+    fn aggregate_shared_coverage_keeps_partial_component_evidence() {
+        assert!(is_predominantly_shared_coverage(625, 1000));
+        assert!(!is_predominantly_shared_coverage(624, 1000));
+        assert!(!is_predominantly_shared_coverage(0, 0));
     }
 
-    /// best_local_shift must now FIND a 12-device-px displacement (it used to be
-    /// capped at ±1). A unique dark mark sits 12px apart in cand vs ref over an
-    /// otherwise white field; the estimator returns ~(12,12), which is 3.84 CSS px
-    /// per axis -> magnitude 5.43 > the 4.0 CSS-px FAIL bound. With the OLD radius=1
-    /// this could only ever return (±1,±1) ~ 0.45 CSS px. (Sign follows the
-    /// convention: ref reappears in cand at +shift.)
     #[test]
-    fn best_local_shift_measures_a_12px_displacement() {
-        let (w, h) = (64u32, 64u32);
-        let mut reference = white(w, h);
-        let mut cand = white(w, h);
-        // A 3x3 dark mark: ref at (20,20), cand at (32,32) (= +12,+12).
-        for dy in 0..3 {
-            for dx in 0..3 {
-                reference.put_pixel(20 + dx, 20 + dy, Rgba([0, 0, 0, 255]));
-                cand.put_pixel(32 + dx, 32 + dy, Rgba([0, 0, 0, 255]));
-            }
-        }
-        // Sample the mark's top-left ref pixel so the nearest cand-black is the full
-        // +12,+12 away (an interior ref pixel could match a nearer cand-black edge).
-        let (sx, sy) = best_local_shift(&cand, &reference, 20, 20).expect("a shift must be found");
-        assert_eq!(
-            (sx, sy),
-            (12, 12),
-            "the estimator must measure the full 12px displacement"
-        );
-        let css = (sx as f64 / CSS_PX, sy as f64 / CSS_PX);
-        let mag = (css.0 * css.0 + css.1 * css.1).sqrt();
+    fn color_ramp_proof_requires_a_supermajority_and_bounded_remainder() {
         assert!(
-            mag > 4.0,
-            "12px displacement = {mag:.2} CSS px must exceed the 4.0 FAIL bound"
-        );
-    }
-
-    /// Tie-break: on a perfectly SYMMETRIC field (every neighbour identical to the
-    /// centre), all offsets tie on colour delta, so the estimator must return the
-    /// CENTRE (0,0) — NOT the old strict-min (-radius,-radius) that fabricated a
-    /// diagonal shift (review #7).
-    #[test]
-    fn best_local_shift_ties_resolve_to_centre() {
-        let (w, h) = (40u32, 40u32);
-        let grey = Rgba([128, 128, 128, 255]);
-        let reference = ImageBuffer::from_pixel(w, h, grey);
-        let cand = ImageBuffer::from_pixel(w, h, grey);
-        let (sx, sy) = best_local_shift(&cand, &reference, 20, 20).expect("a shift must be found");
-        assert_eq!(
-            (sx, sy),
-            (0, 0),
-            "a symmetric field must yield the centre offset, not (-1,-1)"
-        );
-    }
-
-    /// End-to-end: a gentle grey gradient translated by 12px produces GeomShift
-    /// pixels (each ref tone reappears APPROXIMATELY within EDGE_JITTER_PX, so the
-    /// pixel is admitted GeomShift, but its EXACT match lies 12px away). The revived
-    /// estimator measures the 12px displacement, so `shift_max_css` clears the FAIL
-    /// bound — the gate is ALIVE end-to-end (it was structurally unreachable before).
-    #[test]
-    fn shift_gate_fires_on_a_translated_gradient() {
-        use super::super::super::geom::content_mask;
-        use super::super::classify::classify_pixels;
-        use super::super::masks::structural_masks;
-        use super::super::tally::aggregate;
-
-        let (w, h) = (160u32, 120u32);
-        // A 2D grey ramp (varies in BOTH axes so a +12,+12 translation is recoverable
-        // on both, not just x). Slope ≈1.2 raw/px/axis is the narrow window where a
-        // SAME-position delta EXCEEDS t_match (so the pixel is not a Match) yet a
-        // ±2px neighbour stays WITHIN it (so the pixel is ADMITTED as GeomShift):
-        // same = 24·s ≈ 28.8 raw (YIQ ≈ 419 > t_match≈352); within-2 = 20·s ≈ 24 raw
-        // (YIQ ≈ 291 < t_match). best_local_shift then finds the EXACT match 12px away.
-        let val = |x: i32, y: i32| -> u8 {
-            (60.0 + 1.2 * x as f64 + 1.2 * y as f64)
-                .round()
-                .clamp(0.0, 255.0) as u8
-        };
-        let mut reference = white(w, h);
-        let mut cand = white(w, h);
-        for y in 10..h - 10 {
-            for x in 10..w - 10 {
-                let r = val(x as i32, y as i32);
-                let c = val(x as i32 - 12, y as i32 - 12); // candidate translated +12,+12
-                reference.put_pixel(x, y, Rgba([r, r, r, 255]));
-                cand.put_pixel(x, y, Rgba([c, c, c, 255]));
+            ColorRampProof {
+                strict_proven: 75,
+                total: 100,
+                ..Default::default()
             }
-        }
-        let mask_c = content_mask(&cand);
-        let mask_r = content_mask(&reference);
-        let masks = structural_masks(&cand, &reference);
-        let cm = classify_pixels(&cand, &reference, &mask_c, &mask_r, &masks);
-        let regions = segment(&cm, &cand, &reference, &masks);
-        let tally = aggregate(&cm, &regions, [0; 4], &mask_c, &mask_r, &cand, &reference);
+            .covers_component()
+        );
         assert!(
-            tally.shift_max_css > 4.0,
-            "a 12px-translated gradient must drive shift_max_css past the FAIL bound, got {:.3}",
-            tally.shift_max_css
+            !ColorRampProof {
+                strict_proven: 74,
+                total: 100,
+                ..Default::default()
+            }
+            .covers_component()
+        );
+        assert!(
+            !ColorRampProof {
+                strict_proven: 300,
+                total: 500,
+                ..Default::default()
+            }
+            .covers_component()
+        );
+        assert!(!ColorRampProof::default().has_direct_sample());
+    }
+
+    #[test]
+    fn diagnostic_workspace_reuses_component_and_cross_section_capacity() {
+        let mut workspace = ComponentPixels::default();
+        assert!(workspace.reset(&[0, 1, 4, 5], 4, 0, 0, 1, 1));
+        let component_capacity = workspace.members.capacity();
+
+        assert!(workspace.reset(&[2, 6], 4, 2, 0, 2, 1));
+        assert_eq!(workspace.members.capacity(), component_capacity);
+        assert!(workspace.contains(2, 0));
+        assert!(workspace.contains(2, 1));
+
+        let mut diagnostics = super::RegionDiagnostics::default();
+        assert!(diagnostics.reset_cross_sections(4));
+        let cross_section_capacity = diagnostics.cross_sections.capacity();
+        assert!(diagnostics.reset_cross_sections(2));
+        assert_eq!(
+            diagnostics.cross_sections.capacity(),
+            cross_section_capacity
         );
     }
 }

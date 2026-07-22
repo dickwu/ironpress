@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border image background nested and replaced elements</title>
+<style>
+  @page { size: 320px 320px; margin: 0; }
+  html, body { background: #fff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { padding: 16px; }
+  .outer {
+    width: 288px;
+    height: 72px;
+    padding: 12px;
+    background: linear-gradient(to bottom, #fff3b0, #90e0ef);
+    border: 8px solid #d00000;
+    border-image: linear-gradient(to right, #7209b7, #f72585, #4cc9f0) 1;
+  }
+  .inner {
+    width: 144px;
+    height: 32px;
+    background: #f8f9fa;
+    border: 6px solid #ff0000;
+    border-image: linear-gradient(135deg, #2a9d8f, #ffbe0b) 1;
+  }
+  .item {
+    width: 96px;
+    height: 48px;
+    margin-top: 16px;
+    background: linear-gradient(to right, #e9ecef, #ced4da);
+    border: 7px solid #ff0000;
+    border-image: linear-gradient(to bottom, #3a0ca3, #4cc9f0) 1;
+  }
+  img {
+    display: block;
+    width: 64px;
+    height: 48px;
+    margin-top: 16px;
+    background: #f1faee;
+    border: 7px solid #ff0000;
+    border-image: linear-gradient(to right, #e63946, #457b9d) 1;
+  }
+</style>
+</head>
+<body>
+  <div class="outer"><div class="inner"></div></div>
+  <div class="item"></div>
+  <img alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII=">
+</body>
+</html>

@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <title>probe border box</title>
 <style>
-  @page { size: 277px 141px; margin: 0; }
+  @page { size: 280px 144px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
-  /* Substrate canary: one box with a thick solid border and a
-     transparent fill. Tests border paint in isolation. */
+  /* Exact-output canary: one known thick solid border. A mismatch measures
+     emitted PDF stroke/edge coverage; it is not, by itself, evidence that the
+     CSS border-box geometry is wrong. */
   .box {
     width: 200px;
     height: 140px;

@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>page context text cascade</title><style>
+@page {
+  size: 184px 120px;
+  margin: 20px 0 0;
+  font-family: ParitySans;
+  font-size: 16px;
+  line-height: 1.5;
+  @top-center { content: "BASE"; }
+}
+@page :first {
+  font-size: 20px;
+  @top-center { content: "FIRST"; }
+}
+html { font-family: ParitySerif; font-size: 10px; line-height: 1; }
+* { margin: 0; box-sizing: border-box; }
+.p { height: 100px; background: #dbeafe; }
+.q { height: 100px; background: #bbf7d0; }
+</style></head><body><div class="p"></div><div class="q"></div></body></html>

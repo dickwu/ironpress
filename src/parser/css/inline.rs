@@ -1,5 +1,5 @@
 use super::{
-    CssValue, StyleMap,
+    BackgroundLayerSource, CssValue, StyleMap,
     imports::extract_svg_data_uri,
     is_css_wide_keyword,
     lightning::parse_inline_style_with_lightning,
@@ -10,41 +10,13 @@ use super::{
     },
 };
 
+mod border_images;
+
+use border_images::*;
+
 /// Parse an inline CSS style string (e.g. "color: red; font-size: 14px").
 pub fn parse_inline_style(style: &str) -> StyleMap {
-    let legacy = parse_inline_style_legacy(style);
-    let Some(mut parsed) = parse_inline_style_with_lightning(style) else {
-        return legacy;
-    };
-
-    reconcile_legacy_value_forms(&mut parsed, &legacy);
-    parsed
-}
-
-pub(crate) fn parse_inline_style_legacy(style: &str) -> StyleMap {
-    let mut map = StyleMap::new();
-
-    for declaration in style
-        .split(';')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let Some((prop, val)) = declaration.split_once(':') else {
-            continue;
-        };
-
-        let raw_prop = prop.trim();
-        let val = val.trim();
-        let (val, is_important) = if let Some(stripped) = val.strip_suffix("!important") {
-            (stripped.trim_end(), true)
-        } else {
-            (val, false)
-        };
-
-        apply_declaration(&mut map, raw_prop, val, is_important);
-    }
-
-    map
+    parse_inline_style_with_lightning(style).unwrap_or_default()
 }
 
 pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, is_important: bool) {
@@ -60,8 +32,20 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         prop = "background-clip".to_string();
     } else if prop == "-webkit-text-fill-color" {
         prop = "color".to_string();
+    } else if prop == "font-width" {
+        // CSS Fonts 4 makes `font-stretch` a legacy alias of `font-width`.
+        // Keep one canonical longhand so source order and !important cascade
+        // exactly as they do for a single property.
+        prop = "font-stretch".to_string();
     } else if let Some(unprefixed) = prop.strip_prefix("-webkit-mask") {
         prop = format!("mask{unprefixed}");
+        // A vendor declaration is not the standard property. Retain it as a
+        // compatibility fallback only when this declaration block did not
+        // author the corresponding unprefixed property; otherwise a later
+        // `-webkit-mask-*` must not replace the Paged CSS semantics.
+        if map.get(&prop).is_some() {
+            return;
+        }
     }
     let prop = prop;
     if (prop == "margin" || prop == "padding") && !prop.contains('-') {
@@ -83,8 +67,7 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         let trimmed = val.trim();
         let lower = trimmed.to_ascii_lowercase();
         if is_css_wide_keyword(&lower) {
-            clear_background_shorthand_keys(map);
-            map.set_with_importance("background", CssValue::Keyword(lower), is_important);
+            apply_background_css_wide_keyword(map, &lower, is_important);
             return;
         }
 
@@ -92,21 +75,18 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         // (custom properties resolve in the cascade). Defer it as a
         // background-color Var so computed-time var resolution handles it.
         if let Some(var_val) = parse_var_function(trimmed) {
-            clear_background_shorthand_keys(map);
             map.set_with_importance("background-color", var_val, is_important);
             return;
         }
 
         let mut parsed = StyleMap::new();
         if parse_background_shorthand(trimmed, &mut parsed, is_important) {
-            clear_background_shorthand_keys(map);
             map.merge(&parsed);
             return;
         }
     }
 
     if prop == "background-image" {
-        clear_background_image_keys(map);
         if apply_background_image_value(map, val.trim(), is_important) {
             return;
         }
@@ -134,11 +114,77 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
     }
 
     if prop == "border-image" {
+        if let Some((source, slices, widths, outsets, repeats)) = split_border_image_shorthand(val)
+        {
+            map.set_with_importance(
+                "border-image-source",
+                CssValue::Keyword(source),
+                is_important,
+            );
+            map.set_with_importance(
+                "border-image-slice",
+                CssValue::Keyword(slices),
+                is_important,
+            );
+            map.set_with_importance(
+                "border-image-width",
+                CssValue::Keyword(widths),
+                is_important,
+            );
+            map.set_with_importance(
+                "border-image-outset",
+                CssValue::Keyword(outsets),
+                is_important,
+            );
+            map.set_with_importance(
+                "border-image-repeat",
+                CssValue::Keyword(repeats),
+                is_important,
+            );
+        }
+        return;
+    }
+
+    if matches!(
+        prop.as_str(),
+        "border-image-source"
+            | "border-image-slice"
+            | "border-image-width"
+            | "border-image-outset"
+            | "border-image-repeat"
+    ) {
+        if !border_image_longhand_is_valid(&prop, val) {
+            return;
+        }
         map.set_with_importance(
-            "border-image",
+            &prop,
             CssValue::Keyword(val.trim().to_string()),
             is_important,
         );
+        return;
+    }
+
+    // CSS Backgrounds 3 makes `border-image` a reset-only subproperty of the
+    // `border` shorthand. Expanding that reset here preserves declaration
+    // order and `!important` in the same winner map as explicit border-image
+    // longhands.
+    if prop == "border"
+        && let Some(css_value) = parse_property_value(&prop, val)
+    {
+        map.set_with_importance(&prop, css_value, is_important);
+        for (property, initial) in [
+            ("border-image-source", "none"),
+            ("border-image-slice", "100%"),
+            ("border-image-width", "1"),
+            ("border-image-outset", "0"),
+            ("border-image-repeat", "stretch"),
+        ] {
+            map.set_with_importance(
+                property,
+                CssValue::Keyword(initial.to_string()),
+                is_important,
+            );
+        }
         return;
     }
 
@@ -147,33 +193,175 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
     }
 }
 
-fn clear_background_image_keys(map: &mut StyleMap) {
-    for key in [
-        "background-image",
-        "background-svg",
-        "background-gradient",
-        "background-radial-gradient",
-        "background-conic-gradient",
-        "background-layer-slots",
-    ] {
-        map.remove(key);
+/// Split `border-image` into its independent longhands before
+/// cascading. Shorthand expansion is necessary because each longhand has its
+/// own cascade slot and the shorthand resets omitted components to their
+/// initial values.
+pub(super) fn split_border_image_shorthand(
+    value: &str,
+) -> Option<(String, String, String, String, String)> {
+    let mut source = None;
+    let mut repeats = Vec::new();
+    let mut geometry = vec![Vec::new()];
+    for token in tokenize_border_image(value)? {
+        match token {
+            BorderImageToken::Slash => {
+                if geometry.last().is_none_or(Vec::is_empty) || geometry.len() == 3 {
+                    return None;
+                }
+                geometry.push(Vec::new());
+            }
+            BorderImageToken::Word(word) if is_border_image_source(&word) => {
+                if source.replace(word).is_some() {
+                    return None;
+                }
+            }
+            BorderImageToken::Word(word) if is_border_image_repeat_keyword(&word) => {
+                repeats.push(word);
+                if repeats.len() > 2 {
+                    return None;
+                }
+            }
+            BorderImageToken::Word(word) => geometry.last_mut()?.push(word),
+        }
     }
+    if geometry.last().is_none_or(Vec::is_empty) && geometry.len() > 1 {
+        return None;
+    }
+    let component = |index: usize, fallback: &str| {
+        geometry
+            .get(index)
+            .filter(|values| !values.is_empty())
+            .map(|values| values.join(" "))
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    let components = (
+        source.unwrap_or_else(|| "none".to_string()),
+        component(0, "100%"),
+        component(1, "1"),
+        component(2, "0"),
+        if repeats.is_empty() {
+            "stretch".to_string()
+        } else {
+            repeats.join(" ")
+        },
+    );
+    let valid = [
+        ("border-image-source", components.0.as_str()),
+        ("border-image-slice", components.1.as_str()),
+        ("border-image-width", components.2.as_str()),
+        ("border-image-outset", components.3.as_str()),
+        ("border-image-repeat", components.4.as_str()),
+    ]
+    .into_iter()
+    .all(|(property, value)| border_image_longhand_is_valid(property, value));
+    valid.then_some(components)
 }
 
-fn clear_background_shorthand_keys(map: &mut StyleMap) {
-    clear_background_image_keys(map);
+enum BorderImageToken {
+    Word(String),
+    Slash,
+}
+
+fn tokenize_border_image(value: &str) -> Option<Vec<BorderImageToken>> {
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut escaped = false;
+    let flush = |word: &mut String, tokens: &mut Vec<BorderImageToken>| {
+        if !word.is_empty() {
+            tokens.push(BorderImageToken::Word(std::mem::take(word)));
+        }
+    };
+    for ch in value.trim().chars() {
+        if escaped {
+            word.push(ch);
+            escaped = false;
+            continue;
+        }
+        if quote.is_some() && ch == '\\' {
+            word.push(ch);
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            word.push(ch);
+            if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => {
+                quote = Some(ch);
+                word.push(ch);
+            }
+            '(' => {
+                depth = depth.checked_add(1)?;
+                word.push(ch);
+            }
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                word.push(ch);
+            }
+            '/' if depth == 0 => {
+                flush(&mut word, &mut tokens);
+                tokens.push(BorderImageToken::Slash);
+            }
+            ch if depth == 0 && ch.is_whitespace() => flush(&mut word, &mut tokens),
+            _ => word.push(ch),
+        }
+    }
+    if depth != 0 || quote.is_some() || escaped {
+        return None;
+    }
+    flush(&mut word, &mut tokens);
+    (!tokens.is_empty()).then_some(tokens)
+}
+
+fn is_border_image_source(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower == "none"
+        || [
+            "url(",
+            "linear-gradient(",
+            "repeating-linear-gradient(",
+            "radial-gradient(",
+            "repeating-radial-gradient(",
+            "conic-gradient(",
+            "repeating-conic-gradient(",
+            "image-set(",
+            "-webkit-image-set(",
+            "cross-fade(",
+            "element(",
+            "var(",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn is_border_image_repeat_keyword(value: &str) -> bool {
+    ["stretch", "repeat", "round", "space"]
+        .iter()
+        .any(|keyword| value.eq_ignore_ascii_case(keyword))
+}
+
+fn apply_background_css_wide_keyword(map: &mut StyleMap, keyword: &str, is_important: bool) {
+    // CSS shorthands participate in the cascade as their longhands. Keeping a
+    // synthetic `background` winner would allow lower-priority longhands to
+    // survive beside it, so expand CSS-wide keywords at the declaration edge.
     for key in [
-        "background",
         "background-color",
+        "background-image",
         "background-size",
         "background-repeat",
         "background-position",
         "background-origin",
         "background-clip",
         "background-attachment",
-        "border-image",
     ] {
-        map.remove(key);
+        map.set_with_importance(key, CssValue::Keyword(keyword.to_string()), is_important);
     }
 }
 
@@ -229,161 +417,65 @@ fn split_top_level_commas(val: &str) -> Vec<String> {
     parts
 }
 
-/// The paint slot a single `background-image` layer maps to. The data model
-/// carries one raster/SVG slot and one gradient slot, so each comma-separated
-/// layer is classified into one of these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BackgroundLayerSlot {
-    /// A raster (`url(...)`) or SVG (`data:image/svg+xml`) image layer.
-    Raster,
-    /// A `linear-gradient(...)` or `radial-gradient(...)` layer.
-    Gradient,
-    /// A `none` layer (occupies a list position but paints nothing).
-    None,
-}
-
-impl BackgroundLayerSlot {
-    fn as_str(self) -> &'static str {
-        match self {
-            BackgroundLayerSlot::Raster => "raster",
-            BackgroundLayerSlot::Gradient => "gradient",
-            BackgroundLayerSlot::None => "none",
-        }
-    }
-}
-
 /// Apply a `background-image` value, supporting multiple comma-separated layers.
 ///
-/// Each layer is parsed independently via [`apply_single_background_image_value`].
-/// The data model carries a single raster/SVG layer (`background-image` /
-/// `background-svg`) and a single gradient layer (`background-gradient` /
-/// `background-radial-gradient`) separately, so a `url(...), linear-gradient(...)`
-/// list can populate both keys. Per CSS the first listed layer paints on top,
-/// which matches the renderer's gradient-then-raster paint order.
-///
-/// When more than one layer is present, the slot of each list position is
-/// recorded in the `background-layer-slots` key (a comma-joined keyword list,
-/// e.g. `raster,gradient`). The style cascade uses that mapping to assign the
-/// matching comma-separated `background-size` / `-position` / `-repeat` entry to
-/// each slot.
+/// The ordered list is one typed property value. Internal raster/gradient/SVG
+/// implementation details must not become independent cascade properties: one
+/// later `background-image` declaration replaces the whole earlier list.
 ///
 /// Returns `true` if at least one layer was recognised and applied.
 fn apply_background_image_value(map: &mut StyleMap, value: &str, is_important: bool) -> bool {
-    let layers = split_top_level_commas(value);
-    if layers.len() <= 1 {
-        return apply_single_background_image_value(map, value, is_important).is_some();
+    let raw_layers = split_top_level_commas(value);
+    let mut sources = Vec::with_capacity(raw_layers.len());
+    for layer in raw_layers {
+        let Some(source) = parse_background_image_source(&layer) else {
+            return false;
+        };
+        sources.push(source);
     }
-
-    let mut applied = false;
-    let mut saw_raster = false;
-    let mut saw_gradient = false;
-    let mut first_none: Option<StyleMap> = None;
-    let mut slots: Vec<&'static str> = Vec::with_capacity(layers.len());
-    for layer in &layers {
-        let mut layer_map = StyleMap::new();
-        match apply_single_background_image_value(&mut layer_map, layer, is_important) {
-            Some(slot) => {
-                slots.push(slot.as_str());
-                applied = true;
-                match slot {
-                    BackgroundLayerSlot::Raster if !saw_raster => {
-                        map.merge(&layer_map);
-                        saw_raster = true;
-                    }
-                    BackgroundLayerSlot::Gradient if !saw_gradient => {
-                        map.merge(&layer_map);
-                        saw_gradient = true;
-                    }
-                    BackgroundLayerSlot::None if first_none.is_none() => {
-                        first_none = Some(layer_map);
-                    }
-                    _ => {}
-                }
-            }
-            None => slots.push(BackgroundLayerSlot::None.as_str()),
-        }
+    if sources.is_empty() {
+        return false;
     }
-    if applied {
-        if !saw_raster
-            && !saw_gradient
-            && let Some(none_map) = first_none
-        {
-            map.merge(&none_map);
-        }
-        map.set_with_importance(
-            "background-layer-slots",
-            CssValue::Keyword(slots.join(",")),
-            is_important,
-        );
-    }
-    applied
+    map.set_with_importance(
+        "background-image",
+        CssValue::BackgroundLayers(sources),
+        is_important,
+    );
+    true
 }
 
-/// Apply a single (non-comma-separated) `background-image` layer. Returns the
-/// paint slot it occupies, or `None` if the layer was not recognised.
-fn apply_single_background_image_value(
-    map: &mut StyleMap,
-    value: &str,
-    is_important: bool,
-) -> Option<BackgroundLayerSlot> {
+fn parse_background_image_source(value: &str) -> Option<BackgroundLayerSource> {
     let trimmed = value.trim();
     let lower = trimmed.to_ascii_lowercase();
 
     if lower.starts_with("linear-gradient(") || lower.starts_with("repeating-linear-gradient(") {
-        map.set_with_importance(
-            "background-gradient",
-            CssValue::Keyword(trimmed.to_string()),
-            is_important,
-        );
-        return Some(BackgroundLayerSlot::Gradient);
+        return Some(BackgroundLayerSource::Linear(trimmed.to_string()));
     }
 
     if lower.starts_with("radial-gradient(") || lower.starts_with("repeating-radial-gradient(") {
-        map.set_with_importance(
-            "background-radial-gradient",
-            CssValue::Keyword(trimmed.to_string()),
-            is_important,
-        );
-        return Some(BackgroundLayerSlot::Gradient);
+        return Some(BackgroundLayerSource::Radial(trimmed.to_string()));
     }
 
     if lower.starts_with("conic-gradient(") || lower.starts_with("repeating-conic-gradient(") {
-        map.set_with_importance(
-            "background-conic-gradient",
-            CssValue::Keyword(trimmed.to_string()),
-            is_important,
-        );
-        return Some(BackgroundLayerSlot::Gradient);
+        return Some(BackgroundLayerSource::Conic(trimmed.to_string()));
     }
 
     if lower == "none" {
-        map.set_with_importance(
-            "background-image",
-            CssValue::Keyword("none".to_string()),
-            is_important,
-        );
-        return Some(BackgroundLayerSlot::None);
+        return Some(BackgroundLayerSource::None);
     }
 
     if let Some(svg_text) = extract_svg_data_uri(trimmed) {
-        map.set_with_importance("background-svg", CssValue::Keyword(svg_text), is_important);
-        return Some(BackgroundLayerSlot::Raster);
+        return Some(BackgroundLayerSource::Svg(svg_text));
     }
 
     // A non-SVG `url(...)` is a raster image layer. Preserve the full `url(...)`
     // token (rather than just the path) so the raster builder can resolve it.
     if let Some(url) = extract_image_set_url(trimmed) {
-        map.set_with_importance("background-image", CssValue::Keyword(url), is_important);
-        return Some(BackgroundLayerSlot::Raster);
+        return Some(BackgroundLayerSource::Raster(url));
     }
 
     if lower.starts_with("url(") {
-        map.set_with_importance(
-            "background-image",
-            CssValue::Keyword(trimmed.to_string()),
-            is_important,
-        );
-        return Some(BackgroundLayerSlot::Raster);
+        return Some(BackgroundLayerSource::Raster(trimmed.to_string()));
     }
 
     None
@@ -418,7 +510,7 @@ fn apply_background_shorthand_defaults(map: &mut StyleMap, is_important: bool) {
     );
     map.set_with_importance(
         "background-image",
-        CssValue::Keyword("none".to_string()),
+        CssValue::BackgroundLayers(vec![BackgroundLayerSource::None]),
         is_important,
     );
     map.set_with_importance(
@@ -871,70 +963,19 @@ fn tokenize_background_value(val: &str) -> Vec<String> {
     tokens
 }
 
-fn reconcile_legacy_value_forms(parsed: &mut StyleMap, legacy: &StyleMap) {
-    for (key, value) in &legacy.properties {
-        let prefer_legacy = parsed
-            .properties
-            .get(key)
-            .is_some_and(|parsed_value| prefer_legacy_value_form(key, parsed_value, value));
-        if !parsed.properties.contains_key(key) || prefer_legacy {
-            parsed.set_with_importance(key, value.clone(), legacy.is_important(key));
-        }
-    }
-}
-
-fn prefer_legacy_value_form(key: &str, parsed: &CssValue, legacy: &CssValue) -> bool {
-    matches!(
-        key,
-        "font-family"
-            | "filter"
-            | "border"
-            | "border-top"
-            | "border-right"
-            | "border-bottom"
-            | "border-left"
-            | "outline"
-            | "background-image"
-            | "background-size"
-            | "background-position"
-    ) || prefers_legacy_relative_length(key, parsed, legacy)
-}
-
-fn prefers_legacy_relative_length(key: &str, parsed: &CssValue, legacy: &CssValue) -> bool {
-    matches!((parsed, legacy), (CssValue::Length(_), CssValue::Number(_)))
-        && matches!(
-            key,
-            "width"
-                | "height"
-                | "max-width"
-                | "min-width"
-                | "max-height"
-                | "min-height"
-                | "margin-top"
-                | "margin-right"
-                | "margin-bottom"
-                | "margin-left"
-                | "padding-top"
-                | "padding-right"
-                | "padding-bottom"
-                | "padding-left"
-                | "top"
-                | "left"
-                | "gap"
-                | "grid-gap"
-                | "column-gap"
-                | "border-width"
-                | "border-radius"
-                | "text-indent"
-                | "letter-spacing"
-                | "word-spacing"
-                | "border-spacing"
-                | "border-spacing-horizontal"
-                | "border-spacing-vertical"
-        )
-}
-
 fn expand_box_shorthand(map: &mut StyleMap, prop: &str, val: &str, is_important: bool) {
+    let keyword = val.trim().to_ascii_lowercase();
+    if is_css_wide_keyword(&keyword) {
+        for side in ["top", "right", "bottom", "left"] {
+            map.set_with_importance(
+                &format!("{prop}-{side}"),
+                CssValue::Keyword(keyword.clone()),
+                is_important,
+            );
+        }
+        return;
+    }
+
     let parts: Vec<&str> = val.split_whitespace().collect();
     if parts.len() > 1 {
         let (top, right, bottom, left) = match parts.as_slice() {
@@ -984,8 +1025,10 @@ fn expand_box_shorthand(map: &mut StyleMap, prop: &str, val: &str, is_important:
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_declaration, parse_inline_style, split_top_level_commas};
-    use crate::parser::css::{CssValue, StyleMap};
+    use super::{
+        apply_declaration, parse_inline_style, split_border_image_shorthand, split_top_level_commas,
+    };
+    use crate::parser::css::{BackgroundLayerSource, CssValue, SpecifiedColor, StyleMap};
 
     #[test]
     fn inline_relative_length_preserves_em_units() {
@@ -1001,7 +1044,10 @@ mod tests {
         assert!(
             matches!(style.get("font-size"), Some(CssValue::Length(v)) if (*v - 12.0).abs() < 0.1)
         );
-        assert!(matches!(style.get("color"), Some(CssValue::Color(c)) if c.r == 255));
+        assert!(matches!(
+            style.get("color"),
+            Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.r == 255.0
+        ));
         assert!(
             matches!(style.get("text-align"), Some(CssValue::Keyword(value)) if value == "center")
         );
@@ -1023,6 +1069,18 @@ mod tests {
     }
 
     #[test]
+    fn box_shorthand_css_wide_keyword_expands_to_longhands() {
+        let padding = parse_inline_style("padding: inherit");
+        for side in ["top", "right", "bottom", "left"] {
+            assert!(matches!(
+                padding.get(&format!("padding-{side}")),
+                Some(CssValue::Keyword(value)) if value == "inherit"
+            ));
+        }
+        assert!(padding.get("padding").is_none());
+    }
+
+    #[test]
     fn parse_font_keywords() {
         let style = parse_inline_style(
             "font-weight: bold; font-style: italic; font-family: 'Times New Roman', serif",
@@ -1035,7 +1093,7 @@ mod tests {
         );
         assert!(matches!(
             style.get("font-family"),
-            Some(CssValue::Keyword(value)) if value == "'Times New Roman', serif"
+            Some(CssValue::Keyword(value)) if value == "Times New Roman, serif"
         ));
     }
 
@@ -1045,7 +1103,7 @@ mod tests {
             "border: 1px solid black; border-top: 1pt solid red; border-width: 2pt; outline-color: blue",
         );
         assert!(
-            matches!(style.get("border"), Some(CssValue::Keyword(value)) if value == "1px solid black")
+            matches!(style.get("border"), Some(CssValue::Keyword(value)) if value == "1px solid #000")
         );
         assert!(
             matches!(style.get("border-top"), Some(CssValue::Keyword(value)) if value == "1pt solid red")
@@ -1053,7 +1111,10 @@ mod tests {
         assert!(
             matches!(style.get("border-width"), Some(CssValue::Length(v)) if (*v - 2.0).abs() < 0.1)
         );
-        assert!(matches!(style.get("outline-color"), Some(CssValue::Color(c)) if c.b == 255));
+        assert!(matches!(
+            style.get("outline-color"),
+            Some(CssValue::Color(SpecifiedColor::Absolute(c))) if c.b == 255.0
+        ));
     }
 
     #[test]
@@ -1091,8 +1152,16 @@ mod tests {
     fn parse_background_gradients() {
         let linear = parse_inline_style("background-image: linear-gradient(red, blue)");
         let radial = parse_inline_style("background: radial-gradient(circle, white, black)");
-        assert!(linear.get("background-gradient").is_some());
-        assert!(radial.get("background-radial-gradient").is_some());
+        assert!(matches!(
+            linear.get("background-image"),
+            Some(CssValue::BackgroundLayers(layers))
+                if matches!(layers.as_slice(), [BackgroundLayerSource::Linear(_)])
+        ));
+        assert!(matches!(
+            radial.get("background-image"),
+            Some(CssValue::BackgroundLayers(layers))
+                if matches!(layers.as_slice(), [BackgroundLayerSource::Radial(_)])
+        ));
     }
 
     #[test]
@@ -1111,6 +1180,210 @@ mod tests {
         assert!(
             matches!(style.get("width"), Some(CssValue::Percentage(v)) if (*v - 40.0).abs() < 0.01)
         );
+    }
+
+    #[test]
+    fn invalid_later_declaration_is_discarded_without_replacing_valid_value() {
+        enum Expected<'a> {
+            Keyword(&'a str),
+            Number(f32),
+            Length(f32),
+        }
+
+        fn assert_expected(map: &StyleMap, property: &str, expected: &Expected<'_>) {
+            match (map.get(property), expected) {
+                (Some(CssValue::Keyword(actual)), Expected::Keyword(expected)) => {
+                    assert_eq!(actual, expected, "unexpected value for {property}");
+                }
+                (Some(CssValue::Number(actual)), Expected::Number(expected)) => {
+                    assert!(
+                        (*actual - *expected).abs() < f32::EPSILON,
+                        "unexpected value for {property}: {actual}"
+                    );
+                }
+                (Some(CssValue::Length(actual)), Expected::Length(expected)) => {
+                    assert!(
+                        (*actual - *expected).abs() < f32::EPSILON,
+                        "unexpected value for {property}: {actual}"
+                    );
+                }
+                (actual, _) => panic!("unexpected parsed value for {property}: {actual:?}"),
+            }
+        }
+
+        let cases = [
+            (
+                "justify-content",
+                "center",
+                "definitely-invalid",
+                Expected::Keyword("center"),
+            ),
+            (
+                "align-items",
+                "center",
+                "definitely-invalid",
+                Expected::Keyword("center"),
+            ),
+            (
+                "overflow",
+                "hidden",
+                "definitely-invalid",
+                Expected::Keyword("hidden"),
+            ),
+            ("flex-grow", "2", "-1", Expected::Number(2.0)),
+            (
+                "filter",
+                "blur(4px)",
+                "blur(-1px)",
+                Expected::Keyword("blur(4px)"),
+            ),
+            ("column-count", "3", "2.5", Expected::Number(3.0)),
+            (
+                "background-repeat",
+                "no-repeat",
+                "definitely-invalid",
+                Expected::Keyword("no-repeat"),
+            ),
+            ("border-radius", "7px", "9", Expected::Length(5.25)),
+            ("border-top-left-radius", "8px", "11", Expected::Length(6.0)),
+            (
+                "column-rule-style",
+                "dashed",
+                "zigzag",
+                Expected::Keyword("dashed"),
+            ),
+            ("column-rule-width", "4px", "-2px", Expected::Length(3.0)),
+            (
+                "column-rule",
+                "4px double red",
+                "2px dashed red extra",
+                Expected::Keyword("4px double red"),
+            ),
+        ];
+
+        for (property, valid, invalid, expected) in cases {
+            let declarations = format!("{property}: {valid}; {property}: {invalid}");
+
+            let inline = parse_inline_style(&declarations);
+            assert_expected(&inline, property, &expected);
+            assert!(
+                parse_inline_style(&format!("{property}: {invalid}"))
+                    .get(property)
+                    .is_none(),
+                "invalid inline declaration was retained for {property}"
+            );
+
+            let rules =
+                crate::parser::css::parse_stylesheet(&format!(".target {{ {declarations} }}"));
+            assert_eq!(rules.len(), 1, "stylesheet rule was lost for {property}");
+            assert_expected(&rules[0].declarations, property, &expected);
+        }
+
+        // GCPM's `string-set` is intentionally supported by ironpress but is
+        // not a typed property in this lightningcss release. Unknown-property
+        // ingestion must remain available without reopening the known-property
+        // `Unparsed` loophole above.
+        let ironpress_only = "string-set: chapter content()";
+        let inline = parse_inline_style(ironpress_only);
+        assert!(matches!(
+            inline.get("string-set"),
+            Some(CssValue::Keyword(value)) if value == "chapter content()"
+        ));
+        let rules =
+            crate::parser::css::parse_stylesheet(&format!(".target {{ {ironpress_only} }}"));
+        assert!(matches!(
+            rules[0].declarations.get("string-set"),
+            Some(CssValue::Keyword(value)) if value == "chapter content()"
+        ));
+    }
+
+    #[test]
+    fn invalid_source_spelling_is_rejected_before_lightning_normalization() {
+        let cases = [
+            ("transform", "translate(40px, 0)", "translate(40, 0)"),
+            ("transform", "rotate(45deg)", "rotate(45)"),
+            (
+                "box-shadow",
+                "22px 0 0 #c62828",
+                "22px 0 0 #c62828, 12 0 #1565c0",
+            ),
+            ("filter", "blur(8px)", "blur(8)"),
+            ("background-size", "42px", "42"),
+            ("background-position", "5px", "5"),
+        ];
+
+        for (property, valid, invalid) in cases {
+            let valid_inline = parse_inline_style(&format!("{property}: {valid}"));
+            let expected = format!("{:?}", valid_inline.get(property));
+            assert_ne!(
+                expected, "None",
+                "valid declaration was lost for {property}"
+            );
+
+            let combined =
+                parse_inline_style(&format!("{property}: {valid}; {property}: {invalid}"));
+            assert_eq!(
+                format!("{:?}", combined.get(property)),
+                expected,
+                "invalid inline source replaced {property}"
+            );
+            assert!(
+                parse_inline_style(&format!("{property}: {invalid}"))
+                    .get(property)
+                    .is_none(),
+                "invalid inline source survived for {property}"
+            );
+
+            let rules = crate::parser::css::parse_stylesheet(&format!(
+                ".target {{ {property}: {valid}; {property}: {invalid} }}"
+            ));
+            assert_eq!(
+                rules.len(),
+                1,
+                "valid stylesheet rule was lost for {property}"
+            );
+            assert_eq!(
+                format!("{:?}", rules[0].declarations.get(property)),
+                expected,
+                "invalid stylesheet source replaced {property}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_border_image_longhands_do_not_replace_prior_valid_declarations() {
+        for (property, valid, invalid) in [
+            (
+                "border-image-source",
+                "linear-gradient(red, blue)",
+                "paint(red)",
+            ),
+            ("border-image-slice", "17 fill", "-2"),
+            ("border-image-width", "3", "-1"),
+            ("border-image-outset", "2", "-1px"),
+            ("border-image-repeat", "round space", "round sideways"),
+        ] {
+            let valid_map = parse_inline_style(&format!("{property}: {valid}"));
+            let expected = format!("{:?}", valid_map.get(property));
+            assert_ne!(
+                expected, "None",
+                "valid declaration was lost for {property}"
+            );
+
+            let combined =
+                parse_inline_style(&format!("{property}: {valid}; {property}: {invalid}"));
+            assert_eq!(
+                format!("{:?}", combined.get(property)),
+                expected,
+                "invalid declaration replaced {property}",
+            );
+            assert!(
+                parse_inline_style(&format!("{property}: {invalid}"))
+                    .get(property)
+                    .is_none(),
+                "invalid declaration survived for {property}",
+            );
+        }
     }
 
     #[test]
@@ -1148,7 +1421,10 @@ mod tests {
         assert!(
             matches!(style.get("content"), Some(CssValue::Keyword(value)) if value == "\"a; b\"")
         );
-        assert!(matches!(style.get("color"), Some(CssValue::Color(color)) if color.r == 255));
+        assert!(matches!(
+            style.get("color"),
+            Some(CssValue::Color(SpecifiedColor::Absolute(color))) if color.r == 255.0
+        ));
     }
 
     #[test]
@@ -1248,8 +1524,12 @@ mod tests {
             "background-image: url(\"data:image/svg+xml,{svg}\")"
         ));
         assert!(
-            style.get("background-svg").is_some(),
-            "expected background-svg to be set from SVG data URI"
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [BackgroundLayerSource::Svg(_)])
+            ),
+            "expected a typed SVG background-image source"
         );
     }
 
@@ -1262,8 +1542,12 @@ mod tests {
             "background: url(\"data:image/svg+xml;base64,{svg_b64}\")"
         ));
         assert!(
-            style.get("background-svg").is_some(),
-            "expected background-svg from SVG data URI in background shorthand"
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [BackgroundLayerSource::Svg(_)])
+            ),
+            "expected a typed SVG source from the background shorthand"
         );
     }
 
@@ -1279,9 +1563,8 @@ mod tests {
 
     #[test]
     fn inline_background_image_layers_url_and_gradient() {
-        // A comma-separated `background-image` with a raster url() layer and a
-        // gradient layer should populate BOTH the raster and gradient keys
-        // (one raster + one gradient layer can coexist in the data model).
+        // A comma-separated `background-image` remains one ordered, atomic
+        // cascade value even though the renderer derives per-kind paint fields.
         // Use apply_declaration directly so the data-URI `;` is not split by
         // the legacy declaration tokenizer.
         let mut style = StyleMap::new();
@@ -1293,14 +1576,16 @@ mod tests {
             false,
         );
         assert!(
-            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v.contains("url(")),
-            "expected raster background-image layer to be captured: {:?}",
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [
+                        BackgroundLayerSource::Raster(_),
+                        BackgroundLayerSource::Linear(_)
+                    ])
+            ),
+            "expected one ordered raster/gradient value: {:?}",
             style.get("background-image")
-        );
-        assert!(
-            matches!(style.get("background-gradient"), Some(CssValue::Keyword(v)) if v.starts_with("linear-gradient(")),
-            "expected gradient background-image layer to be captured: {:?}",
-            style.get("background-gradient")
         );
     }
 
@@ -1314,20 +1599,21 @@ mod tests {
             false,
         );
         assert!(
-            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v == "url(top.png)"),
-            "single raster slot should retain the topmost CSS layer: {:?}",
-            style.get("background-image")
-        );
-        assert!(
-            matches!(style.get("background-layer-slots"), Some(CssValue::Keyword(v)) if v == "raster,raster"),
-            "slot list should still preserve both source layers"
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [
+                        BackgroundLayerSource::Raster(top),
+                        BackgroundLayerSource::Raster(bottom)
+                    ] if top == "url(top.png)" && bottom == "url(bottom.png)")
+            ),
+            "the atomic value should preserve both CSS layers in order"
         );
     }
 
     #[test]
     fn inline_background_image_single_layer_unchanged() {
-        // A single gradient layer must still parse exactly as before (no
-        // spurious background-image key).
+        // A single gradient is represented by the canonical property too.
         let mut style = StyleMap::new();
         apply_declaration(
             &mut style,
@@ -1336,13 +1622,32 @@ mod tests {
             false,
         );
         assert!(
-            matches!(style.get("background-gradient"), Some(CssValue::Keyword(v)) if v.starts_with("linear-gradient(")),
-            "single gradient layer should set background-gradient"
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [BackgroundLayerSource::Linear(value)]
+                        if value.starts_with("linear-gradient("))
+            ),
+            "single gradient should remain an atomic background-image value"
         );
-        assert!(
-            !matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v.contains("url(")),
-            "single gradient must not set a raster background-image"
+    }
+
+    #[test]
+    fn standard_mask_longhands_override_later_webkit_fallbacks() {
+        let style = parse_inline_style(
+            "mask-image: radial-gradient(circle, #000, transparent); \
+             mask-composite: subtract; \
+             -webkit-mask-image: linear-gradient(#000, transparent); \
+             -webkit-mask-composite: source-out",
         );
+        assert!(matches!(
+            style.get("mask-image"),
+            Some(CssValue::Keyword(value)) if value.starts_with("radial-gradient(")
+        ));
+        assert!(matches!(
+            style.get("mask-composite"),
+            Some(CssValue::Keyword(value)) if value == "subtract"
+        ));
     }
 
     #[test]
@@ -1356,8 +1661,15 @@ mod tests {
             false,
         );
         assert!(
-            matches!(style.get("background-layer-slots"), Some(CssValue::Keyword(v)) if v == "raster,gradient"),
-            "slot list should preserve layer order"
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [
+                        BackgroundLayerSource::Raster(_),
+                        BackgroundLayerSource::Linear(_)
+                    ])
+            ),
+            "the image value should preserve layer order"
         );
         assert!(
             matches!(style.get("background-position"), Some(CssValue::Keyword(v)) if v == "left top, right bottom"),
@@ -1380,7 +1692,7 @@ mod tests {
             style.get("background-clip")
         );
         assert!(
-            matches!(style.get("background-color"), Some(CssValue::Color(color)) if color.r == 0xfd && color.g == 0xd8 && color.b == 0x35),
+            matches!(style.get("background-color"), Some(CssValue::Color(SpecifiedColor::Absolute(color))) if color.r == 0xfd as f32 && color.g == 0xd8 as f32 && color.b == 0x35 as f32),
             "final-layer background-color should survive"
         );
     }
@@ -1464,12 +1776,160 @@ mod tests {
 
     #[test]
     fn inline_background_shorthand_css_wide_keyword() {
-        // background: inherit — exercises the css-wide-keyword branch
+        // A shorthand never becomes a synthetic cascade property.
         let style = parse_inline_style("background: inherit");
-        assert!(
-            matches!(style.get("background"), Some(CssValue::Keyword(v)) if v == "inherit"),
-            "background should be 'inherit'"
+        assert!(style.get("background").is_none());
+        for longhand in [
+            "background-color",
+            "background-image",
+            "background-size",
+            "background-repeat",
+            "background-position",
+            "background-origin",
+            "background-clip",
+            "background-attachment",
+        ] {
+            assert!(
+                matches!(style.get(longhand), Some(CssValue::Keyword(v)) if v == "inherit"),
+                "{longhand} should inherit"
+            );
+        }
+    }
+
+    #[test]
+    fn background_shorthand_respects_longhand_importance() {
+        let earlier_important =
+            parse_inline_style("background-size: cover !important; background: initial");
+        assert!(matches!(
+            earlier_important.get("background-size"),
+            Some(CssValue::Keyword(value)) if value == "cover"
+        ));
+        assert!(earlier_important.is_important("background-size"));
+
+        let later_important =
+            parse_inline_style("background-size: cover; background: initial !important");
+        assert!(matches!(
+            later_important.get("background-size"),
+            Some(CssValue::Keyword(value)) if value == "initial"
+        ));
+        assert!(later_important.is_important("background-size"));
+    }
+
+    #[test]
+    fn background_shorthand_does_not_reset_border_image() {
+        let style =
+            parse_inline_style("border-image: linear-gradient(red, blue) 1; background: none");
+        assert!(style.get("border-image-source").is_some());
+    }
+
+    #[test]
+    fn border_shorthand_resets_border_image_in_source_order() {
+        let reset =
+            parse_inline_style("border-image: linear-gradient(red, blue) 1; border: solid red");
+        assert!(matches!(
+            reset.get("border-image-source"),
+            Some(CssValue::Keyword(value)) if value == "none"
+        ));
+
+        let restored =
+            parse_inline_style("border: solid red; border-image: linear-gradient(red, blue) 1");
+        assert!(matches!(
+            restored.get("border-image-source"),
+            Some(CssValue::Keyword(value)) if value == "linear-gradient(red, blue)"
+        ));
+    }
+
+    #[test]
+    fn border_image_shorthand_expands_to_cascading_longhands() {
+        let style = parse_inline_style(
+            "border-image-width: 3 !important; border-image: linear-gradient(red, blue) 1",
         );
+        assert!(matches!(
+            style.get("border-image-source"),
+            Some(CssValue::Keyword(value)) if value == "linear-gradient(red, blue)"
+        ));
+        assert!(matches!(
+            style.get("border-image-slice"),
+            Some(CssValue::Keyword(value)) if value == "1"
+        ));
+        assert!(matches!(
+            style.get("border-image-width"),
+            Some(CssValue::Keyword(value)) if value == "3"
+        ));
+        assert!(matches!(
+            style.get("border-image-outset"),
+            Some(CssValue::Keyword(value)) if value == "0"
+        ));
+        assert!(matches!(
+            style.get("border-image-repeat"),
+            Some(CssValue::Keyword(value)) if value == "stretch"
+        ));
+        assert!(style.is_important("border-image-width"));
+    }
+
+    #[test]
+    fn border_image_shorthand_preserves_a_second_slash_outset() {
+        let style = parse_inline_style("border-image: linear-gradient(red, blue) 1 / 1 / 2");
+        assert!(
+            matches!(
+                style.get("border-image-outset"),
+                Some(CssValue::Keyword(value)) if value == "2"
+            ),
+            "{style:?}"
+        );
+    }
+
+    #[test]
+    fn border_image_shorthand_separates_its_two_axis_repeat_suffix() {
+        let style =
+            parse_inline_style("border-image: linear-gradient(red, blue) 1 / 1 / 2 repeat stretch");
+        assert!(matches!(
+            style.get("border-image-repeat"),
+            Some(CssValue::Keyword(value)) if value == "repeat stretch"
+        ));
+    }
+
+    #[test]
+    fn border_image_shorthand_defaults_omitted_components() {
+        let style = parse_inline_style("border-image: linear-gradient(red, blue)");
+        assert!(matches!(
+            style.get("border-image-slice"),
+            Some(CssValue::Keyword(value)) if value == "100%"
+        ));
+        assert!(matches!(
+            style.get("border-image-width"),
+            Some(CssValue::Keyword(value)) if value == "1"
+        ));
+        assert!(matches!(
+            style.get("border-image-outset"),
+            Some(CssValue::Keyword(value)) if value == "0"
+        ));
+    }
+
+    #[test]
+    fn border_image_shorthand_accepts_components_in_grammar_order_independently() {
+        let (source, slices, widths, outsets, repeats) = split_border_image_shorthand(
+            "round 12 fill / 2 / 3 url('data:image/png;base64,AAAA') stretch",
+        )
+        .expect("valid order-independent border-image shorthand");
+
+        assert_eq!(source, "url('data:image/png;base64,AAAA')");
+        assert_eq!(slices, "12 fill");
+        assert_eq!(widths, "2");
+        assert_eq!(outsets, "3");
+        assert_eq!(repeats, "round stretch");
+    }
+
+    #[test]
+    fn border_image_shorthand_can_reset_an_omitted_source_to_none() {
+        let (source, slices, widths, outsets, repeats) =
+            split_border_image_shorthand("15 / 2 repeat").expect("valid source-less shorthand");
+
+        assert_eq!(source, "none");
+        assert_eq!(slices, "15");
+        assert_eq!(widths, "2");
+        assert_eq!(outsets, "0");
+        assert_eq!(repeats, "repeat");
     }
 
     #[test]
@@ -1477,7 +1937,11 @@ mod tests {
         // background-image: none — exercises the "none" branch in apply_background_image_value
         let style = parse_inline_style("background-image: none");
         assert!(
-            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v == "none"),
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [BackgroundLayerSource::None])
+            ),
             "background-image: none should be stored"
         );
     }
@@ -1487,7 +1951,12 @@ mod tests {
         // background-image: url(...) — exercises the url( fallback in parse_background_shorthand
         let style = parse_inline_style("background: url(hero.png) no-repeat center");
         assert!(
-            matches!(style.get("background-image"), Some(CssValue::Keyword(v)) if v.starts_with("url(")),
+            matches!(
+                style.get("background-image"),
+                Some(CssValue::BackgroundLayers(layers))
+                    if matches!(layers.as_slice(), [BackgroundLayerSource::Raster(v)]
+                        if v.starts_with("url("))
+            ),
             "url() background image should be stored"
         );
         assert!(

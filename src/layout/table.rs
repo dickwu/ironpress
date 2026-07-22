@@ -1,102 +1,325 @@
-use crate::parser::css::{
-    AncestorInfo, CssRule, CssValue, SelectorContext, selector_matches_with_context, specificity,
+use crate::layout::cells::{
+    CellAlignment, CellBox, CellBoxModel, CellContent, CellPaint, TableCell,
+    TableCellHeightConstraint, TableCellSpan, TableCellState,
 };
+use crate::layout::elements::{
+    BoxModel, BoxPaint, Container, Image, InlineOffset, IntoLayoutNode, LayoutElement, LayoutNode,
+    LayoutSize, LayoutVisitor, LayoutVisitorMut, PageBreak, PaintGroup, Positioning,
+    SizeConstraints, Svg, Table, TableBoxDecoration, TableCells, TableFormatting,
+    TableFragmentGroup, TableFragmentation, TableInlineGeometry, TableRow, TableRowFlow, TextBlock,
+};
+use crate::layout::flow_metrics::BlockMargins;
+use crate::parser::css::{AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
+#[cfg(test)]
+use crate::style::computed::BorderStyle;
 use crate::style::computed::{
-    BorderCollapse, BorderStyle, BoxSizing, ComputedStyle, Display, FontStyle, FontWeight,
-    Position, TableLayout, TextAlign, VerticalAlign, Visibility, WhiteSpace,
-    compute_style_with_context,
+    BorderCollapse, BoxSizing, ComputedStyle, Display, TableLayout, VerticalAlign, Visibility,
+    WhiteSpace, compute_pseudo_element_style_with_font_metrics, compute_style_with_context,
+    compute_style_with_context_with_font_metrics,
 };
+use crate::style::font_metrics::FontMetrics;
+use crate::types::EdgeSizes;
+#[cfg(test)]
+use crate::types::PhysicalSide;
 use std::collections::HashMap;
 
 use super::context::{LayoutContext, LayoutEnv, ParentBox, Viewport};
+#[cfg(test)]
+use super::engine::LayoutBorderSide;
 use super::engine::{
-    CounterState, LayoutBorder, LayoutBorderSide, LayoutElement, PageBreakSide, TextLine, TextRun,
-    collects_as_inline_text, flatten_element, has_background_paint, recurses_as_layout_child,
+    CounterState, ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, TextLine,
+    TextRun, collects_as_inline_text, flatten_element, has_background_paint,
+    recurses_as_layout_child,
 };
-use super::paginate::{estimate_element_height, table_row_content_width};
+use super::helpers::{build_pseudo_block, pseudo_is_block_like};
+use super::inline_formatting::{
+    AnonymousInlineFormattingContext, GeneratedBox, GeneratedInlineContent,
+};
+#[cfg(test)]
+use super::paginate::estimate_element_height;
 use super::text::{
     TextWrapOptions, collapse_whitespace, estimate_word_width, expand_pre_tabs,
-    resolve_style_font_family, resolved_line_height_factor, wrap_text_runs,
+    measure_text_intrinsic_widths, parent_line_strut, push_styled_text_run, required_outer_width,
+    resolve_style_font_family, text_run_line_height_factor, used_font_size, wrap_text_runs,
+};
+
+mod collapsed_borders;
+#[cfg(test)]
+use collapsed_borders::{
+    BorderCandidate, CollapsedBorderOrigin, apply_table_winning_side, collapsed_border_winner,
+    collapsed_style_rank,
+};
+use collapsed_borders::{
+    CollapsedBorderSources, CollapsedBorderTrack, resolve_collapsed_border_grid,
 };
 
 const MAX_COLSPAN: usize = 1000;
 const MAX_ROWSPAN: usize = 65_534;
 
-/// A table cell ready for rendering.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct TableCell {
-    pub lines: Vec<TextLine>,
-    pub nested_rows: Vec<LayoutElement>,
-    pub bold: bool,
-    pub background_color: Option<(f32, f32, f32, f32)>,
-    pub padding_top: f32,
-    pub padding_right: f32,
-    pub padding_bottom: f32,
-    pub padding_left: f32,
-    /// Number of columns this cell spans (default 1).
-    pub colspan: usize,
-    /// Number of rows this cell spans (default 1).
-    pub rowspan: usize,
-    /// Per-side border specification.
-    pub border: LayoutBorder,
-    /// Text alignment within the cell.
-    pub text_align: TextAlign,
-    /// Vertical alignment within the row box.
-    pub vertical_align: VerticalAlign,
-    /// Minimum content-box height from an explicit `height` on the cell. The
-    /// row grows to at least this even when the cell has no text (CSS treats
-    /// the cell `height` as a minimum). 0.0 = auto.
-    pub min_content_height: f32,
-    /// `empty-cells: hide` is in effect and this cell has no content, so its
-    /// background and borders must not be painted (the table background shows
-    /// through instead).
-    pub hide_if_empty: bool,
-    /// Grid-only: when set, the cell's painted box (background + border) is
-    /// inset from the track cell rather than filling it, to model
-    /// `justify-items`/`align-items` with an explicit item size smaller than
-    /// the track. `None` for table cells (which always fill). Fields are the
-    /// inset from the left/top of the track and the item's own painted size.
-    pub grid_inset: Option<GridInset>,
-    /// Whether the cell clips its nested content (`overflow: hidden`/`clip`/
-    /// `scroll`/`auto` on a grid item). When true, the cell's `nested_rows` are
-    /// painted under a clip at the cell's padding box. `false` for table cells
-    /// and non-clipping grid items.
-    pub clips: bool,
-    /// CSS `linear-gradient()` background painted across the cell's box. Grid
-    /// items (and table cells) are block containers, so a gradient/image
-    /// `background` paints over the cell area exactly like a normal block
-    /// (css-backgrounds-3 §3). `None` when the cell has no gradient background.
-    pub background_gradient: Option<crate::style::computed::LinearGradient>,
-    /// CSS `radial-gradient()` background painted across the cell's box.
-    pub background_radial_gradient: Option<crate::style::computed::RadialGradient>,
-    /// CSS `conic-gradient()` background painted across the cell's box.
-    pub background_conic_gradient: Option<crate::style::computed::ConicGradient>,
+struct TableRowQuery<F, R> {
+    query: Option<F>,
+    result: Option<R>,
 }
 
-/// Placement of a grid item's painted box within its (possibly larger) track
-/// cell. All values in points relative to the track cell's top-left corner.
+impl<F, R> LayoutVisitor for TableRowQuery<F, R>
+where
+    F: FnOnce(&TableRow) -> R,
+{
+    fn visit_table_row(&mut self, element: &TableRow) {
+        if let Some(query) = self.query.take() {
+            self.result = Some(query(element));
+        }
+    }
+}
+
+fn query_table_row<R>(
+    element: &dyn LayoutElement,
+    query: impl FnOnce(&TableRow) -> R,
+) -> Option<R> {
+    let mut visitor = TableRowQuery {
+        query: Some(query),
+        result: None,
+    };
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+struct TableRowUpdate<F>(Option<F>);
+
+impl<F> LayoutVisitorMut for TableRowUpdate<F>
+where
+    F: FnOnce(&mut TableRow),
+{
+    fn visit_table_row(&mut self, element: &mut TableRow) {
+        if let Some(update) = self.0.take() {
+            update(element);
+        }
+    }
+}
+
+fn update_table_row(element: &mut dyn LayoutElement, update: impl FnOnce(&mut TableRow)) {
+    element.accept_mut(&mut TableRowUpdate(Some(update)));
+}
+
+fn table_row_node(
+    content: TableCells,
+    flow: TableRowFlow,
+    formatting: TableFormatting,
+    fragmentation: TableFragmentation,
+    inline: TableInlineGeometry,
+) -> LayoutNode {
+    TableRow {
+        content,
+        flow,
+        formatting,
+        fragmentation,
+        inline,
+    }
+    .boxed()
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowspanId(usize);
+
+impl RowspanId {
+    fn allocate(counter: &mut usize) -> Self {
+        let id = *counter;
+        *counter = counter.saturating_add(1);
+        Self(id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RowspanSlot {
+    span_id: Option<RowspanId>,
+    remaining_rows: u16,
+    min_height: f32,
+}
+
+impl RowspanSlot {
+    fn occupied(span_id: RowspanId, remaining_rows: usize, min_height: f32) -> Self {
+        Self {
+            span_id: Some(span_id),
+            remaining_rows: remaining_rows.min(MAX_ROWSPAN) as u16,
+            min_height,
+        }
+    }
+
+    fn is_occupied(self) -> bool {
+        self.span_id.is_some()
+    }
+
+    fn consume_row(&mut self) {
+        debug_assert!(self.is_occupied() && self.remaining_rows > 0);
+        self.remaining_rows -= 1;
+        if self.remaining_rows == 0 {
+            *self = Self::default();
+        }
+    }
+}
+
+fn table_cell_allows_soft_wrap(style: &ComputedStyle) -> bool {
+    !matches!(style.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre)
+        && !style.text_wrap_mode_nowrap
+}
+
+/// Keep table intrinsic sizing and final line wrapping on the same set of CSS
+/// text controls.  In particular, run tokenization must agree about preserved
+/// whitespace, hyphen/CJK opportunities, bidi, and the first-line indent.
+fn table_cell_text_wrap_options(
+    style: &ComputedStyle,
+    available_width: f32,
+    fonts: &HashMap<String, TtfFont>,
+) -> TextWrapOptions {
+    let wrap_width = if table_cell_allows_soft_wrap(style) {
+        available_width.max(0.0)
+    } else {
+        f32::MAX
+    };
+    TextWrapOptions::new(
+        wrap_width,
+        used_font_size(style, fonts),
+        text_run_line_height_factor(style, fonts),
+        style.overflow_wrap,
+    )
+    .with_parent_strut(parent_line_strut(style, fonts))
+    .with_rtl(style.direction_rtl)
+    .with_bidi_override(style.bidi_override)
+    .with_bidi_plaintext(style.bidi_plaintext)
+    .with_word_break_keep_all(style.word_break_keep_all)
+    .with_hyphens_manual(style.hyphens_manual)
+    .with_white_space(style.white_space)
+    .with_text_indent(style.text_indent.resolve(available_width))
+}
+
+/// Padding plus the cell-owned share of each border, grouped as one reusable
+/// edge value so sizing, wrapping, and painting cannot swap or omit a side.
+fn table_cell_border_inset_factor(border_collapse: BorderCollapse) -> f32 {
+    if border_collapse == BorderCollapse::Collapse {
+        0.5
+    } else {
+        1.0
+    }
+}
+
+fn table_cell_content_insets(
+    style: &ComputedStyle,
+    border: &LayoutBorder,
+    border_collapse: BorderCollapse,
+) -> EdgeSizes {
+    style.padding + border.widths() * table_cell_border_inset_factor(border_collapse)
+}
+
+/// The table root has a different box model in collapsed-border mode: its
+/// authored padding is ignored and winning outer borders, not the authored
+/// border widths, determine the border-box extent. Centralizing those rules
+/// prevents width, height, row offsets, and paint from each approximating the
+/// model independently.
 #[derive(Debug, Clone, Copy)]
-pub struct GridInset {
-    pub offset_x: f32,
-    pub offset_y: f32,
-    pub width: f32,
-    pub height: f32,
+struct TableRootBoxModel {
+    formatting: TableFormatting,
+    box_sizing: BoxSizing,
+    padding: EdgeSizes,
+    authored_border: EdgeSizes,
+}
+
+impl TableRootBoxModel {
+    fn new(
+        formatting: TableFormatting,
+        box_sizing: BoxSizing,
+        authored_padding: EdgeSizes,
+        authored_border: EdgeSizes,
+    ) -> Self {
+        Self {
+            formatting,
+            box_sizing,
+            padding: formatting.root_padding(authored_padding),
+            authored_border,
+        }
+    }
+
+    fn grid_insets(self) -> EdgeSizes {
+        if self.formatting.is_collapsed() {
+            EdgeSizes::ZERO
+        } else {
+            self.padding + self.authored_border
+        }
+    }
+
+    fn resolve_inline_extent(self, specified: f32) -> f32 {
+        if self.box_sizing == BoxSizing::BorderBox {
+            (specified - self.grid_insets().horizontal()).max(0.0)
+        } else {
+            specified.max(0.0)
+        }
+    }
+
+    fn resolve_block_extent(self, specified: f32) -> f32 {
+        if self.box_sizing == BoxSizing::BorderBox {
+            (specified - self.grid_insets().vertical()).max(0.0)
+        } else {
+            specified.max(0.0)
+        }
+    }
+
+    /// Convert the resolved table width/height into the span between the outer
+    /// collapsed grid lines. With `border-box`, the specified size already
+    /// includes the two half-border overhangs; with `content-box`, they extend
+    /// beyond the specified content extent.
+    fn collapsed_grid_extent(self, resolved: f32, outer_border_extent: f32) -> f32 {
+        if self.formatting.is_collapsed() && self.box_sizing == BoxSizing::BorderBox {
+            (resolved - outer_border_extent).max(0.0)
+        } else {
+            resolved.max(0.0)
+        }
+    }
 }
 
 /// Minimum outer width a nested layout element wants inside an auto-sized table
 /// cell. Used so shrink-to-fit columns stay at least as wide as fixed-width
 /// block descendants, nested tables, and replaced content.
-fn nested_element_preferred_width(element: &LayoutElement) -> f32 {
-    match element {
-        LayoutElement::TableRow { .. } => table_row_content_width(element),
-        LayoutElement::TextBlock { block_width, .. }
-        | LayoutElement::Container { block_width, .. } => block_width.unwrap_or(0.0),
-        LayoutElement::Image { width, .. } | LayoutElement::Svg { width, .. } => *width,
-        _ => 0.0,
+fn nested_element_preferred_width(element: &dyn LayoutElement) -> f32 {
+    #[derive(Default)]
+    struct PreferredWidth(f32);
+
+    impl LayoutVisitor for PreferredWidth {
+        fn visit_table_row(&mut self, element: &TableRow) {
+            self.0 = element.box_inline_extent();
+        }
+
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.0 = element
+                .box_model
+                .size
+                .width
+                .fixed_value()
+                .unwrap_or_default();
+        }
+
+        fn visit_container(&mut self, element: &Container) {
+            self.0 = element
+                .box_model
+                .size
+                .width
+                .fixed_value()
+                .unwrap_or_default();
+        }
+
+        fn visit_image(&mut self, element: &Image) {
+            self.0 = element.geometry.size.width;
+        }
+
+        fn visit_svg(&mut self, element: &Svg) {
+            self.0 = element.geometry.size.width;
+        }
     }
+
+    let mut width = PreferredWidth::default();
+    element.accept(&mut width);
+    width.0
 }
 
 /// Whether a `<td>`/`<th>` has no in-flow content for the purpose of
@@ -116,47 +339,21 @@ fn cell_has_no_content(cell_el: &ElementNode) -> bool {
 pub(crate) fn table_cell_content_height(cell: &TableCell) -> f32 {
     // An explicit cell height acts as a minimum (CSS): an empty cell with
     // `height:Npx` must still occupy that height rather than collapsing.
-    table_cell_intrinsic_content_height(cell).max(cell.min_content_height)
+    cell_box_intrinsic_content_height(&cell.layout).max(cell.layout.box_model.minimum_block_size)
 }
 
-fn nested_cell_content_element_height(element: &LayoutElement) -> f32 {
-    let base = estimate_element_height(element);
-    let LayoutElement::TableRow {
-        cells,
-        border_collapse,
-        ..
-    } = element
-    else {
-        return base;
-    };
-    if *border_collapse != BorderCollapse::Collapse {
-        return base;
-    }
-    let top = cells
-        .iter()
-        .filter(|cell| cell.rowspan != 0)
-        .map(|cell| cell.border.top.width / 2.0)
-        .fold(0.0f32, f32::max);
-    let bottom = cells
-        .iter()
-        .filter(|cell| cell.rowspan != 0)
-        .map(|cell| cell.border.bottom.width / 2.0)
-        .fold(0.0f32, f32::max);
-    base + top + bottom
+fn nested_cell_content_height(elements: &[LayoutNode]) -> f32 {
+    super::paginate::simulate_block_flow(elements).height
 }
 
 /// The cell's *actual* content height (padding + text + nested content), WITHOUT
 /// the `min_content_height` floor. Used to position content within a taller cell
 /// (e.g. `vertical-align` offset), where the real content extent is needed
 /// rather than the cell's full height.
-pub(crate) fn table_cell_intrinsic_content_height(cell: &TableCell) -> f32 {
-    let text_h: f32 = cell.lines.iter().map(|l| l.height).sum();
-    let nested_h: f32 = cell
-        .nested_rows
-        .iter()
-        .map(nested_cell_content_element_height)
-        .sum();
-    cell.padding_top + text_h + nested_h + cell.padding_bottom
+pub(crate) fn cell_box_intrinsic_content_height(cell: &CellBox) -> f32 {
+    let text_h: f32 = cell.content.lines.iter().map(|line| line.height).sum();
+    let nested_h = nested_cell_content_height(&cell.content.children);
+    text_h + nested_h + cell.box_model.content_insets.vertical()
 }
 
 /// Parse a width for a `<col>` / `<colgroup>` element.
@@ -172,22 +369,40 @@ enum TableTrackWidth {
 
 #[derive(Debug, Clone, Default)]
 struct TableColumnInfo {
-    background_color: Option<(f32, f32, f32, f32)>,
+    background_color: Option<crate::types::Color>,
     collapsed: bool,
+    column_border: LayoutBorder,
+    column_group_border: LayoutBorder,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct HiddenBorderSides {
-    top: bool,
-    right: bool,
-    bottom: bool,
-    left: bool,
+fn assign_column_border(
+    columns: &mut [TableColumnInfo],
+    start: usize,
+    span: usize,
+    border: LayoutBorder,
+) {
+    for column in columns.iter_mut().skip(start).take(span) {
+        column.column_border = border;
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum BorderSideName {
-    Right,
-    Left,
+fn assign_column_group_border(
+    columns: &mut [TableColumnInfo],
+    start: usize,
+    span: usize,
+    border: LayoutBorder,
+) {
+    let end = start.saturating_add(span).min(columns.len());
+    for (index, column) in columns.iter_mut().enumerate().take(end).skip(start) {
+        column.column_group_border.top = border.top;
+        column.column_group_border.bottom = border.bottom;
+        if index == start {
+            column.column_group_border.left = border.left;
+        }
+        if index + 1 == end {
+            column.column_group_border.right = border.right;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,13 +418,454 @@ enum TableBoxRole {
     Cell,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BorderCandidate {
-    side: LayoutBorderSide,
-    hidden: bool,
+const ANONYMOUS_TABLE: &str = "#anonymous-table";
+const ANONYMOUS_TABLE_ROW: &str = "#anonymous-table-row";
+const ANONYMOUS_TABLE_CELL: &str = "#anonymous-table-cell";
+
+struct AnonymousTableRow<'a> {
+    element: ElementNode,
+    generated_cells: Vec<GeneratedTableCellContent<'a>>,
+}
+
+enum TableRowNode<'a> {
+    Element(&'a ElementNode),
+    Anonymous(AnonymousTableRow<'a>),
+}
+
+impl TableRowNode<'_> {
+    fn element(&self) -> &ElementNode {
+        match self {
+            Self::Element(element) => element,
+            Self::Anonymous(row) => &row.element,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct GeneratedTableCellContent<'a> {
+    before: Option<GeneratedBox<'a>>,
+    after: Option<GeneratedBox<'a>>,
+}
+
+#[derive(Default)]
+struct AuthoredCellGeneratedContent {
+    before: Option<ComputedStyle>,
+    after: Option<ComputedStyle>,
+}
+
+impl AuthoredCellGeneratedContent {
+    fn resolve(
+        element: &ElementNode,
+        style: &ComputedStyle,
+        rules: &[CssRule],
+        selector: &SelectorContext<'_>,
+        fonts: &HashMap<String, TtfFont>,
+    ) -> Self {
+        let classes = element.class_list();
+        let resolve = |pseudo| {
+            compute_pseudo_element_style_with_font_metrics(
+                style,
+                rules,
+                element.tag_name(),
+                &classes,
+                element.id(),
+                &element.attributes,
+                selector,
+                pseudo,
+                FontMetrics::new(fonts),
+            )
+        };
+        Self {
+            before: resolve(PseudoElement::Before),
+            after: resolve(PseudoElement::After),
+        }
+    }
+
+    fn boundaries<'a>(&'a self, element: &'a ElementNode) -> GeneratedTableCellContent<'a> {
+        GeneratedTableCellContent {
+            before: self
+                .before
+                .as_ref()
+                .map(|style| GeneratedBox::new(element, style)),
+            after: self
+                .after
+                .as_ref()
+                .map(|style| GeneratedBox::new(element, style)),
+        }
+    }
+}
+
+impl GeneratedTableCellContent<'_> {
+    const fn is_empty(self) -> bool {
+        self.before.is_none() && self.after.is_none()
+    }
+
+    fn append_before_measurement(
+        self,
+        runs: &mut Vec<TextRun>,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        if let Some(before) = self.before {
+            before.append_measurement_run(runs, fonts, counter_state);
+        }
+    }
+
+    fn append_after_measurement(
+        self,
+        runs: &mut Vec<TextRun>,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        if let Some(after) = self.after {
+            after.append_measurement_run(runs, fonts, counter_state);
+        }
+    }
+
+    fn append_before_layout(
+        self,
+        runs: &mut Vec<TextRun>,
+        blocks: &mut Vec<LayoutNode>,
+        parent_style: &ComputedStyle,
+        available_width: f32,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        append_generated_cell_layout(
+            self.before,
+            runs,
+            blocks,
+            parent_style,
+            available_width,
+            fonts,
+            counter_state,
+        );
+    }
+
+    fn append_after_layout(
+        self,
+        runs: &mut Vec<TextRun>,
+        blocks: &mut Vec<LayoutNode>,
+        parent_style: &ComputedStyle,
+        available_width: f32,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        append_generated_cell_layout(
+            self.after,
+            runs,
+            blocks,
+            parent_style,
+            available_width,
+            fonts,
+            counter_state,
+        );
+    }
+}
+
+fn append_generated_cell_layout(
+    generated: Option<GeneratedBox<'_>>,
+    runs: &mut Vec<TextRun>,
+    blocks: &mut Vec<LayoutNode>,
+    parent_style: &ComputedStyle,
+    available_width: f32,
+    fonts: &HashMap<String, TtfFont>,
+    counter_state: &mut CounterState,
+) {
+    let Some(generated) = generated else {
+        return;
+    };
+    if pseudo_is_block_like(generated.style()) {
+        if let Some(block) = generated_table_cell_boundary(
+            generated,
+            parent_style,
+            available_width,
+            fonts,
+            counter_state,
+        ) {
+            blocks.push(block);
+        }
+    } else {
+        generated.append_inline(runs, fonts, counter_state);
+    }
+}
+
+struct TableRowSource<'a> {
+    node: TableRowNode<'a>,
+    section_index: usize,
+    section_size: usize,
+    section: Option<&'a ElementNode>,
+    section_child_index: usize,
+    section_sibling_count: usize,
+    section_role: EffectiveTableSectionRole,
+}
+
+impl<'a> TableRowSource<'a> {
+    fn generated_cell_content(&self, cell_index: usize) -> GeneratedTableCellContent<'a> {
+        match &self.node {
+            TableRowNode::Element(_) => GeneratedTableCellContent::default(),
+            TableRowNode::Anonymous(row) => row
+                .generated_cells
+                .get(cell_index)
+                .copied()
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// The role a row group actually has after CSS Tables' first-header/first-footer
+/// normalization. Declared `table-header-group` and `table-footer-group` values
+/// are not sufficient: only the first owned group of each kind is special and
+/// every later one participates in the ordinary body lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectiveTableSectionRole {
+    Header,
+    Body,
+    Footer,
+}
+
+impl EffectiveTableSectionRole {
+    fn claim(declared: TableBoxRole, header_claimed: &mut bool, footer_claimed: &mut bool) -> Self {
+        match declared {
+            TableBoxRole::HeaderGroup if !*header_claimed => {
+                *header_claimed = true;
+                Self::Header
+            }
+            TableBoxRole::FooterGroup if !*footer_claimed => {
+                *footer_claimed = true;
+                Self::Footer
+            }
+            TableBoxRole::HeaderGroup | TableBoxRole::RowGroup | TableBoxRole::FooterGroup => {
+                Self::Body
+            }
+            _ => Self::Body,
+        }
+    }
+
+    const fn paint_order(self) -> u8 {
+        match self {
+            Self::Header => 0,
+            Self::Body => 1,
+            Self::Footer => 2,
+        }
+    }
+
+    const fn fragmentation(
+        self,
+        avoid_inside: bool,
+        avoid_group: Option<TableFragmentGroup>,
+    ) -> TableFragmentation {
+        TableFragmentation {
+            repeats_as_header: matches!(self, Self::Header),
+            repeats_as_footer: matches!(self, Self::Footer),
+            avoid_inside,
+            avoid_group,
+        }
+    }
+}
+
+fn anonymous_table_box(role: TableBoxRole, children: Vec<DomNode>) -> ElementNode {
+    let mut element = ElementNode::new(HtmlTag::Unknown);
+    element.raw_tag_name = match role {
+        TableBoxRole::Table => ANONYMOUS_TABLE,
+        TableBoxRole::Row => ANONYMOUS_TABLE_ROW,
+        TableBoxRole::Cell => ANONYMOUS_TABLE_CELL,
+        _ => "#anonymous-table-box",
+    }
+    .to_string();
+    element.children = children;
+    element
+}
+
+pub(crate) fn anonymous_table_from_cells(cells: &[&ElementNode]) -> ElementNode {
+    let row = anonymous_table_box(
+        TableBoxRole::Row,
+        cells
+            .iter()
+            .map(|cell| DomNode::Element((*cell).clone()))
+            .collect(),
+    );
+    anonymous_table_box(TableBoxRole::Table, vec![DomNode::Element(row)])
+}
+
+fn anonymous_table_row<'a>(
+    children: Vec<(DomNode, Option<TableBoxRole>)>,
+    generated: GeneratedTableCellContent<'a>,
+) -> AnonymousTableRow<'a> {
+    let mut row_children = Vec::new();
+    let mut generated_cells = Vec::new();
+    let mut anonymous_cell_children = Vec::new();
+    let mut anonymous_cell_generated = GeneratedTableCellContent {
+        before: generated.before,
+        ..Default::default()
+    };
+    let flush_anonymous_cell =
+        |row_children: &mut Vec<DomNode>,
+         generated_cells: &mut Vec<GeneratedTableCellContent<'a>>,
+         anonymous_cell_children: &mut Vec<DomNode>,
+         anonymous_cell_generated: &mut GeneratedTableCellContent<'a>| {
+            if anonymous_cell_children.is_empty() && anonymous_cell_generated.is_empty() {
+                return;
+            }
+            row_children.push(DomNode::Element(anonymous_table_box(
+                TableBoxRole::Cell,
+                std::mem::take(anonymous_cell_children),
+            )));
+            generated_cells.push(std::mem::take(anonymous_cell_generated));
+        };
+
+    for (child, role) in children {
+        if role == Some(TableBoxRole::Cell) {
+            flush_anonymous_cell(
+                &mut row_children,
+                &mut generated_cells,
+                &mut anonymous_cell_children,
+                &mut anonymous_cell_generated,
+            );
+            row_children.push(child);
+            generated_cells.push(GeneratedTableCellContent::default());
+        } else {
+            anonymous_cell_children.push(child);
+        }
+    }
+    anonymous_cell_generated.after = generated.after;
+    flush_anonymous_cell(
+        &mut row_children,
+        &mut generated_cells,
+        &mut anonymous_cell_children,
+        &mut anonymous_cell_generated,
+    );
+    AnonymousTableRow {
+        element: anonymous_table_box(TableBoxRole::Row, row_children),
+        generated_cells,
+    }
+}
+
+fn push_anonymous_table_row<'a>(
+    row_sources: &mut Vec<TableRowSource<'a>>,
+    improper_children: &mut Vec<(DomNode, Option<TableBoxRole>)>,
+    generated: &mut GeneratedTableCellContent<'a>,
+    section_child_index: usize,
+    section_sibling_count: usize,
+) {
+    if improper_children.is_empty() && generated.is_empty() {
+        return;
+    }
+    let section_index = row_sources.len();
+    row_sources.push(TableRowSource {
+        node: TableRowNode::Anonymous(anonymous_table_row(
+            std::mem::take(improper_children),
+            std::mem::take(generated),
+        )),
+        section_index,
+        section_size: 1,
+        section: None,
+        section_child_index,
+        section_sibling_count,
+        section_role: EffectiveTableSectionRole::Body,
+    });
+}
+
+fn generated_table_cell_boundary(
+    generated: GeneratedBox<'_>,
+    parent_style: &ComputedStyle,
+    available_width: f32,
+    fonts: &HashMap<String, TtfFont>,
+    counter_state: &mut CounterState,
+) -> Option<LayoutNode> {
+    if pseudo_is_block_like(generated.style()) {
+        return Some(build_pseudo_block(
+            generated.style(),
+            generated.originating_element(),
+            available_width,
+            fonts,
+            None,
+            0,
+            counter_state,
+            generated.style().display == Display::ListItem,
+        ));
+    }
+
+    let mut runs = Vec::new();
+    generated.append_inline(&mut runs, fonts, counter_state);
+    AnonymousInlineFormattingContext::new(parent_style, available_width, fonts).layout_runs(runs)
+}
+
+fn anonymous_table_box_role(element: &ElementNode) -> Option<TableBoxRole> {
+    match element.raw_tag_name.as_str() {
+        ANONYMOUS_TABLE => Some(TableBoxRole::Table),
+        ANONYMOUS_TABLE_ROW => Some(TableBoxRole::Row),
+        ANONYMOUS_TABLE_CELL => Some(TableBoxRole::Cell),
+        _ => None,
+    }
+}
+
+fn is_anonymous_table_box(element: &ElementNode) -> bool {
+    anonymous_table_box_role(element).is_some()
+}
+
+fn push_table_dom_ancestor<'a>(
+    ancestors: &mut Vec<AncestorInfo<'a>>,
+    element: &'a ElementNode,
+    child_index: usize,
+    sibling_count: usize,
+) {
+    if !is_anonymous_table_box(element) {
+        ancestors.push(AncestorInfo {
+            element,
+            child_index,
+            sibling_count,
+            preceding_siblings: Vec::new(),
+            following_siblings: Vec::new(),
+            is_empty: false,
+        });
+    }
+}
+
+pub(crate) fn anonymous_table_box_style(
+    element: &ElementNode,
+    parent: &ComputedStyle,
+) -> Option<ComputedStyle> {
+    let role = anonymous_table_box_role(element)?;
+    let mut style = compute_style_with_context(
+        HtmlTag::Unknown,
+        None,
+        parent,
+        &[],
+        "",
+        &[],
+        None,
+        &HashMap::new(),
+        &SelectorContext::default(),
+    );
+    style.display = match role {
+        TableBoxRole::Table => Display::Table,
+        TableBoxRole::Row => Display::TableRow,
+        TableBoxRole::Cell => Display::TableCell,
+        _ => style.display,
+    };
+    Some(style)
+}
+
+fn is_proper_table_child(role: Option<TableBoxRole>) -> bool {
+    matches!(
+        role,
+        Some(
+            TableBoxRole::Caption
+                | TableBoxRole::ColumnGroup
+                | TableBoxRole::Column
+                | TableBoxRole::HeaderGroup
+                | TableBoxRole::RowGroup
+                | TableBoxRole::FooterGroup
+                | TableBoxRole::Row
+        )
+    )
 }
 
 fn table_box_role(el: &ElementNode, style: &ComputedStyle) -> Option<TableBoxRole> {
+    if let Some(role) = anonymous_table_box_role(el) {
+        return Some(role);
+    }
     match el.tag {
         HtmlTag::Table => return Some(TableBoxRole::Table),
         HtmlTag::Caption => return Some(TableBoxRole::Caption),
@@ -235,26 +891,6 @@ fn table_box_role(el: &ElementNode, style: &ComputedStyle) -> Option<TableBoxRol
         Display::TableCell => Some(TableBoxRole::Cell),
         _ => None,
     }
-}
-
-fn table_section_role(
-    section: Option<&ElementNode>,
-    table_style: &ComputedStyle,
-    rules: &[CssRule],
-    table_ancestors: &[AncestorInfo],
-    child_index: usize,
-    sibling_count: usize,
-) -> Option<TableBoxRole> {
-    let section = section?;
-    let style = compute_column_style(
-        section,
-        table_style,
-        rules,
-        table_ancestors,
-        child_index,
-        sibling_count,
-    );
-    table_box_role(section, &style)
 }
 
 fn table_child_role(
@@ -339,8 +975,8 @@ fn resolve_table_percentage_width(table_width: f32, percent: f32) -> f32 {
     table_width * percent
 }
 
-fn style_background_rgba(style: &ComputedStyle) -> Option<(f32, f32, f32, f32)> {
-    style.background_color.map(|c| c.to_f32_rgba())
+fn style_background_rgba(style: &ComputedStyle) -> Option<crate::types::Color> {
+    style.background_color
 }
 
 fn table_cell_is_hidden(style: &ComputedStyle) -> bool {
@@ -348,248 +984,15 @@ fn table_cell_is_hidden(style: &ComputedStyle) -> bool {
 }
 
 fn hide_table_cell_paint(cell: &mut TableCell) {
-    cell.min_content_height = cell.min_content_height.max(table_cell_content_height(cell));
-    cell.lines.clear();
-    cell.nested_rows.clear();
-    cell.background_color = None;
-    cell.border = LayoutBorder::default();
-    cell.background_gradient = None;
-    cell.background_radial_gradient = None;
-    cell.background_conic_gradient = None;
-}
-
-fn css_value_contains_hidden(value: &CssValue) -> bool {
-    match value {
-        CssValue::Keyword(raw) => raw
-            .split(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '/' | ','))
-            .any(|token| token.eq_ignore_ascii_case("hidden")),
-        _ => false,
-    }
-}
-
-fn mark_hidden_border_property(sides: &mut HiddenBorderSides, property: &str, value: &CssValue) {
-    if !css_value_contains_hidden(value) {
-        return;
-    }
-    match property {
-        "border" | "border-style" => {
-            sides.top = true;
-            sides.right = true;
-            sides.bottom = true;
-            sides.left = true;
-        }
-        "border-top" | "border-top-style" => sides.top = true,
-        "border-right" | "border-right-style" => sides.right = true,
-        "border-bottom" | "border-bottom-style" => sides.bottom = true,
-        "border-left" | "border-left-style" => sides.left = true,
-        _ => {}
-    }
-}
-
-fn declared_hidden_borders(
-    el: &ElementNode,
-    rules: &[CssRule],
-    selector_ctx: &SelectorContext,
-) -> HiddenBorderSides {
-    let classes = el.class_list();
-    let mut sides = HiddenBorderSides::default();
-    let mut best_specificity: HashMap<&'static str, u32> = HashMap::new();
-    for rule in rules.iter().filter(|rule| rule.pseudo_element.is_none()) {
-        if !selector_matches_with_context(
-            &rule.selector,
-            el.tag_name(),
-            &classes,
-            el.id(),
-            &el.attributes,
-            selector_ctx,
-        ) {
-            continue;
-        }
-        let rule_specificity = specificity(&rule.selector);
-        for (property, value) in &rule.declarations.properties {
-            let side_key = match property.as_str() {
-                "border" | "border-style" => "all",
-                "border-top" | "border-top-style" => "top",
-                "border-right" | "border-right-style" => "right",
-                "border-bottom" | "border-bottom-style" => "bottom",
-                "border-left" | "border-left-style" => "left",
-                _ => continue,
-            };
-            if rule_specificity >= best_specificity.get(side_key).copied().unwrap_or(0) {
-                best_specificity.insert(side_key, rule_specificity);
-                mark_hidden_border_property(&mut sides, property, value);
-            }
-        }
-    }
-    if let Some(inline) = el.style_attr().map(crate::parser::css::parse_inline_style) {
-        for (property, value) in &inline.properties {
-            mark_hidden_border_property(&mut sides, property, value);
-        }
-    }
-    sides
-}
-
-fn hidden_for_side(hidden: HiddenBorderSides, side: BorderSideName) -> bool {
-    match side {
-        BorderSideName::Right => hidden.right,
-        BorderSideName::Left => hidden.left,
-    }
-}
-
-fn border_side(border: &LayoutBorder, side: BorderSideName) -> LayoutBorderSide {
-    match side {
-        BorderSideName::Right => border.right,
-        BorderSideName::Left => border.left,
-    }
-}
-
-fn border_side_mut(border: &mut LayoutBorder, side: BorderSideName) -> &mut LayoutBorderSide {
-    match side {
-        BorderSideName::Right => &mut border.right,
-        BorderSideName::Left => &mut border.left,
-    }
-}
-
-fn collapsed_style_rank(style: BorderStyle) -> u8 {
-    match style {
-        BorderStyle::Double => 4,
-        BorderStyle::Solid => 3,
-        BorderStyle::Dashed => 2,
-        BorderStyle::Dotted => 1,
-        BorderStyle::None => 0,
-    }
-}
-
-fn collapsed_border_winner(first: BorderCandidate, second: BorderCandidate) -> Option<usize> {
-    if first.hidden || second.hidden {
-        return None;
-    }
-    let first_paints = first.side.width > 0.0 && first.side.style != BorderStyle::None;
-    let second_paints = second.side.width > 0.0 && second.side.style != BorderStyle::None;
-    match (first_paints, second_paints) {
-        (false, false) => return None,
-        (true, false) => return Some(0),
-        (false, true) => return Some(1),
-        (true, true) => {}
-    }
-    let width_cmp = first
-        .side
-        .width
-        .partial_cmp(&second.side.width)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    match width_cmp {
-        std::cmp::Ordering::Greater => Some(0),
-        std::cmp::Ordering::Less => Some(1),
-        std::cmp::Ordering::Equal => {
-            let first_rank = collapsed_style_rank(first.side.style);
-            let second_rank = collapsed_style_rank(second.side.style);
-            if first_rank > second_rank {
-                Some(0)
-            } else if second_rank > first_rank {
-                Some(1)
-            } else {
-                Some(0)
-            }
-        }
-    }
-}
-
-fn resolve_collapsed_border_pair(
-    first_border: &mut LayoutBorder,
-    first_hidden: HiddenBorderSides,
-    first_side: BorderSideName,
-    second_border: &mut LayoutBorder,
-    second_hidden: HiddenBorderSides,
-    second_side: BorderSideName,
-) {
-    let first = BorderCandidate {
-        side: border_side(first_border, first_side),
-        hidden: hidden_for_side(first_hidden, first_side),
-    };
-    let second = BorderCandidate {
-        side: border_side(second_border, second_side),
-        hidden: hidden_for_side(second_hidden, second_side),
-    };
-    match collapsed_border_winner(first, second) {
-        Some(0) => {
-            *border_side_mut(first_border, first_side) = LayoutBorderSide::default();
-            *border_side_mut(second_border, second_side) = first.side;
-        }
-        Some(1) => {
-            *border_side_mut(first_border, first_side) = LayoutBorderSide::default();
-            *border_side_mut(second_border, second_side) = second.side;
-        }
-        _ => {
-            *border_side_mut(first_border, first_side) = LayoutBorderSide::default();
-            *border_side_mut(second_border, second_side) = LayoutBorderSide::default();
-        }
-    }
-}
-
-fn apply_table_winning_side(cell_side: &mut LayoutBorderSide, table_side: LayoutBorderSide) {
-    if table_side.width > 0.0
-        && table_side.style != BorderStyle::None
-        && table_side.width >= cell_side.width
-    {
-        *cell_side = table_side;
-        cell_side.width *= 2.0;
-        cell_side.alpha = 0.0;
-    }
-}
-
-fn table_side_wins(cell_side: LayoutBorderSide, table_side: LayoutBorderSide) -> bool {
-    table_side.width > 0.0
-        && table_side.style != BorderStyle::None
-        && table_side.width >= cell_side.width
-}
-
-fn resolve_collapsed_outer_table_borders(rows: &mut [LayoutElement], table_border: LayoutBorder) {
-    if !table_border.has_any() {
-        return;
-    }
-    let mut first_row_idx = None;
-    let mut last_row_idx = None;
-    for (idx, row) in rows.iter().enumerate() {
-        if matches!(row, LayoutElement::TableRow { cells, .. } if !cells.is_empty()) {
-            first_row_idx.get_or_insert(idx);
-            last_row_idx = Some(idx);
-        }
-    }
-    for row in rows.iter_mut() {
-        let LayoutElement::TableRow { cells, .. } = row else {
-            continue;
-        };
-        if let Some(first_cell) = cells.iter_mut().find(|cell| cell.rowspan != 0) {
-            apply_table_winning_side(&mut first_cell.border.left, table_border.left);
-        }
-        if let Some(last_cell) = cells.iter_mut().rev().find(|cell| cell.rowspan != 0) {
-            apply_table_winning_side(&mut last_cell.border.right, table_border.right);
-        }
-    }
-    if let Some(idx) = first_row_idx {
-        if let LayoutElement::TableRow { cells, .. } = &mut rows[idx] {
-            for cell in cells.iter_mut().filter(|cell| cell.rowspan != 0) {
-                let top_wins = table_side_wins(cell.border.top, table_border.top);
-                apply_table_winning_side(&mut cell.border.top, table_border.top);
-                if top_wins {
-                    cell.min_content_height =
-                        (cell.min_content_height - table_border.top.width / 2.0).max(0.0);
-                }
-            }
-        }
-    }
-    if let Some(idx) = last_row_idx {
-        if let LayoutElement::TableRow { cells, .. } = &mut rows[idx] {
-            for cell in cells.iter_mut().filter(|cell| cell.rowspan != 0) {
-                let bottom_wins = table_side_wins(cell.border.bottom, table_border.bottom);
-                apply_table_winning_side(&mut cell.border.bottom, table_border.bottom);
-                if bottom_wins {
-                    cell.min_content_height =
-                        (cell.min_content_height - table_border.bottom.width / 2.0).max(0.0);
-                }
-            }
-        }
-    }
+    cell.layout.box_model.minimum_block_size = cell
+        .layout
+        .box_model
+        .minimum_block_size
+        .max(table_cell_content_height(cell));
+    cell.layout.content.lines.clear();
+    cell.layout.content.children.clear();
+    cell.layout.paint.background = Default::default();
+    cell.layout.box_model.border = LayoutBorder::default();
 }
 
 impl TableTrackWidth {
@@ -609,6 +1012,9 @@ fn compute_column_style(
     child_index: usize,
     sibling_count: usize,
 ) -> ComputedStyle {
+    if let Some(style) = anonymous_table_box_style(el, parent_style) {
+        return style;
+    }
     let classes = el.class_list();
     let selector_ctx = SelectorContext {
         ancestors: ancestors.to_vec(),
@@ -761,101 +1167,10 @@ fn parse_cell_rowspan(el: &ElementNode, remaining_rows_in_group: usize) -> usize
     span.min(remaining_rows_in_group.max(1))
 }
 
-fn parse_table_attr_length(el: &ElementNode, attr: &str) -> Option<f32> {
-    let value = el.attributes.get(attr)?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let parsed = if let Ok(number) = value.parse::<f32>() {
-        number * 0.75
-    } else {
-        match crate::parser::css::parse_length(value) {
-            Some(CssValue::Length(length)) => length,
-            _ => return None,
-        }
-    };
-    (parsed.is_finite() && parsed >= 0.0).then_some(parsed)
-}
-
-fn attr_border(width: f32, light: bool) -> LayoutBorder {
-    let light_color = (0.933, 0.933, 0.933);
-    let dark_color = (0.604, 0.604, 0.604);
-    let side = |color| super::engine::LayoutBorderSide {
-        width,
-        color,
-        alpha: 1.0,
-        style: BorderStyle::Solid,
-    };
-    LayoutBorder {
-        top: side(if light { light_color } else { dark_color }),
-        right: side(if light { dark_color } else { light_color }),
-        bottom: side(if light { dark_color } else { light_color }),
-        left: side(if light { light_color } else { dark_color }),
-    }
-}
-
-fn apply_cell_attribute_hints(
-    style: &mut ComputedStyle,
-    cellpadding: Option<f32>,
-    border_width: Option<f32>,
-) {
-    if let Some(padding) = cellpadding {
-        if style.padding.top <= 1.0
-            && style.padding.right <= 1.0
-            && style.padding.bottom <= 1.0
-            && style.padding.left <= 1.0
-        {
-            style.padding.top = padding;
-            style.padding.right = padding;
-            style.padding.bottom = padding;
-            style.padding.left = padding;
-        }
-    }
-
-    if let Some(width) = border_width {
-        if style.border.top.width == 0.0
-            && style.border.right.width == 0.0
-            && style.border.bottom.width == 0.0
-            && style.border.left.width == 0.0
-        {
-            let side = crate::style::computed::BorderSide {
-                width: width.min(0.75),
-                color: Some(crate::types::Color::rgb(238, 238, 238)),
-                style: BorderStyle::Solid,
-            };
-            style.border.top = side;
-            style.border.right = side;
-            style.border.bottom = side;
-            style.border.left = side;
-        }
-    }
-}
-
 fn table_section_key(el: Option<&ElementNode>, child_index: usize) -> usize {
     el.map_or(child_index, |section| {
         section as *const ElementNode as usize
     })
-}
-
-fn table_section_is_first_header_group(
-    section: Option<&ElementNode>,
-    first_header_section_key: Option<usize>,
-    child_index: usize,
-    table_style: &ComputedStyle,
-    rules: &[CssRule],
-    table_ancestors: &[AncestorInfo],
-    sibling_count: usize,
-) -> bool {
-    section.is_some_and(|section| section.tag == HtmlTag::Thead)
-        && table_section_role(
-            section,
-            table_style,
-            rules,
-            table_ancestors,
-            child_index,
-            sibling_count,
-        ) == Some(TableBoxRole::HeaderGroup)
-        && first_header_section_key == Some(table_section_key(section, child_index))
 }
 
 fn distribute_extra_width(widths: &mut [f32], extra: f32) {
@@ -890,15 +1205,17 @@ fn enforce_row_min_height(cells: &mut [TableCell], min_height: f32) {
     if current >= min_height {
         return;
     }
-    if let Some(cell) = cells.iter_mut().find(|cell| cell.rowspan != 0) {
-        cell.min_content_height = cell.min_content_height.max(min_height);
+    if let Some(cell) = cells.iter_mut().find(|cell| cell.span.rows != 0) {
+        cell.layout.box_model.minimum_block_size =
+            cell.layout.box_model.minimum_block_size.max(min_height);
     } else if let Some(cell) = cells.first_mut() {
-        cell.min_content_height = cell.min_content_height.max(min_height);
+        cell.layout.box_model.minimum_block_size =
+            cell.layout.box_model.minimum_block_size.max(min_height);
     }
 }
 
 fn stretch_table_rows_to_min_height(
-    output: &mut [LayoutElement],
+    output: &mut [LayoutNode],
     target_table_height: f32,
     vertical_edge_spacing: f32,
 ) {
@@ -908,9 +1225,11 @@ fn stretch_table_rows_to_min_height(
     let mut row_indices = Vec::new();
     let mut rows_height = 0.0f32;
     for (idx, elem) in output.iter().enumerate() {
-        if let LayoutElement::TableRow { cells, .. } = elem {
+        if let Some(row_height) = query_table_row(elem.as_ref(), |row| {
+            row_height_from_cells(&row.content.cells)
+        }) {
             row_indices.push(idx);
-            rows_height += row_height_from_cells(cells);
+            rows_height += row_height;
         }
     }
     if row_indices.is_empty() {
@@ -923,32 +1242,34 @@ fn stretch_table_rows_to_min_height(
     }
     let extra_per_row = (target_rows_height - rows_height) / row_indices.len() as f32;
     for idx in row_indices {
-        if let LayoutElement::TableRow { cells, .. } = &mut output[idx] {
-            let target_row_height = row_height_from_cells(cells) + extra_per_row;
-            enforce_row_min_height(cells, target_row_height);
-        }
+        update_table_row(output[idx].as_mut(), |row| {
+            let target_row_height = row_height_from_cells(&row.content.cells) + extra_per_row;
+            enforce_row_min_height(&mut row.content.cells, target_row_height);
+        });
     }
 }
 
-fn collapsed_outer_vertical_border_extent(rows: &[LayoutElement]) -> f32 {
+fn collapsed_outer_vertical_border_extent(rows: &[LayoutNode]) -> f32 {
     let first_top = rows.iter().find_map(|row| {
-        let LayoutElement::TableRow { cells, .. } = row else {
-            return None;
-        };
-        cells
-            .iter()
-            .find(|cell| cell.rowspan != 0)
-            .map(|cell| cell.border.top.width / 2.0)
+        query_table_row(row.as_ref(), |row| {
+            row.content
+                .cells
+                .iter()
+                .find(|cell| cell.span.rows != 0)
+                .map(|cell| cell.layout.box_model.border.top.width / 2.0)
+        })
+        .flatten()
     });
     let last_bottom = rows.iter().rev().find_map(|row| {
-        let LayoutElement::TableRow { cells, .. } = row else {
-            return None;
-        };
-        cells
-            .iter()
-            .rev()
-            .find(|cell| cell.rowspan != 0)
-            .map(|cell| cell.border.bottom.width / 2.0)
+        query_table_row(row.as_ref(), |row| {
+            row.content
+                .cells
+                .iter()
+                .rev()
+                .find(|cell| cell.span.rows != 0)
+                .map(|cell| cell.layout.box_model.border.bottom.width / 2.0)
+        })
+        .flatten()
     });
     first_top.unwrap_or(0.0) + last_bottom.unwrap_or(0.0)
 }
@@ -966,7 +1287,7 @@ fn estimate_run_text_width(run: &TextRun, text: &str, fonts: &HashMap<String, Tt
         run.font_size,
         &run.font_family,
         run.bold,
-        run.italic,
+        run.font_style.is_slanted(),
         fonts,
     )
 }
@@ -1160,7 +1481,7 @@ fn measure_caption_min_width(
         false,
         true,
         &caption_ancestors,
-        available_width.max(1.0),
+        available_width.max(0.0),
         counter_state,
     );
     let text_width: f32 = runs
@@ -1171,19 +1492,18 @@ fn measure_caption_min_width(
                 run.font_size,
                 &run.font_family,
                 run.bold,
-                run.italic,
+                run.font_style.is_slanted(),
                 fonts,
             )
         })
         .sum();
     let nested_width = nested
         .iter()
-        .map(nested_element_preferred_width)
+        .map(|element| nested_element_preferred_width(element.as_ref()))
         .fold(0.0f32, f32::max);
-    let caption_border = LayoutBorder::from_computed(&caption_style.border);
+    let caption_border = LayoutBorder::from_computed(&caption_style.border, caption_style.color);
     text_width.max(nested_width)
-        + caption_style.padding.left
-        + caption_style.padding.right
+        + caption_style.padding.horizontal()
         + caption_border.horizontal_width()
 }
 
@@ -1199,19 +1519,27 @@ fn assign_explicit_col_widths(
     *col_idx = col_idx.saturating_add(span);
 }
 
-fn resolve_table_inner_width(style: &ComputedStyle, available_width: f32) -> f32 {
-    let containing_width = (available_width - style.margin.left - style.margin.right).max(0.0);
-    style
-        .width
-        .or_else(|| {
-            style
-                .percentage_sizing
-                .width
-                .map(|percent| containing_width * percent / 100.0)
-        })
-        .map_or(containing_width, |width| {
-            width.min(containing_width).max(0.0)
-        })
+fn resolve_table_inner_width(
+    style: &ComputedStyle,
+    available_width: f32,
+    box_model: TableRootBoxModel,
+) -> f32 {
+    let containing_width = (available_width - style.margin.horizontal()).max(0.0);
+    let specified = style.width.or_else(|| {
+        style
+            .percentage_sizing
+            .width
+            .map(|percent| containing_width * percent / 100.0)
+    });
+    specified.map_or(containing_width, |width| {
+        box_model.resolve_inline_extent(width)
+    })
+}
+
+fn resolve_table_inner_height(style: &ComputedStyle, box_model: TableRootBoxModel) -> Option<f32> {
+    SizeConstraints::new(style.min_height, style.max_height)
+        .constrain_preferred(style.height)
+        .map(|height| box_model.resolve_block_extent(height))
 }
 
 fn uses_fixed_table_layout(style: &ComputedStyle) -> bool {
@@ -1285,17 +1613,20 @@ fn resolve_fixed_table_columns(
             is_empty: false,
         };
         let row_classes = first_row.class_list();
-        let mut row_style = compute_style_with_context(
-            first_row.tag,
-            first_row.style_attr(),
-            table_style,
-            rules,
-            first_row.tag_name(),
-            &row_classes,
-            first_row.id(),
-            &first_row.attributes,
-            &row_selector_ctx,
-        );
+        let mut row_style =
+            anonymous_table_box_style(first_row, table_style).unwrap_or_else(|| {
+                compute_style_with_context(
+                    first_row.tag,
+                    first_row.style_attr(),
+                    table_style,
+                    rules,
+                    first_row.tag_name(),
+                    &row_classes,
+                    first_row.id(),
+                    &first_row.attributes,
+                    &row_selector_ctx,
+                )
+            });
         row_style.width = Some(table_width);
 
         let mut col_pos = 0usize;
@@ -1312,14 +1643,12 @@ fn resolve_fixed_table_columns(
 
             let cell_classes = cell_el.class_list();
             let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-            cell_ancestors.push(AncestorInfo {
-                element: first_row,
-                child_index: row_selector_ctx.child_index,
-                sibling_count: row_selector_ctx.sibling_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            });
+            push_table_dom_ancestor(
+                &mut cell_ancestors,
+                first_row,
+                row_selector_ctx.child_index,
+                row_selector_ctx.sibling_count,
+            );
             let cell_selector_ctx = SelectorContext {
                 ancestors: cell_ancestors,
                 child_index: col_pos,
@@ -1328,26 +1657,22 @@ fn resolve_fixed_table_columns(
                 following_siblings: Vec::new(),
                 is_empty: false,
             };
-            let cell_style = compute_style_with_context(
-                cell_el.tag,
-                cell_el.style_attr(),
-                &row_style,
-                rules,
-                cell_el.tag_name(),
-                &cell_classes,
-                cell_el.id(),
-                &cell_el.attributes,
-                &cell_selector_ctx,
-            );
+            let cell_style = anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
+                compute_style_with_context(
+                    cell_el.tag,
+                    cell_el.style_attr(),
+                    &row_style,
+                    rules,
+                    cell_el.tag_name(),
+                    &cell_classes,
+                    cell_el.id(),
+                    &cell_el.attributes,
+                    &cell_selector_ctx,
+                )
+            });
 
             if let Some(width) = resolve_cell_track_width(cell_el, &cell_style, table_width) {
                 apply_cell_width_to_columns(&mut col_widths, col_pos, colspan, width);
-            } else if colspan == 1 && col_pos < col_widths.len() {
-                let border_min = cell_style.border.horizontal_width() + cell_style.font_size * 0.25;
-                if border_min > 0.0 {
-                    col_widths[col_pos] =
-                        Some(col_widths[col_pos].map_or(border_min, |w| w.max(border_min)));
-                }
             }
 
             col_pos = col_pos.saturating_add(colspan);
@@ -1471,17 +1796,21 @@ fn collapse_outer_horizontal_borders(
         following_siblings: Vec::new(),
         is_empty: false,
     };
-    let row_style = compute_style_with_context(
-        first_row.tag,
-        first_row.style_attr(),
-        row_parent_style.as_ref().unwrap_or(table_style),
-        rules,
-        first_row.tag_name(),
-        &row_classes,
-        first_row.id(),
-        &first_row.attributes,
-        &row_selector_ctx,
-    );
+    let row_style =
+        anonymous_table_box_style(first_row, row_parent_style.as_ref().unwrap_or(table_style))
+            .unwrap_or_else(|| {
+                compute_style_with_context(
+                    first_row.tag,
+                    first_row.style_attr(),
+                    row_parent_style.as_ref().unwrap_or(table_style),
+                    rules,
+                    first_row.tag_name(),
+                    &row_classes,
+                    first_row.id(),
+                    &first_row.attributes,
+                    &row_selector_ctx,
+                )
+            });
     let cells = table_row_cell_elements(first_row, &row_style, rules, &row_selector_ctx.ancestors);
     if cells.is_empty() {
         return (0.0, 0.0);
@@ -1494,40 +1823,47 @@ fn collapse_outer_horizontal_borders(
         col_pos = col_pos.saturating_add(parse_cell_colspan(cell));
     }
     let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-    cell_ancestors.push(AncestorInfo {
-        element: first_row,
-        child_index: row_selector_ctx.child_index,
-        sibling_count: row_selector_ctx.sibling_count,
-        preceding_siblings: Vec::new(),
-        following_siblings: Vec::new(),
-        is_empty: false,
-    });
+    push_table_dom_ancestor(
+        &mut cell_ancestors,
+        first_row,
+        row_selector_ctx.child_index,
+        row_selector_ctx.sibling_count,
+    );
     let cell_border = |idx: usize, cell: &ElementNode| -> ComputedStyle {
         let classes = cell.class_list();
-        compute_style_with_context(
-            cell.tag,
-            cell.style_attr(),
-            &row_style,
-            rules,
-            cell.tag_name(),
-            &classes,
-            cell.id(),
-            &cell.attributes,
-            &SelectorContext {
-                ancestors: cell_ancestors.clone(),
-                child_index: cell_positions.get(idx).copied().unwrap_or(idx),
-                sibling_count: num_cols,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            },
-        )
+        anonymous_table_box_style(cell, &row_style).unwrap_or_else(|| {
+            compute_style_with_context(
+                cell.tag,
+                cell.style_attr(),
+                &row_style,
+                rules,
+                cell.tag_name(),
+                &classes,
+                cell.id(),
+                &cell.attributes,
+                &SelectorContext {
+                    ancestors: cell_ancestors.clone(),
+                    child_index: cell_positions.get(idx).copied().unwrap_or(idx),
+                    sibling_count: num_cols,
+                    preceding_siblings: Vec::new(),
+                    following_siblings: Vec::new(),
+                    is_empty: false,
+                },
+            )
+        })
     };
     let first = cell_border(0, cells[0]);
     let last = cell_border(cell_count - 1, cells[cell_count - 1]);
     (
-        first.border.left.width.max(table_style.border.left.width),
-        last.border.right.width.max(table_style.border.right.width),
+        first
+            .border
+            .left
+            .width
+            .max(table_style.border.left.used_width()),
+        last.border
+            .right
+            .width
+            .max(table_style.border.right.used_width()),
     )
 }
 
@@ -1536,10 +1872,11 @@ pub(crate) fn flatten_table(
     el: &ElementNode,
     style: &ComputedStyle,
     available_width: f32,
-    output: &mut Vec<LayoutElement>,
+    output: &mut Vec<LayoutNode>,
     ancestors: &[AncestorInfo],
     table_child_index: usize,
     table_sibling_count: usize,
+    generated_content: GeneratedInlineContent<'_>,
     env: &mut LayoutEnv,
 ) {
     let rules = env.rules;
@@ -1547,46 +1884,48 @@ pub(crate) fn flatten_table(
     let filter_defs = env.filter_defs;
     let filter_dpi = env.filter_dpi;
     let counter_state = &mut *env.counter_state;
-    let inner_width = resolve_table_inner_width(style, available_width);
-    let table_attr_border_width =
-        parse_table_attr_length(el, "border").filter(|width| *width > 0.0);
-    let table_attr_cellpadding = parse_table_attr_length(el, "cellpadding");
-    let table_attr_cellspacing = parse_table_attr_length(el, "cellspacing");
-    let legacy_border_spacing =
-        table_attr_cellspacing.or_else(|| table_attr_border_width.is_some().then_some(2.0 * 0.75));
-    let effective_border_spacing = if style.border_spacing == 0.0 {
-        legacy_border_spacing.unwrap_or(style.border_spacing)
-    } else {
-        style.border_spacing
-    };
-    let effective_border_spacing_vertical = if style.border_spacing_vertical == 0.0 {
-        legacy_border_spacing.unwrap_or(style.border_spacing_vertical)
-    } else {
-        style.border_spacing_vertical
-    };
-    let table_grid_inset = table_attr_border_width.unwrap_or(0.0);
+    let mut measurement_counter_state = counter_state.clone();
+    let table_border = LayoutBorder::from_computed(&style.border, style.color);
+    let effective_border_spacing = style.border_spacing;
+    let effective_border_spacing_vertical = style.border_spacing_vertical;
+    let table_formatting = TableFormatting::new(style.border_collapse, effective_border_spacing);
+    let table_box_model = TableRootBoxModel::new(
+        table_formatting,
+        style.box_sizing,
+        style.padding,
+        table_border.widths(),
+    );
+    let inner_width = resolve_table_inner_width(style, available_width, table_box_model);
+    let table_grid_box_insets = table_box_model.grid_insets();
+    // Row construction needs the table grid's local inset, but the table
+    // wrapper's final inline position cannot be resolved until auto layout has
+    // produced the used table width below.
+    let table_inline_geometry = TableInlineGeometry::new(
+        InlineOffset::ZERO,
+        InlineOffset::new(table_grid_box_insets.left),
+    );
 
     // Build ancestor chain: everything above + the table element itself.
     let mut table_ancestors: Vec<AncestorInfo> = ancestors.to_vec();
-    table_ancestors.push(AncestorInfo {
-        element: el,
-        child_index: table_child_index,
-        sibling_count: table_sibling_count,
-        preceding_siblings: Vec::new(),
-        following_siblings: Vec::new(),
-        is_empty: false,
-    });
+    push_table_dom_ancestor(
+        &mut table_ancestors,
+        el,
+        table_child_index,
+        table_sibling_count,
+    );
 
     // Collect all <tr> elements (from direct children, thead, tbody, tfoot).
     // Track section-relative indices so nth-child counts within each section
     // (thead, tbody, tfoot) as browsers do, not globally.
     // Also track the section element so descendant selectors can see it.
-    let mut rows: Vec<&ElementNode> = Vec::new();
-    let mut row_section_indices: Vec<usize> = Vec::new();
-    let mut row_section_sizes: Vec<usize> = Vec::new();
-    let mut row_section_elements: Vec<Option<&ElementNode>> = Vec::new();
-    let mut row_section_child_indices: Vec<usize> = Vec::new();
-    let mut row_section_sibling_counts: Vec<usize> = Vec::new();
+    let mut row_sources = Vec::new();
+    let mut header_section_claimed = false;
+    let mut footer_section_claimed = false;
+    let mut improper_children = Vec::new();
+    let mut improper_generated = GeneratedTableCellContent {
+        before: generated_content.before(),
+        ..Default::default()
+    };
     // `<caption>` / `display: table-caption` boxes and their positions among
     // the table's element children, for selector matching.
     let mut captions: Vec<(&ElementNode, usize)> = Vec::new();
@@ -1596,89 +1935,130 @@ pub(crate) fn flatten_table(
         .filter(|c| matches!(c, DomNode::Element(_)))
         .count();
     for (section_child_idx, child) in el.children.iter().enumerate() {
-        if let DomNode::Element(child_el) = child {
-            let (_, child_role) = table_child_role(
-                child_el,
-                style,
-                rules,
-                &table_ancestors,
-                section_child_idx,
-                section_count,
-            );
-            match child_role {
-                Some(TableBoxRole::Caption) => {
-                    captions.push((child_el, section_child_idx));
+        let (child_el, child_role) = match child {
+            DomNode::Element(child_el) => {
+                let (_, role) = table_child_role(
+                    child_el,
+                    style,
+                    rules,
+                    &table_ancestors,
+                    section_child_idx,
+                    section_count,
+                );
+                if !is_proper_table_child(role) {
+                    improper_children.push((DomNode::Element(child_el.clone()), role));
+                    continue;
                 }
-                Some(TableBoxRole::Row) => {
-                    // Direct <tr> child of <table> — standalone section
-                    let idx = rows.len();
-                    rows.push(child_el);
-                    row_section_indices.push(idx);
-                    row_section_sizes.push(1);
-                    row_section_elements.push(None);
-                    row_section_child_indices.push(section_child_idx);
-                    row_section_sibling_counts.push(section_count);
-                }
-                Some(
-                    TableBoxRole::HeaderGroup | TableBoxRole::RowGroup | TableBoxRole::FooterGroup,
-                ) => {
-                    let mut section_ancestors = table_ancestors.clone();
-                    section_ancestors.push(AncestorInfo {
-                        element: child_el,
-                        child_index: section_child_idx,
-                        sibling_count: section_count,
-                        preceding_siblings: Vec::new(),
-                        following_siblings: Vec::new(),
-                        is_empty: false,
-                    });
-                    let group_style = compute_column_style(
-                        child_el,
-                        style,
-                        rules,
-                        &table_ancestors,
-                        section_child_idx,
-                        section_count,
-                    );
-                    let group_child_count = child_el
-                        .children
-                        .iter()
-                        .filter(|gc| matches!(gc, DomNode::Element(_)))
-                        .count();
-                    let section_rows: Vec<&ElementNode> = child_el
-                        .children
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(group_child_idx, gc)| {
-                            let DomNode::Element(g) = gc else {
-                                return None;
-                            };
-                            let (_, role) = table_child_role(
-                                g,
-                                &group_style,
-                                rules,
-                                &section_ancestors,
-                                group_child_idx,
-                                group_child_count,
-                            );
-                            matches!(role, Some(TableBoxRole::Row) | None).then_some(g)
-                        })
-                        .collect();
-                    let section_size = section_rows.len();
-                    for (i, gc) in section_rows.into_iter().enumerate() {
-                        rows.push(gc);
-                        row_section_indices.push(i);
-                        row_section_sizes.push(section_size);
-                        row_section_elements.push(Some(child_el));
-                        row_section_child_indices.push(section_child_idx);
-                        row_section_sibling_counts.push(section_count);
-                    }
-                }
-                _ => {}
+                (child_el, role)
             }
+            DomNode::Text(text) if !text.trim().is_empty() => {
+                improper_children.push((DomNode::Text(text.clone()), None));
+                continue;
+            }
+            DomNode::Text(_) => continue,
+        };
+
+        push_anonymous_table_row(
+            &mut row_sources,
+            &mut improper_children,
+            &mut improper_generated,
+            section_child_idx,
+            section_count,
+        );
+        match child_role {
+            Some(TableBoxRole::Caption) => {
+                captions.push((child_el, section_child_idx));
+            }
+            Some(TableBoxRole::Row) => {
+                // Direct <tr> child of <table> — standalone section
+                let section_index = row_sources.len();
+                row_sources.push(TableRowSource {
+                    node: TableRowNode::Element(child_el),
+                    section_index,
+                    section_size: 1,
+                    section: None,
+                    section_child_index: section_child_idx,
+                    section_sibling_count: section_count,
+                    section_role: EffectiveTableSectionRole::Body,
+                });
+            }
+            Some(
+                declared_role @ (TableBoxRole::HeaderGroup
+                | TableBoxRole::RowGroup
+                | TableBoxRole::FooterGroup),
+            ) => {
+                let section_role = EffectiveTableSectionRole::claim(
+                    declared_role,
+                    &mut header_section_claimed,
+                    &mut footer_section_claimed,
+                );
+                let mut section_ancestors = table_ancestors.clone();
+                section_ancestors.push(AncestorInfo {
+                    element: child_el,
+                    child_index: section_child_idx,
+                    sibling_count: section_count,
+                    preceding_siblings: Vec::new(),
+                    following_siblings: Vec::new(),
+                    is_empty: false,
+                });
+                let group_style = compute_column_style(
+                    child_el,
+                    style,
+                    rules,
+                    &table_ancestors,
+                    section_child_idx,
+                    section_count,
+                );
+                let group_child_count = child_el
+                    .children
+                    .iter()
+                    .filter(|gc| matches!(gc, DomNode::Element(_)))
+                    .count();
+                let section_rows: Vec<&ElementNode> = child_el
+                    .children
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(group_child_idx, gc)| {
+                        let DomNode::Element(g) = gc else {
+                            return None;
+                        };
+                        let (_, role) = table_child_role(
+                            g,
+                            &group_style,
+                            rules,
+                            &section_ancestors,
+                            group_child_idx,
+                            group_child_count,
+                        );
+                        matches!(role, Some(TableBoxRole::Row) | None).then_some(g)
+                    })
+                    .collect();
+                let section_size = section_rows.len();
+                for (i, gc) in section_rows.into_iter().enumerate() {
+                    row_sources.push(TableRowSource {
+                        node: TableRowNode::Element(gc),
+                        section_index: i,
+                        section_size,
+                        section: Some(child_el),
+                        section_child_index: section_child_idx,
+                        section_sibling_count: section_count,
+                        section_role,
+                    });
+                }
+            }
+            _ => {}
         }
     }
+    improper_generated.after = generated_content.after();
+    push_anonymous_table_row(
+        &mut row_sources,
+        &mut improper_children,
+        &mut improper_generated,
+        section_count,
+        section_count,
+    );
 
-    if rows.is_empty() {
+    if row_sources.is_empty() {
         return;
     }
 
@@ -1691,66 +2071,27 @@ pub(crate) fn flatten_table(
     // unchanged (no layout/selector difference for the common case). The
     // per-row section metadata travels with each row, so nth-child / descendant
     // selector matching is unaffected.
-    let section_rank = |sec: &Option<&ElementNode>| -> u8 {
-        match sec.and_then(|s| {
-            let child_index = row_section_child_indices
-                .iter()
-                .zip(&row_section_elements)
-                .find_map(|(idx, candidate)| {
-                    candidate
-                        .is_some_and(|candidate| std::ptr::eq(candidate, s))
-                        .then_some(*idx)
-                })
-                .unwrap_or(0);
-            table_section_role(
-                Some(s),
-                style,
-                rules,
-                &table_ancestors,
-                child_index,
-                section_count,
-            )
-        }) {
-            Some(TableBoxRole::HeaderGroup) => 0,
-            Some(TableBoxRole::FooterGroup) => 2,
-            _ => 1, // tbody and standalone <tr>
-        }
-    };
-    if (0..rows.len()).any(|i| {
-        i > 0 && section_rank(&row_section_elements[i]) < section_rank(&row_section_elements[i - 1])
-    }) {
-        let mut order: Vec<usize> = (0..rows.len()).collect();
-        order.sort_by_key(|&i| section_rank(&row_section_elements[i]));
-        let apply =
-            |v: &[usize], src: &Vec<usize>| -> Vec<usize> { v.iter().map(|&i| src[i]).collect() };
-        rows = order.iter().map(|&i| rows[i]).collect();
-        row_section_indices = apply(&order, &row_section_indices);
-        row_section_sizes = apply(&order, &row_section_sizes);
-        row_section_elements = order.iter().map(|&i| row_section_elements[i]).collect();
-        row_section_child_indices = apply(&order, &row_section_child_indices);
-        row_section_sibling_counts = apply(&order, &row_section_sibling_counts);
+    let section_rank = |row: &TableRowSource<'_>| row.section_role.paint_order();
+    if row_sources
+        .windows(2)
+        .any(|rows| section_rank(&rows[1]) < section_rank(&rows[0]))
+    {
+        row_sources.sort_by_key(section_rank);
     }
 
-    // CSS Tables defines only the first table-header-group as a repeated header;
-    // later header-group boxes are treated as ordinary row groups.
-    let first_header_section_key = row_section_elements
+    let rows: Vec<&ElementNode> = row_sources.iter().map(|row| row.node.element()).collect();
+    let row_section_indices: Vec<usize> = row_sources.iter().map(|row| row.section_index).collect();
+    let row_section_sizes: Vec<usize> = row_sources.iter().map(|row| row.section_size).collect();
+    let row_section_elements: Vec<Option<&ElementNode>> =
+        row_sources.iter().map(|row| row.section).collect();
+    let row_section_child_indices: Vec<usize> = row_sources
         .iter()
-        .zip(&row_section_child_indices)
-        .find_map(|(section, child_index)| {
-            section
-                .filter(|section| section.tag == HtmlTag::Thead)
-                .filter(|_| {
-                    table_section_role(
-                        *section,
-                        style,
-                        rules,
-                        &table_ancestors,
-                        *child_index,
-                        section_count,
-                    ) == Some(TableBoxRole::HeaderGroup)
-                })
-                .map(|section| table_section_key(Some(section), *child_index))
-        });
+        .map(|row| row.section_child_index)
+        .collect();
+    let row_section_sibling_counts: Vec<usize> = row_sources
+        .iter()
+        .map(|row| row.section_sibling_count)
+        .collect();
 
     let caption_styles_for_layout: Vec<ComputedStyle> = captions
         .iter()
@@ -1779,7 +2120,7 @@ pub(crate) fn flatten_table(
                 fonts,
                 filter_defs,
                 filter_dpi,
-                counter_state,
+                &mut measurement_counter_state,
                 inner_width,
             )
         })
@@ -1856,6 +2197,7 @@ pub(crate) fn flatten_table(
                         let colgroup_style = child_style;
                         let colgroup_bg = style_background_rgba(&colgroup_style);
                         if !cols.is_empty() {
+                            let colgroup_start = col_idx;
                             let col_sibling_count = cols.len();
                             for (col_child_idx, col_el) in cols.into_iter().enumerate() {
                                 let span = parse_col_span(col_el);
@@ -1869,6 +2211,12 @@ pub(crate) fn flatten_table(
                                 );
                                 let col_bg = style_background_rgba(&col_style).or(colgroup_bg);
                                 let collapsed = col_style.visibility == Visibility::Collapse;
+                                assign_column_border(
+                                    &mut column_info,
+                                    col_idx,
+                                    span,
+                                    LayoutBorder::from_computed(&col_style.border, col_style.color),
+                                );
                                 for info in column_info.iter_mut().skip(col_idx).take(span) {
                                     info.background_color = col_bg;
                                     info.collapsed = collapsed;
@@ -1889,9 +2237,27 @@ pub(crate) fn flatten_table(
                                         }),
                                 );
                             }
+                            assign_column_group_border(
+                                &mut column_info,
+                                colgroup_start,
+                                col_idx.saturating_sub(colgroup_start),
+                                LayoutBorder::from_computed(
+                                    &colgroup_style.border,
+                                    colgroup_style.color,
+                                ),
+                            );
                             continue;
                         }
                         let span = parse_col_span(child_el);
+                        assign_column_group_border(
+                            &mut column_info,
+                            col_idx,
+                            span,
+                            LayoutBorder::from_computed(
+                                &colgroup_style.border,
+                                colgroup_style.color,
+                            ),
+                        );
                         for info in column_info.iter_mut().skip(col_idx).take(span) {
                             info.background_color = colgroup_bg;
                             info.collapsed = colgroup_style.visibility == Visibility::Collapse;
@@ -1915,6 +2281,12 @@ pub(crate) fn flatten_table(
                         let col_style = child_style;
                         let col_bg = style_background_rgba(&col_style);
                         let collapsed = col_style.visibility == Visibility::Collapse;
+                        assign_column_border(
+                            &mut column_info,
+                            col_idx,
+                            span,
+                            LayoutBorder::from_computed(&col_style.border, col_style.color),
+                        );
                         for info in column_info.iter_mut().skip(col_idx).take(span) {
                             info.background_color = col_bg;
                             info.collapsed = collapsed;
@@ -1949,13 +2321,11 @@ pub(crate) fn flatten_table(
     // the N columns is `inner_width - (N+1) * border_spacing`. Without this reduction
     // the columns are distributed across the full width and the table overflows by
     // exactly `(N+1) * border_spacing` on the right.
-    // For `border-collapse: collapse`, the cell borders are painted INSIDE the
-    // table's border box (CSS2 §17.6.2): the table width includes them. ironpress
-    // strokes borders centered on cell edges, so the column tracks (measured
-    // center-to-center) span `width - outer_left/2 - outer_right/2`; the
-    // `collapse_paint_offset` then nudges the painted table right by `outer_left/2`
-    // so the outer border's outer pixel lands on the table box edge. Without this
-    // reduction the columns sum to the full width and the table renders too wide.
+    // For `border-collapse: collapse`, CSS 2.2 §17.6.2 defines the table width
+    // from the outer border edges while collapsed borders are centered on grid
+    // lines.  Therefore the column tracks (grid-line to grid-line) span the
+    // table width minus half of each winning outer border.  Painting starts the
+    // first grid line half an outer border inward from the table origin.
     let (outer_left_border, outer_right_border) = collapse_outer_horizontal_borders(
         &rows,
         &row_section_indices,
@@ -1975,8 +2345,11 @@ pub(crate) fn flatten_table(
         && num_cols > 0
     {
         (inner_width - (num_cols as f32 + 1.0) * effective_border_spacing).max(0.0)
-    } else if style.border_collapse == BorderCollapse::Collapse {
-        (inner_width - outer_left_border / 2.0 - outer_right_border / 2.0).max(0.0)
+    } else if table_formatting.is_collapsed() {
+        table_box_model.collapsed_grid_extent(
+            inner_width,
+            outer_left_border / 2.0 + outer_right_border / 2.0,
+        )
     } else {
         inner_width
     };
@@ -2053,17 +2426,22 @@ pub(crate) fn flatten_table(
                 following_siblings: Vec::new(),
                 is_empty: false,
             };
-            let mut row_style = compute_style_with_context(
-                row.tag,
-                row.style_attr(),
-                sizing_row_parent_style.as_ref().unwrap_or(style),
-                rules,
-                row.tag_name(),
-                &row_classes,
-                row.id(),
-                &row.attributes,
-                &sizing_row_ctx,
-            );
+            let mut row_style =
+                anonymous_table_box_style(row, sizing_row_parent_style.as_ref().unwrap_or(style))
+                    .unwrap_or_else(|| {
+                        compute_style_with_context_with_font_metrics(
+                            row.tag,
+                            row.style_attr(),
+                            sizing_row_parent_style.as_ref().unwrap_or(style),
+                            rules,
+                            row.tag_name(),
+                            &row_classes,
+                            row.id(),
+                            &row.attributes,
+                            &sizing_row_ctx,
+                            FontMetrics::new(fonts),
+                        )
+                    });
             // `display: none` and `visibility: collapse` rows are removed from the
             // table entirely (no cells, no reserved height), so skip measuring them.
             if row_style.display == Display::None || row_style.visibility == Visibility::Collapse {
@@ -2090,6 +2468,8 @@ pub(crate) fn flatten_table(
                         row_child_idx,
                         row_child_count,
                     );
+                    let generated_cell_content =
+                        row_sources[sizing_row_idx].generated_cell_content(row_child_idx);
                     row_child_idx += 1;
                     if is_cell {
                         while col_pos < num_cols && sizing_occupied[col_pos] > 0 {
@@ -2103,14 +2483,12 @@ pub(crate) fn flatten_table(
                         let span = colspan.min(num_cols - col_pos);
                         let cell_classes = cell_el.class_list();
                         let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
-                        cell_sizing_ancestors.push(AncestorInfo {
-                            element: row,
-                            child_index: row_section_indices[sizing_row_idx],
-                            sibling_count: row_section_sizes[sizing_row_idx],
-                            preceding_siblings: Vec::new(),
-                            following_siblings: Vec::new(),
-                            is_empty: false,
-                        });
+                        push_table_dom_ancestor(
+                            &mut cell_sizing_ancestors,
+                            row,
+                            row_section_indices[sizing_row_idx],
+                            row_section_sizes[sizing_row_idx],
+                        );
                         let cell_sizing_ctx = SelectorContext {
                             ancestors: cell_sizing_ancestors,
                             child_index: col_pos,
@@ -2119,36 +2497,48 @@ pub(crate) fn flatten_table(
                             following_siblings: Vec::new(),
                             is_empty: false,
                         };
-                        let mut cell_style = compute_style_with_context(
-                            cell_el.tag,
-                            cell_el.style_attr(),
-                            &row_style,
+                        let cell_style = anonymous_table_box_style(cell_el, &row_style)
+                            .unwrap_or_else(|| {
+                                compute_style_with_context_with_font_metrics(
+                                    cell_el.tag,
+                                    cell_el.style_attr(),
+                                    &row_style,
+                                    rules,
+                                    cell_el.tag_name(),
+                                    &cell_classes,
+                                    cell_el.id(),
+                                    &cell_el.attributes,
+                                    &cell_sizing_ctx,
+                                    FontMetrics::new(fonts),
+                                )
+                            });
+                        let cell_counter_scope =
+                            measurement_counter_state.enter_element(&cell_style);
+                        let authored_generated = AuthoredCellGeneratedContent::resolve(
+                            cell_el,
+                            &cell_style,
                             rules,
-                            cell_el.tag_name(),
-                            &cell_classes,
-                            cell_el.id(),
-                            &cell_el.attributes,
                             &cell_sizing_ctx,
+                            fonts,
                         );
-                        apply_cell_attribute_hints(
-                            &mut cell_style,
-                            table_attr_cellpadding,
-                            table_attr_border_width,
-                        );
+                        let authored_generated = authored_generated.boundaries(cell_el);
                         let mut runs = Vec::new();
                         let mut nested_rows = Vec::new();
                         let recurse_descendants = cell_el.children.iter().any(
                             |node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)),
                         );
                         let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
-                        text_ancestors.push(AncestorInfo {
-                            element: cell_el,
-                            child_index: col_pos,
-                            sibling_count: num_cols,
-                            preceding_siblings: Vec::new(),
-                            following_siblings: Vec::new(),
-                            is_empty: false,
-                        });
+                        push_table_dom_ancestor(&mut text_ancestors, cell_el, col_pos, num_cols);
+                        generated_cell_content.append_before_measurement(
+                            &mut runs,
+                            fonts,
+                            &mut measurement_counter_state,
+                        );
+                        authored_generated.append_before_measurement(
+                            &mut runs,
+                            fonts,
+                            &mut measurement_counter_state,
+                        );
                         collect_table_cell_content_inner(
                             &cell_el.children,
                             &cell_style,
@@ -2163,78 +2553,41 @@ pub(crate) fn flatten_table(
                             recurse_descendants,
                             recurse_descendants,
                             &text_ancestors,
-                            inner_width.max(1.0),
-                            counter_state,
+                            inner_width,
+                            &mut measurement_counter_state,
                         );
-                        // Estimate content width the way the line wrapper measures
-                        // it: sum each word's width plus one inter-word space. The
-                        // wrapper measures words and spaces separately (losing the
-                        // cross-word kerning that a single full-string measurement
-                        // folds in), so measuring the full run here would under-size
-                        // the column and force max-content text to wrap. Track the
-                        // longest single word too, so short headings never hyphenate.
-                        // `nowrap`/`pre`: the run cannot break, so its min-content
-                        // equals its max-content (the whole run width).
-                        let cell_nowrap =
-                            matches!(cell_style.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre);
-                        let mut content_min_width = 0.0f32;
-                        let content_width: f32 = runs
-                            .iter()
-                            .map(|run| {
-                                let space_width = estimate_word_width(
-                                    " ",
-                                    run.font_size,
-                                    &run.font_family,
-                                    run.bold,
-                                    run.italic,
-                                    fonts,
-                                );
-                                let words: Vec<&str> = run.text.split_whitespace().collect();
-                                let mut line_width = 0.0f32;
-                                let mut longest_word_width = 0.0f32;
-                                for (i, word) in words.iter().enumerate() {
-                                    let word_width = estimate_word_width(
-                                        word,
-                                        run.font_size,
-                                        &run.font_family,
-                                        run.bold,
-                                        run.italic,
-                                        fonts,
-                                    );
-                                    if i > 0 {
-                                        line_width += space_width;
-                                    }
-                                    line_width += word_width;
-                                    longest_word_width = longest_word_width.max(word_width);
-                                }
-                                let run_max = line_width.max(longest_word_width);
-                                // Min-content per run: longest unbreakable word, or
-                                // the full run when it cannot wrap.
-                                content_min_width += if cell_nowrap {
-                                    run_max
-                                } else {
-                                    longest_word_width
-                                };
-                                run_max
-                            })
-                            .sum();
-                        // The line wrapper accumulates word/space widths in a
-                        // different association order than the sum above, so an
-                        // exact-fit column can tip into wrapping on a 1-ULP
-                        // rounding difference. A sub-point slack keeps max-content
-                        // text on one line without visibly widening the column.
-                        let content_width = if content_width > 0.0 {
-                            content_width + 0.5
-                        } else {
-                            content_width
-                        };
+                        generated_cell_content.append_after_measurement(
+                            &mut runs,
+                            fonts,
+                            &mut measurement_counter_state,
+                        );
+                        authored_generated.append_after_measurement(
+                            &mut runs,
+                            fonts,
+                            &mut measurement_counter_state,
+                        );
+                        measurement_counter_state.leave_element(cell_counter_scope);
+                        // Measure the same prepared styled tokens and the same
+                        // ordered advances that the final line wrapper consumes.
+                        // This makes max-content an actual exact fit: no point- or
+                        // pixel-based slack is added to table geometry.
+                        let text_options =
+                            table_cell_text_wrap_options(&cell_style, inner_width, fonts);
+                        let intrinsic = measure_text_intrinsic_widths(
+                            runs,
+                            text_options,
+                            table_cell_allows_soft_wrap(&cell_style),
+                            fonts,
+                        );
+                        let content_width = intrinsic.max_content;
+                        let content_min_width = intrinsic.min_content;
                         // Nested block descendants (e.g. a fixed-width <div>) and
                         // nested tables both contribute a minimum content width so
                         // a shrink-to-fit cell does not crush them narrower than
                         // their own declared/intrinsic width.
                         let nested_width = nested_rows
                             .iter()
-                            .map(nested_element_preferred_width)
+                            .map(|element| nested_element_preferred_width(element.as_ref()))
                             .fold(0.0f32, f32::max);
                         // An explicit width on the cell (CSS or `width` attribute)
                         // seeds the column's preferred width: the column is at least
@@ -2254,22 +2607,25 @@ pub(crate) fn flatten_table(
                         // full border. Without this the track is sized for the full
                         // border but painted center-to-center on the grid line,
                         // making each collapsed column ~half-a-border too wide.
-                        let track_border_factor =
-                            if style.border_collapse == BorderCollapse::Collapse {
-                                0.5
-                            } else {
-                                1.0
-                            };
-                        let cell_padding_x = cell_style.padding.left
-                            + cell_style.padding.right
-                            + cell_style.border.horizontal_width() * track_border_factor;
-                        let total_preferred = (content_width.max(nested_width) + cell_padding_x)
-                            .max(explicit_cell_width);
+                        let cell_border =
+                            LayoutBorder::from_computed(&cell_style.border, cell_style.color);
+                        let cell_insets = table_cell_content_insets(
+                            &cell_style,
+                            &cell_border,
+                            style.border_collapse,
+                        );
+                        let cell_padding_x = cell_insets.horizontal();
+                        let total_preferred =
+                            required_outer_width(content_width.max(nested_width), cell_padding_x)
+                                .max(explicit_cell_width);
                         // Min-content includes padding and is floored by an explicit
                         // cell width (an explicit `width` makes the column at least
                         // that wide even for shrinking).
-                        let total_min = (content_min_width.max(nested_width) + cell_padding_x)
-                            .max(explicit_cell_width);
+                        let total_min = required_outer_width(
+                            content_min_width.max(nested_width),
+                            cell_padding_x,
+                        )
+                        .max(explicit_cell_width);
                         if span == 1 {
                             if col_pos < num_cols {
                                 preferred_widths[col_pos] =
@@ -2338,11 +2694,15 @@ pub(crate) fn flatten_table(
                 // as its columns require, so don't stretch the columns to fill the
                 // containing block. Only an explicitly-sized table absorbs the
                 // leftover space.
-                if table_has_explicit_width && total_preferred > 0.0 && extra > 0.0 {
-                    preferred_widths
-                        .iter()
-                        .map(|width| width + (width / total_preferred) * extra)
-                        .collect()
+                if table_has_explicit_width && extra > 0.0 {
+                    if total_preferred > 0.0 {
+                        preferred_widths
+                            .iter()
+                            .map(|width| width + (width / total_preferred) * extra)
+                            .collect()
+                    } else {
+                        vec![columns_width / preferred_widths.len() as f32; preferred_widths.len()]
+                    }
                 } else {
                     preferred_widths
                 }
@@ -2392,10 +2752,21 @@ pub(crate) fn flatten_table(
         distribute_extra_width(&mut col_widths, caption_min_width - current_table_width);
     }
 
-    // Build layout rows, tracking cells occupied by rowspan from previous rows.
-    // Each entry in `occupied` tracks the remaining rowspan count for that column.
-    let mut occupied: Vec<usize> = vec![0; num_cols];
-    let mut occupied_min_heights: Vec<f32> = vec![0.0; num_cols];
+    let mut collapsed_border_sources = CollapsedBorderSources::new(
+        table_border,
+        column_info.iter().map(|column| CollapsedBorderTrack {
+            border: column.column_border,
+            group_border: column.column_group_border,
+        }),
+        style.direction_rtl,
+    );
+
+    // Build layout rows, tracking cells occupied by rowspans from previous rows.
+    // Every column covered by one originating cell carries the same semantic ID,
+    // so adjacent but independent rowspans can never be merged by coincidental
+    // geometry.
+    let mut occupied = vec![RowspanSlot::default(); num_cols];
+    let mut rowspan_id_counter = 0;
     let mut layout_section = None;
     let mut collapsed_section_spacers = Vec::new();
     // Remember where this table's rows start so a table-level background/border
@@ -2407,8 +2778,7 @@ pub(crate) fn flatten_table(
             row_section_child_indices[row_idx],
         );
         if layout_section != Some(section_key) {
-            occupied.fill(0);
-            occupied_min_heights.fill(0.0);
+            occupied.fill(RowspanSlot::default());
             layout_section = Some(section_key);
         }
         let row_classes = row.class_list();
@@ -2453,6 +2823,12 @@ pub(crate) fn flatten_table(
         let section_break_inside_avoid = row_parent_style
             .as_ref()
             .is_some_and(|section_style| section_style.break_inside_avoid);
+        let section_avoid_group = section_break_inside_avoid.then(|| {
+            TableFragmentGroup::new(table_section_key(
+                row_section_elements[row_idx],
+                row_section_child_indices[row_idx],
+            ))
+        });
         let row_selector_ctx = SelectorContext {
             ancestors: row_ancestors,
             child_index: section_idx,
@@ -2461,31 +2837,45 @@ pub(crate) fn flatten_table(
             following_siblings: Vec::new(),
             is_empty: false,
         };
-        let mut row_style = compute_style_with_context(
-            row.tag,
-            row.style_attr(),
-            row_parent_style.as_ref().unwrap_or(style),
-            rules,
-            row.tag_name(),
-            &row_classes,
-            row.id(),
-            &row.attributes,
-            &row_selector_ctx,
-        );
+        let mut row_style =
+            anonymous_table_box_style(row, row_parent_style.as_ref().unwrap_or(style))
+                .unwrap_or_else(|| {
+                    compute_style_with_context_with_font_metrics(
+                        row.tag,
+                        row.style_attr(),
+                        row_parent_style.as_ref().unwrap_or(style),
+                        rules,
+                        row.tag_name(),
+                        &row_classes,
+                        row.id(),
+                        &row.attributes,
+                        &row_selector_ctx,
+                        FontMetrics::new(fonts),
+                    )
+                });
         // `display: none` rows are removed from the table entirely.
         if row_style.display == Display::None {
             continue;
         }
+        let row_border = LayoutBorder::from_computed(&row_style.border, row_style.color);
+        let row_group_border = row_parent_style.as_ref().map(|section_style| {
+            LayoutBorder::from_computed(&section_style.border, section_style.color)
+        });
         if row_style.page_break_before || section_break_before {
             let side = if row_style.page_break_before {
                 PageBreakSide::from(row_style.break_before)
             } else {
                 section_break_side
             };
-            output.push(LayoutElement::PageBreak(side, None));
+            output.push(
+                PageBreak {
+                    side,
+                    page_name: None,
+                }
+                .boxed(),
+            );
         }
-        let row_break_inside_avoid =
-            style.break_inside_avoid || section_break_inside_avoid || row_style.break_inside_avoid;
+        let row_break_inside_avoid = row_style.break_inside_avoid;
         if row_style.visibility == Visibility::Collapse || section_collapsed {
             // CSS Tables collapses the row's content and height, but in the
             // collapsed-border model the row's own cell borders still
@@ -2527,14 +2917,7 @@ pub(crate) fn flatten_table(
 
                     let cell_classes = cell_el.class_list();
                     let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-                    cell_ancestors.push(AncestorInfo {
-                        element: row,
-                        child_index: section_idx,
-                        sibling_count: section_size,
-                        preceding_siblings: Vec::new(),
-                        following_siblings: Vec::new(),
-                        is_empty: false,
-                    });
+                    push_table_dom_ancestor(&mut cell_ancestors, row, section_idx, section_size);
                     let cell_selector_ctx = SelectorContext {
                         ancestors: cell_ancestors,
                         child_index: col_pos,
@@ -2543,49 +2926,53 @@ pub(crate) fn flatten_table(
                         following_siblings: Vec::new(),
                         is_empty: false,
                     };
-                    let mut cell_style = compute_style_with_context(
-                        cell_el.tag,
-                        cell_el.style_attr(),
-                        &row_style,
-                        rules,
-                        cell_el.tag_name(),
-                        &cell_classes,
-                        cell_el.id(),
-                        &cell_el.attributes,
-                        &cell_selector_ctx,
-                    );
-                    apply_cell_attribute_hints(
-                        &mut cell_style,
-                        table_attr_cellpadding,
-                        table_attr_border_width,
-                    );
-                    let cell_border = LayoutBorder::from_computed(&cell_style.border);
+                    let cell_style =
+                        anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
+                            compute_style_with_context_with_font_metrics(
+                                cell_el.tag,
+                                cell_el.style_attr(),
+                                &row_style,
+                                rules,
+                                cell_el.tag_name(),
+                                &cell_classes,
+                                cell_el.id(),
+                                &cell_el.attributes,
+                                &cell_selector_ctx,
+                                FontMetrics::new(fonts),
+                            )
+                        });
+                    let cell_border =
+                        LayoutBorder::from_computed(&cell_style.border, cell_style.color);
                     cells.push(TableCell {
-                        lines: Vec::new(),
-                        nested_rows: Vec::new(),
-                        bold: false,
-                        background_color: None,
-                        padding_top: 0.0,
-                        padding_right: 0.0,
-                        padding_bottom: 0.0,
-                        padding_left: 0.0,
-                        colspan: span,
-                        rowspan: 1,
-                        border: cell_border,
-                        text_align: cell_style.text_align,
-                        vertical_align: VerticalAlign::Top,
-                        min_content_height: cell_border.top.width + cell_border.bottom.width,
-                        hide_if_empty: false,
-                        grid_inset: None,
-                        clips: false,
-                        background_gradient: None,
-                        background_radial_gradient: None,
-                        background_conic_gradient: None,
+                        layout: CellBox {
+                            box_model: CellBoxModel {
+                                border: cell_border,
+                                minimum_block_size: cell_border.vertical_width(),
+                                ..Default::default()
+                            },
+                            alignment: CellAlignment {
+                                inline: cell_style.text_align,
+                                block: VerticalAlign::Top,
+                            },
+                            ..Default::default()
+                        },
+                        span: TableCellSpan {
+                            columns: span,
+                            ..Default::default()
+                        },
+                        table: TableCellState::default(),
+                        ..Default::default()
                     });
                     col_pos += span;
                 }
 
                 if !cells.is_empty() {
+                    collapsed_border_sources.push_row(CollapsedBorderTrack::row(
+                        row_border,
+                        row_group_border,
+                        section_idx,
+                        section_size,
+                    ));
                     let first_emitted_row = output.len() == table_output_start;
                     let mut row_cells = cells;
                     let mut row_col_widths = col_widths.clone();
@@ -2593,22 +2980,22 @@ pub(crate) fn flatten_table(
                         row_cells.reverse();
                         row_col_widths.reverse();
                     }
-                    output.push(LayoutElement::TableRow {
-                        cells: row_cells,
-                        col_widths: row_col_widths,
-                        margin_top: if first_emitted_row {
-                            table_grid_inset
+                    output.push(table_row_node(
+                        TableCells {
+                            cells: row_cells,
+                            column_widths: row_col_widths,
+                        },
+                        TableRowFlow::new(if first_emitted_row {
+                            table_grid_box_insets.top
                         } else {
                             0.0
-                        },
-                        margin_bottom: 0.0,
-                        border_collapse: style.border_collapse,
-                        border_spacing: effective_border_spacing,
-                        is_header: false,
-                        is_footer: false,
-                        offset_left: style.margin.left.max(0.0) + table_grid_inset,
-                        break_inside_avoid: row_break_inside_avoid,
-                    });
+                        }),
+                        table_formatting,
+                        row_sources[row_idx]
+                            .section_role
+                            .fragmentation(row_break_inside_avoid, section_avoid_group),
+                        table_inline_geometry,
+                    ));
                 }
             } else {
                 let spacer_height = if section_collapsed {
@@ -2632,109 +3019,76 @@ pub(crate) fn flatten_table(
                 if style.direction_rtl {
                     row_col_widths.reverse();
                 }
-                let is_header = table_section_is_first_header_group(
-                    row_section_elements[row_idx],
-                    first_header_section_key,
-                    row_section_child_indices[row_idx],
-                    style,
-                    rules,
-                    &table_ancestors,
-                    row_section_sibling_counts[row_idx],
-                );
-                let is_footer = table_section_role(
-                    row_section_elements[row_idx],
-                    style,
-                    rules,
-                    &table_ancestors,
-                    row_section_child_indices[row_idx],
-                    row_section_sibling_counts[row_idx],
-                ) == Some(TableBoxRole::FooterGroup);
-                output.push(LayoutElement::TableRow {
-                    cells: Vec::new(),
-                    col_widths: row_col_widths,
-                    margin_top: spacer_height
-                        + if first_emitted_row {
-                            table_grid_inset
-                        } else {
-                            0.0
-                        },
-                    margin_bottom: 0.0,
-                    border_collapse: style.border_collapse,
-                    border_spacing: effective_border_spacing,
-                    is_header,
-                    is_footer,
-                    offset_left: style.margin.left.max(0.0) + table_grid_inset,
-                    break_inside_avoid: row_break_inside_avoid,
-                });
+                output.push(table_row_node(
+                    TableCells {
+                        cells: Vec::new(),
+                        column_widths: row_col_widths,
+                    },
+                    TableRowFlow::new(
+                        spacer_height
+                            + if first_emitted_row {
+                                table_grid_box_insets.top
+                            } else {
+                                0.0
+                            },
+                    ),
+                    table_formatting,
+                    row_sources[row_idx]
+                        .section_role
+                        .fragmentation(row_break_inside_avoid, section_avoid_group),
+                    table_inline_geometry,
+                ));
             }
             continue;
         }
         row_style.width = Some(inner_width);
         let mut cells = Vec::new();
-        let mut cell_hidden_borders = Vec::new();
 
         // Current logical column position in the grid
         let mut col_pos: usize = 0;
         let row_cell_elements =
             table_row_cell_elements(row, &row_style, rules, &row_selector_ctx.ancestors);
-        let mut child_iter = row_cell_elements.into_iter();
+        let mut child_iter = row_cell_elements.into_iter().enumerate();
 
         // Process cells, skipping occupied positions and inserting phantom cells
         let mut next_cell = child_iter.next();
         while col_pos < num_cols {
-            if occupied[col_pos] > 0 {
+            if occupied[col_pos].is_occupied() {
                 // This position is occupied by a rowspan from a previous row.
                 // Insert a phantom cell (rowspan = 0) as a placeholder.
-                let span_cols = {
-                    // Count how many consecutive occupied columns share this rowspan
-                    let remaining = occupied[col_pos];
-                    let min_height = occupied_min_heights[col_pos];
-                    let mut count = 1;
-                    while col_pos + count < num_cols
-                        && occupied[col_pos + count] == remaining
-                        && (occupied_min_heights[col_pos + count] - min_height).abs() < 0.01
-                    {
-                        count += 1;
-                    }
-                    count
-                };
-                let phantom_min_height = occupied_min_heights[col_pos];
+                let span_id = occupied[col_pos].span_id;
+                let span_cols = occupied[col_pos..]
+                    .iter()
+                    .take_while(|slot| slot.span_id == span_id)
+                    .count();
                 cells.push(TableCell {
-                    lines: Vec::new(),
-                    nested_rows: Vec::new(),
-                    bold: false,
-                    background_color: None,
-                    padding_top: 0.0,
-                    padding_right: 0.0,
-                    padding_bottom: 0.0,
-                    padding_left: 0.0,
-                    colspan: span_cols,
-                    rowspan: 0, // phantom cell marker
-                    border: LayoutBorder::default(),
-                    text_align: TextAlign::Left,
-                    vertical_align: VerticalAlign::Baseline,
-                    min_content_height: phantom_min_height,
-                    hide_if_empty: false,
-                    grid_inset: None,
-                    clips: false,
-                    background_gradient: None,
-                    background_radial_gradient: None,
-                    background_conic_gradient: None,
+                    layout: CellBox {
+                        box_model: CellBoxModel {
+                            minimum_block_size: occupied[col_pos].min_height,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    span: TableCellSpan {
+                        columns: span_cols,
+                        rows: 0,
+                    },
+                    ..Default::default()
                 });
-                cell_hidden_borders.push(HiddenBorderSides::default());
-                for i in 0..span_cols {
-                    occupied[col_pos + i] -= 1;
-                    if occupied[col_pos + i] == 0 {
-                        occupied_min_heights[col_pos + i] = 0.0;
-                    }
+                for slot in &mut occupied[col_pos..col_pos + span_cols] {
+                    slot.consume_row();
                 }
                 col_pos += span_cols;
                 continue;
             }
 
             // Place the next real cell at this position
-            let Some(cell_el) = next_cell else { break };
+            let Some((cell_source_index, cell_el)) = next_cell else {
+                break;
+            };
             next_cell = child_iter.next();
+            let generated_cell_content =
+                row_sources[row_idx].generated_cell_content(cell_source_index);
 
             let colspan = parse_cell_colspan(cell_el);
             let rowspan = parse_cell_rowspan(
@@ -2744,14 +3098,7 @@ pub(crate) fn flatten_table(
 
             let cell_classes = cell_el.class_list();
             let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-            cell_ancestors.push(AncestorInfo {
-                element: row,
-                child_index: section_idx,
-                sibling_count: section_size,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            });
+            push_table_dom_ancestor(&mut cell_ancestors, row, section_idx, section_size);
             let cell_selector_ctx = SelectorContext {
                 ancestors: cell_ancestors,
                 child_index: col_pos,
@@ -2760,23 +3107,29 @@ pub(crate) fn flatten_table(
                 following_siblings: Vec::new(),
                 is_empty: false,
             };
-            let mut cell_style = compute_style_with_context(
-                cell_el.tag,
-                cell_el.style_attr(),
-                &row_style,
+            let cell_style = anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
+                compute_style_with_context_with_font_metrics(
+                    cell_el.tag,
+                    cell_el.style_attr(),
+                    &row_style,
+                    rules,
+                    cell_el.tag_name(),
+                    &cell_classes,
+                    cell_el.id(),
+                    &cell_el.attributes,
+                    &cell_selector_ctx,
+                    FontMetrics::new(fonts),
+                )
+            });
+            let cell_counter_scope = counter_state.enter_element(&cell_style);
+            let authored_generated = AuthoredCellGeneratedContent::resolve(
+                cell_el,
+                &cell_style,
                 rules,
-                cell_el.tag_name(),
-                &cell_classes,
-                cell_el.id(),
-                &cell_el.attributes,
                 &cell_selector_ctx,
+                fonts,
             );
-            apply_cell_attribute_hints(
-                &mut cell_style,
-                table_attr_cellpadding,
-                table_attr_border_width,
-            );
-            let hidden_borders = declared_hidden_borders(cell_el, rules, &cell_selector_ctx);
+            let authored_generated = authored_generated.boundaries(cell_el);
             // Compute effective width from auto-sized column widths. Cell borders
             // are painted INSIDE the cell box (CSS2 §17.6: the border-box is the
             // column width), so the content box is inset by the border and the
@@ -2787,22 +3140,15 @@ pub(crate) fn flatten_table(
             // owns only HALF of a collapsed border (the rest belongs to the shared
             // grid line), so the content box subtracts half the border width;
             // `separate` subtracts the full border.
-            let cell_border = LayoutBorder::from_computed(&cell_style.border);
-            let border_inset_factor = if style.border_collapse == BorderCollapse::Collapse {
-                0.5
-            } else {
-                1.0
-            };
-            let inset_left = cell_border.left.width * border_inset_factor + cell_style.padding.left;
-            let inset_right =
-                cell_border.right.width * border_inset_factor + cell_style.padding.right;
-            let inset_top = cell_border.top.width * border_inset_factor + cell_style.padding.top;
-            let inset_bottom =
-                cell_border.bottom.width * border_inset_factor + cell_style.padding.bottom;
+            let cell_border = LayoutBorder::from_computed(&cell_style.border, cell_style.color);
+            let border_inset_factor = table_cell_border_inset_factor(style.border_collapse);
+            let cell_border_insets = cell_border.widths() * border_inset_factor;
+            let cell_insets =
+                table_cell_content_insets(&cell_style, &cell_border, style.border_collapse);
             let effective_width: f32 = col_widths.iter().skip(col_pos).take(colspan).copied().sum();
-            let cell_inner = effective_width - inset_left - inset_right;
+            let cell_inner = (effective_width - cell_insets.horizontal()).max(0.0);
             let mut cell_content_style = cell_style.clone();
-            cell_content_style.width = Some(cell_inner.max(0.0));
+            cell_content_style.width = Some(cell_inner);
             // A cell's `height` is its border-box; a child's `height: %` resolves
             // against the cell's *content* box (height minus the cell's own
             // padding and border). `cell_content_style` is the parent handed to
@@ -2812,9 +3158,8 @@ pub(crate) fn flatten_table(
             cell_content_style.height = cell_style.height.map(|h| {
                 super::helpers::resolve_content_box_height(
                     h,
-                    cell_style.padding.top,
-                    cell_style.padding.bottom,
-                    (cell_border.top.width + cell_border.bottom.width) * border_inset_factor,
+                    cell_style.padding,
+                    cell_border.widths() * border_inset_factor,
                     cell_style.box_sizing,
                 )
             });
@@ -2826,19 +3171,32 @@ pub(crate) fn flatten_table(
                 .iter()
                 .any(|node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)));
             let mut text_ancestors = cell_selector_ctx.ancestors.clone();
-            text_ancestors.push(AncestorInfo {
-                element: cell_el,
-                child_index: col_pos,
-                sibling_count: num_cols,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            });
+            push_table_dom_ancestor(&mut text_ancestors, cell_el, col_pos, num_cols);
             let (block_margin_top, block_margin_bottom) = table_cell_edge_block_margins(
                 &cell_el.children,
                 &cell_content_style,
                 rules,
                 &text_ancestors,
+                FontMetrics::new(fonts),
+            );
+            if let Some(before) = generated_cell_content.before
+                && let Some(boundary) = generated_table_cell_boundary(
+                    before,
+                    &cell_content_style,
+                    cell_inner,
+                    fonts,
+                    counter_state,
+                )
+            {
+                nested_rows.push(boundary);
+            }
+            authored_generated.append_before_layout(
+                &mut runs,
+                &mut nested_rows,
+                &cell_content_style,
+                cell_inner,
+                fonts,
+                counter_state,
             );
             collect_table_cell_content_inner(
                 &cell_el.children,
@@ -2854,23 +3212,36 @@ pub(crate) fn flatten_table(
                 recurse_descendants,
                 recurse_descendants,
                 &text_ancestors,
-                cell_inner.max(1.0),
+                cell_inner,
                 counter_state,
             );
+            if let Some(after) = generated_cell_content.after
+                && let Some(boundary) = generated_table_cell_boundary(
+                    after,
+                    &cell_content_style,
+                    cell_inner,
+                    fonts,
+                    counter_state,
+                )
+            {
+                nested_rows.push(boundary);
+            }
+            authored_generated.append_after_layout(
+                &mut runs,
+                &mut nested_rows,
+                &cell_content_style,
+                cell_inner,
+                fonts,
+                counter_state,
+            );
+            counter_state.leave_element(cell_counter_scope);
             let mut lines = wrap_text_runs(
                 runs,
-                TextWrapOptions::new(
-                    cell_inner.max(1.0),
-                    cell_style.font_size,
-                    resolved_line_height_factor(&cell_style, fonts),
-                    cell_style.overflow_wrap,
-                )
-                .with_rtl(cell_style.direction_rtl)
-                .with_bidi_override(cell_style.bidi_override),
+                table_cell_text_wrap_options(&cell_style, cell_inner, fonts),
                 fonts,
             );
             if cell_style.overflow.clips() {
-                clip_text_lines_to_width(&mut lines, cell_inner.max(0.0), fonts);
+                clip_text_lines_to_width(&mut lines, cell_inner, fonts);
             }
 
             let column_bg = column_info
@@ -2883,53 +3254,69 @@ pub(crate) fn flatten_table(
                 .or_else(|| row_parent_style.as_ref().and_then(style_background_rgba))
                 .or(column_bg);
 
-            // An explicit cell height is a minimum on the cell's rendered box.
-            // The intrinsic content height now folds the cell border into its top/
-            // bottom inset (see `padding_*` below), so the minimum must match that
-            // basis: for content-box, add padding AND border; for border-box, the
-            // declared height already includes both, so keep it whole.
-            let min_content_height = cell_style.height.map_or(0.0, |h| {
-                if cell_style.box_sizing == BoxSizing::BorderBox {
-                    h
-                } else {
-                    h + inset_top + inset_bottom
-                }
-            });
+            // CSS Tables defines the row minimum from the cell's definite
+            // computed height. Collapsed borders extend around the row grid;
+            // conflict resolution must not shrink this track contribution.
+            let height_constraint = cell_style
+                .height
+                .map(|specified| TableCellHeightConstraint { specified, rowspan });
+            let min_content_height = height_constraint
+                .map(TableCellHeightConstraint::minimum_row_height)
+                .unwrap_or(0.0);
             // Under `empty-cells: hide`, a cell with no in-flow content has its
             // border and background suppressed so the table background shows
             // through. Emptiness is decided from the DOM, not the collapsed
             // text, because `&nbsp;` is content yet whitespace-collapses away.
             let hide_if_empty = style.border_collapse == BorderCollapse::Separate
                 && cell_style.empty_cells == crate::style::computed::EmptyCells::Hide
-                && cell_has_no_content(cell_el);
-            let row_span_share = if rowspan > 1 {
-                (min_content_height / rowspan as f32).max(0.0)
-            } else {
-                min_content_height
-            };
+                && cell_has_no_content(cell_el)
+                && generated_cell_content.is_empty();
+            let row_span_share = min_content_height;
+            let mut box_paint = BoxPaint::from_style(
+                &cell_style,
+                LayoutSize::fixed(
+                    col_widths.get(col_pos).copied().unwrap_or_default(),
+                    Some(row_span_share),
+                ),
+            );
+            table_formatting.constrain_internal_decoration(&mut box_paint);
+            box_paint.background.color = bg;
             let mut table_cell = TableCell {
-                lines,
-                nested_rows,
-                bold: cell_style.font_weight == FontWeight::Bold,
-                background_color: bg,
-                // `padding_*` here is the cell's CONTENT inset (border + padding):
-                // borders paint inside the cell box, so content is offset past both.
-                padding_top: inset_top + block_margin_top,
-                padding_right: inset_right,
-                padding_bottom: inset_bottom + block_margin_bottom,
-                padding_left: inset_left,
-                colspan,
-                rowspan,
-                border: cell_border,
-                text_align: cell_style.text_align,
-                vertical_align: table_cell_vertical_align(cell_style.vertical_align),
-                min_content_height: row_span_share,
-                hide_if_empty,
-                grid_inset: None,
-                clips: cell_style.overflow.clips(),
-                background_gradient: None,
-                background_radial_gradient: None,
-                background_conic_gradient: None,
+                layout: CellBox {
+                    content: CellContent {
+                        lines,
+                        children: nested_rows,
+                    },
+                    box_model: CellBoxModel {
+                        content_insets: EdgeSizes::new(
+                            cell_insets.top + block_margin_top,
+                            cell_insets.right,
+                            cell_insets.bottom + block_margin_bottom,
+                            cell_insets.left,
+                        ),
+                        border_insets: cell_border_insets,
+                        border: cell_border,
+                        minimum_block_size: row_span_share,
+                    },
+                    paint: CellPaint {
+                        box_paint,
+                        ..Default::default()
+                    },
+                    positioning: Positioning::from_style(&cell_style),
+                    alignment: CellAlignment {
+                        inline: cell_style.text_align,
+                        block: table_cell_vertical_align(cell_style.vertical_align),
+                    },
+                },
+                span: TableCellSpan {
+                    columns: colspan,
+                    rows: rowspan,
+                },
+                table: TableCellState {
+                    hide_if_empty,
+                    clips: cell_style.overflow.clips(),
+                    ..Default::default()
+                },
             };
             let collapsed_columns = column_info
                 .iter()
@@ -2940,35 +3327,27 @@ pub(crate) fn flatten_table(
                 hide_table_cell_paint(&mut table_cell);
             }
             cells.push(table_cell);
-            cell_hidden_borders.push(hidden_borders);
 
             // Mark subsequent rows as occupied if rowspan > 1
             if rowspan > 1 {
-                for i in 0..colspan {
-                    if col_pos + i < num_cols {
-                        occupied[col_pos + i] = rowspan - 1;
-                        occupied_min_heights[col_pos + i] = row_span_share;
-                    }
-                }
+                let slot = RowspanSlot::occupied(
+                    RowspanId::allocate(&mut rowspan_id_counter),
+                    rowspan - 1,
+                    row_span_share,
+                );
+                occupied[col_pos..col_pos.saturating_add(colspan).min(num_cols)].fill(slot);
             }
 
             col_pos += colspan;
         }
 
         if !cells.is_empty() {
-            if style.border_collapse == BorderCollapse::Collapse {
-                for idx in 0..cells.len().saturating_sub(1) {
-                    let (left, right) = cells.split_at_mut(idx + 1);
-                    resolve_collapsed_border_pair(
-                        &mut left[idx].border,
-                        cell_hidden_borders[idx],
-                        BorderSideName::Right,
-                        &mut right[0].border,
-                        cell_hidden_borders[idx + 1],
-                        BorderSideName::Left,
-                    );
-                }
-            }
+            collapsed_border_sources.push_row(CollapsedBorderTrack::row(
+                row_border,
+                row_group_border,
+                section_idx,
+                section_size,
+            ));
             let first_emitted_row = output.len() == table_output_start;
             if let Some(row_height) = row_style.height.or(row_style.min_height) {
                 enforce_row_min_height(&mut cells, row_height);
@@ -2979,50 +3358,35 @@ pub(crate) fn flatten_table(
                 row_cells.reverse();
                 row_col_widths.reverse();
             }
-            let is_header = table_section_is_first_header_group(
-                row_section_elements[row_idx],
-                first_header_section_key,
-                row_section_child_indices[row_idx],
-                style,
-                rules,
-                &table_ancestors,
-                row_section_sibling_counts[row_idx],
-            );
-            let is_footer = table_section_role(
-                row_section_elements[row_idx],
-                style,
-                rules,
-                &table_ancestors,
-                row_section_child_indices[row_idx],
-                row_section_sibling_counts[row_idx],
-            ) == Some(TableBoxRole::FooterGroup);
-            output.push(LayoutElement::TableRow {
-                cells: row_cells,
-                col_widths: row_col_widths,
+            output.push(table_row_node(
+                TableCells {
+                    cells: row_cells,
+                    column_widths: row_col_widths,
+                },
                 // The table-level background box (inserted below) carries the
                 // table's own `margin-top`. The first row is therefore inset
                 // only by the top *vertical* `border-spacing` (zero when
                 // collapsed); subsequent rows are separated by the same.
-                margin_top: if style.border_collapse == BorderCollapse::Separate {
-                    effective_border_spacing_vertical
-                } else {
-                    0.0
-                } + if first_emitted_row {
-                    table_grid_inset
-                } else {
-                    0.0
-                },
-                margin_bottom: 0.0,
-                border_collapse: style.border_collapse,
-                border_spacing: effective_border_spacing,
-                is_header,
-                is_footer,
+                TableRowFlow::new(
+                    if style.border_collapse == BorderCollapse::Separate {
+                        effective_border_spacing_vertical
+                    } else {
+                        0.0
+                    } + if first_emitted_row {
+                        table_grid_box_insets.top
+                    } else {
+                        0.0
+                    },
+                ),
+                table_formatting,
+                row_sources[row_idx]
+                    .section_role
+                    .fragmentation(row_break_inside_avoid, section_avoid_group),
                 // The table's own horizontal start margin shifts every cell (and
                 // the table box) right from the containing block's content edge,
                 // mirroring how `margin_top` shifts it down.
-                offset_left: style.margin.left.max(0.0) + table_grid_inset,
-                break_inside_avoid: row_break_inside_avoid,
-            });
+                table_inline_geometry,
+            ));
         }
     }
 
@@ -3030,13 +3394,6 @@ pub(crate) fn flatten_table(
     // there is no table box to paint.
     if output.len() == table_output_start {
         return;
-    }
-
-    let mut table_border = LayoutBorder::from_computed(&style.border);
-    if !table_border.has_any() {
-        if let Some(width) = table_attr_border_width {
-            table_border = attr_border(width, true);
-        }
     }
 
     let separate = matches!(style.border_collapse, BorderCollapse::Separate);
@@ -3054,52 +3411,64 @@ pub(crate) fn flatten_table(
         0.0
     };
 
-    if let Some(table_height) = style.height.or(style.min_height) {
-        let stretch_target = if style.border_collapse == BorderCollapse::Collapse {
-            (table_height - collapsed_outer_vertical_border_extent(&output[table_output_start..]))
-                .max(0.0)
-        } else {
-            table_height
-        };
+    let resolved_table_grid_insets = if style.border_collapse == BorderCollapse::Collapse {
+        resolve_collapsed_border_grid(
+            &mut output[table_output_start..],
+            &collapsed_border_sources,
+            style.direction_rtl,
+        )
+    } else {
+        table_grid_box_insets
+    };
+    if let Some(table_height) = resolve_table_inner_height(style, table_box_model) {
+        let stretch_target = table_box_model.collapsed_grid_extent(
+            table_height,
+            collapsed_outer_vertical_border_extent(&output[table_output_start..]),
+        );
         stretch_table_rows_to_min_height(
             &mut output[table_output_start..],
             stretch_target,
             edge_spacing_v,
         );
     }
-    if style.border_collapse == BorderCollapse::Collapse {
-        resolve_collapsed_outer_table_borders(&mut output[table_output_start..], table_border);
-    }
-
-    // Height of the table content box: the rows plus, for `separate` collapse,
+    // Height of the table padding box: the rows plus, for `separate` collapse,
     // the vertical `border-spacing` above the first row, below the last row, and
-    // between each adjacent pair. (`compute_row_height` lives in the renderer;
-    // mirror it here from each row's cells.)
+    // between each adjacent pair, then the table padding. `TextBlock` height is
+    // a padding-box height; its renderer adds the border exactly once.
     let mut emitted_rows = 0usize;
     let mut rows_height = 0.0f32;
     for elem in &output[table_output_start..] {
-        if let LayoutElement::TableRow {
-            cells, margin_top, ..
-        } = elem
+        if let Some((cell_count, row_height, margin_start)) =
+            query_table_row(elem.as_ref(), |row| {
+                (
+                    row.content.cells.len(),
+                    row_height_from_cells(&row.content.cells),
+                    row.flow.internal.start,
+                )
+            })
         {
-            if cells.is_empty() {
-                rows_height += *margin_top;
+            if cell_count == 0 {
+                rows_height += margin_start;
                 continue;
             }
             emitted_rows += 1;
-            rows_height += cells
-                .iter()
-                .map(table_cell_content_height)
-                .fold(0.0f32, f32::max);
+            rows_height += row_height;
         }
     }
+    let collapsed_outer_height = if style.border_collapse == BorderCollapse::Collapse {
+        collapsed_outer_vertical_border_extent(&output[table_output_start..])
+    } else {
+        0.0
+    };
+    let collapsed = style.border_collapse == BorderCollapse::Collapse;
     let box_height = rows_height
-        + edge_spacing_v * (emitted_rows.saturating_add(1) as f32)
-        + if table_attr_border_width.is_some() {
-            0.0
+        + if collapsed {
+            collapsed_outer_height
         } else {
-            table_grid_inset * 2.0
-        };
+            0.0
+        }
+        + edge_spacing_v * (emitted_rows.saturating_add(1) as f32)
+        + table_box_model.padding.vertical();
 
     // Width of the table content box: the resolved column widths plus, for
     // `separate` collapse, one horizontal `border-spacing` on each outer edge
@@ -3111,14 +3480,35 @@ pub(crate) fn flatten_table(
     // inside the table box); add them back so the table-level background/border box
     // spans the full border-box width.
     let collapse_outer_w = if style.border_collapse == BorderCollapse::Collapse {
-        outer_left_border / 2.0 + outer_right_border / 2.0
+        resolved_table_grid_insets.left + resolved_table_grid_insets.right
     } else {
         0.0
+    };
+    let table_level_border = if collapsed {
+        LayoutBorder::default()
+    } else {
+        table_border
     };
     let box_width = columns_sum
         + edge_spacing_h * (col_widths.len().saturating_add(1) as f32)
         + collapse_outer_w
-        + table_grid_inset * 2.0;
+        + table_box_model.padding.horizontal()
+        + table_level_border.horizontal_width();
+    let table_offset = InlineOffset::resolve_block_start(style, available_width, box_width);
+    let resolved_grid_left = if collapsed {
+        resolved_table_grid_insets.left
+    } else {
+        table_grid_box_insets.left
+    };
+    let table_inline_geometry =
+        TableInlineGeometry::new(table_offset, table_offset + resolved_grid_left)
+            .with_box_extent(box_width);
+
+    for row in &mut output[table_output_start..] {
+        update_table_row(row.as_mut(), |row| {
+            row.inline = table_inline_geometry.relative_to(table_offset);
+        });
+    }
 
     // The last row carries the bottom vertical `border-spacing` gap plus the
     // table's own `margin-bottom`, so the in-flow height below the rows matches
@@ -3133,14 +3523,25 @@ pub(crate) fn flatten_table(
             )
         });
     let bottom_caption = !captions.is_empty() && !caption_on_top;
-    if let Some(LayoutElement::TableRow { margin_bottom, .. }) = output.last_mut() {
-        *margin_bottom = edge_spacing_v
-            + table_grid_inset
-            + if bottom_caption {
+    if let Some(last) = output.last_mut() {
+        // A collapsed table extends half of its winning top and bottom borders
+        // beyond the row grid.  Row heights span grid line to grid line, so carry
+        // that one table-level outer extent after the last row.  Charging it to
+        // every row would incorrectly grow multi-row tables; omitting it places
+        // the following sibling one border-width too high.
+        update_table_row(last.as_mut(), |row| {
+            row.flow.internal.end = edge_spacing_v + table_grid_box_insets.bottom;
+            row.flow.margins.end = if bottom_caption {
                 0.0
             } else {
                 style.margin.bottom
             };
+            row.flow.extra_end = if collapsed {
+                resolved_table_grid_insets.bottom
+            } else {
+                0.0
+            };
+        });
     }
 
     let has_top_caption = !captions.is_empty() && caption_on_top;
@@ -3154,74 +3555,34 @@ pub(crate) fn flatten_table(
     // zero-flow box: its `margin-top` carries the table's own top margin (unless
     // a caption above already does) while a matching negative `margin-bottom`
     // cancels its height so the rows that follow render on top of it.
-    if has_background_paint(style) || table_border.has_any() {
+    if has_background_paint(style) || style.has_border_decoration() {
         let bg_margin_top = if has_top_caption {
             0.0
         } else {
             margin_top_claimed = true;
             style.margin.top
         };
-        let bg_block = LayoutElement::TextBlock {
-            box_decoration_break: crate::style::computed::BoxDecorationBreak::Slice,
-            orphans: 2,
-            widows: 2,
-            lines: Vec::new(),
-            margin_top: bg_margin_top,
-            margin_bottom: -(box_height + table_border.vertical_width()),
-            text_align: TextAlign::Left,
-            writing_mode: crate::style::computed::WritingMode::HorizontalTb,
-            background_color: style.background_color.map(|c| c.to_f32_rgba()),
-            padding_top: 0.0,
-            padding_bottom: 0.0,
-            padding_left: 0.0,
-            padding_right: 0.0,
-            border: table_border,
-            block_width: Some(box_width),
-            block_height: Some(box_height),
-            opacity: style.opacity,
-            mix_blend_mode: style.mix_blend_mode,
-            background_blend_mode: style.background_blend_mode,
-            float: Default::default(),
-            clear: Default::default(),
-            position: Default::default(),
-            offset_top: 0.0,
-            // Shift the table's background/border box right by its own start
-            // margin so it aligns with the cells (which carry the same offset).
-            offset_left: style.margin.left.max(0.0),
-            offset_bottom: 0.0,
-            offset_right: 0.0,
-            containing_block: None,
-            clip_children_count: 0,
-            box_shadow: style.box_shadow.clone(),
-            visible: style.visibility == Visibility::Visible,
-            clip_rect: None,
-            transform: None,
-            transform_origin: crate::style::computed::TransformOrigin::default(),
-            border_radius: style.border_radius,
-            border_radii: style.border_radii,
-            border_radii_y: style.border_radii_y,
-            outline_offset: style.outline_offset,
-            outline_width: 0.0,
-            outline_color: None,
-            text_indent: 0.0,
-            letter_spacing: 0.0,
-            word_spacing: 0.0,
-            vertical_align: Default::default(),
-            background_gradient: style.background_gradient.clone(),
-            background_radial_gradient: style.background_radial_gradient.clone(),
-            background_conic_gradient: style.background_conic_gradient.clone(),
-            background_svg: style.background_svg.clone(),
-            background_blur_radius: 0.0,
-            background_size: Default::default(),
-            background_position: Default::default(),
-            background_repeat: Default::default(),
-            background_origin: Default::default(),
-            background_clip: Default::default(),
-            z_index: style.z_index,
-            repeat_on_each_page: false,
-            positioned_depth: 0,
-            heading_level: None,
-        };
+        let mut bg_block = TextBlock::from_style(
+            Vec::new(),
+            style,
+            crate::layout::elements::BoxModel {
+                size: crate::layout::elements::LayoutSize::fixed(box_width, Some(box_height)),
+                margins: BlockMargins::new(
+                    bg_margin_top,
+                    -(box_height + table_level_border.vertical_width()),
+                ),
+                padding: EdgeSizes::ZERO,
+                border: table_level_border,
+            },
+        );
+        bg_block.flow = Default::default();
+        bg_block.positioning = Default::default();
+        bg_block.paint.group = Default::default();
+        bg_block.paint.border_radii = table_formatting.table_corner_radii(
+            style.resolve_corner_radii(box_width, box_height + table_level_border.vertical_width()),
+        );
+        bg_block.text = Default::default();
+        let bg_block = TableBoxDecoration::new(bg_block).boxed();
         output.insert(table_output_start, bg_block);
     }
 
@@ -3234,8 +3595,7 @@ pub(crate) fn flatten_table(
         .enumerate()
     {
         let caption_style = caption_style.clone();
-        let caption_inner =
-            (box_width - caption_style.padding.left - caption_style.padding.right).max(1.0);
+        let caption_inner = (box_width - caption_style.padding.horizontal()).max(0.0);
         let mut caption_ancestors = table_ancestors.clone();
         caption_ancestors.push(AncestorInfo {
             element: caption_el,
@@ -3268,15 +3628,18 @@ pub(crate) fn flatten_table(
             caption_runs,
             TextWrapOptions::new(
                 caption_inner,
-                caption_style.font_size,
-                resolved_line_height_factor(&caption_style, fonts),
+                used_font_size(&caption_style, fonts),
+                text_run_line_height_factor(&caption_style, fonts),
                 caption_style.overflow_wrap,
             )
+            .with_white_space(caption_style.white_space)
+            .with_parent_strut(parent_line_strut(&caption_style, fonts))
             .with_rtl(caption_style.direction_rtl)
             .with_bidi_override(caption_style.bidi_override),
             fonts,
         );
-        let caption_border = LayoutBorder::from_computed(&caption_style.border);
+        let caption_border =
+            LayoutBorder::from_computed(&caption_style.border, caption_style.color);
         // A top caption sits above the table and carries the table's
         // `margin-top`; a bottom caption is appended after the rows and carries
         // the table's `margin-bottom` instead (the rows already absorbed the
@@ -3300,65 +3663,23 @@ pub(crate) fn flatten_table(
                 },
             )
         };
-        let caption_block = LayoutElement::TextBlock {
-            box_decoration_break: crate::style::computed::BoxDecorationBreak::Slice,
-            orphans: 2,
-            widows: 2,
-            lines: caption_lines,
-            margin_top: caption_margin_top,
-            margin_bottom: caption_margin_bottom,
-            text_align: caption_style.text_align,
-            writing_mode: crate::style::computed::WritingMode::HorizontalTb,
-            background_color: caption_style.background_color.map(|c| c.to_f32_rgba()),
-            padding_top: caption_style.padding.top,
-            padding_bottom: caption_style.padding.bottom,
-            padding_left: caption_style.padding.left,
-            padding_right: caption_style.padding.right,
-            border: caption_border,
-            block_width: Some(box_width),
-            block_height: caption_style.height,
-            opacity: caption_style.opacity,
-            mix_blend_mode: caption_style.mix_blend_mode,
-            background_blend_mode: caption_style.background_blend_mode,
-            float: Default::default(),
-            clear: Default::default(),
-            position: Default::default(),
-            offset_top: 0.0,
-            offset_left: 0.0,
-            offset_bottom: 0.0,
-            offset_right: 0.0,
-            containing_block: None,
-            clip_children_count: 0,
-            box_shadow: caption_style.box_shadow.clone(),
-            visible: caption_style.visibility == Visibility::Visible,
-            clip_rect: None,
-            transform: None,
-            transform_origin: crate::style::computed::TransformOrigin::default(),
-            border_radius: caption_style.border_radius,
-            border_radii: caption_style.border_radii,
-            border_radii_y: caption_style.border_radii_y,
-            outline_offset: caption_style.outline_offset,
-            outline_width: 0.0,
-            outline_color: None,
-            text_indent: 0.0,
-            letter_spacing: caption_style.letter_spacing,
-            word_spacing: caption_style.word_spacing,
-            vertical_align: Default::default(),
-            background_gradient: caption_style.background_gradient.clone(),
-            background_radial_gradient: caption_style.background_radial_gradient.clone(),
-            background_conic_gradient: caption_style.background_conic_gradient.clone(),
-            background_svg: caption_style.background_svg.clone(),
-            background_blur_radius: 0.0,
-            background_size: Default::default(),
-            background_position: Default::default(),
-            background_repeat: Default::default(),
-            background_origin: Default::default(),
-            background_clip: Default::default(),
-            z_index: caption_style.z_index,
-            repeat_on_each_page: false,
-            positioned_depth: 0,
-            heading_level: None,
-        };
+        let mut caption_block = TextBlock::from_style(
+            caption_lines,
+            &caption_style,
+            crate::layout::elements::BoxModel {
+                size: crate::layout::elements::LayoutSize::fixed(box_width, caption_style.height),
+                margins: BlockMargins::new(caption_margin_top, caption_margin_bottom),
+                padding: caption_style.padding,
+                border: caption_border,
+            },
+        );
+        caption_block.flow = Default::default();
+        caption_block.positioning =
+            crate::layout::elements::Positioning::from_style(&caption_style);
+        caption_block.paint.border_radii = caption_style
+            .resolve_corner_radii(box_width, caption_style.height.unwrap_or(box_width));
+        caption_block.text.indent = 0.0;
+        let caption_block = caption_block.boxed();
         if caption_on_top {
             output.insert(table_output_start + caption_idx, caption_block);
             margin_top_claimed = true;
@@ -3370,11 +3691,40 @@ pub(crate) fn flatten_table(
     // If neither a caption nor a background box claimed the table's `margin-top`,
     // fold it into the first emitted row so the table keeps its top margin.
     if !margin_top_claimed && style.margin.top != 0.0 {
-        if let Some(LayoutElement::TableRow { margin_top, .. }) = output.get_mut(table_output_start)
-        {
-            *margin_top += style.margin.top;
+        if let Some(first_row) = output.get_mut(table_output_start) {
+            update_table_row(first_row.as_mut(), |row| {
+                row.flow.margins.start += style.margin.top;
+            });
         }
     }
+
+    // A table is one principal CSS box, not a coincidental run of paint leaves.
+    // Move its external flow spacing and positioning onto that principal while
+    // keeping rows, captions, and decoration as fragmentable children.
+    let mut parts = output.drain(table_output_start..).collect::<Vec<_>>();
+    if let Some(first) = parts.first_mut().and_then(|part| part.margin_holder_mut()) {
+        first.margins_mut().start = 0.0;
+    }
+    if let Some(last) = parts.last_mut().and_then(|part| part.margin_holder_mut()) {
+        last.margins_mut().end = 0.0;
+    }
+
+    let mut principal = Container::from_style(
+        parts,
+        style,
+        BoxModel {
+            size: LayoutSize::fixed(box_width, None),
+            margins: BlockMargins::new(style.margin.top, style.margin.bottom),
+            ..Default::default()
+        },
+    );
+    principal.paint = BoxPaint {
+        group: PaintGroup::from_style(style),
+        visible: style.visibility == Visibility::Visible,
+        ..Default::default()
+    };
+    principal.positioning.insets.left += table_offset.value();
+    output.push(Table::new(principal).boxed());
 }
 
 fn table_cell_edge_block_margins(
@@ -3382,6 +3732,7 @@ fn table_cell_edge_block_margins(
     parent_style: &ComputedStyle,
     rules: &[CssRule],
     ancestors: &[AncestorInfo],
+    font_metrics: FontMetrics<'_>,
 ) -> (f32, f32) {
     let element_sibling_count = nodes
         .iter()
@@ -3428,7 +3779,7 @@ fn table_cell_edge_block_margins(
             following_siblings: Vec::new(),
             is_empty: false,
         };
-        let child_style = compute_style_with_context(
+        let child_style = compute_style_with_context_with_font_metrics(
             element.tag,
             element.style_attr(),
             parent_style,
@@ -3438,6 +3789,7 @@ fn table_cell_edge_block_margins(
             element.id(),
             &element.attributes,
             &selector_ctx,
+            font_metrics,
         );
         if child_style.display == Display::Inline {
             continue;
@@ -3459,7 +3811,7 @@ fn table_cell_child_should_flatten(el: &ElementNode, style: &ComputedStyle) -> b
         || el.tag == HtmlTag::Svg
         || (recurses_as_layout_child(el.tag) && !collects_as_inline_text(el.tag))
         || style.display != Display::Inline
-        || style.position == Position::Absolute
+        || style.position.is_absolute()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3467,7 +3819,7 @@ fn collect_table_cell_content_inner(
     nodes: &[DomNode],
     parent_style: &ComputedStyle,
     runs: &mut Vec<TextRun>,
-    nested_rows: &mut Vec<LayoutElement>,
+    nested_rows: &mut Vec<LayoutNode>,
     link_url: Option<&str>,
     rules: &[CssRule],
     fonts: &HashMap<String, TtfFont>,
@@ -3519,46 +3871,17 @@ fn collect_table_cell_content_inner(
                     crate::style::computed::TextTransform::None => processed,
                 };
                 if !processed.is_empty() {
-                    let (bg, pad, br) = if (inline_parent || recurse_blocks) && !preserve_ws {
+                    let (bg, pad) = if (inline_parent || recurse_blocks) && !preserve_ws {
                         let pad = if suppress_direct_text_padding {
-                            (0.0, 0.0)
+                            EdgeSizes::ZERO
                         } else {
-                            (parent_style.padding.left, parent_style.padding.top)
+                            EdgeSizes::axes(parent_style.padding.left, parent_style.padding.top)
                         };
-                        (
-                            parent_style.background_color.map(|c| c.to_f32_rgba()),
-                            pad,
-                            parent_style.border_radius,
-                        )
+                        (parent_style.background_color, pad)
                     } else {
-                        (None, (0.0, 0.0), 0.0)
+                        (None, EdgeSizes::ZERO)
                     };
-                    push_text_run(
-                        runs,
-                        TextRun {
-                            text: processed,
-                            font_size: parent_style.font_size,
-                            bold: parent_style.font_weight == FontWeight::Bold,
-                            italic: parent_style.font_style == FontStyle::Italic,
-                            underline: parent_style.text_decoration_underline,
-                            line_through: parent_style.text_decoration_line_through,
-                            overline: parent_style.text_decoration_overline,
-                            decoration_color: parent_style
-                                .text_decoration_color
-                                .map(|c| c.to_f32_rgb()),
-                            color: parent_style.color.to_f32_rgb(),
-                            link_url: link_url.map(String::from),
-                            font_family: resolve_style_font_family(parent_style, fonts),
-                            background_color: bg,
-                            padding: pad,
-                            border_radius: br,
-                            line_height_factor: resolved_line_height_factor(parent_style, fonts),
-                            inline_box: None,
-                            disable_ligatures: false,
-                            vertical_align: parent_style.vertical_align,
-                            text_shadow: parent_style.text_shadow.clone(),
-                        },
-                    );
+                    push_styled_text_run(runs, processed, parent_style, link_url, bg, pad, fonts);
                 }
             }
             DomNode::Element(el) => {
@@ -3589,7 +3912,7 @@ fn collect_table_cell_content_inner(
                     following_siblings: Vec::new(),
                     is_empty: false,
                 };
-                let style = compute_style_with_context(
+                let style = compute_style_with_context_with_font_metrics(
                     el.tag,
                     el.style_attr(),
                     parent_style,
@@ -3599,6 +3922,7 @@ fn collect_table_cell_content_inner(
                     el.id(),
                     &el.attributes,
                     &selector_ctx,
+                    FontMetrics::new(fonts),
                 );
                 if style.display == Display::None {
                     continue;
@@ -3642,16 +3966,11 @@ fn collect_table_cell_content_inner(
                     };
                     flatten_element(
                         el,
-                        parent_style,
-                        &cell_ctx,
+                        LayoutTreeContext::new(parent_style, &cell_ctx, ancestors).for_element(
+                            ElementSiblingContext::new(child_index, element_sibling_count)
+                                .with_neighbors(&selector_ctx.preceding_siblings, &[]),
+                        ),
                         nested_rows,
-                        None,
-                        ancestors,
-                        0,
-                        child_index,
-                        element_sibling_count,
-                        &selector_ctx.preceding_siblings,
-                        &[],
                         &mut inner_env,
                     );
                 } else if recurse_blocks || collects_as_inline_text(el.tag) || el.tag == HtmlTag::Br
@@ -3699,24 +4018,722 @@ fn push_line_break_run(
         runs,
         TextRun {
             text: "\n".to_string(),
-            font_size: style.font_size,
-            bold: false,
-            italic: false,
-            underline: false,
-            line_through: false,
-            overline: false,
-            decoration_color: None,
-            color: (0.0, 0.0, 0.0),
-            link_url: None,
+            font_size: used_font_size(style, fonts),
             font_family: resolve_style_font_family(style, fonts),
-            background_color: None,
-            padding: (0.0, 0.0),
-            border_radius: 0.0,
-            line_height_factor: resolved_line_height_factor(style, fonts),
-            inline_box: None,
-            disable_ligatures: false,
-            vertical_align: VerticalAlign::Baseline,
+            line_height_factor: text_run_line_height_factor(style, fonts),
             text_shadow: style.text_shadow.clone(),
+            metadata: crate::layout::text::text_run_metadata(style),
+            ..Default::default()
         },
     );
+}
+
+#[cfg(test)]
+mod subpoint_width_tests {
+    use super::*;
+    use crate::layout::elements::{LayoutElementTestExt, visit_layout_tree};
+    use crate::layout::engine::{
+        SyntheticFontWeight, layout, layout_with_rules, layout_with_rules_and_fonts,
+    };
+    use crate::parser::css::parse_stylesheet;
+    use crate::parser::html::{parse_html, parse_html_with_styles};
+    use crate::types::{Margin, PageSize};
+
+    fn table_rows(page: &crate::layout::engine::Page) -> Vec<TableRow> {
+        #[derive(Default)]
+        struct Rows(Vec<TableRow>);
+
+        impl LayoutVisitor for Rows {
+            fn visit_table_row(&mut self, row: &TableRow) {
+                self.0.push(row.clone());
+            }
+        }
+
+        let mut rows = Rows::default();
+        for (_, element) in &page.elements {
+            visit_layout_tree(element.as_ref(), &mut rows);
+        }
+        rows.0
+    }
+
+    fn first_cell(width: f32) -> (f32, usize) {
+        let nodes = parse_html(&format!(
+            r#"<table style="table-layout:fixed;width:{width}pt;border-spacing:0;font-size:0.5pt;line-height:1"><tr><td style="padding:0;overflow-wrap:anywhere">i i i i</td></tr></table>"#
+        ))
+        .expect("valid table fixture");
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.inspect_table(|row| {
+                    (
+                        row.content.column_widths[0],
+                        row.content.cells[0].layout.content.lines.len(),
+                    )
+                })
+            })
+            .expect("one table row")
+    }
+
+    #[test]
+    fn css_table_normalizes_only_the_first_header_and_footer_groups() {
+        let nodes = parse_html(
+            r#"<div style="display:table">
+                <div style="display:table-row-group"><div style="display:table-row"><div style="display:table-cell">body</div></div></div>
+                <div style="display:table-footer-group"><div style="display:table-row"><div style="display:table-cell">first footer</div></div></div>
+                <div style="display:table-footer-group"><div style="display:table-row"><div style="display:table-cell">second footer</div></div></div>
+                <div style="display:table-header-group"><div style="display:table-row"><div style="display:table-cell">first header</div></div></div>
+                <div style="display:table-header-group"><div style="display:table-row"><div style="display:table-cell">second header</div></div></div>
+            </div>"#,
+        )
+        .expect("valid CSS table fixture");
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let roles = table_rows(&pages[0])
+            .into_iter()
+            .map(|row| {
+                (
+                    row.fragmentation.repeats_as_header,
+                    row.fragmentation.repeats_as_footer,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            roles,
+            vec![
+                (true, false),
+                (false, false),
+                (false, false),
+                (false, false),
+                (false, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn adjacent_avoided_row_groups_keep_distinct_fragmentation_identity() {
+        let nodes = parse_html(
+            r#"<div style="display:table">
+                <div style="display:table-row-group;break-inside:avoid"><div style="display:table-row"><div style="display:table-cell">first</div></div></div>
+                <div style="display:table-row-group;break-inside:avoid"><div style="display:table-row"><div style="display:table-cell">second</div></div></div>
+            </div>"#,
+        )
+        .expect("valid CSS table fixture");
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let groups = table_rows(&pages[0])
+            .into_iter()
+            .map(|row| row.fragmentation.avoid_group)
+            .collect::<Vec<_>>();
+
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(Option::is_some));
+        assert_ne!(groups[0], groups[1]);
+    }
+
+    #[test]
+    fn table_wrap_width_preserves_half_point_and_thousandth_point_cells() {
+        let fonts = HashMap::new();
+        let style = ComputedStyle::default();
+        assert_eq!(
+            table_cell_text_wrap_options(&style, 0.5, &fonts).max_width,
+            0.5
+        );
+        assert_eq!(
+            table_cell_text_wrap_options(&style, 0.001, &fonts).max_width,
+            0.001
+        );
+
+        let (half_width, half_lines) = first_cell(0.5);
+        let (thousandth_width, thousandth_lines) = first_cell(0.001);
+        assert_eq!(half_width, 0.5);
+        assert_eq!(thousandth_width, 0.001);
+        assert!(
+            half_lines > 1,
+            "0.5pt cell unexpectedly used a wider wrap width"
+        );
+        assert!(
+            thousandth_lines > half_lines,
+            "0.001pt cell must remain distinct from the 0.5pt and 1pt layout lanes: {thousandth_lines} vs {half_lines} lines"
+        );
+    }
+
+    #[test]
+    fn collapsed_table_carries_its_outer_border_extent_once_after_the_last_row() {
+        let nodes = parse_html(
+            r#"<table style="border-collapse:collapse;margin-bottom:4pt">
+                <tr><td style="border:1pt solid">a</td></tr>
+                <tr><td style="border:1pt solid">b</td></tr>
+                <tr><td style="border:1pt solid">c</td></tr>
+            </table>"#,
+        )
+        .expect("valid collapsed table fixture");
+        let pages = layout(&nodes, PageSize::A4, Margin::default());
+        let rows = table_rows(&pages[0]);
+        let row_flow = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.flow.internal.start,
+                    row.flow.margins.start,
+                    row.flow.margins.end,
+                    row.flow.extra_end,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            row_flow,
+            vec![
+                (0.5, 0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0, 0.5),
+            ]
+        );
+
+        let last_row = rows.last().expect("last collapsed-table row");
+        let margin_top = last_row.flow.margins.start;
+        let margin_bottom = last_row.flow.margins.end;
+        let flow_extra_bottom = last_row.flow.extra_end;
+        let row_height = last_row
+            .content
+            .cells
+            .iter()
+            .map(table_cell_content_height)
+            .fold(0.0_f32, f32::max);
+        assert_eq!(
+            estimate_element_height(last_row),
+            margin_top + row_height + flow_extra_bottom + margin_bottom,
+            "nested layout sizing must reserve the collapsed table's outer border"
+        );
+        let table_margin_bottom = pages[0].elements[0]
+            .1
+            .inspect_container(|table| table.box_model.margins.end)
+            .expect("table principal box");
+        assert_eq!(table_margin_bottom, 4.0);
+    }
+
+    #[test]
+    fn table_wrapper_auto_margins_center_rows_and_decoration() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { box-sizing: border-box; margin: 0; }
+                table {
+                    width: 126px;
+                    margin: 0 auto;
+                    padding: 7px;
+                    border: 2px solid;
+                    border-spacing: 3px;
+                    background: white;
+                }
+                td { padding: 0; }
+            </style>
+            <table><tr><td>Ag Bb</td></tr></table>"#,
+        )
+        .expect("valid centered table fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(144.0, 150.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let row = pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| element.inspect_table(Clone::clone))
+            .expect("one table row");
+
+        let expected_box_width = 94.5;
+        let expected_box_offset = (144.0 - expected_box_width) / 2.0;
+        let expected_grid_offset = 6.75;
+        assert!((row.box_inline_extent() - expected_box_width).abs() < 0.001);
+        assert!((row.grid_inline_offset() - expected_grid_offset).abs() < 0.001);
+
+        let principal_offset = pages[0].elements[0]
+            .1
+            .inspect_container(|table| table.positioning.insets.left)
+            .expect("table principal box");
+        assert!((principal_offset - expected_box_offset).abs() < 0.001);
+    }
+
+    #[test]
+    fn collapsed_table_border_is_owned_by_cells_once() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { margin: 0; box-sizing: border-box; }
+                table { border-collapse: collapse; border: 12px solid #d7263d; }
+                td { width: 70px; height: 46px; border: 4px solid #1d3557; }
+            </style><table><tr><td></td><td></td></tr></table>"#,
+        )
+        .expect("valid collapsed-border fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(204.0, 108.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        assert_eq!(
+            pages[0].elements.len(),
+            1,
+            "collapsed borders must not emit a second table-root paint box"
+        );
+        let (y, row) = pages[0]
+            .elements
+            .first()
+            .and_then(|(y, element)| element.inspect_table(|row| (*y, row.clone())))
+            .expect("one collapsed table row");
+        assert_eq!(y, 0.0);
+        assert_eq!(row.flow.margins, BlockMargins::ZERO);
+        assert_eq!(row.grid_inline_offset(), 4.5);
+        assert_eq!(row.content.column_widths, vec![52.5, 52.5]);
+
+        let [first, second] = row.content.cells.as_slice() else {
+            panic!("expected exactly two table cells");
+        };
+        for cell in [first, second] {
+            assert_eq!(cell.layout.box_model.minimum_block_size, 34.5);
+            assert_eq!(cell.layout.box_model.border_insets.top, 4.5);
+            assert_eq!(cell.layout.box_model.border_insets.bottom, 4.5);
+            assert!(cell.table.collapsed_outer_edges.top);
+            assert!(cell.table.collapsed_outer_edges.bottom);
+        }
+        assert_eq!(first.layout.box_model.border_insets.left, 4.5);
+        assert_eq!(first.layout.box_model.border_insets.right, 1.5);
+        assert_eq!(second.layout.box_model.border_insets.left, 1.5);
+        assert_eq!(second.layout.box_model.border_insets.right, 4.5);
+        assert!(first.table.collapsed_outer_edges.left);
+        assert!(!first.table.collapsed_outer_edges.right);
+        assert!(!second.table.collapsed_outer_edges.left);
+        assert!(second.table.collapsed_outer_edges.right);
+        assert_eq!(first.layout.box_model.border.right.width, 3.0);
+        assert!(first.table.collapsed_segments.right.is_empty());
+        assert_eq!(second.table.collapsed_segments.left.len(), 1);
+        assert_eq!(second.layout.box_model.border.left.width, 3.0);
+    }
+
+    #[test]
+    fn table_cell_text_preserves_font_synthesis_none() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                td { font-family: ParitySans; font-weight: bold; font-synthesis: none; }
+            </style><table><tr><td>Cell</td></tr></table>"#,
+        )
+        .expect("valid table markup");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let font = crate::parser::ttf::parse_ttf(
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/parity/fonts/ParitySans.ttf"),
+            )
+            .expect("ParitySans test font"),
+        )
+        .expect("valid ParitySans test font");
+        let fonts = HashMap::from([("paritysans".to_string(), font)]);
+        let pages = layout_with_rules_and_fonts(
+            &parsed.nodes,
+            PageSize::A4,
+            Margin::default(),
+            &rules,
+            &fonts,
+            None,
+            0.0,
+            Default::default(),
+        );
+        let run = pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.inspect_table(|row| {
+                    row.content
+                        .cells
+                        .first()
+                        .and_then(|cell| cell.layout.content.lines.first())
+                        .and_then(|line| line.runs.first())
+                        .cloned()
+                })?
+            })
+            .expect("table cell text run");
+
+        assert!(!run.bold);
+        assert_eq!(run.font_synthesis.weight, SyntheticFontWeight::Suppressed);
+    }
+
+    #[test]
+    fn table_fixup_keeps_generated_boundaries_around_improper_block_children() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { margin: 0; }
+                .table { display: table; width: 126px; }
+                .table::before { content: 'before'; }
+                .table::after { content: 'after'; }
+                .child { display: block; height: 20px; }
+            </style><div class="table"><div class="child">body</div></div>"#,
+        )
+        .expect("valid generated table fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(180.0, 120.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let generated_boundaries = pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.inspect_table(|row| {
+                    let children = &row.content.cells.first()?.layout.content.children;
+                    let first = children.first()?.inspect_text(|block| {
+                        block
+                            .lines
+                            .iter()
+                            .flat_map(|line| &line.runs)
+                            .map(|run| run.text.as_str())
+                            .collect::<String>()
+                    })?;
+                    let last = children.last()?.inspect_text(|block| {
+                        block
+                            .lines
+                            .iter()
+                            .flat_map(|line| &line.runs)
+                            .map(|run| run.text.as_str())
+                            .collect::<String>()
+                    })?;
+                    Some((children.len(), first, last))
+                })?
+            })
+            .expect("anonymous table cell with generated boundary children");
+
+        assert!(generated_boundaries.0 >= 3);
+        assert_eq!(generated_boundaries.1, "before");
+        assert_eq!(generated_boundaries.2, "after");
+    }
+}
+
+#[cfg(test)]
+mod cell_attribute_tests {
+    use super::*;
+    use crate::parser::css::parse_stylesheet;
+
+    const CELLPADDING: f32 = 6.0;
+
+    fn first_element(nodes: &[DomNode], tag: HtmlTag) -> Option<&ElementNode> {
+        for node in nodes {
+            let DomNode::Element(element) = node else {
+                continue;
+            };
+            if element.tag == tag {
+                return Some(element);
+            }
+            if let Some(found) = first_element(&element.children, tag) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn cell_padding(
+        inline_style: Option<&str>,
+        stylesheet: &str,
+        parent: &ComputedStyle,
+    ) -> EdgeSizes {
+        let inline = inline_style
+            .map(|style| format!(r#" style="{style}""#))
+            .unwrap_or_default();
+        let parsed = crate::parser::html::parse_html(&format!(
+            r#"<table cellpadding="8"><tr><td{inline}></td></tr></table>"#
+        ))
+        .expect("valid table fixture");
+        let table = first_element(&parsed, HtmlTag::Table).expect("table element");
+        let row = first_element(&table.children, HtmlTag::Tr).expect("table row");
+        let cell = first_element(&row.children, HtmlTag::Td).expect("table cell");
+        let rules = parse_stylesheet(stylesheet);
+        compute_style_with_context(
+            HtmlTag::Td,
+            cell.style_attr(),
+            parent,
+            &rules,
+            "td",
+            &[],
+            None,
+            &cell.attributes,
+            &SelectorContext {
+                ancestors: vec![
+                    AncestorInfo {
+                        element: table,
+                        child_index: 0,
+                        sibling_count: 1,
+                        preceding_siblings: Vec::new(),
+                        following_siblings: Vec::new(),
+                        is_empty: false,
+                    },
+                    AncestorInfo {
+                        element: row,
+                        child_index: 0,
+                        sibling_count: 1,
+                        preceding_siblings: Vec::new(),
+                        following_siblings: Vec::new(),
+                        is_empty: false,
+                    },
+                ],
+                ..SelectorContext::default()
+            },
+        )
+        .padding
+    }
+
+    #[test]
+    fn cellpadding_supplies_all_sides_when_css_is_absent() {
+        assert_eq!(
+            cell_padding(None, "", &ComputedStyle::default()),
+            EdgeSizes::uniform(CELLPADDING)
+        );
+    }
+
+    #[test]
+    fn authored_subpoint_padding_shorthand_wins_by_cascade_not_magnitude() {
+        assert_eq!(
+            cell_padding(Some("padding: 0.5pt"), "", &ComputedStyle::default()),
+            EdgeSizes::uniform(0.5)
+        );
+    }
+
+    #[test]
+    fn authored_padding_sides_override_only_their_presentational_hints() {
+        assert_eq!(
+            cell_padding(
+                Some("padding-top: 0.5pt; padding-left: 2pt"),
+                "",
+                &ComputedStyle::default()
+            ),
+            EdgeSizes::new(0.5, CELLPADDING, CELLPADDING, 2.0)
+        );
+    }
+
+    #[test]
+    fn authored_padding_inherit_wins_over_cellpadding() {
+        let parent = ComputedStyle {
+            padding: EdgeSizes::new(1.0, 2.0, 3.0, 4.0),
+            ..ComputedStyle::default()
+        };
+        assert_eq!(
+            cell_padding(Some("padding: inherit"), "", &parent),
+            parent.padding
+        );
+    }
+
+    #[test]
+    fn authored_padding_initial_is_not_mistaken_for_an_absent_declaration() {
+        assert_eq!(
+            cell_padding(Some("padding: initial"), "", &ComputedStyle::default()),
+            EdgeSizes::ZERO
+        );
+    }
+
+    #[test]
+    fn stylesheet_inline_and_important_padding_share_one_cascade() {
+        assert_eq!(
+            cell_padding(
+                Some("padding: 2pt"),
+                "td { padding: 4pt; padding-right: 0.5pt !important; }",
+                &ComputedStyle::default()
+            ),
+            EdgeSizes::new(2.0, 0.5, 2.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn padding_revert_removes_the_author_origin_hint() {
+        assert_eq!(
+            cell_padding(Some("padding-top: revert"), "", &ComputedStyle::default()),
+            EdgeSizes::new(0.75, CELLPADDING, CELLPADDING, CELLPADDING)
+        );
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::*;
+
+    fn side(style: BorderStyle, width: f32) -> LayoutBorderSide {
+        LayoutBorderSide {
+            width,
+            style,
+            ..LayoutBorderSide::default()
+        }
+    }
+
+    #[test]
+    fn collapsed_style_rank_covers_the_full_css_order() {
+        let ordered = [
+            BorderStyle::Inset,
+            BorderStyle::Groove,
+            BorderStyle::Outset,
+            BorderStyle::Ridge,
+            BorderStyle::Dotted,
+            BorderStyle::Dashed,
+            BorderStyle::Solid,
+            BorderStyle::Double,
+        ];
+        for pair in ordered.windows(2) {
+            assert!(collapsed_style_rank(pair[0]) < collapsed_style_rank(pair[1]));
+        }
+    }
+
+    #[test]
+    fn typed_hidden_border_suppresses_a_collapsed_neighbor() {
+        let hidden = BorderCandidate {
+            side: side(BorderStyle::Hidden, 0.0),
+            origin: CollapsedBorderOrigin::Cell,
+        };
+        let solid = BorderCandidate {
+            side: side(BorderStyle::Solid, 8.0),
+            origin: CollapsedBorderOrigin::Cell,
+        };
+        assert_eq!(collapsed_border_winner(hidden, solid), Some(0));
+    }
+
+    #[test]
+    fn collapsed_outer_edge_provenance_does_not_overwrite_alpha() {
+        let mut cell = TableCell {
+            layout: crate::layout::cells::CellBox {
+                box_model: crate::layout::cells::CellBoxModel {
+                    border: LayoutBorder {
+                        left: side(BorderStyle::Solid, 1.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut table = side(BorderStyle::Solid, 4.0);
+        table.color = crate::types::Color::from_srgb(0.0, 0.0, 0.0, 0.25);
+        apply_table_winning_side(&mut cell, PhysicalSide::Left, table);
+        assert!(cell.table.collapsed_outer_edges.left);
+        assert_eq!(cell.layout.box_model.border.left.color.alpha(), 0.25);
+        assert_eq!(cell.layout.box_model.border.left.width, 4.0);
+    }
+
+    #[test]
+    fn collapsed_column_borders_preserve_definite_cell_track_heights() {
+        use crate::layout::elements::LayoutElementTestExt;
+        use crate::layout::engine::layout_with_rules;
+        use crate::parser::css::parse_stylesheet;
+        use crate::parser::html::parse_html_with_styles;
+        use crate::types::{Margin, PageSize};
+
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { margin:0; padding:0; box-sizing:border-box }
+                table { border-collapse:collapse; border:2px solid }
+                col { border:8px solid blue }
+                td { width:58px; height:36px; border:none }
+            </style><table><colgroup><col><col></colgroup>
+            <tr><td></td><td></td></tr><tr><td></td><td></td></tr></table>"#,
+        )
+        .expect("valid collapsed column-border fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|sheet| parse_stylesheet(sheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(312.0, 168.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let heights = pages[0]
+            .elements
+            .iter()
+            .filter_map(|(_, element)| {
+                element.inspect_table(|row| row_height_from_cells(&row.content.cells))
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!heights.is_empty());
+        assert!(heights.into_iter().all(|height| height == 27.0));
+    }
+
+    #[test]
+    fn contextual_table_cells_and_replaced_sibling_keep_table_fixup_boundaries() {
+        use crate::layout::elements::LayoutElementTestExt;
+        use crate::layout::engine::layout_with_rules;
+        use crate::parser::html::parse_html_with_styles;
+        use crate::types::{Margin, PageSize};
+
+        let document = parse_html_with_styles(
+            r#"<style>
+                * { box-sizing:border-box; margin:0; }
+                .table { display:table; width:126px; height:68px; padding:7px;
+                    border:2px solid #577590; border-spacing:3px; }
+                .own { height:22px; white-space:nowrap; }
+                .table > .own > .token { display:table-cell; vertical-align:middle; }
+                .asset { display:inline-block; width:34px; height:24px; }
+            </style>
+            <div class="table"><div class="own"><span class="token">Ag</span><span class="token">Bb</span><img class="asset" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="></div></div>"#,
+        )
+        .expect("table fixup fixture should parse");
+        let rules = document
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| crate::parser::css::parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &document.nodes,
+            PageSize::new(200.0, 120.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+
+        fn has_fixup_boundary(element: &dyn LayoutElement) -> bool {
+            if element
+                .inspect_container(|container| {
+                    let [table, replaced] = container.children.as_slice() else {
+                        return false;
+                    };
+                    let two_cells = table
+                        .inspect_table(|row| row.content.cells.len() == 2)
+                        .unwrap_or(false);
+                    let one_replaced_cell = replaced
+                        .inspect_flex(|row| row.content.cells.len() == 1)
+                        .unwrap_or(false);
+                    two_cells && one_replaced_cell
+                })
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            let mut found = false;
+            element.visit_children(&mut |child| found |= has_fixup_boundary(child));
+            found
+        }
+        assert!(
+            pages[0]
+                .elements
+                .iter()
+                .any(|(_, element)| has_fixup_boundary(element.as_ref())),
+            "computed table-cell children form an anonymous table before the replaced sibling"
+        );
+    }
 }

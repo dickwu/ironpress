@@ -6,12 +6,13 @@
     "subfeature": "padding-box-clip-edge",
     "description": "overflow:hidden on a padded box clips its oversized child at the PADDING box: the child fills the padding box out to the inner border edge and is cut there, leaving the border fully visible and the top/left padding band showing.",
     "file": "cases/overflow-clipping/overflow-padding-box-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-border-box"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-border-box"
+    ]
   },
   {
     "id": "overflow-hidden-clip",
@@ -20,12 +21,12 @@
     "subfeature": "hidden",
     "description": "overflow:hidden clips an oversized in-flow child to the clip box; the child is cut off at the right and bottom edges.",
     "file": "cases/overflow-clipping/overflow-hidden-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-visible-no-clip",
@@ -34,12 +35,12 @@
     "subfeature": "visible",
     "description": "overflow:visible (explicit) does not clip; the oversized child paints beyond the parent box on the right and bottom.",
     "file": "cases/overflow-clipping/overflow-visible-no-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-clip",
@@ -48,26 +49,30 @@
     "subfeature": "clip",
     "description": "overflow:clip clips the oversized child to the clip box with no scroll container (modern clip keyword).",
     "file": "cases/overflow-clipping/overflow-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-scroll-print-clip",
     "category": "overflow-clipping",
     "feature": "overflow",
     "subfeature": "scroll",
-    "description": "overflow:scroll produces no scrollbars in print; the oversized child is clipped to the box edges with no interactive scroll affordance.",
+    "description": "overflow:scroll establishes a scroll container. In static print media, the exact overflow indicator and placement of printed overflow are UA-defined, so the Chrome PDF is retained only as a compatibility canary.",
     "file": "cases/overflow-clipping/overflow-scroll-print-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Overflow 3 section 3.1.3 allows static-media UAs to show an overflow indication and says overflowing scroll content may be printed without defining where; Chrome's exact scrollbar and clipping pixels are not a normative oracle."
+    },
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-hidden-border-radius",
@@ -76,12 +81,13 @@
     "subfeature": "hidden-with-border-radius",
     "description": "overflow:hidden combined with border-radius clips the overflowing child to the rounded corners of the clip box.",
     "file": "cases/overflow-clipping/overflow-hidden-border-radius.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-border-box"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-border-box"
+    ]
   },
   {
     "id": "overflow-hidden-flex-item",
@@ -90,12 +96,12 @@
     "subfeature": "hidden-on-flex-item",
     "description": "A flex item with overflow:hidden clips its oversized inner block to the flex item box while the sibling item is unaffected.",
     "file": "cases/overflow-clipping/overflow-hidden-flex-item.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-hidden-grid-item",
@@ -104,12 +110,12 @@
     "subfeature": "hidden-on-grid-item",
     "description": "A grid cell with overflow:hidden clips its oversized inner block to the cell box while the sibling cell is unaffected.",
     "file": "cases/overflow-clipping/overflow-hidden-grid-item.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "partial",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-hidden-nested",
@@ -118,12 +124,12 @@
     "subfeature": "nested-clip-intersection",
     "description": "Nested overflow:hidden boxes; the visible region is the intersection of the outer and inner clip rectangles, with the grandchild clipped by both.",
     "file": "cases/overflow-clipping/overflow-hidden-nested.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-hidden-text-clip",
@@ -132,26 +138,31 @@
     "subfeature": "hidden-clips-text",
     "description": "overflow:hidden on a short fixed-height box clips overflowing text lines below the box edge (bundled ParitySans).",
     "file": "cases/overflow-clipping/overflow-hidden-text-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
   },
   {
     "id": "overflow-x-y-separate",
     "category": "overflow-clipping",
     "feature": "overflow",
     "subfeature": "overflow-x-overflow-y",
-    "description": "overflow-x:hidden clips horizontally while overflow-y:visible lets the child overflow downward only.",
+    "description": "overflow-x:hidden makes the visible y value compute to auto, so both axes constrain the oversized child. Catches renderers that retain visible y overflow instead of applying the CSS Overflow axis-coercion rule.",
     "file": "cases/overflow-clipping/overflow-x-y-separate.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Overflow 3 section 3.1 makes visible compute to auto when the other axis is scrollable, which Ironpress implements. In static media, section 3.1.3 permits a UA overflow indication and section 5.1 leaves its appearance, size, and edge UA-defined; Chrome's scrollbar pixels are a compatibility canary, not a normative oracle."
+    },
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-clip-margin",
@@ -160,12 +171,12 @@
     "subfeature": "clip-edge-extension",
     "description": "overflow:clip with overflow-clip-margin:18px lets the child bleed past the box edge; catches clipping exactly at the padding box.",
     "file": "cases/overflow-clipping/overflow-clip-margin.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-axis-visible-hidden-coercion",
@@ -174,12 +185,16 @@
     "subfeature": "visible-hidden-axis-coercion",
     "description": "overflow-x:visible plus overflow-y:hidden coerces the x axis to non-visible clipping; catches preserving visible overflow on the x axis.",
     "file": "cases/overflow-clipping/overflow-axis-visible-hidden-coercion.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Overflow 3 section 3.1 makes visible compute to auto when the other axis is scrollable, which Ironpress implements. In print, auto inherits scroll's undefined overflow placement, so Chrome's scrollbar geometry and clipping pixels are a compatibility canary, not a normative oracle."
+    },
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-clip-float-no-bfc",
@@ -188,13 +203,13 @@
     "subfeature": "clip-no-float-containment",
     "description": "overflow:clip clips overflow but does not establish a new formatting context, so a following red block is not pushed below the float; catches treating clip like hidden for BFC creation.",
     "file": "cases/overflow-clipping/overflow-clip-float-no-bfc.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-logical-inline-clip",
@@ -203,13 +218,13 @@
     "subfeature": "logical-inline-block-axes",
     "description": "overflow-inline:clip and overflow-block:visible clip only inline-axis overflow in horizontal writing mode; catches ignoring logical overflow or clipping both axes.",
     "file": "cases/overflow-clipping/overflow-logical-inline-clip.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-scrollbar-gutter-stable",
@@ -218,13 +233,13 @@
     "subfeature": "stable",
     "description": "scrollbar-gutter:stable reserves inline gutter space in a non-overflowing auto scroll container; catches ignoring the gutter and letting the child fill the full red box.",
     "file": "cases/overflow-clipping/overflow-scrollbar-gutter-stable.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-scrollbar-gutter-both-edges",
@@ -233,13 +248,13 @@
     "subfeature": "stable-both-edges",
     "description": "scrollbar-gutter:stable both-edges reserves symmetric inline gutters around the child; catches treating both-edges as plain stable or ignoring scrollbar-gutter entirely.",
     "file": "cases/overflow-clipping/overflow-scrollbar-gutter-both-edges.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   },
   {
     "id": "overflow-line-clamp-two-lines",
@@ -248,13 +263,14 @@
     "subfeature": "two-line-webkit-clamp",
     "description": "-webkit-line-clamp:2 with vertical box layout clips static text to two lines before the red block; catches unsupported line-clamp rendering all lines.",
     "file": "cases/overflow-clipping/overflow-line-clamp-two-lines.html",
-    "weight": 1,
-    "pass_threshold_pct": 6.0,
-    "partial_threshold_pct": 18.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
   },
   {
     "id": "overflow-visible-clip-axis",
@@ -263,12 +279,27 @@
     "subfeature": "visible-x-clip-y",
     "description": "overflow-x:visible with overflow-y:clip preserves horizontal overflow while clipping vertical overflow; catches single-rectangle clipping of both axes.",
     "file": "cases/overflow-clipping/overflow-visible-clip-axis.html",
-    "weight": 1,
-    "pass_threshold_pct": 2.0,
-    "partial_threshold_pct": 10.0,
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "overflow-invalid-value-preserves-hidden",
+    "category": "overflow-clipping",
+    "feature": "overflow",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A later invalid overflow value is discarded, so the earlier overflow:hidden still clips oversized painted content on both axes.",
+    "file": "cases/overflow-clipping/overflow-invalid-value-preserves-hidden.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
   }
 ]

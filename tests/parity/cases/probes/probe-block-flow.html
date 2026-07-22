@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <title>probe block flow</title>
 <style>
-  @page { size: 297px 181px; margin: 0; }
+  @page { size: 304px 184px; margin: 0; }
   html { font-family: ParitySans; line-height: 1.5; }
   * { margin: 0; box-sizing: border-box; }
   html, body { background: #ffffff; }
-  /* Substrate canary: two stacked solid blocks.
-     Tests block box generation + normal vertical flow. */
+  /* Exact-output canary: two known, correctly stacked rectangles.
+     A mismatch can come from PDF coordinate/edge encoding and is not, by
+     itself, evidence that normal-flow geometry is wrong. */
   .a {
     width: 220px;
     height: 90px;

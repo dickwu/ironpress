@@ -1,0 +1,151 @@
+/*
+ * Stable author-origin baseline for every parity render.
+ *
+ * These rules are deliberately zero-specificity and are injected before each
+ * fixture stylesheet. They remove browser-version UA stylesheet choices from
+ * the oracle while leaving the fixture free to override every declaration.
+ * CSS-defined initial values are not restated here.
+ */
+
+:where(html) {
+  display: block;
+  font-family: ParitySans;
+  line-height: 1.5;
+}
+
+:where(body) {
+  display: block;
+  margin: 0;
+}
+
+:where(div, p, section, h1, h2, h3, figure, figcaption, ul, ol) {
+  display: block;
+}
+
+:where(span, a, q, sub, sup, img, svg, canvas, br) {
+  display: inline;
+}
+
+:where(p) {
+  margin: 16px 0;
+}
+
+:where(h1) {
+  margin: 21.44px 0;
+  font-size: 32px;
+  font-weight: bold;
+}
+
+:where(h2) {
+  margin: 19.92px 0;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+:where(h3) {
+  margin: 18.72px 0;
+  font-size: 18.72px;
+  font-weight: bold;
+}
+
+:where(a) {
+  color: #0000ee;
+  text-decoration: underline;
+}
+
+:where(q) {
+  quotes: "\201c" "\201d" "\2018" "\2019";
+}
+
+:where(sub) {
+  font-size: 83%;
+  vertical-align: sub;
+}
+
+:where(sup) {
+  font-size: 83%;
+  vertical-align: super;
+}
+
+:where(figure) {
+  margin: 16px 40px;
+}
+
+:where(ul, ol) {
+  margin: 16px 0;
+  padding-left: 40px;
+}
+
+:where(ul) {
+  list-style-type: disc;
+}
+
+:where(ol) {
+  list-style-type: decimal;
+}
+
+:where(li) {
+  display: list-item;
+  margin: 0;
+}
+
+:where(table) {
+  display: table;
+  border-collapse: separate;
+}
+
+:where(table:not([cellspacing])) {
+  border-spacing: 2px;
+}
+
+:where(caption) {
+  display: table-caption;
+  text-align: center;
+}
+
+:where(colgroup) {
+  display: table-column-group;
+}
+
+:where(col) {
+  display: table-column;
+}
+
+:where(thead) {
+  display: table-header-group;
+}
+
+:where(tbody) {
+  display: table-row-group;
+}
+
+:where(tfoot) {
+  display: table-footer-group;
+}
+
+:where(tr) {
+  display: table-row;
+}
+
+:where(td, th) {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+:where(
+  table:not([cellpadding]) > tr > td,
+  table:not([cellpadding]) > tr > th,
+  table:not([cellpadding]) > thead > tr > td,
+  table:not([cellpadding]) > thead > tr > th,
+  table:not([cellpadding]) > tbody > tr > td,
+  table:not([cellpadding]) > tbody > tr > th,
+  table:not([cellpadding]) > tfoot > tr > td,
+  table:not([cellpadding]) > tfoot > tr > th
+) {
+  padding: 1px;
+}
+
+:where(th) {
+  font-weight: bold;
+  text-align: center;
+}

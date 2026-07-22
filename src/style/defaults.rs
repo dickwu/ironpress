@@ -1,4 +1,4 @@
-use crate::parser::css::{CssValue, StyleMap};
+use crate::parser::css::{CssValue, SpecifiedColor, StyleMap};
 use crate::parser::dom::HtmlTag;
 use crate::types::Color;
 
@@ -65,7 +65,10 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("text-decoration", CssValue::Keyword("line-through".into()));
         }
         HtmlTag::A => {
-            style.set("color", CssValue::Color(Color::rgb(0, 0, 238)));
+            style.set(
+                "color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(0, 0, 238))),
+            );
             style.set("text-decoration", CssValue::Keyword("underline".into()));
         }
         HtmlTag::Hr => {
@@ -100,6 +103,11 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
                     .into(),
                 ),
             );
+        }
+        HtmlTag::Table => {
+            style.set("box-sizing", CssValue::Keyword("border-box".into()));
+            style.set("border-spacing", CssValue::Length(1.5));
+            style.set("text-indent", CssValue::Keyword("initial".into()));
         }
         HtmlTag::Dl => {
             style.set("margin-top", CssValue::Length(4.0));
@@ -157,7 +165,7 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-right", CssValue::Length(8.0));
             style.set(
                 "background-color",
-                CssValue::Color(Color::rgb(245, 245, 245)),
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(245, 245, 245))),
             );
             style.set("white-space", CssValue::Keyword("pre".into()));
         }
@@ -166,7 +174,7 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("font-size", CssValue::Length(10.0));
             style.set(
                 "background-color",
-                CssValue::Color(Color::rgb(245, 245, 245)),
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(245, 245, 245))),
             );
         }
         HtmlTag::Small => {
@@ -185,7 +193,10 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("font-size", CssValue::Number(0.83));
         }
         HtmlTag::Mark => {
-            style.set("background-color", CssValue::Color(Color::rgb(255, 255, 0)));
+            style.set(
+                "background-color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(255, 255, 0))),
+            );
         }
         HtmlTag::Address => {
             style.set("font-style", CssValue::Keyword("italic".into()));
@@ -217,7 +228,10 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-bottom", CssValue::Length(2.0));
             style.set("padding-left", CssValue::Length(4.0));
             style.set("border-width", CssValue::Length(1.0));
-            style.set("border-color", CssValue::Color(Color::rgb(169, 169, 169)));
+            style.set(
+                "border-color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(169, 169, 169))),
+            );
         }
         HtmlTag::Select => {
             style.set("padding-top", CssValue::Length(2.0));
@@ -225,7 +239,10 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-bottom", CssValue::Length(2.0));
             style.set("padding-left", CssValue::Length(4.0));
             style.set("border-width", CssValue::Length(1.0));
-            style.set("border-color", CssValue::Color(Color::rgb(169, 169, 169)));
+            style.set(
+                "border-color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(169, 169, 169))),
+            );
         }
         HtmlTag::Textarea => {
             style.set("padding-top", CssValue::Length(4.0));
@@ -233,20 +250,26 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             style.set("padding-bottom", CssValue::Length(4.0));
             style.set("padding-left", CssValue::Length(4.0));
             style.set("border-width", CssValue::Length(1.0));
-            style.set("border-color", CssValue::Color(Color::rgb(169, 169, 169)));
+            style.set(
+                "border-color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(169, 169, 169))),
+            );
             style.set("font-size", CssValue::Length(10.0));
         }
         HtmlTag::Video => {
             style.set("margin-top", CssValue::Length(4.0));
             style.set("margin-bottom", CssValue::Length(4.0));
-            style.set("background-color", CssValue::Color(Color::rgb(0, 0, 0)));
+            style.set(
+                "background-color",
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(0, 0, 0))),
+            );
         }
         HtmlTag::Audio => {
             style.set("margin-top", CssValue::Length(2.0));
             style.set("margin-bottom", CssValue::Length(2.0));
             style.set(
                 "background-color",
-                CssValue::Color(Color::rgb(240, 240, 240)),
+                CssValue::Color(SpecifiedColor::Absolute(Color::rgb(240, 240, 240))),
             );
         }
         HtmlTag::Progress => {
@@ -309,6 +332,20 @@ mod tests {
         );
         assert!(default_style(HtmlTag::Small).get("font-size").is_some());
         assert!(default_style(HtmlTag::Code).get("font-size").is_some());
+    }
+
+    #[test]
+    fn ua_colors_are_explicit_absolute_specified_values() {
+        assert!(matches!(
+            default_style(HtmlTag::A).get("color"),
+            Some(CssValue::Color(SpecifiedColor::Absolute(color)))
+                if *color == Color::rgb(0, 0, 238)
+        ));
+        assert!(matches!(
+            default_style(HtmlTag::Mark).get("background-color"),
+            Some(CssValue::Color(SpecifiedColor::Absolute(color)))
+                if *color == Color::rgb(255, 255, 0)
+        ));
     }
 
     #[test]

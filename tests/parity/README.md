@@ -1,134 +1,172 @@
-# ironpress Feature-Parity Engine
+# Visual parity
 
-This directory holds the feature-parity test suite. Each fixture isolates **one**
-CSS/HTML feature (or one interaction between two features), is rendered
-**in-process** through the `ironpress` library at Chrome-matching page geometry,
-and is diffed against a **committed Chrome reference raster**. The engine scores
-parity per feature / per category / overall, writes a machine scorecard
-(`report.json`) and a human one (`REPORT.md`), and gates CI on regressions.
+This corpus renders small, adversarial HTML/CSS fixtures with ironpress and
+compares them with committed browser oracle PDFs at 300 DPI. It is both a
+regression gate and a defect inventory: a passing percentage never hides the
+fixtures that need attention.
 
-Chrome is **never** run at test time — references are pre-generated once and
-committed.
+Chrome is not launched by the test. Reference generation is a separate,
+explicit operation.
 
-## Layout
+## Files
 
-```
-tests/
-  feature_parity.rs              # integration entry: `cargo test --test feature_parity`
-  parity_support/mod.rs          # the engine implementation
-  parity/
-    cases/<category>/<id>.html   # standalone fixtures (committed)
-    refs/<category>/<id>.png     # Chrome references @150 DPI (committed)
-    manifest/<category>.json     # manifest fragment: JSON array of entries (committed)
-    report.json                  # machine scorecard / regression baseline (committed)
-    REPORT.md                    # human scorecard (committed)
-    diffs/<category>/<id>.png    # failure overlays (gitignored)
-scripts/
-  parity-gen-refs.sh             # one-time Chrome reference generator
-  parity.sh                      # convenience runner
+```text
+tests/feature_parity.rs                integration-test entry point
+tests/parity_support/                  comparator, gate, and report code
+tests/parity/cases/<category>/<id>.html
+tests/parity/oracles/<category>/<id>.pdf committed browser output
+tests/parity/refs/<category>/<id>.png  generated, ignored report previews
+tests/parity/manifest/<category>.json  fixture metadata
+tests/parity/refs.lock                 fixture, PDF oracle, and provenance lock
+tests/parity/baseline.json             explicitly reviewed regression baseline
+tests/parity/report.json               always-current machine-readable report
+tests/parity/REPORT.md                 always-current compact human report
+tests/parity/reports/                  visual HTML report
 ```
 
-## Running
+## Run it
 
 ```bash
 scripts/parity.sh
-# or directly:
-cargo test --test feature_parity -- --nocapture
 ```
 
-The engine always rewrites `report.json` + `REPORT.md`, then fails the test only
-on a **regression**: an overall-score drop beyond a small epsilon, or a fixture
-that was `PASS` in the committed `report.json` and is now `FAIL`. New fixtures and
-`UNKNOWN` fixtures (no reference) never fail the build. If `pdftoppm` is missing,
-every fixture is `UNKNOWN` and the run still passes.
+A full run always writes the current JSON, Markdown, and visual report, then
+fails closed when:
 
-## Adding a fixture (one feature per file)
+- any fixture is not an exact `PASS`, regardless of its support label;
+- an authenticated reference is missing, stale, or renamed;
+- a committed fixture disappears or its status gets worse;
+- a newly added fixture is not `PASS`; or
+- the committed baseline is missing or malformed.
 
-1. Write a **standalone, deterministic** HTML document at
-   `tests/parity/cases/<category>/<id>.html`:
-   - Self-contained: **no external resources, no web fonts, no network.**
-   - Use only generic font families (`serif` / `sans-serif` / `monospace`) with
-     explicit `px`/`pt` sizes and explicit colors so both engines agree on
-     metrics.
-   - Isolate **one** feature/value. Keep the region small and bounded with solid
-     fills and `>=2px` borders so geometric differences show up as pixel diffs.
-     Prefer boxes over text for pure-layout features (text shaping differs between
-     engines); reserve text for `typography` / `inline` categories and keep it
-     short.
-   - Reset default margins: `* { margin:0; box-sizing:border-box }` unless the
-     fixture specifically tests margins / box-model defaults.
-   - **Do NOT declare `@page { size / margin }`** — it would override the page
-     geometry on the ironpress side only and desynchronize candidate vs.
-     reference. The engine rejects fixtures containing `@page`.
-   - Keep all content within **one** US Letter page.
+Every candidate and oracle source is rendered with
+`tests/parity/ua-pins.css` injected before its own styles. The zero-specificity
+author rules pin HTML display roles, body margins, root typography, list/table
+behavior, links, headings, and other browser-UA choices without preventing a
+fixture from overriding them. Schema 6 of `refs.lock` authenticates that exact
+stylesheet hash, so a baseline change forces real oracle regeneration. The
+corpus audit also rejects an empty/symlinked baseline or a source without an
+explicit `<head>` insertion point.
 
-2. Add an entry to `tests/parity/manifest/<category>.json` (a JSON array). The
-   filename stem must equal each entry's `category`, and `id` must equal the
-   fixture filename stem. Minimal entry:
+An already-failing raster is fingerprinted page by page. Any change to it needs
+explicit baseline review; a rounded percentage cannot silently launder a moved
+or newly shaped defect.
 
-   ```json
-   {
-     "id": "flexbox-justify-content-space-between",
-     "category": "flexbox",
-     "feature": "justify-content",
-     "subfeature": "space-between",
-     "description": "Three boxes spaced space-between in a row flex container.",
-     "file": "cases/flexbox/flexbox-justify-content-space-between.html"
-   }
-   ```
+To inspect a small subset without touching the baseline:
 
-   Optional fields: `weight` (default 1.0), `pass_threshold_pct` (default 2.0),
-   `partial_threshold_pct` (default 10.0), `sanitize` (default true). For an
-   **interaction** fixture add `interaction_of` (>=2 categories) and `base_ids`
-   (the single-feature fixture ids it combines) so the report can classify the
-   failure as GENUINE vs. DERIVATIVE.
+```bash
+PARITY_ONLY=invalid-justify-content cargo test --test feature_parity -- --nocapture
+```
 
-3. Generate the reference (one time, requires chromium + poppler):
+This is diagnostic only and deliberately exits nonzero after rendering. A
+filtered or zero-match selection can never satisfy the full-corpus gate. Its
+images are written under `target/parity-diagnostics/run-<pid>/`; it does not
+overwrite the images or documents belonging to the last full report.
+
+For PDF-level investigation, add `PARITY_KEEP_PDFS=1`; the filtered run then
+retains its candidate PDFs under that diagnostic directory's `pdfs/` tree.
+
+An intentional full baseline replacement must be explicit:
+
+```bash
+PARITY_UPDATE_BASELINE=1 scripts/parity.sh
+```
+
+That mode skips only the comparison with the old baseline. Corpus and reference
+integrity still gate, and every fixture must still pass regardless of its support
+label. It cannot be combined with `PARITY_ONLY`.
+
+To intentionally regenerate one browser oracle without rewriting its category,
+set its fixture id explicitly:
+
+```bash
+PARITY_FIXTURE=background-repeat-space-round FORCE=1 \
+  scripts/parity-gen-refs.sh backgrounds-borders
+```
+
+The generator preserves every out-of-scope lock entry and verifies the selected
+fixture exists before it writes `refs.lock`.
+
+## Add an adversarial fixture
+
+1. Add one deterministic, standalone document at
+   `cases/<category>/<id>.html`. Use no network resources. Prefer solid shapes
+   and explicit dimensions over text unless typography is the subject. Include
+   an explicit `<head>`; the harness injects the authenticated UA baseline
+   there before the fixture's author styles.
+2. Give the fixture an explicit, content-sized
+   `@page { size: ...; margin: 0 }`. This keeps both engines on the same small
+   canvas and makes a defect occupy a meaningful part of the raster. Chrome
+   fixtures using CSS-pixel page sizes must use multiples of 8 at 300 DPI; run
+   `scripts/parity-normalize-page-sizes.py` to check or normalize them.
+3. Add its manifest entry. The filename stem, category, and id must agree.
+   Unknown manifest fields are rejected. There are no per-fixture score
+   thresholds or noise floors.
+4. Generate the missing reference, then authenticate the complete corpus:
 
    ```bash
-   scripts/parity-gen-refs.sh <category>     # or no arg for all missing refs
+   scripts/parity-gen-refs.sh <category>
+   scripts/parity-gen-refs.sh --check
    ```
 
-   Commit the resulting `tests/parity/refs/<category>/<id>.png`.
+5. Run the targeted fixture first, fix the underlying engine behavior, then run
+   the complete corpus. Support labels are descriptive only; no label can make a
+   differing raster pass.
 
-4. Run the engine to update the scorecard and commit `report.json` + `REPORT.md`:
+A typical manifest entry is:
 
-   ```bash
-   scripts/parity.sh
-   ```
+```json
+{
+  "id": "flexbox-invalid-justify-content-preserves-prior-value",
+  "category": "flexbox",
+  "feature": "justify-content",
+  "subfeature": "invalid-declaration-discard",
+  "description": "A later invalid declaration is discarded.",
+  "file": "cases/flexbox/flexbox-invalid-justify-content-preserves-prior-value.html",
+  "kind": "feature",
+  "oracle": "chrome",
+  "expected_support": "implemented",
+  "depends_on": ["probe-fill-box", "probe-block-flow"]
+}
+```
 
-## Reading the scorecard
+`expected_support` is one of `implemented`, `partial`, or `unsupported`; it does
+not affect the verdict or gate.
+`oracle` is `chrome` or `weasyprint`. A parity fixture without a real PDF oracle
+is rejected.
 
-`REPORT.md` leads with a **Regressions / Failures** table that names the exact
-feature/subfeature (or interaction) that is wrong, followed by a per-category
-coverage table and a category -> feature -> fixture detail tree, and finally the
-UNKNOWN (untested) list.
+## Verdicts
 
-`report.json` is the machine-readable baseline used by the regression gate. Its
-`env` block records DPI and tolerances for provenance.
+The comparator classifies every non-identical pixel from the two values at that
+coordinate: missing content, extra content, or colour error. Both PDFs use the
+exact same `pdftoppm` executable and arguments, so a raster difference is
+evidence that the PDFs differ, not evidence of different rasterizers.
 
-### Status meaning
+The raw pixel count is never suppressed. The verdict applies one fixed,
+same-coordinate human-visibility policy to that evidence: ΔE2000 ≤ 2.3 against
+paper is not treated as visible paint; colour differences ≤ 2.3 are
+imperceptible; and larger Missing/Extra regions must exceed global CSS-size
+floors. It never translates, registers, crops-to-fit, filters, resamples, or
+uses fixture-specific thresholds.
 
-| status   | meaning                                                              |
-|----------|---------------------------------------------------------------------|
-| PASS     | `diff_pct <= pass_threshold_pct` (default 2%)                        |
-| PARTIAL  | `diff_pct <= partial_threshold_pct` (default 10%)                    |
-| FAIL     | above partial, or render error / malformed PDF / pdftoppm failure   |
-| UNKNOWN  | no committed reference (excluded from the score, never gates)        |
+| status | meaning |
+|---|---|
+| `PASS` | dimensions match and any remaining raw difference is below the fixed visibility policy |
+| `FAIL` | visible pixel difference, render error, or dimension mismatch |
 
-### Interpreting the percentage
+The headline percentage is an unweighted summary (`PASS=1`, `FAIL=0`). Every
+fixture counts equally. Per-fixture `max-page pixel diff` is the exact raw
+unequal-RGBA-pixel percentage; read it and the needs-attention table first.
 
-The overall / per-category / per-feature score is a **weighted pass-rate** over
-fixtures that have a reference (`PASS=1.0`, `PARTIAL=0.5`, `FAIL=0`, `UNKNOWN`
-excluded). It is the percentage of **written** fixtures that pass — read it
-together with **Scored coverage** (how many fixtures actually have a reference) so
-a high score over a tiny tested subset is not mistaken for broad parity.
+## Reference integrity
 
-## How diffing works
+`refs.lock` binds each id to its complete manifest metadata, fixture bytes,
+category/path, oracle PDF hash, renderer version, bundled fonts, and generator.
+PNGs are deliberately excluded:
+the test rasterizes the committed oracle PDF and candidate PDF through one
+discovered runtime `pdftoppm` executable with one option set.
 
-For each fixture with a reference: the candidate PDF is rasterized with
-`pdftoppm -r 150`, both candidate and reference are cropped to their non-white
-content bounding box, the candidate is resized to the reference dimensions, and a
-per-pixel diff (per-channel tolerance) yields `diff_pct`. On any non-PASS result a
-magenta-highlighted overlay is written to `tests/parity/diffs/<category>/<id>.png`
-(gitignored) for inspection.
+Oracle regeneration requires Chromium, Poppler (for PDF validation), and
+WeasyPrint for the fixtures that declare it. Existing PDFs are left
+untouched unless `--force` is supplied; use force only when oracle output is
+intentionally being replaced.

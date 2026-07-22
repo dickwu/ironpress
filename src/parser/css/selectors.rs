@@ -407,9 +407,7 @@ fn split_rightmost_combinator(selector: &str) -> Option<(Combinator, &str, &str)
         (Combinator::AdjacentSibling, '+'),
         (Combinator::Child, '>'),
     ] {
-        if let Some((byte_index, left, right)) =
-            split_on_spaced_combinator(selector, combinator_char)
-        {
+        if let Some((byte_index, left, right)) = split_on_combinator(selector, combinator_char) {
             match candidate {
                 Some((current_index, _, _, _)) if current_index > byte_index => {}
                 _ => candidate = Some((byte_index, combinator, left, right)),
@@ -420,7 +418,7 @@ fn split_rightmost_combinator(selector: &str) -> Option<(Combinator, &str, &str)
     candidate.map(|(_, combinator, left, right)| (combinator, left, right))
 }
 
-fn split_on_spaced_combinator(selector: &str, combinator: char) -> Option<(usize, &str, &str)> {
+fn split_on_combinator(selector: &str, combinator: char) -> Option<(usize, &str, &str)> {
     let chars: Vec<(usize, char)> = selector.char_indices().collect();
     let mut bracket_depth = 0usize;
     let mut paren_depth = 0usize;
@@ -439,19 +437,13 @@ fn split_on_spaced_combinator(selector: &str, combinator: char) -> Option<(usize
             continue;
         }
 
-        let Some((left_space_index, ' ')) = index
-            .checked_sub(1)
-            .and_then(|prev_index| chars.get(prev_index).copied())
-        else {
-            continue;
-        };
-        let Some((right_space_index, ' ')) = chars.get(index + 1).copied() else {
-            continue;
-        };
-        let right_start = right_space_index + ' '.len_utf8();
-        let left = selector.get(..left_space_index)?.trim();
+        let byte_index = chars[index].0;
+        let right_start = byte_index + combinator.len_utf8();
+        let left = selector.get(..byte_index)?.trim();
         let right = selector.get(right_start..)?.trim();
-        return Some((left_space_index, left, right));
+        if !left.is_empty() && !right.is_empty() {
+            return Some((byte_index, left, right));
+        }
     }
 
     None

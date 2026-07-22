@@ -1,35 +1,24 @@
-//! Structural-edge masks (spec §1.6) — the FLIP-style "feature pipeline".
-//!
-//! Anti-aliasing forgiveness is the single largest false-pass risk: a global 1px
-//! tolerance laundered wrong fonts, recolours, and mitered-vs-square corners as
-//! "noise". The V2 path forgives AA only where it is genuinely legal — on a
-//! structural edge present in BOTH images (the `shared_edge_band`). Same glyph in
-//! both -> its AA ramp lies in the shared band (forgiven). A wrong glyph/weight,
-//! a mitered-vs-butt corner, or a recolour has edges that do NOT coincide -> the
-//! differing pixels fall outside the shared band -> they are scored.
+//! Structural-edge masks used to distinguish a localized boundary appearance
+//! difference from a solid interior recolour. The mask never suppresses a pixel:
+//! every non-identical pixel remains a counted class.
 
 use image::RgbaImage;
 
 use super::super::config::EDGE_GRAD;
 
-/// Four packed bitsets over the union-cropped frame (1 bit/px, row-major):
-/// - `edge`: per-image structural edge (kept for diagnosis; unused by the gate).
+/// Two packed bitsets over the union-cropped frame (1 bit/px, row-major):
+/// - `edge`: per-image structural edge (kept for diagnosis).
 /// - `edge_band`: union of both images' 1px-dilated edge bands — the structural
-///   boundary locus (fill-vs-border / box-vs-background). The interior-recolour
-///   gate excludes it (interior = `ColorErr && !edge_band`).
-/// - `shared`: `edge_band(cand) AND edge_band(ref)` — the only locus of AA mercy.
+///   boundary locus (fill-vs-border / box-vs-background).
 pub(crate) struct StructuralMasks {
     w: u32,
     h: u32,
-    /// Union of both images' raw edges. Informational (drives the C5 edge/heat
-    /// overlay and diagnosis); the AA gate uses `shared`, not this.
+    /// Union of both images' raw edges. Informational (drives diagnosis).
     #[allow(dead_code)]
     edge: Vec<u64>,
-    /// Union of both images' DILATED edge bands. A ColorErr pixel inside this band
-    /// is a structural-boundary recolour (geometry-edge jitter / curved-AA ring),
-    /// NOT a solid interior recolour — the hard-colour gate excludes it.
+    /// Union of both images' dilated edge bands. A ColorErr pixel inside this band
+    /// is still counted, but is not described as a solid interior recolour.
     edge_band: Vec<u64>,
-    shared: Vec<u64>,
 }
 
 impl StructuralMasks {
@@ -37,8 +26,7 @@ impl StructuralMasks {
     fn test(bits: &[u64], i: usize) -> bool {
         (bits[i >> 6] >> (i & 63)) & 1 == 1
     }
-    /// Whether `(x,y)` lies on a structural edge in EITHER image (informational;
-    /// consumed by the C5 overlay/diagnosis, not by the AA gate).
+    /// Whether `(x,y)` lies on a structural edge in either image.
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn is_edge(&self, x: u32, y: u32) -> bool {
@@ -47,19 +35,9 @@ impl StructuralMasks {
         }
         Self::test(&self.edge, (y as usize) * (self.w as usize) + x as usize)
     }
-    /// Whether `(x,y)` is within 1px of an edge in BOTH images — AA-forgivable.
-    #[inline]
-    pub(crate) fn in_shared_band(&self, x: u32, y: u32) -> bool {
-        if x >= self.w || y >= self.h {
-            return false;
-        }
-        Self::test(&self.shared, (y as usize) * (self.w as usize) + x as usize)
-    }
-    /// Whether `(x,y)` is within 1px of a structural edge in EITHER image — a
-    /// fill/border/background boundary. A ColorErr pixel here is boundary jitter
-    /// (a moved/resized fill abutting a different colour, or a curved-AA ring), NOT
-    /// a solid interior recolour; the hard-colour gate excludes it. Out-of-bounds
-    /// reads as `false` (a degenerate pixel is treated as interior, never masked).
+    /// Whether `(x,y)` is within 1px of a structural edge in either image. This
+    /// distinguishes boundary-local appearance from solid interior appearance;
+    /// it does not exclude the pixel from the ordinary ColorErr tally.
     #[inline]
     pub(crate) fn in_edge_band(&self, x: u32, y: u32) -> bool {
         if x >= self.w || y >= self.h {
@@ -117,8 +95,8 @@ fn detect_edges(img: &RgbaImage) -> Vec<u64> {
     edge
 }
 
-/// 3x3 morphological dilation of an edge bitset by 1px.
-fn dilate(edge: &[u64], w: u32, h: u32) -> Vec<u64> {
+/// Square morphological dilation of an edge bitset by `radius` pixels.
+fn dilate(edge: &[u64], w: u32, h: u32, radius: u32) -> Vec<u64> {
     let words = (w as usize * h as usize).div_ceil(64);
     let mut out = vec![0u64; words.max(1)];
     for y in 0..h {
@@ -127,10 +105,10 @@ fn dilate(edge: &[u64], w: u32, h: u32) -> Vec<u64> {
             if !get(edge, i) {
                 continue;
             }
-            let x0 = x.saturating_sub(1);
-            let y0 = y.saturating_sub(1);
-            let x2 = (x + 1).min(w - 1);
-            let y2 = (y + 1).min(h - 1);
+            let x0 = x.saturating_sub(radius);
+            let y0 = y.saturating_sub(radius);
+            let x2 = (x + radius).min(w - 1);
+            let y2 = (y + radius).min(h - 1);
             for yy in y0..=y2 {
                 for xx in x0..=x2 {
                     set(&mut out, (yy as usize) * (w as usize) + xx as usize);
@@ -147,15 +125,14 @@ pub(crate) fn structural_masks(cand: &RgbaImage, reference: &RgbaImage) -> Struc
     let edge_c = detect_edges(cand);
     let edge_r = detect_edges(reference);
 
-    // Per-image edge-band (1px dilation), then AND for the shared band.
-    let band_c = dilate(&edge_c, w, h);
-    let band_r = dilate(&edge_r, w, h);
+    // Edge masks only refine colour diagnostics. They never relabel or forgive
+    // unequal pixels.
+    let band_c = dilate(&edge_c, w, h, 1);
+    let band_r = dilate(&edge_r, w, h, 1);
 
     let words = band_c.len();
-    let mut shared = vec![0u64; words];
     let mut edge_band = vec![0u64; words];
     for i in 0..words {
-        shared[i] = band_c[i] & band_r[i];
         // Union of the dilated bands: the structural-boundary locus (either image).
         edge_band[i] = band_c[i] | band_r[i];
     }
@@ -171,6 +148,5 @@ pub(crate) fn structural_masks(cand: &RgbaImage, reference: &RgbaImage) -> Struc
         h,
         edge,
         edge_band,
-        shared,
     }
 }

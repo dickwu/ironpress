@@ -1,20 +1,16 @@
-//! Multi-gate verdict (spec §1.10): PASS/PARTIAL/FAIL decided by per-class
-//! severities, not a single `diff_pct`.
+//! Same-coordinate human-visibility verdict.
 //!
-//! PASS requires EVERY gate within its PASS bound. FAIL if ANY gate exceeds its
-//! PARTIAL bound or hits a hard colour gate. Else PARTIAL. Crucially, the
-//! geometry, coverage, and hard-colour gates are NOT overridable by manifest
-//! thresholds — only `G_COLOR_PCT` and the derived total-area bound are — so no
-//! per-fixture tuning can re-introduce a size/margin/recolour/missing false-pass
-//! (amendment A6).
+//! Raw RGBA inequality is never discarded: it is measured and reported in full.
+//! The verdict asks the narrower product question: would the remaining error be
+//! visible at the authored CSS scale? It never translates, registers, crops, or
+//! fixture-tunes either image.
 
 use super::super::config::{
-    COLOR_DE_FAIL, COLOR_DE_PASS, G_COLOR_PCT, G_EDGE_CSS, G_EXTRA_PCT, G_MISSING_PCT, G_SHIFT_CSS,
+    VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS, VISUAL_COLOR_JND, VISUAL_EDGE_COLOR_PCT,
 };
-use super::super::manifest::ManifestEntry;
 use super::super::report::Status;
 use super::classify::PixelClass;
-use super::segment::DiffRegion;
+use super::segment::RegionSet;
 use super::tally::ClassTally;
 
 pub(crate) struct Verdict {
@@ -23,83 +19,27 @@ pub(crate) struct Verdict {
     pub(crate) dominant_class: PixelClass,
 }
 
-/// Apply the §1.10 gates. The returned `diff_pct` is a placeholder approximated
-/// from the class percentages; `compare_v2` overwrites it with the exact
-/// class-map-derived scalar (which needs the full class map, not just the tally).
-pub(crate) fn verdict(t: &ClassTally, regions: &[DiffRegion], entry: &ManifestEntry) -> Verdict {
-    // Manifest may RELAX only G_COLOR_PCT (and the derived total bound). Geometry,
-    // coverage, and hard-colour gates are fixed.
-    let color_pass = entry
-        .pass_threshold_pct
-        .map(|v| v.max(G_COLOR_PCT.0))
-        .unwrap_or(G_COLOR_PCT.0);
-    let color_partial = entry
-        .partial_threshold_pct
-        .map(|v| v.max(G_COLOR_PCT.1))
-        .unwrap_or(G_COLOR_PCT.1);
-
-    // A VISUALLY-VERIFIED cross-rasterizer floor (conic / repeating-gradient angular
-    // banding, mask-edge band). It raises ONLY the PASS bounds — colour/missing/extra
-    // up to `floor`, interior ΔE up to the (fixed) hard-colour bound — so a sub-
-    // perceptual residual reads PASS instead of PARTIAL. `floor()` is clamped below
-    // the coverage FAIL bound, and the FAIL gates below are untouched, so a real
-    // large-area recolour/missing/extra still FAILs.
-    let floor = entry.floor();
-    let color_pass = color_pass.max(floor);
-    let miss_pass = G_MISSING_PCT.0.max(floor);
-    let extra_pass = G_EXTRA_PCT.0.max(floor);
-    let de_pass = if floor > 0.0 {
-        COLOR_DE_FAIL
-    } else {
-        COLOR_DE_PASS
-    };
-
-    let dominant_class = elect_dominant(regions);
-
-    // --- FAIL gates -------------------------------------------------------
-    // Hard colour: a SOLID INTERIOR recolour. We gate on the INTERIOR-ColorErr
-    // signal (ColorErr px NOT in the structural edge band), area-relative to union
-    // CONTENT (review #4 — `r.area_pct` was whole-FRAME, a unit mismatch with
-    // G_COLOR_PCT's content-relative meaning), with the robust median interior ΔE
-    // (review #17). This fires on a genuine fill/border recolour (solid interior
-    // pixels) but NOT on:
-    //   * scattered glyph-edge ColorErr from cross-rasterizer text AA (in the edge
-    //     band -> not interior),
-    //   * a shifted/resized element's fill abutting a different background (colours
-    //     CORRECT, the boundary moved -> all ColorErr in the edge band, review §1-B),
-    //   * a curved/coloured AA ring (border-radius-circle: interior byte-identical,
-    //     only the perimeter AA differs -> interior_color_pct ~0).
-    let hard_color = t.interior_color_de >= COLOR_DE_FAIL && t.interior_color_pct >= G_COLOR_PCT.0;
-
-    let any_fail = hard_color
-        || t.color_pct > color_partial
-        || t.missing_pct > G_MISSING_PCT.1
-        || t.extra_pct > G_EXTRA_PCT.1
-        || t.edge_max_css > G_EDGE_CSS.1
-        || t.shift_max_css > G_SHIFT_CSS.1;
-
-    let status = if any_fail {
-        Status::Fail
-    } else if t.color_pct <= color_pass
-        && t.interior_color_de <= de_pass
-        && t.missing_pct <= miss_pass
-        && t.extra_pct <= extra_pass
-        && t.edge_max_css <= G_EDGE_CSS.0
-        && t.shift_max_css <= G_SHIFT_CSS.0
+/// Apply the fixed visibility policy to the direct 300-DPI evidence.
+pub(crate) fn verdict(
+    raw: (&ClassTally, &RegionSet),
+    visibility: (&ClassTally, &RegionSet),
+    exact_page_match: bool,
+    visible_page_canvas_difference: bool,
+) -> Verdict {
+    let (raw_tally, raw_regions) = raw;
+    let (visibility_tally, visibility_regions) = visibility;
+    let dominant_class = elect_dominant(raw_regions);
+    let status = if !visible_page_canvas_difference
+        && (exact_page_match
+            || !visible_difference(raw_tally, visibility_tally, visibility_regions))
     {
-        // Colour PASS reads the INTERIOR ΔE, not the boundary-inclusive `color_de`:
-        // a structural-boundary / curved-AA ColorErr (correct colours, moved
-        // boundary — e.g. border-radius-circle, interior byte-identical) has a high
-        // boundary `color_de` but zero interior ΔE, so it must not be denied PASS by
-        // a phantom recolour. A genuine small interior recolour still has
-        // interior_color_de > JND and is correctly held back to PARTIAL.
         Status::Pass
     } else {
-        Status::Partial
+        Status::Fail
     };
 
     // `diff_pct` placeholder (overwritten by compare_v2 with the exact value).
-    let diff_pct = (t.color_pct + t.missing_pct + t.extra_pct).min(100.0);
+    let diff_pct = (raw_tally.color_pct + raw_tally.missing_pct + raw_tally.extra_pct).min(100.0);
 
     Verdict {
         status,
@@ -108,26 +48,105 @@ pub(crate) fn verdict(t: &ClassTally, regions: &[DiffRegion], entry: &ManifestEn
     }
 }
 
-/// The dominant class among real-diff regions: highest `area_pct`; ties broken by
-/// severity (Missing > Extra > ColorErr > GeomShift).
-fn elect_dominant(regions: &[DiffRegion]) -> PixelClass {
-    let mut best: Option<&DiffRegion> = None;
-    for r in regions {
+fn visible_difference(
+    raw_tally: &ClassTally,
+    visibility_tally: &ClassTally,
+    visibility_regions: &RegionSet,
+) -> bool {
+    if super::visibility::is_mixed_coverage_phase(visibility_tally, visibility_regions)
+        || super::visibility::is_conserved_sub_css_coverage_phase(
+            visibility_tally,
+            visibility_regions,
+        )
+        || super::visibility::is_one_sided_sub_css_coverage_phase(
+            visibility_tally,
+            visibility_regions,
+        )
+        || super::visibility::is_stable_shared_outline_phase(visibility_tally, visibility_regions)
+    {
+        return false;
+    }
+    visible_presence_difference(visibility_tally, visibility_regions)
+        || visible_color_difference(raw_tally, visibility_tally, visibility_regions)
+}
+
+fn visible_presence_difference(tally: &ClassTally, regions: &RegionSet) -> bool {
+    super::visibility::visible_presence_class(tally, regions).is_some()
+}
+
+fn visible_color_difference(
+    raw_tally: &ClassTally,
+    visibility_tally: &ClassTally,
+    visibility_regions: &RegionSet,
+) -> bool {
+    if visibility_tally.color_px == 0 {
+        return false;
+    }
+
+    if visibility_regions.shared_coverage_color_with_compact_remainder() {
+        return false;
+    }
+
+    // A solid semantic recolour remains visible regardless of any larger field
+    // of tolerated rounding. A direct shared-endpoint ramp is checked first
+    // because its topology is stronger than the structural edge mask: a
+    // one-device-pixel rectangular edge can otherwise be mislabeled interior.
+    if super::visibility::has_visible_interior_recolor(visibility_tally) {
+        return true;
+    }
+    // Boundary-only residuals use the mean ΔE of the complete raw ColorErr
+    // field. Deleting correct one-code-value samples from that mean would
+    // artificially magnify sparse raster-edge extrema.
+    if raw_tally.color_de <= VISUAL_COLOR_JND {
+        return false;
+    }
+
+    if super::visibility::is_predominantly_shared_coverage_phase(
+        visibility_tally,
+        visibility_regions,
+    ) {
+        return false;
+    }
+
+    if is_balanced_edge_coverage(visibility_tally) {
+        return false;
+    }
+
+    visibility_tally.color_pct > VISUAL_EDGE_COLOR_PCT
+}
+
+/// A page-wide colour error can be an imperceptible outline phase only if it
+/// contains no solid interior recolour and its positive and negative coverage
+/// energy nearly cancels. This evaluates the original, same-coordinate pixels;
+/// it neither shifts nor filters either raster.
+pub(crate) fn is_balanced_edge_coverage(tally: &ClassTally) -> bool {
+    tally.interior_color_pct == 0.0
+        && tally.color_coverage_bias <= VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS
+        && tally.color_components_are_balanced
+        && tally.color_errors_have_css_anchors
+}
+
+/// The dominant directly observed class: largest component, then
+/// Missing > Extra > ColorErr for deterministic ties.
+fn elect_dominant(regions: &RegionSet) -> PixelClass {
+    let mut best = None;
+    for aggregate in &regions.aggregates {
         best = match best {
-            None => Some(r),
-            Some(b) => {
-                if r.area_pct > b.area_pct + 1e-9
-                    || ((r.area_pct - b.area_pct).abs() <= 1e-9
-                        && severity(r.dominant) > severity(b.dominant))
+            None => Some(aggregate),
+            Some(current) => {
+                if aggregate.largest_area_px > current.largest_area_px
+                    || (aggregate.largest_area_px == current.largest_area_px
+                        && severity(aggregate.class) > severity(current.class))
                 {
-                    Some(r)
+                    Some(aggregate)
                 } else {
-                    Some(b)
+                    Some(current)
                 }
             }
         };
     }
-    best.map(|r| r.dominant).unwrap_or(PixelClass::Match)
+    best.map(|aggregate| aggregate.class)
+        .unwrap_or(PixelClass::Match)
 }
 
 #[inline]
@@ -136,8 +155,121 @@ fn severity(c: PixelClass) -> u8 {
         PixelClass::Missing => 5,
         PixelClass::Extra => 4,
         PixelClass::ColorErr => 3,
-        PixelClass::GeomShift => 2,
-        PixelClass::AaEdge => 1,
         PixelClass::Match => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::config::VISUAL_INTERIOR_COLOR_PCT;
+    use super::super::visibility::has_visible_interior_recolor;
+    use super::*;
+
+    #[test]
+    fn sub_jnd_interior_residue_is_not_a_visible_recolor() {
+        let tally = ClassTally {
+            interior_color_de: VISUAL_COLOR_JND - 0.01,
+            interior_color_pct: 1.0,
+            ..Default::default()
+        };
+
+        assert!(!has_visible_interior_recolor(&tally));
+    }
+
+    #[test]
+    fn per_pixel_sub_half_percent_color_residue_is_not_visible() {
+        let within_tolerance = ClassTally {
+            color_px: 10,
+            color_pct: 10.0,
+            color_de: VISUAL_COLOR_JND + 20.0,
+            interior_color_pct: 10.0,
+            interior_color_de: VISUAL_COLOR_JND + 20.0,
+            ..Default::default()
+        };
+        let above_tolerance = ClassTally {
+            color_above_channel_tolerance_px: 1,
+            color_above_channel_tolerance_pct: VISUAL_EDGE_COLOR_PCT + 0.001,
+            ..within_tolerance
+        };
+
+        assert!(!visible_color_difference(
+            &within_tolerance,
+            &ClassTally::default(),
+            &RegionSet::default(),
+        ));
+        assert!(visible_color_difference(
+            &above_tolerance,
+            &above_tolerance,
+            &RegionSet::default(),
+        ));
+    }
+
+    #[test]
+    fn visible_interior_recolor_needs_both_contrast_and_coverage() {
+        let visible = ClassTally {
+            interior_color_de: VISUAL_COLOR_JND + 0.01,
+            interior_color_pct: VISUAL_INTERIOR_COLOR_PCT + 0.001,
+            ..Default::default()
+        };
+        let sparse = ClassTally {
+            interior_color_pct: VISUAL_INTERIOR_COLOR_PCT - 0.001,
+            ..visible
+        };
+
+        assert!(has_visible_interior_recolor(&visible));
+        assert!(!has_visible_interior_recolor(&sparse));
+    }
+
+    #[test]
+    fn balanced_edge_coverage_is_not_a_solid_recolor() {
+        let balanced = ClassTally {
+            color_pct: 3.0,
+            color_de: VISUAL_COLOR_JND + 1.0,
+            color_coverage_bias: VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS,
+            color_components_are_balanced: true,
+            color_errors_have_css_anchors: true,
+            ..Default::default()
+        };
+        let biased = ClassTally {
+            color_coverage_bias: VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS + 0.001,
+            ..balanced
+        };
+
+        assert!(is_balanced_edge_coverage(&balanced));
+        assert!(!is_balanced_edge_coverage(&biased));
+
+        let unbalanced_component = ClassTally {
+            color_components_are_balanced: false,
+            ..balanced
+        };
+        assert!(!is_balanced_edge_coverage(&unbalanced_component));
+    }
+
+    #[test]
+    fn sparse_edge_only_colour_residue_uses_the_fixed_coverage_floor() {
+        let at_limit = ClassTally {
+            color_px: 1,
+            color_pct: VISUAL_EDGE_COLOR_PCT,
+            color_above_channel_tolerance_px: 1,
+            color_above_channel_tolerance_pct: VISUAL_EDGE_COLOR_PCT,
+            color_de: VISUAL_COLOR_JND + 1.0,
+            ..Default::default()
+        };
+        let over_limit = ClassTally {
+            color_pct: VISUAL_EDGE_COLOR_PCT + 0.001,
+            color_above_channel_tolerance_pct: VISUAL_EDGE_COLOR_PCT + 0.001,
+            ..at_limit
+        };
+
+        assert!(!visible_color_difference(
+            &at_limit,
+            &at_limit,
+            &RegionSet::default()
+        ));
+        assert!(visible_color_difference(
+            &over_limit,
+            &over_limit,
+            &RegionSet::default()
+        ));
     }
 }

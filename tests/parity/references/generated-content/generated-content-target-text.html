@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  Standards-derived oracle for generated-content-target-text.
+
+  CSS Generated Content Level 3 §2.6.3 defines target-text() as the textual
+  value of the local URL target. The candidate link resolves #target to
+  "Deep Section"; Chromium does not implement target-text(), so this source
+  independently materializes that required result for its PDF oracle.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: 344px 152px; margin: 0; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    body { padding: 12px; background: #fff; font-size: 20px; line-height: 30px; }
+    a { text-decoration: none; }
+    a::after { content: ' → Deep Section'; color: #d7263d; }
+    .spacer { height: 40px; }
+  </style>
+</head>
+<body>
+  <a href="#target">Jump</a><div class="spacer"></div><div id="target">Deep Section</div>
+</body>
+</html>

@@ -1,21 +1,23 @@
-//! Raster geometry: content detection, bounding boxes, union/crop, content masks,
-//! and image translation.
+//! Raster geometry: content detection, bounding boxes, union/crop, and masks.
 //!
 //! Extracted verbatim from the former monolithic `mod.rs` (C1 mechanical split).
-//! The clamped best-shift registration search (`best_registration_offset`) was
-//! removed in C6 — the V2 path uses a single fixed page-origin calibration and
-//! never searches per-fixture (that masked real layout bugs).
+//! No stage translates, registers, crops-to-fit, or resizes one render to match
+//! the other.
 
 use image::{ImageBuffer, Rgba, RgbaImage};
 
-use super::config::WHITE_TOL;
+use super::compare::color::{ciede2000, srgb_to_lab};
+use super::config::PAPER_CONTENT_JND;
+
+const PAPER_LAB: super::compare::color::Lab = super::compare::color::Lab {
+    l: 100.0,
+    a: 0.0,
+    b: 0.0,
+};
 
 pub(crate) fn is_content(px: &Rgba<u8>) -> bool {
     let [r, g, b, _] = px.0;
-    let dr = (r as i32 - 255).abs();
-    let dg = (g as i32 - 255).abs();
-    let db = (b as i32 - 255).abs();
-    dr.max(dg).max(db) > WHITE_TOL
+    ciede2000(srgb_to_lab([r, g, b]), PAPER_LAB) > PAPER_CONTENT_JND
 }
 
 /// Inclusive content bounding box `(min_x, min_y, max_x, max_y)` in the image's
@@ -25,13 +27,12 @@ pub(crate) fn is_content(px: &Rgba<u8>) -> bool {
 /// offsets survive into the union/diff.
 pub(crate) type BBox = (u32, u32, u32, u32);
 
-pub(crate) fn content_bbox(img: &RgbaImage) -> Option<BBox> {
-    let (w, h) = img.dimensions();
+fn bbox_where(w: u32, h: u32, mut included: impl FnMut(u32, u32) -> bool) -> Option<BBox> {
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
     let mut found = false;
     for y in 0..h {
         for x in 0..w {
-            if is_content(img.get_pixel(x, y)) {
+            if included(x, y) {
                 found = true;
                 min_x = min_x.min(x);
                 min_y = min_y.min(y);
@@ -47,27 +48,16 @@ pub(crate) fn content_bbox(img: &RgbaImage) -> Option<BBox> {
     }
 }
 
-/// Translate `img` by `(dx, dy)` pixels on a white background (same dimensions),
-/// so calibrated content lands at the reference's page position before cropping.
-/// Out-of-frame source pixels become white. Used by the V2 calibration step
-/// (`calibrate::calibrate` applies the fixed `-GLOBAL_OFFSET` shift), so only a
-/// few px is lost per edge.
-pub(crate) fn shift_image(img: &RgbaImage, dx: i32, dy: i32) -> RgbaImage {
-    if dx == 0 && dy == 0 {
-        return img.clone();
-    }
+pub(crate) fn content_bbox(img: &RgbaImage) -> Option<BBox> {
     let (w, h) = img.dimensions();
-    let mut out: RgbaImage = ImageBuffer::from_pixel(w, h, Rgba([255, 255, 255, 255]));
-    for y in 0..h {
-        for x in 0..w {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if nx >= 0 && ny >= 0 && (nx as u32) < w && (ny as u32) < h {
-                out.put_pixel(nx as u32, ny as u32, *img.get_pixel(x, y));
-            }
-        }
-    }
-    out
+    bbox_where(w, h, |x, y| is_content(img.get_pixel(x, y)))
+}
+
+/// Inclusive bounds of every unequal same-coordinate RGBA pixel.
+pub(crate) fn difference_bbox(left: &RgbaImage, right: &RgbaImage) -> Option<BBox> {
+    debug_assert_eq!(left.dimensions(), right.dimensions());
+    let (w, h) = left.dimensions();
+    bbox_where(w, h, |x, y| left.get_pixel(x, y) != right.get_pixel(x, y))
 }
 
 /// Union of two inclusive bboxes (min of mins, max of maxes).
@@ -148,4 +138,30 @@ pub(crate) fn crop_rect(img: &RgbaImage, bb: BBox) -> RgbaImage {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use image::{ImageBuffer, Rgba};
+
+    use super::{difference_bbox, is_content};
+
+    #[test]
+    fn imperceptible_near_white_is_paper() {
+        assert!(!is_content(&Rgba([255, 255, 255, 255])));
+        assert!(!is_content(&Rgba([254, 255, 255, 255])));
+        assert!(is_content(&Rgba([240, 240, 240, 255])));
+    }
+
+    #[test]
+    fn difference_bounds_include_alpha_only_pixels_on_paper() {
+        let reference = ImageBuffer::from_pixel(20, 20, Rgba([255, 255, 255, 255]));
+        let mut candidate = reference.clone();
+        candidate.put_pixel(19, 18, Rgba([255, 255, 255, 254]));
+
+        assert_eq!(
+            difference_bbox(&candidate, &reference),
+            Some((19, 18, 19, 18))
+        );
+    }
 }

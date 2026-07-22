@@ -1,0 +1,378 @@
+use super::LayoutNode;
+use super::{
+    BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource,
+    BoxFragmentationOwner, BoxModel, BoxPaint, ContainingBlockConsumer, DescendantClip,
+    FilterHolder, FragmentBreakQuery, FragmentBreakScope, InlineFlowExtent, LayoutElement,
+    LayoutVisitor, LayoutVisitorMut, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
+    TextBlockStyle, TextFragmentation, TextSemantics,
+};
+use crate::layout::engine::TextLine;
+use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
+use crate::style::computed::ComputedStyle;
+use crate::types::{Point, Size};
+
+/// Geometry and page-layer identity of a document-canvas background box.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BackgroundBoxGeometry {
+    pub(crate) size: Size,
+    pub(crate) origin: Point,
+    pub(crate) z_index: i32,
+    pub(crate) repeat_on_each_page: bool,
+}
+
+/// A laid-out block of text and the semantic property groups that govern it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TextBlock {
+    pub(crate) lines: Vec<TextLine>,
+    pub(crate) box_model: BoxModel,
+    pub(crate) paint: BoxPaint,
+    pub(crate) flow: BlockFlow,
+    pub(crate) positioning: Positioning,
+    pub(crate) fragmentation: TextFragmentation,
+    pub(crate) text: TextBlockStyle,
+    pub(crate) clipping: DescendantClip,
+    pub(crate) semantics: TextSemantics,
+}
+
+impl TextBlock {
+    pub(crate) fn empty_spacer() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn plain(lines: Vec<TextLine>) -> Self {
+        Self {
+            lines,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn from_style(
+        lines: Vec<TextLine>,
+        style: &ComputedStyle,
+        box_model: super::BoxModel,
+    ) -> Self {
+        let paint = super::BoxPaint::from_style(style, box_model.size);
+        let indent_basis = box_model.size.width.fixed_value().unwrap_or_default();
+        Self {
+            lines,
+            box_model,
+            paint,
+            flow: super::BlockFlow {
+                float: style.float,
+                clear: style.clear,
+            },
+            positioning: super::Positioning::from_style(style),
+            fragmentation: super::TextFragmentation {
+                box_fragmentation: super::BoxFragmentation {
+                    decoration: style.box_decoration_break,
+                    ..Default::default()
+                },
+                orphans: style.orphans,
+                widows: style.widows,
+            },
+            text: super::TextBlockStyle {
+                alignment: style.text_align,
+                writing_mode: style.writing_mode,
+                indent: style.text_indent.resolve(indent_basis),
+                spacing: super::TextSpacing {
+                    letter: style.letter_spacing,
+                    word: style.word_spacing,
+                },
+            },
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn background_box(style: &ComputedStyle, geometry: BackgroundBoxGeometry) -> Self {
+        let size = super::LayoutSize::fixed(geometry.size.width, Some(geometry.size.height));
+        let role = if geometry.repeat_on_each_page && geometry.z_index < 0 {
+            super::StackingRole::PageBackdrop
+        } else {
+            super::StackingRole::Ordinary
+        };
+        Self {
+            box_model: super::BoxModel {
+                size,
+                ..Default::default()
+            },
+            paint: super::BoxPaint {
+                background: super::BackgroundPaint::from_style(style),
+                group: super::PaintGroup {
+                    stacking: super::Stacking {
+                        z_index: crate::style::computed::ZIndex::integer(geometry.z_index),
+                        role,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            positioning: super::Positioning {
+                scheme: crate::style::computed::Position::Absolute,
+                insets: crate::types::EdgeSizes::new(
+                    geometry.origin.y,
+                    0.0,
+                    0.0,
+                    geometry.origin.x,
+                ),
+                ..Default::default()
+            },
+            fragmentation: super::TextFragmentation {
+                box_fragmentation: super::BoxFragmentation {
+                    content_role: if geometry.repeat_on_each_page {
+                        super::PageContentRole::RepeatedDecoration
+                    } else {
+                        super::PageContentRole::MainFlow
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+impl MarginHolder for TextBlock {
+    fn margins(&self) -> &BlockMargins {
+        &self.box_model.margins
+    }
+
+    fn margins_mut(&mut self) -> &mut BlockMargins {
+        &mut self.box_model.margins
+    }
+}
+
+impl InlineFlowExtent for TextBlock {
+    fn normal_flow_right_edge(&self) -> Option<f32> {
+        let width = self.box_model.size.width.fixed_value()?;
+        (self.positioning.is_in_normal_flow()
+            && self.fragmentation.box_fragmentation.content_role
+                != super::PageContentRole::RepeatedDecoration)
+            .then_some((self.positioning.insets.left + width).max(0.0))
+            .filter(|right| right.is_finite())
+    }
+}
+
+impl BlockFlowParticipant for TextBlock {
+    fn collapses_outer_margins(&self) -> bool {
+        true
+    }
+
+    fn is_in_flow_block(&self) -> bool {
+        !self.positioning.scheme.is_absolute()
+            && self.flow.float == crate::style::computed::Float::None
+    }
+}
+
+impl ContainingBlockConsumer for TextBlock {
+    fn attach_missing_containing_block(
+        &mut self,
+        containing_block: crate::layout::engine::ContainingBlock,
+    ) {
+        if !self.positioning.scheme.is_absolute() || self.positioning.containing_block.is_some() {
+            return;
+        }
+
+        let text_height = self.lines.iter().map(|line| line.height).sum::<f32>();
+        let height = self.box_model.size.height.resolve(
+            self.box_model.padding.vertical()
+                + text_height
+                + self.box_model.border.vertical_width(),
+        );
+        let width = self.box_model.size.width.fixed_value().unwrap_or_else(|| {
+            self.lines
+                .iter()
+                .map(|line| {
+                    line.runs
+                        .iter()
+                        .map(|run| {
+                            crate::fonts::str_width(
+                                &run.text,
+                                run.font_size,
+                                &run.font_family,
+                                run.bold,
+                            )
+                        })
+                        .sum::<f32>()
+                })
+                .fold(0.0, f32::max)
+        });
+
+        if self.positioning.insets.left == 0.0 && self.positioning.insets.right > 0.0 {
+            self.positioning.insets.left =
+                containing_block.width - width - self.positioning.insets.right;
+        }
+        if self.positioning.insets.top == 0.0 && self.positioning.insets.bottom > 0.0 {
+            self.positioning.insets.top =
+                containing_block.height - height - self.positioning.insets.bottom;
+        }
+        self.positioning.containing_block = Some(containing_block);
+    }
+}
+
+impl PositioningOwner for TextBlock {
+    fn positioning(&self) -> &Positioning {
+        &self.positioning
+    }
+
+    fn positioning_mut(&mut self) -> &mut Positioning {
+        &mut self.positioning
+    }
+}
+
+impl BlockFlowOwner for TextBlock {
+    fn block_flow(&self) -> &BlockFlow {
+        &self.flow
+    }
+}
+
+impl PaintGroupOwner for TextBlock {
+    fn paint_group(&self) -> &PaintGroup {
+        &self.paint.group
+    }
+
+    fn paint_group_mut(&mut self) -> &mut PaintGroup {
+        &mut self.paint.group
+    }
+}
+
+impl BlockFragmentationSource for TextBlock {
+    fn block_extent(&self) -> f32 {
+        let border = self.box_model.border.vertical_width();
+        let natural = border
+            + self.box_model.padding.vertical()
+            + self.lines.iter().map(|line| line.height).sum::<f32>();
+        self.box_model.size.height.resolve(natural - border) + border
+    }
+
+    fn find_block_break(&self, query: FragmentBreakQuery) -> Option<f32> {
+        use crate::layout::roundoff::exceeds_with_roundoff;
+
+        if self.lines.len() < 2 || query.scope == FragmentBreakScope::BlockBoundaries {
+            return None;
+        }
+
+        let content_start = self.box_model.border.top.width + self.box_model.padding.top;
+        let mut offset = content_start;
+        let mut consumed_lines = 0usize;
+        for line in &self.lines {
+            offset += line.height;
+            if !exceeds_with_roundoff(offset, query.consumed) {
+                consumed_lines += 1;
+            } else {
+                break;
+            }
+        }
+
+        let orphans = self.fragmentation.orphans.max(1) as usize;
+        let widows = self.fragmentation.widows.max(1) as usize;
+        let mut latest = None;
+        offset = content_start;
+        for (index, line) in self.lines.iter().enumerate() {
+            offset += line.height;
+            let lines_before_break = index + 1;
+            let lines_in_fragment = lines_before_break.saturating_sub(consumed_lines);
+            let lines_after_break = self.lines.len() - lines_before_break;
+            let honors_constraints = lines_in_fragment >= orphans && lines_after_break >= widows;
+            if lines_after_break > 0 && query.permits(honors_constraints) {
+                latest = query.select(latest, offset);
+            }
+        }
+        latest
+    }
+}
+
+impl BoxFragmentationOwner for TextBlock {
+    fn fragmentation_box_model(&self) -> &BoxModel {
+        &self.box_model
+    }
+
+    fn box_fragmentation(&self) -> &super::BoxFragmentation {
+        &self.fragmentation.box_fragmentation
+    }
+
+    fn box_fragmentation_mut(&mut self) -> &mut super::BoxFragmentation {
+        &mut self.fragmentation.box_fragmentation
+    }
+}
+
+impl LayoutElement for TextBlock {
+    fn clone_box(&self) -> LayoutNode {
+        Box::new(self.clone())
+    }
+
+    fn accept(&self, visitor: &mut dyn LayoutVisitor) {
+        visitor.visit_text_block(self);
+    }
+
+    fn accept_mut(&mut self, visitor: &mut dyn LayoutVisitorMut) {
+        visitor.visit_text_block(self);
+    }
+
+    fn margin_holder(&self) -> Option<&dyn MarginHolder> {
+        Some(self)
+    }
+
+    fn margin_holder_mut(&mut self) -> Option<&mut dyn MarginHolder> {
+        Some(self)
+    }
+
+    fn inline_flow_extent(&self) -> Option<&dyn InlineFlowExtent> {
+        Some(self)
+    }
+
+    fn block_flow_participant(&self) -> Option<&dyn BlockFlowParticipant> {
+        Some(self)
+    }
+
+    fn block_flow_participant_mut(&mut self) -> Option<&mut dyn BlockFlowParticipant> {
+        Some(self)
+    }
+
+    fn containing_block_consumer_mut(&mut self) -> Option<&mut dyn ContainingBlockConsumer> {
+        Some(self)
+    }
+
+    fn positioning_owner(&self) -> Option<&dyn PositioningOwner> {
+        Some(self)
+    }
+
+    fn positioning_owner_mut(&mut self) -> Option<&mut dyn PositioningOwner> {
+        Some(self)
+    }
+
+    fn block_flow_owner(&self) -> Option<&dyn BlockFlowOwner> {
+        Some(self)
+    }
+
+    fn paint_group_owner(&self) -> Option<&dyn PaintGroupOwner> {
+        Some(self)
+    }
+
+    fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
+        Some(self)
+    }
+
+    fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {
+        Some(self)
+    }
+
+    fn box_fragmentation_owner(&self) -> Option<&dyn BoxFragmentationOwner> {
+        Some(self)
+    }
+
+    fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
+        Some(self)
+    }
+
+    fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
+        Some(&mut self.paint)
+    }
+
+    fn page_content_role(&self) -> super::PageContentRole {
+        self.fragmentation
+            .box_fragmentation
+            .content_role
+            .for_position(self.positioning.scheme)
+    }
+}

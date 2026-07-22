@@ -3,16 +3,18 @@
 //! Run with: `cargo test --test feature_parity -- --nocapture`
 //!
 //! The engine renders every fixture under `tests/parity/cases/**` in-process
-//! through the `ironpress` library at Chrome-matching geometry, rasterizes the
-//! result, diffs it against a committed Chrome reference PNG, scores parity, and
-//! enforces a regression gate against the committed `tests/parity/report.json`.
+//! through the `ironpress` library, then rasterizes both that PDF and the
+//! committed browser-oracle PDF through the same `pdftoppm` executable with the
+//! same arguments. It records identical page dimensions and raw RGBA bytes as
+//! same-coordinate diagnostic evidence, then applies the documented
+//! human-visibility parity policy; it writes the current report and enforces
+//! the gate against `tests/parity/baseline.json`.
 //!
 //! See `tests/parity/README.md` for the full workflow.
 
-#[path = "parity_support/mod.rs"]
 mod parity_support;
 
 #[test]
-fn feature_parity() {
-    parity_support::run().expect("parity engine failure");
+fn feature_parity() -> Result<(), String> {
+    parity_support::run()
 }

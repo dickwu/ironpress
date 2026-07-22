@@ -1,14 +1,24 @@
 use super::engine::{
-    FOOTNOTE_CALL_FONT_SCALE, FootnoteItem, LayoutElement, Page, PageBreakSide, TableCell, TextRun,
-    decode_footnote_link_data, footnote_call_multiline_extra_height, layout_element_paint_order,
+    FootnoteItem, GridCell, Page, PageBreakSide, SvgFragment, TextRun, decode_footnote_link_data,
     table_cell_content_height, target_anchor_id,
 };
+use super::flow_metrics::BlockMargins;
+use super::fragmentation::split_flow_at_descendant_break;
+use super::roundoff::{equal_with_roundoff, exceeds_with_roundoff, is_positive_with_roundoff};
 use super::text::{OverflowWrap, TextWrapOptions, wrap_text_runs};
-use crate::style::computed::{
-    BorderCollapse, BoxDecorationBreak, Clear, Float, ObjectFit, Position,
+use crate::layout::elements::{
+    BlockSize, Container, FlexRow, GridRow, HorizontalRule, Image, IntoLayoutNode, LayoutElement,
+    LayoutNode, LayoutVisitor, LayoutVisitorMut, MathBlock, NamedString, PageContentRole,
+    ProgressBar, RunningElement, Svg, Table, TableFragmentGroup, TableRow, TextBlock,
+    visit_layout_tree,
 };
-use crate::types::{Margin, PageSize};
-use std::collections::{HashMap, HashSet};
+use crate::style::computed::{
+    BoxDecorationBreak, Clear, Float, FootnotePolicy, ObjectFit, Position,
+};
+use crate::types::{Color, EdgeSizes, Margin, PageSize, Size};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+mod measurement;
 
 fn advance_positioned_ancestors_after_page_break(
     positioned_y_by_depth: &mut HashMap<usize, f32>,
@@ -19,102 +29,234 @@ fn advance_positioned_ancestors_after_page_break(
     }
 }
 
-fn collect_footnotes_from_element(element: &LayoutElement, out: &mut Vec<FootnoteItem>) {
-    match element {
-        LayoutElement::TextBlock { lines, .. } => {
-            let mut seen_links = HashSet::new();
-            for line in lines {
-                for run in &line.runs {
-                    let Some(link) = run.link_url.as_deref() else {
-                        continue;
-                    };
-                    if !seen_links.insert(link.to_string()) {
-                        continue;
-                    }
-                    let Some(data) = decode_footnote_link_data(link) else {
-                        continue;
-                    };
-                    out.push(FootnoteItem {
-                        marker: data.marker,
-                        text: data.text,
-                        font_size: run.font_size / FOOTNOTE_CALL_FONT_SCALE,
-                        bold: run.bold,
-                        italic: run.italic,
-                        color: data.body_color,
-                        marker_color: data.marker_color,
-                        marker_prefix: data.marker_prefix,
-                        font_family: run.font_family.clone(),
-                        line_height_factor: run.line_height_factor,
-                        display_compact: data.display_compact,
-                    });
-                }
-            }
+fn collect_footnotes_from_runs(
+    runs: &[TextRun],
+    seen_links: &mut HashSet<String>,
+    out: &mut Vec<FootnoteItem>,
+) {
+    for run in runs {
+        let Some(link) = run.link_url.as_deref() else {
+            continue;
+        };
+        if !seen_links.insert(link.to_string()) {
+            continue;
         }
-        LayoutElement::Container { children, .. } => {
-            for child in children {
-                collect_footnotes_from_element(child, out);
-            }
-        }
-        LayoutElement::TableRow { cells, .. } | LayoutElement::GridRow { cells, .. } => {
-            for cell in cells {
-                for nested in &cell.nested_rows {
-                    collect_footnotes_from_element(nested, out);
-                }
-            }
-        }
-        LayoutElement::FlexRow { cells, .. } => {
-            for cell in cells {
-                for nested in &cell.nested_elements {
-                    collect_footnotes_from_element(nested, out);
-                }
-            }
-        }
-        _ => {}
+        let Some(data) = decode_footnote_link_data(link) else {
+            continue;
+        };
+        out.push(FootnoteItem {
+            marker: data.marker,
+            text: data.text,
+            body: data.body,
+            marker_color: data.marker_color,
+            marker_prefix: data.marker_prefix,
+            formatting: data.formatting,
+        });
     }
 }
 
+fn collect_footnotes_from_element(element: &dyn LayoutElement, out: &mut Vec<FootnoteItem>) {
+    struct FootnoteCollector<'a> {
+        seen_links: HashSet<String>,
+        out: &'a mut Vec<FootnoteItem>,
+    }
+
+    impl LayoutVisitor for FootnoteCollector<'_> {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            for line in &element.lines {
+                collect_footnotes_from_runs(&line.runs, &mut self.seen_links, self.out);
+            }
+        }
+    }
+
+    visit_layout_tree(
+        element,
+        &mut FootnoteCollector {
+            seen_links: HashSet::new(),
+            out,
+        },
+    );
+}
+
+/// The line whose `footnote-policy: line` body makes this page overflow.
+///
+/// A line-policy call that still fits must not move an earlier line: CSS GCPM
+/// applies the break only to the reference whose body cannot fit in the current
+/// footnote area. A policy break is a boundary *before* that line, so index zero
+/// falls back to the ordinary whole-block page break.
+fn footnote_line_policy_break_index(
+    element: &dyn LayoutElement,
+    current_footnotes: &[FootnoteItem],
+    element_y: f32,
+    element_height: f32,
+    content_height: f32,
+    footnote_area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> Option<usize> {
+    struct LinePolicyVisitor<'a> {
+        current_footnotes: &'a [FootnoteItem],
+        element_y: f32,
+        element_height: f32,
+        content_height: f32,
+        footnote_area: FootnoteAreaLayout,
+        fonts: &'a HashMap<String, crate::parser::ttf::TtfFont>,
+        break_index: Option<usize>,
+    }
+
+    impl LayoutVisitor for LinePolicyVisitor<'_> {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            let fits = |pending: &[FootnoteItem]| {
+                let available = (self.content_height
+                    - footnote_reserved_height(
+                        &[self.current_footnotes, pending],
+                        self.footnote_area,
+                        self.fonts,
+                    ))
+                .max(0.0);
+                !exceeds_with_roundoff(self.element_y + self.element_height, available)
+            };
+            let mut seen_links = HashSet::new();
+            let mut pending = Vec::new();
+            for (index, line) in element.lines.iter().enumerate() {
+                let mut line_footnotes = Vec::new();
+                collect_footnotes_from_runs(&line.runs, &mut seen_links, &mut line_footnotes);
+                for footnote in line_footnotes {
+                    let fit_before = fits(&pending);
+                    let policy = footnote.formatting.policy;
+                    pending.push(footnote);
+                    if fit_before && !fits(&pending) && policy == FootnotePolicy::Line {
+                        self.break_index = Some(index);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut visitor = LinePolicyVisitor {
+        current_footnotes,
+        element_y,
+        element_height,
+        content_height,
+        footnote_area,
+        fonts,
+        break_index: None,
+    };
+    element.accept(&mut visitor);
+    visitor.break_index
+}
+
+/// Whether a `footnote-policy: block` call forces a break before its owning
+/// block. CSS GCPM makes this distinct from ordinary footnote reservation: the
+/// block stays on the current page when it fits without its footnote, but moves
+/// intact when adding the block-policy body would make the page overflow.
+fn footnote_block_policy_requires_break(
+    pending_footnotes: &[FootnoteItem],
+    current_footnotes: &[FootnoteItem],
+    element_y: f32,
+    element_height: f32,
+    content_height: f32,
+    footnote_area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> bool {
+    if !pending_footnotes
+        .iter()
+        .any(|footnote| footnote.formatting.policy == FootnotePolicy::Block)
+    {
+        return false;
+    }
+
+    let available_before = (content_height
+        - footnote_reserved_height(&[current_footnotes], footnote_area, fonts))
+    .max(0.0);
+    let available_with_body = (content_height
+        - footnote_reserved_height(
+            &[current_footnotes, pending_footnotes],
+            footnote_area,
+            fonts,
+        ))
+    .max(0.0);
+    !exceeds_with_roundoff(element_y + element_height, available_before)
+        && exceeds_with_roundoff(element_y + element_height, available_with_body)
+}
+
 fn extract_page_state_markers(
-    element: &mut LayoutElement,
-    running_elements: &mut HashMap<String, LayoutElement>,
+    element: &mut dyn LayoutElement,
+    running_elements: &mut HashMap<String, LayoutNode>,
     running_started: &mut HashSet<String>,
     named_strings: &mut HashMap<String, String>,
     named_strings_first: &mut HashMap<String, String>,
     pending_target_anchors: &mut Vec<String>,
 ) {
-    let LayoutElement::Container { children, .. } = element else {
-        return;
-    };
-    let mut kept = Vec::with_capacity(children.len());
-    for mut child in children.drain(..) {
-        match child {
-            LayoutElement::RunningElement { name, element } => {
-                running_started.insert(name.clone());
-                running_elements.insert(name, *element);
-            }
-            LayoutElement::NamedString { name, value } => {
-                if target_anchor_id(&name).is_some() {
-                    pending_target_anchors.push(name);
-                } else {
-                    named_strings_first
-                        .entry(name.clone())
-                        .or_insert_with(|| value.clone());
-                    named_strings.insert(name, value);
+    struct MarkerExtraction {
+        running: Option<(String, LayoutNode)>,
+        named: Option<(String, String)>,
+    }
+
+    impl LayoutVisitor for MarkerExtraction {
+        fn visit_running_element(&mut self, element: &RunningElement) {
+            self.running = Some((element.name.clone(), element.element.clone()));
+        }
+
+        fn visit_named_string(&mut self, element: &NamedString) {
+            self.named = Some((element.name.clone(), element.value.clone()));
+        }
+    }
+
+    struct ContainerMarkerExtractor<'a> {
+        running_elements: &'a mut HashMap<String, LayoutNode>,
+        running_started: &'a mut HashSet<String>,
+        named_strings: &'a mut HashMap<String, String>,
+        named_strings_first: &'a mut HashMap<String, String>,
+        pending_target_anchors: &'a mut Vec<String>,
+    }
+
+    impl LayoutVisitorMut for ContainerMarkerExtractor<'_> {
+        fn visit_container(&mut self, element: &mut Container) {
+            let mut kept = Vec::with_capacity(element.children.len());
+            for mut child in element.children.drain(..) {
+                let mut marker = MarkerExtraction {
+                    running: None,
+                    named: None,
+                };
+                child.accept(&mut marker);
+                if let Some((name, running)) = marker.running {
+                    self.running_started.insert(name.clone());
+                    self.running_elements.insert(name, running);
+                    continue;
                 }
-            }
-            _ => {
+                if let Some((name, value)) = marker.named {
+                    if target_anchor_id(&name).is_some() {
+                        self.pending_target_anchors.push(name);
+                    } else {
+                        self.named_strings_first
+                            .entry(name.clone())
+                            .or_insert_with(|| value.clone());
+                        self.named_strings.insert(name, value);
+                    }
+                    continue;
+                }
                 extract_page_state_markers(
                     &mut child,
-                    running_elements,
-                    running_started,
-                    named_strings,
-                    named_strings_first,
-                    pending_target_anchors,
+                    self.running_elements,
+                    self.running_started,
+                    self.named_strings,
+                    self.named_strings_first,
+                    self.pending_target_anchors,
                 );
                 kept.push(child);
             }
+            element.children = kept;
         }
     }
-    *children = kept;
+
+    element.accept_mut(&mut ContainerMarkerExtractor {
+        running_elements,
+        running_started,
+        named_strings,
+        named_strings_first,
+        pending_target_anchors,
+    });
 }
 
 fn apply_pending_target_anchors(
@@ -128,12 +270,25 @@ fn apply_pending_target_anchors(
     }
 }
 
+/// Resolved top separator for the footnote area.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct FootnoteSeparator {
+    pub width: f32,
+    pub color: Color,
+}
+
+/// Resolved box properties shared by footnote pagination and painting.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct ResolvedFootnoteAreaStyle {
+    pub padding: EdgeSizes,
+    pub separator: FootnoteSeparator,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FootnoteAreaLayout {
     pub content_width: f32,
     pub max_height: Option<f32>,
-    pub padding_top: f32,
-    pub border_top_width: f32,
+    pub style: ResolvedFootnoteAreaStyle,
 }
 
 impl Default for FootnoteAreaLayout {
@@ -141,14 +296,16 @@ impl Default for FootnoteAreaLayout {
         Self {
             content_width: f32::INFINITY,
             max_height: None,
-            padding_top: 0.0,
-            border_top_width: 0.0,
+            style: ResolvedFootnoteAreaStyle::default(),
         }
     }
 }
 
-fn footnote_lines_height(footnotes: &[FootnoteItem], content_width: f32) -> f32 {
-    let fonts = HashMap::new();
+fn footnote_lines_height(
+    footnotes: &[FootnoteItem],
+    content_width: f32,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> f32 {
     let mut total = 0.0f32;
     let mut compact_runs: Vec<TextRun> = Vec::new();
     let flush_compact = |runs: &mut Vec<TextRun>, total: &mut f32| {
@@ -164,7 +321,7 @@ fn footnote_lines_height(footnotes: &[FootnoteItem], content_width: f32) -> f32 
         let lines = wrap_text_runs(
             std::mem::take(runs),
             TextWrapOptions::new(
-                content_width.max(1.0),
+                content_width.max(0.0),
                 font_size,
                 line_height,
                 OverflowWrap::Normal,
@@ -176,7 +333,7 @@ fn footnote_lines_height(footnotes: &[FootnoteItem], content_width: f32) -> f32 
 
     for footnote in footnotes {
         let runs = footnote.text_runs();
-        if footnote.display_compact {
+        if footnote.formatting.display.is_inline_layout() {
             compact_runs.extend(runs);
             continue;
         }
@@ -184,10 +341,10 @@ fn footnote_lines_height(footnotes: &[FootnoteItem], content_width: f32) -> f32 
         let lines = wrap_text_runs(
             runs,
             TextWrapOptions::new(
-                content_width.max(1.0),
-                footnote.font_size,
-                if footnote.line_height_factor.is_finite() {
-                    footnote.line_height_factor
+                content_width.max(0.0),
+                footnote.body.font_size,
+                if footnote.body.line_height_factor.is_finite() {
+                    footnote.body.line_height_factor
                 } else {
                     1.2
                 },
@@ -201,32 +358,59 @@ fn footnote_lines_height(footnotes: &[FootnoteItem], content_width: f32) -> f32 
     total
 }
 
-fn footnote_reserved_height(footnotes: &[FootnoteItem], area: FootnoteAreaLayout) -> f32 {
-    if footnotes.is_empty() {
+fn footnote_content_width(area: FootnoteAreaLayout) -> f32 {
+    (area.content_width - area.style.padding.horizontal()).max(0.0)
+}
+
+fn footnote_content_height(
+    footnotes: &[FootnoteItem],
+    area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> f32 {
+    footnote_lines_height(footnotes, footnote_content_width(area), fonts)
+}
+
+fn footnote_reserved_height(
+    groups: &[&[FootnoteItem]],
+    area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> f32 {
+    if groups.iter().all(|footnotes| footnotes.is_empty()) {
         return 0.0;
     }
-    let height = footnote_lines_height(footnotes, area.content_width);
-    area.max_height
-        .map_or(height, |max| if height > max + 0.5 { 0.0 } else { height })
+    let content_height = groups
+        .iter()
+        .map(|footnotes| footnote_content_height(footnotes, area, fonts))
+        .sum::<f32>();
+    if area
+        .max_height
+        .is_some_and(|max| exceeds_with_roundoff(content_height, max))
+    {
+        return 0.0;
+    }
+    content_height + area.style.padding.vertical() + area.style.separator.width.max(0.0)
 }
 
 pub(crate) fn move_overflow_footnotes_to_next_page(
     pages: &mut Vec<Page>,
     area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
 ) {
     let Some(max_height) = area.max_height else {
         return;
     };
     let mut index = 0usize;
     while index < pages.len() {
-        let height = footnote_lines_height(&pages[index].footnotes, area.content_width);
-        if height > max_height + 0.5
+        let height = footnote_content_height(&pages[index].footnotes, area, fonts);
+        if exceeds_with_roundoff(height, max_height)
             && !pages[index].footnotes.is_empty()
             && !pages[index].elements.is_empty()
         {
             let footnotes = std::mem::take(&mut pages[index].footnotes);
             let carry = Page {
                 elements: Vec::new(),
+                print_content_scale: Default::default(),
+                document_svg_defs: Default::default(),
                 running_elements: pages[index].running_elements.clone(),
                 running_elements_started: HashSet::new(),
                 named_strings: pages[index].named_strings.clone(),
@@ -256,293 +440,124 @@ struct FloatRegion {
 }
 
 /// Estimate the height of a layout element for wrapper sizing.
-pub(crate) fn estimate_element_height(element: &LayoutElement) -> f32 {
-    estimate_element_height_bounded(element, 50)
+pub(crate) fn estimate_element_height(element: &dyn LayoutElement) -> f32 {
+    measurement::element_height(element)
 }
 
-fn estimate_element_height_bounded(element: &LayoutElement, depth: usize) -> f32 {
-    if depth == 0 {
-        return 0.0;
+/// Retain one CSS principal box as the reference geometry shared by the two
+/// fragments produced from it. This is independent of the concrete node type;
+/// every decorated box exposes the same fragmentation capability.
+fn retain_reference_box(
+    source: &dyn LayoutElement,
+    first: &mut dyn LayoutElement,
+    continuation: &mut dyn LayoutElement,
+) {
+    let border_box_extent = |element: &dyn LayoutElement| {
+        let margins = element
+            .box_fragmentation_owner()
+            .map_or(0.0, |owner| owner.fragmentation_box_model().margins.total());
+        (measurement::element_height(element) - margins).max(0.0)
+    };
+    let Some(source) = source.box_fragmentation_owner() else {
+        return;
+    };
+    let Some((first_slice, continuation_slice)) = source.box_fragmentation().split_reference_box(
+        border_box_extent(first),
+        border_box_extent(continuation),
+        source.fragmentation_box_model(),
+    ) else {
+        return;
+    };
+    if let Some(owner) = first.box_fragmentation_owner_mut() {
+        owner.box_fragmentation_mut().reference_slice = Some(first_slice);
     }
-    match element {
-        LayoutElement::TextBlock {
-            lines,
-            margin_top,
-            margin_bottom,
-            padding_top,
-            padding_bottom,
-            border,
-            block_height,
-            position,
-            clip_rect,
-            ..
-        } => {
-            if *position == Position::Absolute {
-                return 0.0;
-            }
-            let text_height: f32 = lines.iter().map(|l| l.height).sum::<f32>()
-                + footnote_call_multiline_extra_height(lines);
-            let content_h = padding_top + text_height + padding_bottom;
-            // When clipping (overflow:hidden), use the specified block_height
-            // instead of expanding to fit content.
-            let effective_h = if clip_rect.is_some() {
-                block_height.unwrap_or(content_h)
-            } else {
-                block_height.map_or(content_h, |h| content_h.max(h))
-            };
-            margin_top + effective_h + margin_bottom + border.vertical_width()
-        }
-        LayoutElement::FlexRow {
-            row_height,
-            margin_top,
-            margin_bottom,
-            padding_top,
-            padding_bottom,
-            border,
-            ..
-        } => {
-            margin_top
-                + padding_top
-                + row_height
-                + padding_bottom
-                + margin_bottom
-                + border.vertical_width()
-        }
-        LayoutElement::TableRow {
-            cells,
-            margin_top,
-            margin_bottom,
-            ..
-        } => {
-            let row_h = cells
-                .iter()
-                .map(table_cell_content_height)
-                .fold(0.0f32, f32::max);
-            margin_top + row_h + margin_bottom
-        }
-        LayoutElement::GridRow {
-            cells,
-            margin_top,
-            margin_bottom,
-            padding_top,
-            padding_bottom,
-            ..
-        } => {
-            // A grid row occupies its resolved track height (css-grid-1 §11),
-            // carried on each cell as `min_content_height`. A grid item with a
-            // definite height does NOT grow its track when its content is taller
-            // (the content overflows), so the row height must not be inflated by
-            // the cells' intrinsic content height the way a table row's is.
-            let row_h = cells
-                .iter()
-                .map(|cell| cell.min_content_height)
-                .fold(0.0f32, f32::max);
-            margin_top + padding_top + row_h + padding_bottom + margin_bottom
-        }
-        LayoutElement::Image {
-            height,
-            flow_extra_bottom,
-            margin_top,
-            margin_bottom,
-            ..
-        } => margin_top + height + flow_extra_bottom + margin_bottom,
-        LayoutElement::HorizontalRule {
-            margin_top,
-            margin_bottom,
-        } => margin_top + 1.0 + margin_bottom,
-        LayoutElement::ProgressBar {
-            height,
-            margin_top,
-            margin_bottom,
-            ..
-        } => margin_top + height + margin_bottom,
-        LayoutElement::Svg {
-            height,
-            flow_extra_bottom,
-            margin_top,
-            margin_bottom,
-            ..
-        } => margin_top + height + flow_extra_bottom + margin_bottom,
-        LayoutElement::MathBlock {
-            layout,
-            margin_top,
-            margin_bottom,
-            ..
-        } => margin_top + layout.height() + margin_bottom,
-        LayoutElement::RunningElement { .. } | LayoutElement::NamedString { .. } => 0.0,
-        LayoutElement::Container {
-            children,
-            padding_top,
-            padding_bottom,
-            border,
-            margin_top,
-            margin_bottom,
-            block_height,
-            position,
-            ..
-        } => {
-            // Absolute containers are out of flow and contribute no height to
-            // their parent (matches the TextBlock arm above).
-            if *position == Position::Absolute {
-                return 0.0;
-            }
-            // When any direct child floats, the auto content height excludes the
-            // floats (they don't stretch the box) but includes any clearance gap;
-            // `simulate_block_flow` is the shared source of truth for that. The
-            // plain (no-float) sum is kept byte-for-byte to avoid regressions.
-            let children_h: f32 = if children.iter().any(|c| element_float(c) != Float::None) {
-                simulate_block_flow(children).height
-            } else {
-                children
-                    .iter()
-                    .map(|c| estimate_element_height_bounded(c, depth - 1))
-                    .sum()
-            };
-            let content_h = padding_top + children_h + padding_bottom + border.vertical_width();
-            // A definite `block_height` (set only for an explicit `height`) is a
-            // hard border-box size: overflowing content spills past it rather than
-            // growing the box, so honour it directly instead of `content_h.max(h)`.
-            let effective_h = block_height.unwrap_or(content_h);
-            margin_top + effective_h + margin_bottom
-        }
-        _ => 0.0,
+    if let Some(owner) = continuation.box_fragmentation_owner_mut() {
+        owner.box_fragmentation_mut().reference_slice = Some(continuation_slice);
     }
 }
 
 /// The CSS `float` value of a block-level layout element (`None` for anything
 /// that cannot float, e.g. table rows).
-pub(crate) fn element_float(element: &LayoutElement) -> Float {
-    match element {
-        LayoutElement::TextBlock { float, .. } | LayoutElement::Container { float, .. } => *float,
-        _ => Float::None,
-    }
+pub(crate) fn element_float(element: &dyn LayoutElement) -> Float {
+    element
+        .block_flow_owner()
+        .map_or(Float::None, |owner| owner.block_flow().float)
 }
 
 /// The CSS `clear` value of a block-level layout element.
-fn element_clear(element: &LayoutElement) -> Clear {
-    match element {
-        LayoutElement::TextBlock { clear, .. } | LayoutElement::Container { clear, .. } => *clear,
-        _ => Clear::None,
-    }
+fn element_clear(element: &dyn LayoutElement) -> Clear {
+    element
+        .block_flow_owner()
+        .map_or(Clear::None, |owner| owner.block_flow().clear)
 }
 
 fn extend_open_column_flex_decoration_to_break(
-    elements: &mut [(f32, LayoutElement)],
+    elements: &mut [(f32, LayoutNode)],
     content_height: f32,
 ) {
+    struct PullbackSpacer(bool);
+
+    impl LayoutVisitor for PullbackSpacer {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.0 = element.lines.is_empty()
+                && is_positive_with_roundoff(-element.box_model.margins.start)
+                && element.paint.background.color.is_none()
+                && !element.box_model.border.has_any();
+        }
+    }
+
+    struct DecorationExtender {
+        y: f32,
+        content_height: f32,
+    }
+
+    impl LayoutVisitorMut for DecorationExtender {
+        fn visit_text_block(&mut self, element: &mut TextBlock) {
+            let Some(block_height) = element.box_model.size.height.used() else {
+                return;
+            };
+            if !element.lines.is_empty() || !element.box_model.border.has_any() {
+                return;
+            }
+            let target_flow = (self.content_height - self.y).max(0.0);
+            let current_flow = block_height + element.box_model.border.vertical_width();
+            if exceeds_with_roundoff(target_flow, current_flow) {
+                element.box_model.border.bottom.width = 0.0;
+                element.box_model.size.height = BlockSize::fragment(
+                    (target_flow - element.box_model.border.vertical_width()).max(0.0),
+                );
+            }
+        }
+    }
+
     for idx in 0..elements.len().saturating_sub(1) {
-        let spacer_is_pullback = matches!(
-            &elements[idx + 1].1,
-            LayoutElement::TextBlock {
-                lines,
-                margin_top,
-                background_color: None,
-                border,
-                ..
-            } if lines.is_empty() && *margin_top < -0.5 && !border.has_any()
-        );
-        if !spacer_is_pullback {
+        let mut pullback = PullbackSpacer(false);
+        elements[idx + 1].1.accept(&mut pullback);
+        if !pullback.0 {
             continue;
         }
         let (y_pos, element) = &mut elements[idx];
-        let LayoutElement::TextBlock {
-            lines,
-            block_height: Some(block_height),
-            border,
-            ..
-        } = element
-        else {
-            continue;
-        };
-        if !lines.is_empty() || !border.has_any() {
-            continue;
-        }
-        let target_flow = (content_height - *y_pos).max(0.0);
-        let current_flow = *block_height + border.vertical_width();
-        if target_flow > current_flow + 0.5 {
-            border.bottom.width = 0.0;
-            *block_height = (target_flow - border.vertical_width()).max(0.0);
-        }
+        element.accept_mut(&mut DecorationExtender {
+            y: *y_pos,
+            content_height,
+        });
     }
 }
 
 /// Whether a layout element is out of normal flow (absolutely positioned) and so
 /// contributes no height to its container and does not advance the flow cursor.
-fn element_is_absolute(element: &LayoutElement) -> bool {
-    matches!(
-        element,
-        LayoutElement::TextBlock {
-            position: Position::Absolute,
-            ..
-        } | LayoutElement::Container {
-            position: Position::Absolute,
-            ..
-        }
-    )
+fn element_is_out_of_flow(element: &dyn LayoutElement) -> bool {
+    !element.contributes_to_normal_flow()
 }
 
 /// Whether an in-flow element participates in adjacent-sibling vertical margin
-/// collapse. Table/grid rows and other non-block content do not (they break the
-/// collapse chain), mirroring `collapse_role` in the renderer.
-fn element_collapses_margins(element: &LayoutElement) -> bool {
-    matches!(
-        element,
-        LayoutElement::TextBlock { .. }
-            | LayoutElement::Container { .. }
-            | LayoutElement::Image { .. }
-            | LayoutElement::Svg { .. }
-            | LayoutElement::FlexRow { .. }
-            | LayoutElement::HorizontalRule { .. }
-            | LayoutElement::ProgressBar { .. }
-            | LayoutElement::MathBlock { .. }
-    )
-}
-
-/// The top/bottom margins of a layout element, used for adjacent-sibling
-/// vertical margin collapse. Returns `(margin_top, margin_bottom)`.
-fn element_margins(element: &LayoutElement) -> (f32, f32) {
-    match element {
-        LayoutElement::TextBlock {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::Container {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::Image {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::Svg {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::FlexRow {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::HorizontalRule {
-            margin_top,
-            margin_bottom,
-        }
-        | LayoutElement::ProgressBar {
-            margin_top,
-            margin_bottom,
-            ..
-        }
-        | LayoutElement::MathBlock {
-            margin_top,
-            margin_bottom,
-            ..
-        } => (*margin_top, *margin_bottom),
-        _ => (0.0, 0.0),
-    }
+/// collapse, mirroring `collapse_role` in the renderer. Flattened table rows
+/// expose only the table's exterior margins through this capability; their
+/// grid spacing remains separate internal geometry.
+fn element_collapses_margins(element: &dyn LayoutElement) -> bool {
+    element
+        .block_flow_participant()
+        .is_some_and(|participant| participant.collapses_outer_margins())
 }
 
 /// The collapsed vertical gap between two adjacent block margins (CSS 2.1
@@ -584,6 +599,82 @@ pub(crate) struct BlockFlowResult {
     pub right_float_bottom: f32,
 }
 
+#[derive(Default)]
+struct BlockFlowAccumulator {
+    result: BlockFlowResult,
+    prev_margin_bottom: Option<f32>,
+}
+
+impl BlockFlowAccumulator {
+    fn include(&mut self, index: usize, child: &dyn LayoutElement, outer_height: f32) {
+        if element_is_out_of_flow(child) {
+            // Out of flow: contributes nothing and leaves the collapse chain.
+            return;
+        }
+
+        let float = element_float(child);
+        let margins = child
+            .margin_holder()
+            .map(|holder| *holder.margins())
+            .unwrap_or(BlockMargins::ZERO);
+        let (margin_top, margin_bottom) = (margins.start, margins.end);
+        if float != Float::None {
+            // A float is pinned to the current content bottom and stacked below
+            // an earlier float on the same side, but does not advance normal flow.
+            let side_bottom = if float == Float::Left {
+                self.result.left_float_bottom
+            } else {
+                self.result.right_float_bottom
+            };
+            let float_top = (self.result.height + margin_top).max(side_bottom);
+            let border_box_height = (outer_height - margin_top - margin_bottom).max(0.0);
+            let float_bottom = float_top + border_box_height;
+            if float == Float::Left {
+                self.result.left_float_bottom = float_bottom;
+            } else {
+                self.result.right_float_bottom = float_bottom;
+            }
+            self.result.floats.push(FloatPlacement {
+                index,
+                top: float_top,
+            });
+            self.prev_margin_bottom = None;
+            return;
+        }
+
+        // Clearance pushes this in-flow child below the relevant float and
+        // breaks adjacent margin collapse.
+        let clear = element_clear(child);
+        let clear_to = match clear {
+            Clear::Left => self.result.left_float_bottom,
+            Clear::Right => self.result.right_float_bottom,
+            Clear::Both => self
+                .result
+                .left_float_bottom
+                .max(self.result.right_float_bottom),
+            Clear::None => f32::NEG_INFINITY,
+        };
+        if clear != Clear::None && clear_to > self.result.height {
+            self.result.height = clear_to;
+            self.prev_margin_bottom = None;
+        }
+
+        self.result.height += outer_height;
+        if element_collapses_margins(child) {
+            if let Some(previous) = self.prev_margin_bottom {
+                self.result.height -= previous + margin_top - collapse_pair(margin_top, previous);
+            }
+            self.prev_margin_bottom = Some(margin_bottom);
+        } else {
+            self.prev_margin_bottom = None;
+        }
+    }
+
+    fn finish(self) -> BlockFlowResult {
+        self.result
+    }
+}
+
 /// Simulate normal-flow block layout of `children` with simplified floats and
 /// `clear`, returning the in-flow content height and the resolved top of every
 /// float. This is the single source of truth shared by the wrapper-height
@@ -603,108 +694,12 @@ pub(crate) struct BlockFlowResult {
 /// clearance gap *does* extend the container because the cleared block is in
 /// flow. Adjacent in-flow blocks collapse their vertical margins across
 /// out-of-flow (float / absolute) siblings.
-pub(crate) fn simulate_block_flow(children: &[LayoutElement]) -> BlockFlowResult {
-    // Running in-flow content bottom, below the content-box top. Accumulated the
-    // same way as `collapsed_children_height`: add each child's full outer
-    // height, then back out the collapsed overlap with the previous sibling.
-    let mut cursor = 0.0f32;
-    // Previous in-flow sibling's margin-bottom for adjacent collapse; `None`
-    // breaks the chain (start, after a float, or after clearance).
-    let mut prev_mb: Option<f32> = None;
-    // Bottom edges of placed floats per side (below the content origin), for
-    // `clear` and for stacking successive same-side floats.
-    let mut left_bottom = 0.0f32;
-    let mut right_bottom = 0.0f32;
-    let mut floats = Vec::new();
-
+pub(crate) fn simulate_block_flow(children: &[LayoutNode]) -> BlockFlowResult {
+    let mut flow = BlockFlowAccumulator::default();
     for (index, child) in children.iter().enumerate() {
-        if element_is_absolute(child) {
-            // Out of flow: contributes nothing and leaves the collapse chain.
-            continue;
-        }
-        let float = element_float(child);
-        let outer_h = estimate_element_height(child);
-        let (mt, mb) = element_margins(child);
-
-        if float != Float::None {
-            // Float: pinned at the current content bottom plus its margin-top,
-            // stacked below any earlier same-side float. Floats don't collapse
-            // margins and don't advance the in-flow cursor, but they do break
-            // the running collapse chain for the next in-flow sibling.
-            let side_bottom = if float == Float::Left {
-                left_bottom
-            } else {
-                right_bottom
-            };
-            let float_top = (cursor + mt).max(side_bottom);
-            let border_box_h = (outer_h - mt - mb).max(0.0);
-            let float_bottom = float_top + border_box_h;
-            if float == Float::Left {
-                left_bottom = float_bottom;
-            } else {
-                right_bottom = float_bottom;
-            }
-            floats.push(FloatPlacement {
-                index,
-                top: float_top,
-            });
-            prev_mb = None;
-            continue;
-        }
-
-        // In-flow block. Apply `clear` first: push the content bottom below the
-        // relevant float(s). Clearance breaks the margin-collapse chain.
-        let clear = element_clear(child);
-        let clear_to = match clear {
-            Clear::Left => left_bottom,
-            Clear::Right => right_bottom,
-            Clear::Both => left_bottom.max(right_bottom),
-            Clear::None => f32::NEG_INFINITY,
-        };
-        if clear != Clear::None && clear_to > cursor {
-            cursor = clear_to;
-            prev_mb = None;
-        }
-
-        // Add the full outer box, then remove the collapse overlap with the
-        // previous in-flow sibling (mirrors `collapsed_children_height`).
-        cursor += outer_h;
-        if element_collapses_margins(child) {
-            if let Some(pmb) = prev_mb {
-                cursor -= pmb + mt - collapse_pair(mt, pmb);
-            }
-            prev_mb = Some(mb);
-        } else {
-            // Non-collapsing in-flow content (table/grid rows): breaks the chain.
-            prev_mb = None;
-        }
+        flow.include(index, child, estimate_element_height(child));
     }
-
-    BlockFlowResult {
-        height: cursor,
-        floats,
-        left_float_bottom: left_bottom,
-        right_float_bottom: right_bottom,
-    }
-}
-
-pub(crate) fn table_row_content_width(element: &LayoutElement) -> f32 {
-    match element {
-        LayoutElement::TableRow {
-            col_widths,
-            border_collapse,
-            border_spacing,
-            ..
-        } => {
-            let spacing = if *border_collapse == BorderCollapse::Collapse {
-                0.0
-            } else {
-                *border_spacing
-            };
-            col_widths.iter().sum::<f32>() + spacing * col_widths.len().saturating_sub(1) as f32
-        }
-        _ => 0.0,
-    }
+    flow.finish()
 }
 
 /// Split a too-tall in-flow `TextBlock` at a line boundary (CSS Fragmentation 3
@@ -722,34 +717,41 @@ pub(crate) fn table_row_content_width(element: &LayoutElement) -> f32 {
 /// lines, or a boundary where every line fits or none would move — in which case
 /// the caller places it whole (the pre-existing, possibly-overflowing behavior).
 fn split_text_block(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::TextBlock {
-        lines,
-        block_height,
-        clip_rect,
-        position,
-        float,
-        border,
-        padding_top,
-        padding_bottom,
-        box_decoration_break,
-        orphans,
-        widows,
-        ..
-    } = element
-    else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.result = split_text_block_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_text_block_node(
+    element: &TextBlock,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    let lines = &element.lines;
     // Only a plain, auto-height, in-flow text block is splittable here. A box
     // with a definite height or `overflow` clip is a hard-sized box (treat as
     // monolithic); a positioned/floated box is out of normal flow and handled
     // elsewhere; a single line cannot be divided.
-    if block_height.is_some()
-        || clip_rect.is_some()
-        || *position != Position::Static
-        || *float != Float::None
+    if element.box_model.size.height.is_definite()
+        || element.clipping.rect.is_some()
+        || element.positioning.scheme != Position::Static
+        || element.flow.float != Float::None
         || lines.len() < 2
     {
         return None;
@@ -760,15 +762,17 @@ fn split_text_block(
     // line area is reduced by the bottom decoration too (the box closes on this
     // page). `slice` (default) leaves the box open at the bottom, so its lines
     // may extend to the page edge.
-    let clone = *box_decoration_break == BoxDecorationBreak::Clone;
+    let clone = element.fragmentation.box_fragmentation.decoration == BoxDecorationBreak::Clone;
 
     // Content-box height available for text lines on this page: the space below
     // the box's border-box top, minus the top border + top padding (and, under
     // `clone`, the bottom border + bottom padding the fragment also carries).
     let avail_lines = if clone {
-        avail_below_box_top - border.vertical_width() - padding_top - padding_bottom
+        avail_below_box_top
+            - element.box_model.border.vertical_width()
+            - element.box_model.padding.vertical()
     } else {
-        avail_below_box_top - border.top.width - padding_top
+        avail_below_box_top - element.box_model.border.top.width - element.box_model.padding.top
     };
 
     // Greedily keep whole lines that fit, but always retain at least one line on
@@ -802,8 +806,8 @@ fn split_text_block(
     // block taller than a full fragmentainer, so when the constraint cannot be
     // honoured it is DROPPED (split greedily) to guarantee forward progress,
     // exactly as the spec requires when a full page cannot satisfy it.
-    let orphans = (*orphans).max(1) as usize;
-    let widows = (*widows).max(1) as usize;
+    let orphans = element.fragmentation.orphans.max(1) as usize;
+    let widows = element.fragmentation.widows.max(1) as usize;
     let n = lines.len();
     if n >= orphans + widows {
         let max_idx = n - widows;
@@ -812,31 +816,64 @@ fn split_text_block(
         }
     }
 
+    split_text_block_at_line_node(element, idx)
+}
+
+/// Split an in-flow text block at a known line boundary.
+///
+/// The caller is responsible for choosing a legal boundary. This keeps
+/// pagination policies that choose a semantic line boundary (such as CSS GCPM
+/// `footnote-policy: line`) on the same decoration and continuation path as
+/// ordinary height-driven fragmentation.
+fn split_text_block_at_line(
+    element: &dyn LayoutElement,
+    idx: usize,
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        index: usize,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.result = split_text_block_at_line_node(element, self.index);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        index: idx,
+        result: None,
+    };
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_text_block_at_line_node(
+    element: &TextBlock,
+    idx: usize,
+) -> Option<(LayoutNode, LayoutNode)> {
+    if element.box_model.size.height.is_definite()
+        || element.clipping.rect.is_some()
+        || element.positioning.scheme != Position::Static
+        || element.flow.float != Float::None
+        || idx == 0
+        || idx >= element.lines.len()
+    {
+        return None;
+    }
+
+    let clone = element.fragmentation.box_fragmentation.decoration == BoxDecorationBreak::Clone;
+
     // First fragment: the lines that fit. Under `slice` it keeps the box's top
     // decoration but drops its bottom border/padding/margin (the box stays open
     // at the page bottom); under `clone` it keeps the FULL decoration and closes.
     let mut first = element.clone();
-    if let LayoutElement::TextBlock {
-        lines: f_lines,
-        margin_bottom: f_mb,
-        padding_bottom: f_pb,
-        border: f_border,
-        border_radii: f_radii,
-        border_radii_y: f_radii_y,
-        ..
-    } = &mut first
-    {
-        *f_lines = lines[..idx].to_vec();
-        if !clone {
-            *f_mb = 0.0;
-            *f_pb = 0.0;
-            f_border.bottom.width = 0.0;
-            // css-break-3 §5.4: the cut (bottom) edge is square under `slice`.
-            f_radii[2] = 0.0;
-            f_radii[3] = 0.0;
-            f_radii_y[2] = 0.0;
-            f_radii_y[3] = 0.0;
-        }
+    first.lines = element.lines[..idx].to_vec();
+    if !clone {
+        first.box_model.margins.end = 0.0;
+        first.box_model.padding.bottom = 0.0;
+        first.box_model.border.bottom.width = 0.0;
+        first.paint.border_radii = first.paint.border_radii.clear_bottom();
     }
 
     // Continuation: the remaining lines. Under `slice` it drops the top
@@ -844,84 +881,88 @@ fn split_text_block(
     // bottom decoration so the LAST fragment closes it; under `clone` it keeps
     // the FULL decoration so the fragment is independently wrapped.
     let mut rest = element.clone();
-    if let LayoutElement::TextBlock {
-        lines: r_lines,
-        margin_top: r_mt,
-        padding_top: r_pt,
-        border: r_border,
-        border_radii: r_radii,
-        border_radii_y: r_radii_y,
-        ..
-    } = &mut rest
-    {
-        *r_lines = lines[idx..].to_vec();
-        if !clone {
-            *r_mt = 0.0;
-            *r_pt = 0.0;
-            r_border.top.width = 0.0;
-            // css-break-3 §5.4: the cut (top) edge is square under `slice`.
-            r_radii[0] = 0.0;
-            r_radii[1] = 0.0;
-            r_radii_y[0] = 0.0;
-            r_radii_y[1] = 0.0;
+    rest.lines = element.lines[idx..].to_vec();
+    if !clone {
+        rest.box_model.margins.start = 0.0;
+        rest.box_model.padding.top = 0.0;
+        rest.box_model.border.top.width = 0.0;
+        rest.paint.border_radii = rest.paint.border_radii.clear_top();
+    }
+
+    retain_reference_box(element, &mut first, &mut rest);
+
+    Some((Box::new(first), Box::new(rest)))
+}
+
+/// Return the continuation size only when a split produces two genuinely
+/// positive fragments. The shared roundoff bound covers arithmetic noise only;
+/// no authored minimum fragment size is imposed.
+fn split_remainder(total: f32, first: f32) -> Option<f32> {
+    let remainder = total - first;
+    (is_positive_with_roundoff(first) && is_positive_with_roundoff(remainder)).then_some(remainder)
+}
+
+/// Slice a definite-height in-flow text block at the fragmentainer edge.
+///
+/// A fixed-height box carries its background and border onto the next page.
+/// The paginator decides whether an empty box is tall enough to start internal
+/// fragmentation before calling this splitter.
+fn split_fixed_height_text_block(
+    element: &dyn LayoutElement,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.result = split_fixed_height_text_block_node(element, self.available);
         }
     }
 
-    Some((first, rest))
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
+    };
+    element.accept(&mut visitor);
+    visitor.result
 }
 
-/// Slice a definite-height in-flow text block at the fragmentainer edge. Unlike
-/// [`split_text_block`], this handles boxes whose own height is monolithic and
-/// taller than the page; the box background/border must continue on following
-/// pages instead of overflowing and being clipped. Text lines that fit in the
-/// first fragment stay there, and later lines move to the continuation.
-fn split_fixed_height_text_block(
-    element: &LayoutElement,
+fn split_fixed_height_text_block_node(
+    element: &TextBlock,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::TextBlock {
-        lines,
-        block_height,
-        clip_rect,
-        position,
-        float,
-        border,
-        padding_top,
-        padding_bottom,
-        box_decoration_break,
-        ..
-    } = element
-    else {
+) -> Option<(LayoutNode, LayoutNode)> {
+    if !element.box_model.size.height.is_definite() {
         return None;
-    };
-    let block_height = (*block_height)?;
-    if clip_rect.is_some()
-        || *position != Position::Static
-        || *float != Float::None
+    }
+    let block_height = element.box_model.size.height.used()?;
+    if element.clipping.rect.is_some()
+        || element.positioning.scheme != Position::Static
+        || element.flow.float != Float::None
         || block_height <= 0.0
     {
         return None;
     }
 
-    let clone = *box_decoration_break == BoxDecorationBreak::Clone;
+    let clone = element.fragmentation.box_fragmentation.decoration == BoxDecorationBreak::Clone;
     let first_border_h = if clone {
-        border.vertical_width()
+        element.box_model.border.vertical_width()
     } else {
-        border.top.width
+        element.box_model.border.top.width
     };
     let first_content_h = (avail_below_box_top - first_border_h).min(block_height);
-    if first_content_h <= MIN_IMAGE_SLICE || block_height - first_content_h <= MIN_IMAGE_SLICE {
-        return None;
-    }
+    let rest_content_h = split_remainder(block_height, first_content_h)?;
 
     let first_line_space = if clone {
-        first_content_h - padding_top - padding_bottom
+        first_content_h - element.box_model.padding.vertical()
     } else {
-        first_content_h - padding_top
+        first_content_h - element.box_model.padding.top
     };
     let mut acc = 0.0f32;
     let mut idx = 0usize;
-    for (i, line) in lines.iter().enumerate() {
+    for (i, line) in element.lines.iter().enumerate() {
         let next = acc + line.height;
         if i > 0 && next > first_line_space {
             break;
@@ -934,61 +975,29 @@ fn split_fixed_height_text_block(
     }
 
     let mut first = element.clone();
-    if let LayoutElement::TextBlock {
-        lines: f_lines,
-        margin_bottom: f_mb,
-        padding_bottom: f_pb,
-        border: f_border,
-        border_radii: f_radii,
-        border_radii_y: f_radii_y,
-        block_height: f_bh,
-        ..
-    } = &mut first
-    {
-        *f_lines = lines[..idx.min(lines.len())].to_vec();
-        *f_bh = Some(first_content_h.max(0.0));
-        if !clone {
-            *f_mb = 0.0;
-            *f_pb = 0.0;
-            f_border.bottom.width = 0.0;
-            f_radii[2] = 0.0;
-            f_radii[3] = 0.0;
-            f_radii_y[2] = 0.0;
-            f_radii_y[3] = 0.0;
-        }
+    first.lines = element.lines[..idx.min(element.lines.len())].to_vec();
+    first.box_model.size.height = BlockSize::definite(first_content_h);
+    if !clone {
+        first.box_model.margins.end = 0.0;
+        first.box_model.padding.bottom = 0.0;
+        first.box_model.border.bottom.width = 0.0;
+        first.paint.border_radii = first.paint.border_radii.clear_bottom();
     }
 
     let mut rest = element.clone();
-    if let LayoutElement::TextBlock {
-        lines: r_lines,
-        margin_top: r_mt,
-        padding_top: r_pt,
-        border: r_border,
-        border_radii: r_radii,
-        border_radii_y: r_radii_y,
-        block_height: r_bh,
-        ..
-    } = &mut rest
-    {
-        *r_lines = lines[idx.min(lines.len())..].to_vec();
-        *r_bh = Some((block_height - first_content_h).max(0.0));
-        if !clone {
-            *r_mt = 0.0;
-            *r_pt = 0.0;
-            r_border.top.width = 0.0;
-            r_radii[0] = 0.0;
-            r_radii[1] = 0.0;
-            r_radii_y[0] = 0.0;
-            r_radii_y[1] = 0.0;
-        }
+    rest.lines = element.lines[idx.min(element.lines.len())..].to_vec();
+    rest.box_model.size.height = BlockSize::definite(rest_content_h);
+    if !clone {
+        rest.box_model.margins.start = 0.0;
+        rest.box_model.padding.top = 0.0;
+        rest.box_model.border.top.width = 0.0;
+        rest.paint.border_radii = rest.paint.border_radii.clear_top();
     }
 
-    Some((first, rest))
-}
+    retain_reference_box(element, &mut first, &mut rest);
 
-/// Minimum slice height (pt) below which a too-tall raster image is not sliced —
-/// keeps a fragment from being a sliver and guarantees forward progress.
-const MIN_IMAGE_SLICE: f32 = 1.0;
+    Some((Box::new(first), Box::new(rest)))
+}
 
 /// Slice a too-tall in-flow raster `Image` at the page boundary (CSS
 /// Fragmentation 3 §4.1: monolithic content taller than the fragmentainer is
@@ -1010,194 +1019,162 @@ const MIN_IMAGE_SLICE: f32 = 1.0;
 /// slice), a bordered box (the frame cannot be split here), a `filter` raster
 /// (already feathered/padded), or no usable space on the page.
 fn split_image_block(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::Image {
-        image,
-        height,
-        object_fit,
-        border,
-        blur_overflow,
-        filter_effect,
-        src_crop,
-        ..
-    } = element
-    else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_image(&mut self, element: &Image) {
+            self.result = split_image_block_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
-    if *object_fit != ObjectFit::Fill
-        || border.vertical_width() != 0.0
-        || *blur_overflow != 0.0
-        || filter_effect.is_some()
-        || *height <= 0.0
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_image_block_node(
+    element: &Image,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    let height = element.geometry.size.height;
+    if element.sampling.object_fit != ObjectFit::Fill
+        || element.geometry.border.vertical_width() != 0.0
+        || !element.paint.raster_overflow.is_zero()
+        || element.paint.filter_effect.is_some()
+        || height <= 0.0
     {
         return None;
     }
 
     // Display height of the TOP slice that fits on this page.
-    let first_h = avail_below_box_top.min(*height);
-    if first_h <= MIN_IMAGE_SLICE || *height - first_h <= MIN_IMAGE_SLICE {
-        // No room for a meaningful slice, or the remainder would be a sliver —
-        // (re)place the image whole (it already restarts on a fresh page).
-        return None;
-    }
+    let first_h = avail_below_box_top.min(height);
+    let rest_h = split_remainder(height, first_h)?;
 
     // The source sub-rectangle this element currently displays (the whole source
     // if it has not been sliced yet), mapped linearly onto `height` under
     // object-fit: fill. Slicing composes with any inherited crop.
-    let [bx, by, bw, bh] = src_crop.unwrap_or([
+    let [bx, by, bw, bh] = element.sampling.source_crop.unwrap_or([
         0.0,
         0.0,
-        image.source_width as f32,
-        image.source_height as f32,
+        element.source.source_width as f32,
+        element.source.source_height as f32,
     ]);
-    let slice_src_h = bh * (first_h / *height);
+    let slice_src_h = bh * (first_h / height);
 
     let mut first = element.clone();
-    if let LayoutElement::Image {
-        height: f_h,
-        flow_extra_bottom: f_fe,
-        margin_bottom: f_mb,
-        src_crop: f_crop,
-        ..
-    } = &mut first
-    {
-        *f_h = first_h;
-        *f_fe = 0.0;
-        *f_mb = 0.0;
-        *f_crop = Some([bx, by, bw, slice_src_h]);
-    }
+    first.geometry.size.height = first_h;
+    first.geometry.flow.extra_end = 0.0;
+    first.geometry.flow.margins.end = 0.0;
+    first.sampling.source_crop = Some([bx, by, bw, slice_src_h]);
 
     let mut rest = element.clone();
-    if let LayoutElement::Image {
-        height: r_h,
-        margin_top: r_mt,
-        src_crop: r_crop,
-        ..
-    } = &mut rest
-    {
-        *r_h = *height - first_h;
-        *r_mt = 0.0;
-        *r_crop = Some([bx, by + slice_src_h, bw, bh - slice_src_h]);
-        // `flow_extra_bottom` and `margin_bottom` stay on the continuation so the
-        // final fragment keeps the original strut / bottom margin.
-    }
+    rest.geometry.size.height = rest_h;
+    rest.geometry.flow.margins.start = 0.0;
+    rest.sampling.source_crop = Some([bx, by + slice_src_h, bw, bh - slice_src_h]);
 
-    Some((first, rest))
+    Some((Box::new(first), Box::new(rest)))
 }
 
-fn svg_source_box(tree: &crate::parser::svg::SvgTree) -> Option<crate::parser::svg::ViewBox> {
-    if let Some(view_box) = tree.view_box {
-        if view_box.width > 0.0 && view_box.height > 0.0 {
-            return Some(view_box);
+/// Slice a too-tall SVG replaced element at its content-box page edge.
+///
+/// The SVG tree remains whole and each page clips the original rendered
+/// viewport. Rewriting the root `viewBox` would reinterpret root
+/// `preserveAspectRatio` per fragment and visibly shift the content.
+fn split_svg_block(
+    element: &dyn LayoutElement,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_svg(&mut self, element: &Svg) {
+            self.result = split_svg_block_node(element, self.available);
         }
     }
-    let width = tree
-        .width_attr
-        .as_deref()
-        .and_then(crate::parser::svg::parse_absolute_length)
-        .unwrap_or(tree.width);
-    let height = tree
-        .height_attr
-        .as_deref()
-        .and_then(crate::parser::svg::parse_absolute_length)
-        .unwrap_or(tree.height);
-    if width > 0.0 && height > 0.0 {
-        Some(crate::parser::svg::ViewBox {
-            min_x: 0.0,
-            min_y: 0.0,
-            width,
-            height,
-        })
-    } else {
-        None
-    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
+    };
+    element.accept(&mut visitor);
+    visitor.result
 }
 
-/// Slice a too-tall SVG replaced element by narrowing its source viewBox to the
-/// rows that belong on each page. This is the SVG analogue of raster `src_crop`:
-/// each fragment maps the relevant source slice into that page's fragment box.
-fn split_svg_block(
-    element: &LayoutElement,
+fn split_svg_block_node(
+    element: &Svg,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::Svg {
-        tree,
-        height,
-        border,
-        ..
-    } = element
-    else {
-        return None;
-    };
-    if *height <= 0.0 {
+) -> Option<(LayoutNode, LayoutNode)> {
+    let height = element.geometry.size.height;
+    let border = &element.geometry.border;
+    if height <= 0.0 {
         return None;
     }
 
-    let first_h = avail_below_box_top.min(*height);
-    if first_h <= MIN_IMAGE_SLICE || *height - first_h <= MIN_IMAGE_SLICE {
+    let first_h = avail_below_box_top.min(height);
+    let rest_h = split_remainder(height, first_h)?;
+    let first_content_h = first_h - border.top.width;
+    let total_content_h = height - border.vertical_width();
+    if !is_positive_with_roundoff(first_content_h)
+        || !exceeds_with_roundoff(total_content_h, first_content_h)
+    {
         return None;
     }
-    let source = svg_source_box(tree)?;
-    let first_content_h = (first_h - border.top.width).max(0.0);
-    let total_content_h = (height - border.vertical_width()).max(1.0);
-    let slice_src_h = source.height * (first_content_h / total_content_h).clamp(0.0, 1.0);
+    let source_content_size = element.replaced.fragment.map_or_else(
+        || {
+            Size::new(
+                element.geometry.size.width - border.horizontal_width(),
+                total_content_h,
+            )
+        },
+        |fragment| fragment.source_content_size,
+    );
+    if !is_positive_with_roundoff(source_content_size.width)
+        || !is_positive_with_roundoff(source_content_size.height)
+    {
+        return None;
+    }
+    let fragment = element
+        .replaced
+        .fragment
+        .unwrap_or_else(|| SvgFragment::initial(source_content_size));
 
     let mut first = element.clone();
-    if let LayoutElement::Svg {
-        tree: f_tree,
-        height: f_h,
-        flow_extra_bottom: f_fe,
-        margin_bottom: f_mb,
-        border: f_border,
-        ..
-    } = &mut first
-    {
-        *f_h = first_h;
-        *f_fe = 0.0;
-        *f_mb = 0.0;
-        f_border.bottom.width = 0.0;
-        f_tree.view_box = Some(crate::parser::svg::ViewBox {
-            min_x: source.min_x,
-            min_y: source.min_y,
-            width: source.width,
-            height: slice_src_h,
-        });
-    }
+    first.geometry.size.height = first_h;
+    first.geometry.flow.extra_end = 0.0;
+    first.geometry.flow.margins.end = 0.0;
+    first.geometry.border.bottom.width = 0.0;
+    first.replaced.fragment = Some(fragment);
 
     let mut rest = element.clone();
-    if let LayoutElement::Svg {
-        tree: r_tree,
-        height: r_h,
-        margin_top: r_mt,
-        border: r_border,
-        ..
-    } = &mut rest
-    {
-        *r_h = *height - first_h;
-        *r_mt = 0.0;
-        r_border.top.width = 0.0;
-        r_tree.view_box = Some(crate::parser::svg::ViewBox {
-            min_x: source.min_x,
-            min_y: source.min_y + slice_src_h,
-            width: source.width,
-            height: source.height - slice_src_h,
-        });
-    }
+    rest.geometry.size.height = rest_h;
+    rest.geometry.flow.margins.start = 0.0;
+    rest.geometry.border.top.width = 0.0;
+    rest.replaced.fragment = Some(fragment.following(first_content_h));
 
-    Some((first, rest))
+    Some((Box::new(first), Box::new(rest)))
 }
 
 /// Dispatch a too-tall in-flow element to the right splitter: a `TextBlock`
-/// splits at a line boundary, a raster `Image` slices at the page edge, a
+/// splits at a line boundary, a raster `Image` slices at the page edge, and a
 /// `Container` splits between (or recurses into) its children. Returns `None`
 /// for anything monolithic/out-of-flow that cannot be fragmented here. Shared by
 /// `paginate` (top-level boxes) and `split_container` (a single too-tall child).
 fn split_element(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
+) -> Option<(LayoutNode, LayoutNode)> {
     split_fixed_height_text_block(element, avail_below_box_top)
         .or_else(|| split_text_block(element, avail_below_box_top))
         .or_else(|| split_image_block(element, avail_below_box_top))
@@ -1209,87 +1186,82 @@ fn split_element(
         .or_else(|| split_container(element, avail_below_box_top))
 }
 
+/// Split an empty definite-height container only after pagination establishes
+/// that it needs an internal fragment. Containers with children use
+/// [`split_container`] to break at child boundaries instead.
 fn split_fixed_height_container(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::Container {
-        block_height,
-        children,
-        position,
-        float,
-        ..
-    } = element
-    else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_container(&mut self, element: &Container) {
+            self.result = split_fixed_height_container_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
-    let box_h = (*block_height)?;
-    if *position != Position::Static
-        || *float != Float::None
-        || !children.is_empty()
-        || box_h <= 1.0
-        || avail_below_box_top <= 1.0
-        || box_h <= avail_below_box_top + 0.5
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_fixed_height_container_node(
+    element: &Container,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    if !element.box_model.size.height.is_definite() {
+        return None;
+    }
+    let box_h = element.box_model.size.height.used()?;
+    if element.positioning.scheme != Position::Static
+        || element.flow.float != Float::None
+        || !element.children.is_empty()
+        || !is_positive_with_roundoff(box_h)
+        || !is_positive_with_roundoff(avail_below_box_top)
+        || !exceeds_with_roundoff(box_h, avail_below_box_top)
     {
         return None;
     }
 
-    let consumed_h = avail_below_box_top.min(box_h - 1.0).max(1.0);
-    let rest_h = (box_h - consumed_h).max(0.0);
-    if rest_h <= 0.5 {
-        return None;
-    }
+    let consumed_h = avail_below_box_top.min(box_h).max(0.0);
+    let rest_h = split_remainder(box_h, consumed_h)?;
+    let clone = element.fragmentation.decoration == BoxDecorationBreak::Clone;
 
     let mut first = element.clone();
-    if let LayoutElement::Container {
-        block_height,
-        margin_bottom,
-        padding_bottom,
-        border,
-        border_radii,
-        border_radii_y,
-        ..
-    } = &mut first
-    {
-        *block_height = Some(consumed_h);
-        *margin_bottom = 0.0;
-        *padding_bottom = 0.0;
-        border.bottom.width = 0.0;
-        border_radii[2] = 0.0;
-        border_radii[3] = 0.0;
-        border_radii_y[2] = 0.0;
-        border_radii_y[3] = 0.0;
+    first.box_model.size.height = BlockSize::definite(consumed_h);
+    if !clone {
+        first.box_model.margins.end = 0.0;
+        first.box_model.padding.bottom = 0.0;
+        first.box_model.border.bottom.width = 0.0;
+        first.paint.border_radii = first.paint.border_radii.clear_bottom();
     }
 
     let mut rest = element.clone();
-    if let LayoutElement::Container {
-        block_height,
-        margin_top,
-        padding_top,
-        border,
-        border_radii,
-        border_radii_y,
-        ..
-    } = &mut rest
-    {
-        *block_height = Some(rest_h);
-        *margin_top = 0.0;
-        *padding_top = 0.0;
-        border.top.width = 0.0;
-        border_radii[0] = 0.0;
-        border_radii[1] = 0.0;
-        border_radii_y[0] = 0.0;
-        border_radii_y[1] = 0.0;
+    rest.box_model.size.height = BlockSize::definite(rest_h);
+    if !clone {
+        rest.box_model.margins.start = 0.0;
+        rest.box_model.padding.top = 0.0;
+        rest.box_model.border.top.width = 0.0;
+        rest.paint.border_radii = rest.paint.border_radii.clear_top();
     }
 
-    Some((first, rest))
+    retain_reference_box(element, &mut first, &mut rest);
+
+    Some((Box::new(first), Box::new(rest)))
 }
 
 fn split_nested_rows_at(
-    rows: &[LayoutElement],
+    rows: &[LayoutNode],
     available_height: f32,
-) -> (Vec<LayoutElement>, Vec<LayoutElement>) {
-    if rows.is_empty() || available_height <= 0.5 {
+) -> (Vec<LayoutNode>, Vec<LayoutNode>) {
+    if rows.is_empty() || !is_positive_with_roundoff(available_height) {
         return (Vec::new(), rows.to_vec());
     }
     let mut first = Vec::new();
@@ -1297,13 +1269,17 @@ fn split_nested_rows_at(
     let mut used = 0.0_f32;
     for (idx, child) in rows.iter().enumerate() {
         let child_h = estimate_element_height(child);
-        if used + child_h <= available_height + 0.5 {
+        if !exceeds_with_roundoff(used + child_h, available_height) {
             first.push(child.clone());
             used += child_h;
             continue;
         }
-        let child_avail = (available_height - used - element_margins(child).0).max(0.0);
-        if child_avail > 1.0 {
+        let margin_start = child
+            .margin_holder()
+            .map(|holder| holder.margins().start)
+            .unwrap_or_default();
+        let child_avail = (available_height - used - margin_start).max(0.0);
+        if is_positive_with_roundoff(child_avail) {
             if let Some((head, tail)) = split_fixed_height_container(child, child_avail)
                 .or_else(|| split_element(child, child_avail))
             {
@@ -1319,134 +1295,141 @@ fn split_nested_rows_at(
     (first, rest)
 }
 
-fn split_grid_cell(cell: &TableCell, first_h: f32, rest_h: f32) -> (TableCell, TableCell) {
-    let available_lines = (first_h - cell.padding_top).max(0.0);
+fn split_grid_cell(cell: &GridCell, first_h: f32, rest_h: f32) -> (GridCell, GridCell) {
+    let available_lines = (first_h - cell.layout.box_model.content_insets.top).max(0.0);
     let mut acc = 0.0_f32;
     let mut cut = 0usize;
-    for (idx, line) in cell.lines.iter().enumerate() {
+    for (idx, line) in cell.layout.content.lines.iter().enumerate() {
         let next = acc + line.height;
-        if idx > 0 && next > available_lines + 0.01 {
+        if idx > 0 && exceeds_with_roundoff(next, available_lines) {
             break;
         }
         acc = next;
         cut = idx + 1;
     }
 
-    let text_first_h: f32 = cell.lines[..cut.min(cell.lines.len())]
+    let text_first_h: f32 = cell.layout.content.lines[..cut.min(cell.layout.content.lines.len())]
         .iter()
         .map(|line| line.height)
         .sum();
-    let nested_avail = (first_h - cell.padding_top - text_first_h).max(0.0);
-    let (first_nested, rest_nested) = split_nested_rows_at(&cell.nested_rows, nested_avail);
+    let nested_avail = (first_h - cell.layout.box_model.content_insets.top - text_first_h).max(0.0);
+    let (first_nested, rest_nested) =
+        split_nested_rows_at(&cell.layout.content.children, nested_avail);
 
     let mut first = cell.clone();
-    first.lines = first.lines[..cut.min(first.lines.len())].to_vec();
-    first.nested_rows = first_nested;
-    first.border.bottom.width = 0.0;
-    first.padding_bottom = 0.0;
-    first.min_content_height = first_h;
-    if let Some(inset) = &mut first.grid_inset {
-        inset.height = first_h;
-        inset.offset_y = inset.offset_y.min(first_h);
+    first.layout.content.lines =
+        first.layout.content.lines[..cut.min(first.layout.content.lines.len())].to_vec();
+    first.layout.content.children = first_nested;
+    first.layout.box_model.border.bottom.width = 0.0;
+    first.layout.box_model.content_insets.bottom = 0.0;
+    first.layout.box_model.minimum_block_size = first_h;
+    if let Some(inset) = &mut first.placement.inset {
+        inset.size.height = first_h;
+        inset.offset.y = inset.offset.y.min(first_h);
     }
 
     let mut rest = cell.clone();
-    let cut = cut.min(rest.lines.len());
-    rest.lines = rest.lines[cut..].to_vec();
-    rest.nested_rows = rest_nested;
-    rest.border.top.width = 0.0;
-    rest.padding_top = 0.0;
-    let rest_intrinsic_h = rest.padding_top
-        + rest.lines.iter().map(|line| line.height).sum::<f32>()
+    let cut = cut.min(rest.layout.content.lines.len());
+    rest.layout.content.lines = rest.layout.content.lines[cut..].to_vec();
+    rest.layout.content.children = rest_nested;
+    rest.layout.box_model.border.top.width = 0.0;
+    rest.layout.box_model.content_insets.top = 0.0;
+    let rest_intrinsic_h = rest.layout.box_model.content_insets.top
         + rest
-            .nested_rows
+            .layout
+            .content
+            .lines
             .iter()
-            .map(estimate_element_height)
+            .map(|line| line.height)
             .sum::<f32>()
-        + rest.padding_bottom;
-    let adjusted_rest_intrinsic_h = if rest.lines.is_empty() && !rest.nested_rows.is_empty() {
-        rest_intrinsic_h * 1.07
-    } else {
-        rest_intrinsic_h
-    };
-    let adjusted_rest_h = if adjusted_rest_intrinsic_h > 0.5 {
-        rest_h.min(adjusted_rest_intrinsic_h)
-    } else {
-        rest_h
-    };
-    rest.min_content_height = adjusted_rest_h;
-    if let Some(inset) = &mut rest.grid_inset {
-        inset.height = adjusted_rest_h;
-        inset.offset_y = 0.0;
+        + rest
+            .layout
+            .content
+            .children
+            .iter()
+            .map(|row| estimate_element_height(row.as_ref()))
+            .sum::<f32>()
+        + rest.layout.box_model.content_insets.bottom;
+    let adjusted_rest_h =
+        if cell.placement.row_span == 1 && is_positive_with_roundoff(rest_intrinsic_h) {
+            rest_intrinsic_h
+        } else {
+            rest_h
+        };
+    rest.layout.box_model.minimum_block_size = adjusted_rest_h;
+    if let Some(inset) = &mut rest.placement.inset {
+        inset.size.height = adjusted_rest_h;
+        inset.offset.y = 0.0;
     }
 
     (first, rest)
 }
 
 fn split_grid_row(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::GridRow {
-        cells,
-        padding_top,
-        border,
-        ..
-    } = element
-    else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_grid_row(&mut self, element: &GridRow) {
+            self.result = split_grid_row_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
-    let row_h = cells
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_grid_row_node(
+    element: &GridRow,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    let row_h = element
+        .content
+        .cells
         .iter()
-        .map(|cell| cell.min_content_height)
+        .map(|cell| cell.layout.box_model.minimum_block_size)
         .fold(0.0_f32, f32::max);
-    let available_row_h = avail_below_box_top - border.top.width - *padding_top;
-    if row_h <= 1.0 || available_row_h <= 1.0 || row_h <= available_row_h + 0.5 {
+    let available_row_h =
+        avail_below_box_top - element.box_model.border.top.width - element.box_model.padding.top;
+    if !is_positive_with_roundoff(row_h)
+        || !is_positive_with_roundoff(available_row_h)
+        || !exceeds_with_roundoff(row_h, available_row_h)
+    {
         return None;
     }
 
-    let first_h = available_row_h.min(row_h - 1.0).max(1.0);
-    let rest_h = (row_h - first_h).max(0.0);
-    if rest_h <= 0.5 {
-        return None;
-    }
+    let first_h = available_row_h.min(row_h).max(0.0);
+    let rest_h = split_remainder(row_h, first_h)?;
 
-    let split_cells: Vec<(TableCell, TableCell)> = cells
+    let split_cells: Vec<(GridCell, GridCell)> = element
+        .content
+        .cells
         .iter()
         .map(|cell| split_grid_cell(cell, first_h, rest_h))
         .collect();
 
     let mut first = element.clone();
-    if let LayoutElement::GridRow {
-        cells,
-        margin_bottom,
-        padding_bottom,
-        border,
-        ..
-    } = &mut first
-    {
-        *cells = split_cells.iter().map(|(cell, _)| cell.clone()).collect();
-        *margin_bottom = 0.0;
-        *padding_bottom = 0.0;
-        border.bottom.width = 0.0;
-    }
+    first.content.cells = split_cells.iter().map(|(cell, _)| cell.clone()).collect();
+    first.box_model.margins.end = 0.0;
+    first.box_model.padding.bottom = 0.0;
+    first.box_model.border.bottom.width = 0.0;
 
     let mut rest = element.clone();
-    if let LayoutElement::GridRow {
-        cells,
-        margin_top,
-        padding_top,
-        border,
-        ..
-    } = &mut rest
-    {
-        *cells = split_cells.into_iter().map(|(_, cell)| cell).collect();
-        *margin_top = 0.0;
-        *padding_top = 0.0;
-        border.top.width = 0.0;
-    }
+    rest.content.cells = split_cells.into_iter().map(|(_, cell)| cell).collect();
+    rest.box_model.margins.start = 0.0;
+    rest.box_model.padding.top = 0.0;
+    rest.box_model.border.top.width = 0.0;
 
-    Some((first, rest))
+    Some((Box::new(first), Box::new(rest)))
 }
 
 /// Split a table row that is taller than the current fragmentainer. CSS Tables
@@ -1454,40 +1437,61 @@ fn split_grid_row(
 /// default `box-decoration-break: slice` the first fragment keeps the top
 /// border/padding and the continuation keeps the bottom edge.
 fn split_table_row(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::TableRow { cells, .. } = element else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_table_row(&mut self, element: &TableRow) {
+            self.result = split_table_row_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
-    let row_h = cells
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_table_row_node(
+    element: &TableRow,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    let row_h = element
+        .content
+        .cells
         .iter()
         .map(table_cell_content_height)
         .fold(0.0f32, f32::max);
-    if row_h <= 1.0 || avail_below_box_top <= 1.0 || row_h <= avail_below_box_top + 0.5 {
+    if !is_positive_with_roundoff(row_h)
+        || !is_positive_with_roundoff(avail_below_box_top)
+        || !exceeds_with_roundoff(row_h, avail_below_box_top)
+    {
         return None;
     }
 
-    let consumed_h = avail_below_box_top.min(row_h - 1.0).max(1.0);
-    let rest_h = (row_h - consumed_h).max(0.0);
-    if rest_h <= 0.5 {
-        return None;
-    }
-    let top_edge_bleed = cells
-        .iter()
-        .map(|cell| cell.border.top.width)
-        .fold(0.0f32, f32::max)
-        / 2.0;
-    let first_painted_h = (consumed_h - top_edge_bleed).max(1.0);
+    let consumed_h = avail_below_box_top.min(row_h).max(0.0);
+    let rest_h = split_remainder(row_h, consumed_h)?;
+    // A sliced cell fragment occupies every available point up to the page
+    // edge. Its retained top edge is painted within that fragment; subtracting
+    // half the border here loses real content height and leaves a visible gap
+    // at the fragmentainer boundary.
+    let first_painted_h = consumed_h;
 
-    let mut line_cut_by_cell: Vec<usize> = Vec::with_capacity(cells.len());
-    for cell in cells {
-        let available_lines = (first_painted_h - cell.padding_top).max(0.0);
+    let mut line_cut_by_cell = Vec::with_capacity(element.content.cells.len());
+    for cell in &element.content.cells {
+        let available_lines = (first_painted_h - cell.layout.box_model.content_insets.top).max(0.0);
         let mut acc = 0.0f32;
         let mut cut = 0usize;
-        for (idx, line) in cell.lines.iter().enumerate() {
+        for (idx, line) in cell.layout.content.lines.iter().enumerate() {
             let next = acc + line.height;
-            if idx > 0 && next > available_lines + 0.01 {
+            if idx > 0 && exceeds_with_roundoff(next, available_lines) {
                 break;
             }
             acc = next;
@@ -1497,109 +1501,57 @@ fn split_table_row(
     }
 
     let mut first = element.clone();
-    if let LayoutElement::TableRow {
-        cells: first_cells,
-        margin_bottom,
-        ..
-    } = &mut first
-    {
-        *margin_bottom = 0.0;
-        for (cell, &cut) in first_cells.iter_mut().zip(&line_cut_by_cell) {
-            cell.lines = cell.lines[..cut.min(cell.lines.len())].to_vec();
-            cell.nested_rows.clear();
-            cell.border.bottom.width = 0.0;
-            cell.padding_bottom = 0.0;
-            cell.min_content_height = first_painted_h;
-        }
+    first.flow.margins.end = 0.0;
+    first.flow.internal.end = 0.0;
+    first.flow.extra_end = 0.0;
+    for (cell, &cut) in first.content.cells.iter_mut().zip(&line_cut_by_cell) {
+        cell.layout.content.lines =
+            cell.layout.content.lines[..cut.min(cell.layout.content.lines.len())].to_vec();
+        cell.layout.content.children.clear();
+        cell.layout.box_model.border.bottom.width = 0.0;
+        cell.layout.box_model.border_insets.bottom = 0.0;
+        cell.layout.box_model.content_insets.bottom = 0.0;
+        cell.layout.box_model.minimum_block_size = first_painted_h;
+        cell.table.collapsed_outer_edges.bottom = false;
     }
 
     let mut rest = element.clone();
-    if let LayoutElement::TableRow {
-        cells: rest_cells,
-        margin_top,
-        ..
-    } = &mut rest
-    {
-        *margin_top = 0.0;
-        for (cell, &cut) in rest_cells.iter_mut().zip(&line_cut_by_cell) {
-            let cut = cut.min(cell.lines.len());
-            cell.lines = cell.lines[cut..].to_vec();
-            cell.nested_rows.clear();
-            cell.border.top.width = 0.0;
-            cell.padding_top = 0.0;
-            cell.min_content_height = rest_h;
-        }
+    rest.flow.margins.start = 0.0;
+    rest.flow.internal.start = 0.0;
+    for (cell, &cut) in rest.content.cells.iter_mut().zip(&line_cut_by_cell) {
+        let cut = cut.min(cell.layout.content.lines.len());
+        cell.layout.content.lines = cell.layout.content.lines[cut..].to_vec();
+        cell.layout.content.children.clear();
+        cell.layout.box_model.border.top.width = 0.0;
+        cell.layout.box_model.border_insets.top = 0.0;
+        cell.layout.box_model.content_insets.top = 0.0;
+        cell.layout.box_model.minimum_block_size = rest_h;
+        cell.table.collapsed_outer_edges.top = false;
     }
 
-    Some((first, rest))
+    Some((Box::new(first), Box::new(rest)))
 }
 
-/// Split a wrapped row-direction flex container at a flex-line boundary. Flex
-/// lines are class-A break opportunities between sibling flex items; keeping
-/// the cells grouped by their `y_offset` preserves each line's internal
-/// main-axis layout while allowing the flex container's border/background to
-/// continue on the next fragmentainer.
-fn split_flex_row(
-    element: &LayoutElement,
-    avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::FlexRow {
-        cells,
-        row_height,
-        border,
-        padding_top,
-        padding_bottom: _,
-        ..
-    } = element
-    else {
-        return None;
-    };
-    if cells.is_empty() || *row_height <= 1.0 || avail_below_box_top <= 1.0 {
-        return None;
-    }
-    let avail_inner = (avail_below_box_top - border.top.width - *padding_top).max(0.0);
-    if *row_height <= avail_inner + 0.5 {
-        return None;
-    }
-
-    let mut line_tops: Vec<f32> = cells.iter().map(|cell| cell.y_offset).collect();
-    line_tops.sort_by(f32::total_cmp);
-    line_tops.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
-    if line_tops.len() <= 1 {
-        return None;
-    }
-
-    let line_extent = |line_top: f32| -> f32 {
-        cells
-            .iter()
-            .filter(|cell| (cell.y_offset - line_top).abs() <= 0.5)
-            .map(|cell| {
-                if cell.line_cross_size > 0.0 {
-                    cell.line_cross_size
-                } else {
-                    cell.natural_height
-                }
-            })
-            .fold(0.0_f32, f32::max)
-    };
-
-    let mut cut_y = None;
-    for (idx, &top) in line_tops.iter().enumerate() {
-        let bottom = top + line_extent(top);
-        if idx > 0 && bottom > avail_inner + 0.5 {
-            cut_y = Some(top);
-            break;
-        }
-    }
-    let cut_y = cut_y?;
-    if cut_y <= 0.5 || cut_y >= *row_height - 0.5 {
+/// Slice a row-direction flex container at a flex-line boundary. Cells retain
+/// their main-axis geometry while the continuation is rebased to its own
+/// cross-axis origin; the container decoration follows `box-decoration-break:
+/// slice`.
+fn split_flex_row_at_line(
+    element: &FlexRow,
+    cut_y: f32,
+    first_row_height: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    if element.content.cells.is_empty()
+        || !is_positive_with_roundoff(cut_y)
+        || !exceeds_with_roundoff(element.content.row_height, cut_y)
+    {
         return None;
     }
 
     let mut first_cells = Vec::new();
     let mut rest_cells = Vec::new();
-    for cell in cells {
-        if cell.y_offset < cut_y - 0.5 {
+    for cell in &element.content.cells {
+        if exceeds_with_roundoff(cut_y, cell.y_offset) {
             first_cells.push(cell.clone());
         } else {
             let mut rest = cell.clone();
@@ -1612,40 +1564,103 @@ fn split_flex_row(
     }
 
     let mut first = element.clone();
-    if let LayoutElement::FlexRow {
-        cells,
-        row_height,
-        margin_bottom,
-        padding_bottom,
-        border,
-        ..
-    } = &mut first
-    {
-        *cells = first_cells;
-        *row_height = (avail_below_box_top - border.top.width - *padding_top).max(cut_y);
-        *margin_bottom = 0.0;
-        *padding_bottom = 0.0;
-        border.bottom.width = 0.0;
-    }
+    first
+        .content
+        .forced_line_breaks
+        .retain(|marker| first_cells.iter().any(|cell| cell.line_id == marker.before));
+    first.content.cells = first_cells;
+    first.content.row_height = first_row_height.max(cut_y);
+    first.box_model.margins.end = 0.0;
+    first.box_model.padding.bottom = 0.0;
+    first.box_model.border.bottom.width = 0.0;
 
     let mut rest = element.clone();
-    if let LayoutElement::FlexRow {
-        cells,
-        row_height,
-        margin_top,
-        padding_top,
-        border,
-        ..
-    } = &mut rest
-    {
-        *cells = rest_cells;
-        *row_height = (*row_height - cut_y).max(0.0);
-        *margin_top = 0.0;
-        *padding_top = 0.0;
-        border.top.width = 0.0;
+    rest.content
+        .forced_line_breaks
+        .retain(|marker| rest_cells.iter().any(|cell| cell.line_id == marker.before));
+    rest.content.cells = rest_cells;
+    rest.content.row_height = (rest.content.row_height - cut_y).max(0.0);
+    rest.box_model.margins.start = 0.0;
+    rest.box_model.padding.top = 0.0;
+    rest.box_model.border.top.width = 0.0;
+
+    Some((Box::new(first), Box::new(rest)))
+}
+
+/// Split a wrapped row-direction flex container at the first class-A line
+/// boundary that no longer fits in the current fragmentainer.
+fn split_flex_row(
+    element: &dyn LayoutElement,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
     }
 
-    Some((first, rest))
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_flex_row(&mut self, element: &FlexRow) {
+            self.result = split_flex_row_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
+    };
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_flex_row_node(
+    element: &FlexRow,
+    avail_below_box_top: f32,
+) -> Option<(LayoutNode, LayoutNode)> {
+    if element.content.cells.is_empty()
+        || !is_positive_with_roundoff(element.content.row_height)
+        || !is_positive_with_roundoff(avail_below_box_top)
+    {
+        return None;
+    }
+    let avail_inner =
+        (avail_below_box_top - element.box_model.border.top.width - element.box_model.padding.top)
+            .max(0.0);
+    if !exceeds_with_roundoff(element.content.row_height, avail_inner) {
+        return None;
+    }
+
+    let mut line_tops: Vec<f32> = element
+        .content
+        .cells
+        .iter()
+        .map(|cell| cell.y_offset)
+        .collect();
+    line_tops.sort_by(f32::total_cmp);
+    line_tops.dedup_by(|a, b| equal_with_roundoff(*a, *b));
+    if line_tops.len() <= 1 {
+        return None;
+    }
+
+    let line_extent = |line_top: f32| -> f32 {
+        element
+            .content
+            .cells
+            .iter()
+            .filter(|cell| equal_with_roundoff(cell.y_offset, line_top))
+            .map(|cell| {
+                if cell.line_cross_size > 0.0 {
+                    cell.line_cross_size
+                } else {
+                    cell.natural_height
+                }
+            })
+            .fold(0.0_f32, f32::max)
+    };
+
+    let cut_y = line_tops.iter().enumerate().find_map(|(idx, &top)| {
+        (idx > 0 && exceeds_with_roundoff(top + line_extent(top), avail_inner)).then_some(top)
+    })?;
+    split_flex_row_at_line(element, cut_y, avail_inner)
 }
 
 /// Split a too-tall in-flow `Container` between its children (CSS Fragmentation 3
@@ -1671,33 +1686,47 @@ fn split_flex_row(
 /// leaving it whole to clip), so a deeply nested too-tall box still fragments
 /// across pages instead of losing data.
 fn split_container(
-    element: &LayoutElement,
+    element: &dyn LayoutElement,
     avail_below_box_top: f32,
-) -> Option<(LayoutElement, LayoutElement)> {
-    let LayoutElement::Container {
-        children,
-        border,
-        padding_top,
-        padding_bottom,
-        block_height,
-        overflow,
-        position,
-        float,
-        box_decoration_break,
-        ..
-    } = element
-    else {
-        return None;
+) -> Option<(LayoutNode, LayoutNode)> {
+    struct SplitVisitor {
+        available: f32,
+        result: Option<(LayoutNode, LayoutNode)>,
+    }
+
+    impl LayoutVisitor for SplitVisitor {
+        fn visit_container(&mut self, element: &Container) {
+            self.result = split_container_node(element, self.available)
+                .map(|(before, after)| (before.boxed(), after.boxed()));
+        }
+
+        fn visit_table(&mut self, element: &Table) {
+            self.result = split_table_node(element, self.available);
+        }
+    }
+
+    let mut visitor = SplitVisitor {
+        available: avail_below_box_top,
+        result: None,
     };
+    element.accept(&mut visitor);
+    visitor.result
+}
+
+fn split_container_node(
+    element: &Container,
+    avail_below_box_top: f32,
+) -> Option<(Container, Container)> {
+    let children = &element.children;
     // Only a plain, auto-height, in-flow container is splittable here. A definite
     // `height` or `overflow` clip makes it a hard-sized/monolithic box; a
     // positioned/floated box is out of normal flow; an empty box has nothing to
     // fragment. A single-child box has no between-children break point but may
     // still be split by RECURSING into that one (too-tall) child below.
-    if block_height.is_some()
-        || overflow.clips()
-        || *position != Position::Static
-        || *float != Float::None
+    if element.box_model.size.height.is_definite()
+        || element.overflow.combined.clips()
+        || element.positioning.scheme != Position::Static
+        || element.flow.float != Float::None
         || children.is_empty()
     {
         return None;
@@ -1707,19 +1736,24 @@ fn split_container(
     // must not become a break boundary or move to the continuation independently.
     // Keep the split path to the simple all-in-flow case; anything else is placed
     // whole (unchanged behavior).
-    if children.iter().any(element_is_absolute) {
+    if children
+        .iter()
+        .any(|child| element_is_out_of_flow(child.as_ref()))
+    {
         return None;
     }
 
-    let clone = *box_decoration_break == BoxDecorationBreak::Clone;
+    let clone = element.fragmentation.decoration == BoxDecorationBreak::Clone;
 
     // Content-box height available for children on this page: below the box's
     // border-box top, minus the top border + top padding (and, under `clone`, the
     // bottom border + bottom padding the fragment also carries).
     let avail_children = if clone {
-        avail_below_box_top - border.vertical_width() - padding_top - padding_bottom
+        avail_below_box_top
+            - element.box_model.border.vertical_width()
+            - element.box_model.padding.vertical()
     } else {
-        avail_below_box_top - border.top.width - padding_top
+        avail_below_box_top - element.box_model.border.top.width - element.box_model.padding.top
     };
 
     // The page-fit check that brought us here sums the children's outer heights
@@ -1729,8 +1763,7 @@ fn split_container(
     // (`simulate_block_flow`): if the children genuinely fit, the box is not
     // overflowing — place it whole (unchanged behaviour) rather than spuriously
     // fragmenting a box that lands on a single page in Chrome.
-    const FRAG_EPSILON: f32 = 0.5;
-    if simulate_block_flow(children).height <= avail_children + FRAG_EPSILON {
+    if !exceeds_with_roundoff(simulate_block_flow(children).height, avail_children) {
         return None;
     }
 
@@ -1741,7 +1774,7 @@ fn split_container(
     let mut acc = 0.0f32;
     let mut idx = 0usize;
     for (i, child) in children.iter().enumerate() {
-        let next = acc + estimate_element_height(child);
+        let next = acc + estimate_element_height(child.as_ref());
         if i > 0 && next > avail_children {
             break;
         }
@@ -1757,13 +1790,17 @@ fn split_container(
     // the same splitter — so its head fills this page and its tail continues. Only
     // the first child can be the too-tall one (every later kept child fit), so this
     // single check covers every nested-too-tall case (CSS Fragmentation 3 §3).
-    let first_child_h = estimate_element_height(&children[0]);
+    let first_child_h = estimate_element_height(children[0].as_ref());
     let (f_children_vec, r_children_vec) = if idx == 1 && first_child_h > avail_children {
         let first_child = &children[0];
         // The child's border-box top sits at the container's content-box top plus
         // its own margin-top, so it has that much less room than the content box.
-        let child_avail = avail_children - element_margins(first_child).0;
-        match split_element(first_child, child_avail) {
+        let child_avail = avail_children
+            - first_child
+                .margin_holder()
+                .map(|holder| holder.margins().start)
+                .unwrap_or_default();
+        match split_element(first_child.as_ref(), child_avail) {
             Some((c_first, c_rest)) => {
                 let mut rest_children = vec![c_rest];
                 rest_children.extend_from_slice(&children[1..]);
@@ -1778,9 +1815,13 @@ fn split_container(
         }
     } else if idx < children.len() {
         let next_child = &children[idx];
-        let child_avail = (avail_children - acc - element_margins(next_child).0).max(0.0);
-        if child_avail > 1.0 && matches!(next_child, LayoutElement::GridRow { .. }) {
-            if let Some((c_first, c_rest)) = split_element(next_child, child_avail) {
+        let margin_start = next_child
+            .margin_holder()
+            .map(|holder| holder.margins().start)
+            .unwrap_or_default();
+        let child_avail = (avail_children - acc - margin_start).max(0.0);
+        if is_positive_with_roundoff(child_avail) && is_grid_row(next_child.as_ref()) {
+            if let Some((c_first, c_rest)) = split_element(next_child.as_ref(), child_avail) {
                 let mut first_children = children[..idx].to_vec();
                 first_children.push(c_first);
                 let mut rest_children = vec![c_rest];
@@ -1804,72 +1845,142 @@ fn split_container(
     // `slice` drop the bottom border/padding/margin (box stays open at the page
     // bottom); under `clone` keep the full decoration so the fragment closes.
     let mut first = element.clone();
-    if let LayoutElement::Container {
-        children: f_children,
-        margin_bottom: f_mb,
-        padding_bottom: f_pb,
-        border: f_border,
-        border_radii: f_radii,
-        border_radii_y: f_radii_y,
-        block_height: f_bh,
-        ..
-    } = &mut first
-    {
-        *f_children = f_children_vec;
-        if !clone {
-            *f_mb = 0.0;
-            *f_pb = 0.0;
-            f_border.bottom.width = 0.0;
-            // css-break-3 §5.4: under `slice` the fragmentation CUT edge is
-            // square — only the box's real corners stay rounded. This fragment's
-            // bottom edge is the cut, so drop the bottom-right/bottom-left radii.
-            f_radii[2] = 0.0;
-            f_radii[3] = 0.0;
-            f_radii_y[2] = 0.0;
-            f_radii_y[3] = 0.0;
-            // A box that continues onto the next fragmentainer occupies the FULL
-            // remaining height of THIS one: its background and left/right borders
-            // extend to the page bottom even though the children only fill part of
-            // it (css-break-3 — the box is sliced at the fragmentainer edge, not
-            // shrink-wrapped to the children that landed on this page). Pin the
-            // first fragment's border-box height to that remaining space so the
-            // background/side-borders reach the page bottom, matching Chrome. The
-            // last fragment keeps auto height (block_height stays None) so it ends
-            // at its natural content + bottom decoration.
-            *f_bh = Some(avail_below_box_top);
-        }
+    first.children = f_children_vec;
+    if !clone {
+        first.box_model.margins.end = 0.0;
+        first.box_model.padding.bottom = 0.0;
+        first.box_model.border.bottom.width = 0.0;
+        // css-break-3 §5.4: under `slice` the fragmentation CUT edge is
+        // square — only the box's real corners stay rounded. This fragment's
+        // bottom edge is the cut, so drop the bottom-right/bottom-left radii.
+        first.paint.border_radii = first.paint.border_radii.clear_bottom();
+        // A box that continues onto the next fragmentainer occupies the FULL
+        // remaining height of THIS one: its background and left/right borders
+        // extend to the page bottom even though the children only fill part of
+        // it (css-break-3 — the box is sliced at the fragmentainer edge, not
+        // shrink-wrapped to the children that landed on this page). Pin the
+        // first fragment's border-box height to that remaining space so the
+        // background/side-borders reach the page bottom, matching Chrome. The
+        // last fragment keeps auto height (block_height stays None) so it ends
+        // at its natural content + bottom decoration.
+        first.box_model.size.height = BlockSize::fragment(avail_below_box_top);
     }
 
     // Continuation: the remaining children. Under `slice` drop the top
     // margin/border/padding (the open box continues) and keep the bottom so the
     // LAST fragment closes it; under `clone` keep the full decoration.
     let mut rest = element.clone();
-    if let LayoutElement::Container {
-        children: r_children,
-        margin_top: r_mt,
-        padding_top: r_pt,
-        border: r_border,
-        border_radii: r_radii,
-        border_radii_y: r_radii_y,
-        ..
-    } = &mut rest
-    {
-        *r_children = r_children_vec;
-        if !clone {
-            *r_mt = 0.0;
-            *r_pt = 0.0;
-            r_border.top.width = 0.0;
-            // css-break-3 §5.4: the continuation's TOP edge is the cut, so it is
-            // square — drop the top-left/top-right radii (the original bottom
-            // corners stay rounded so the LAST fragment closes the box).
-            r_radii[0] = 0.0;
-            r_radii[1] = 0.0;
-            r_radii_y[0] = 0.0;
-            r_radii_y[1] = 0.0;
+    rest.children = r_children_vec;
+    rest.box_model.size.height = BlockSize::AUTO;
+    if !clone {
+        rest.box_model.margins.start = 0.0;
+        rest.box_model.padding.top = 0.0;
+        rest.box_model.border.top.width = 0.0;
+        // css-break-3 §5.4: the continuation's TOP edge is the cut, so it is
+        // square — drop the top-left/top-right radii (the original bottom
+        // corners stay rounded so the LAST fragment closes the box).
+        rest.paint.border_radii = rest.paint.border_radii.clear_top();
+    }
+
+    retain_reference_box(element, &mut first, &mut rest);
+
+    Some((first, rest))
+}
+
+fn split_table_node(element: &Table, avail_below_box_top: f32) -> Option<(LayoutNode, LayoutNode)> {
+    let principal = &element.principal;
+    let headers = principal
+        .children
+        .iter()
+        .filter(|child| table_row_pagination_state(child.as_ref()).is_header)
+        .cloned()
+        .collect::<Vec<_>>();
+    let footers = principal
+        .children
+        .iter()
+        .filter(|child| table_row_pagination_state(child.as_ref()).is_footer)
+        .cloned()
+        .collect::<Vec<_>>();
+    let footer_extent = footers
+        .iter()
+        .map(|footer| estimate_element_height(footer.as_ref()))
+        .sum::<f32>();
+    let has_body_rows = principal.children.iter().any(|child| {
+        let row = table_row_pagination_state(child.as_ref());
+        row.is_row && !row.is_header && !row.is_footer
+    });
+    let available_before_footer = if has_body_rows && !footers.is_empty() {
+        (avail_below_box_top - footer_extent).max(0.0)
+    } else {
+        avail_below_box_top
+    };
+    let (mut before, mut after) = split_container_node(principal, available_before_footer)?;
+
+    // A row-group with break-inside:avoid moves as a unit when the tentative
+    // cut falls inside it. The table header remains on the preceding fragment;
+    // this is a group keep-together break, not a normal mid-table continuation.
+    let continuation_avoid_group = after.children.iter().find_map(|child| {
+        let row = table_row_pagination_state(child.as_ref());
+        row.is_row.then_some(row.avoid_group).flatten()
+    });
+    let mut kept_group_together = false;
+    if let Some(group) = continuation_avoid_group {
+        let trailing_group_start = before
+            .children
+            .iter()
+            .rposition(|child| {
+                let row = table_row_pagination_state(child.as_ref());
+                !row.is_row || row.avoid_group != Some(group)
+            })
+            .map_or(0, |index| index + 1);
+        if trailing_group_start < before.children.len() {
+            let moved = before.children.split_off(trailing_group_start);
+            if !moved.is_empty() {
+                let mut continuation = moved;
+                continuation.append(&mut after.children);
+                after.children = continuation;
+                kept_group_together = true;
+            }
         }
     }
 
-    Some((first, rest))
+    let first_has_footer = before
+        .children
+        .iter()
+        .any(|child| table_row_pagination_state(child.as_ref()).is_footer);
+    if !first_has_footer {
+        before.children.extend(footers.iter().cloned());
+    }
+
+    let continuation_has_header = after
+        .children
+        .iter()
+        .any(|child| table_row_pagination_state(child.as_ref()).is_header);
+    if !kept_group_together && !continuation_has_header && !headers.is_empty() {
+        let first_row = after
+            .children
+            .iter()
+            .position(|child| table_row_pagination_state(child.as_ref()).is_row)
+            .unwrap_or(after.children.len());
+        after.children.splice(first_row..first_row, headers);
+    }
+
+    Some((Table::new(before).boxed(), Table::new(after).boxed()))
+}
+
+fn is_grid_row(element: &dyn LayoutElement) -> bool {
+    #[derive(Default)]
+    struct GridRowVisitor(bool);
+
+    impl LayoutVisitor for GridRowVisitor {
+        fn visit_grid_row(&mut self, _element: &GridRow) {
+            self.0 = true;
+        }
+    }
+
+    let mut visitor = GridRowVisitor::default();
+    element.accept(&mut visitor);
+    visitor.0
 }
 
 /// Geometry override for the first page (CSS Paged Media 3 §3.3 `@page :first`).
@@ -1930,23 +2041,486 @@ pub(crate) struct NamedPageGeom {
     pub page_size: PageSize,
 }
 
+/// Document page geometry that stays constant outside named-page overrides.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DocumentPageGeometry {
+    pub content_height: f32,
+    pub page_height: f32,
+    pub root_margin_top: f32,
+}
+
+impl DocumentPageGeometry {
+    pub(crate) const fn new(content_height: f32, page_height: f32, root_margin_top: f32) -> Self {
+        Self {
+            content_height,
+            page_height,
+            root_margin_top,
+        }
+    }
+}
+
+/// An element waiting for pagination, tagged when it is the tail of an
+/// already-started internal fragment. A continuation keeps fragmenting against
+/// the content box even after its remaining height falls below the physical
+/// page height.
+struct PendingElement {
+    element: LayoutNode,
+    is_fragment_continuation: bool,
+    /// Adjacent class-A boxes that must stay together when they fit a fresh
+    /// page. The group is still paginated element by element once admitted, so
+    /// normal painting and flow stay unchanged.
+    avoid_group: Option<AvoidBreakGroup>,
+}
+
+impl PendingElement {
+    fn fresh(element: LayoutNode) -> Self {
+        Self {
+            element,
+            is_fragment_continuation: false,
+            avoid_group: None,
+        }
+    }
+
+    fn continuation(element: LayoutNode) -> Self {
+        Self {
+            element,
+            is_fragment_continuation: true,
+            avoid_group: None,
+        }
+    }
+}
+
+/// The parts of an in-flow box that matter while judging an avoided break.
+/// Keeping margins separate lets the group use the same collapse rule as the
+/// normal pagination loop instead of double-counting adjacent vertical gaps.
+#[derive(Debug, Clone, Copy)]
+struct FlowBoxMetrics {
+    content_height: f32,
+    margins: BlockMargins,
+}
+
+impl FlowBoxMetrics {
+    fn from_element(element: &dyn LayoutElement) -> Option<Self> {
+        if element_is_out_of_flow(element) {
+            return None;
+        }
+        let margins = *element.margin_holder()?.margins();
+        Some(Self {
+            content_height: (estimate_element_height(element) - margins.total()).max(0.0),
+            margins,
+        })
+    }
+}
+
+fn collapse_vertical_margins(previous: f32, next: f32) -> f32 {
+    if previous >= 0.0 && next >= 0.0 {
+        previous.max(next)
+    } else if previous < 0.0 && next < 0.0 {
+        previous.min(next)
+    } else {
+        previous + next
+    }
+}
+
+/// A run of in-flow boxes connected by `break-before/after: avoid`.
+#[derive(Debug, Clone)]
+struct AvoidBreakGroup {
+    first: FlowBoxMetrics,
+    following: Vec<FlowBoxMetrics>,
+}
+
+impl AvoidBreakGroup {
+    fn fresh_page_height(&self) -> f32 {
+        self.height_from_first(self.first.margins.start + self.first.content_height)
+    }
+
+    fn height_from_first(&self, first_height: f32) -> f32 {
+        self.following
+            .iter()
+            .fold(
+                (
+                    first_height - self.first.margins.end,
+                    self.first.margins.end,
+                ),
+                |(height, previous), next| {
+                    (
+                        height
+                            + collapse_vertical_margins(previous, next.margins.start)
+                            + next.content_height
+                            + next.margins.end,
+                        next.margins.end,
+                    )
+                },
+            )
+            .0
+    }
+}
+
+fn prepare_pagination_work(elements: Vec<LayoutNode>) -> VecDeque<PendingElement> {
+    let mut work = Vec::new();
+    let mut flow_indexes = Vec::new();
+    let mut joins_previous = Vec::new();
+    let mut avoid_next_flow = false;
+    let mut has_previous_flow = false;
+
+    for element in elements {
+        if is_avoid_page_break(element.as_ref()) {
+            avoid_next_flow = true;
+            continue;
+        }
+        if page_break_data(element.as_ref()).is_some() {
+            work.push(PendingElement::fresh(element));
+            avoid_next_flow = false;
+            has_previous_flow = false;
+            continue;
+        }
+
+        let flow_metrics = FlowBoxMetrics::from_element(&element);
+        let index = work.len();
+        work.push(PendingElement::fresh(element));
+        if flow_metrics.is_some() {
+            flow_indexes.push(index);
+            joins_previous.push(avoid_next_flow && has_previous_flow);
+            avoid_next_flow = false;
+            has_previous_flow = true;
+        }
+    }
+
+    let mut group_start = 0;
+    while group_start < flow_indexes.len() {
+        let mut group_end = group_start + 1;
+        while group_end < flow_indexes.len() && joins_previous[group_end] {
+            group_end += 1;
+        }
+        if group_end - group_start > 1 {
+            let first_index = flow_indexes[group_start];
+            let first = FlowBoxMetrics::from_element(&work[first_index].element);
+            let following = flow_indexes[group_start + 1..group_end]
+                .iter()
+                .filter_map(|&index| FlowBoxMetrics::from_element(&work[index].element))
+                .collect::<Vec<_>>();
+            if let Some(first) = first.filter(|_| !following.is_empty()) {
+                work[first_index].avoid_group = Some(AvoidBreakGroup { first, following });
+            }
+        }
+        group_start = group_end;
+    }
+    work.into()
+}
+
+fn is_avoid_page_break(element: &dyn LayoutElement) -> bool {
+    #[derive(Default)]
+    struct AvoidVisitor(bool);
+
+    impl LayoutVisitor for AvoidVisitor {
+        fn visit_avoid_page_break(&mut self, _element: &crate::layout::elements::AvoidPageBreak) {
+            self.0 = true;
+        }
+    }
+
+    let mut visitor = AvoidVisitor::default();
+    element.accept(&mut visitor);
+    visitor.0
+}
+
+fn page_break_data(element: &dyn LayoutElement) -> Option<(PageBreakSide, Option<String>)> {
+    #[derive(Default)]
+    struct BreakVisitor(Option<(PageBreakSide, Option<String>)>);
+
+    impl LayoutVisitor for BreakVisitor {
+        fn visit_page_break(&mut self, element: &crate::layout::elements::PageBreak) {
+            self.0 = Some((element.side, element.page_name.clone()));
+        }
+    }
+
+    let mut visitor = BreakVisitor::default();
+    element.accept(&mut visitor);
+    visitor.0
+}
+
+#[derive(Default)]
+struct PageStateMarker {
+    running: Option<(String, LayoutNode)>,
+    named: Option<(String, String)>,
+}
+
+impl LayoutVisitor for PageStateMarker {
+    fn visit_running_element(&mut self, element: &RunningElement) {
+        self.running = Some((element.name.clone(), element.element.clone()));
+    }
+
+    fn visit_named_string(&mut self, element: &NamedString) {
+        self.named = Some((element.name.clone(), element.value.clone()));
+    }
+}
+
+fn page_state_marker(element: &dyn LayoutElement) -> PageStateMarker {
+    let mut marker = PageStateMarker::default();
+    element.accept(&mut marker);
+    marker
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TableRowPaginationState {
+    is_row: bool,
+    is_header: bool,
+    is_footer: bool,
+    avoid_inside: bool,
+    avoid_group: Option<TableFragmentGroup>,
+}
+
+impl LayoutVisitor for TableRowPaginationState {
+    fn visit_table_row(&mut self, element: &TableRow) {
+        self.is_row = true;
+        self.is_header = element.fragmentation.repeats_as_header;
+        self.is_footer = element.fragmentation.repeats_as_footer;
+        self.avoid_inside = element.fragmentation.avoid_inside;
+        self.avoid_group = element.fragmentation.avoid_group;
+    }
+}
+
+fn table_row_pagination_state(element: &dyn LayoutElement) -> TableRowPaginationState {
+    let mut state = TableRowPaginationState::default();
+    element.accept(&mut state);
+    state
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaginationPosition {
+    float: Float,
+    clear: Clear,
+    scheme: Position,
+    insets: EdgeSizes,
+    containing_block: Option<super::engine::ContainingBlock>,
+    containing_block_depth: usize,
+    flex_padding_box_border_top: Option<f32>,
+}
+
+impl Default for PaginationPosition {
+    fn default() -> Self {
+        Self {
+            float: Float::None,
+            clear: Clear::None,
+            scheme: Position::Static,
+            insets: EdgeSizes::ZERO,
+            containing_block: None,
+            containing_block_depth: 0,
+            flex_padding_box_border_top: None,
+        }
+    }
+}
+
+fn pagination_position(element: &dyn LayoutElement) -> PaginationPosition {
+    let mut result = PaginationPosition::default();
+    if let Some(flow) = element.block_flow_owner().map(|owner| owner.block_flow()) {
+        result.float = flow.float;
+        result.clear = flow.clear;
+    }
+    if let Some(positioning) = element.positioning_owner().map(|owner| owner.positioning()) {
+        result.scheme = positioning.scheme;
+        result.insets = positioning.insets;
+        result.containing_block = positioning.containing_block;
+        result.containing_block_depth = positioning.containing_block_depth;
+    }
+
+    struct FlexPaddingBoxTop<'a>(&'a mut Option<f32>);
+
+    impl LayoutVisitor for FlexPaddingBoxTop<'_> {
+        fn visit_flex_row(&mut self, element: &FlexRow) {
+            if element.positioning.containing_block_depth > 0 {
+                *self.0 = Some(element.box_model.border.top.width);
+            }
+        }
+    }
+
+    element.accept(&mut FlexPaddingBoxTop(
+        &mut result.flex_padding_box_border_top,
+    ));
+    result
+}
+
+fn repeats_on_each_page(element: &dyn LayoutElement) -> bool {
+    element.page_content_role() == PageContentRole::RepeatedDecoration
+}
+
+fn is_empty_fixed_height_box(element: &dyn LayoutElement) -> bool {
+    struct EmptyFixedBox(bool);
+
+    impl LayoutVisitor for EmptyFixedBox {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.0 = element.lines.is_empty() && element.box_model.size.height.is_definite();
+        }
+
+        fn visit_container(&mut self, element: &Container) {
+            self.0 = element.children.is_empty() && element.box_model.size.height.is_definite();
+        }
+    }
+
+    let mut result = EmptyFixedBox(false);
+    element.accept(&mut result);
+    result.0
+}
+
+fn is_fragmentable_fixed_text(element: &dyn LayoutElement) -> bool {
+    struct FragmentableFixedText(bool);
+
+    impl LayoutVisitor for FragmentableFixedText {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            self.0 = !element.lines.is_empty()
+                && element.paint.background.color.is_some()
+                && element.box_model.size.height.is_definite();
+        }
+    }
+
+    let mut result = FragmentableFixedText(false);
+    element.accept(&mut result);
+    result.0
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ElementFlowGeometry {
+    content_height: f32,
+    margins: BlockMargins,
+}
+
+impl ElementFlowGeometry {
+    fn set(&mut self, content_height: f32, margins: BlockMargins) {
+        self.content_height = content_height;
+        self.margins = margins;
+    }
+}
+
+impl LayoutVisitor for ElementFlowGeometry {
+    fn visit_horizontal_rule(&mut self, element: &HorizontalRule) {
+        self.set(1.0, element.margins);
+    }
+
+    fn visit_table_row(&mut self, element: &TableRow) {
+        let row_height = element
+            .content
+            .cells
+            .iter()
+            .map(table_cell_content_height)
+            .fold(0.0, f32::max);
+        self.set(
+            element.flow.content_extent(row_height),
+            element.flow.margins,
+        );
+    }
+
+    fn visit_grid_row(&mut self, element: &GridRow) {
+        let row_height = element
+            .content
+            .cells
+            .iter()
+            .map(|cell| cell.layout.box_model.minimum_block_size)
+            .fold(0.0, f32::max);
+        self.set(row_height, element.box_model.margins);
+    }
+
+    fn visit_flex_row(&mut self, element: &FlexRow) {
+        let content_height = element.box_model.padding.vertical()
+            + element.content.row_height
+            + element.box_model.border.vertical_width();
+        self.set(content_height, element.box_model.margins);
+    }
+
+    fn visit_text_block(&mut self, element: &TextBlock) {
+        let text_height = element.lines.iter().map(|line| line.height).sum::<f32>();
+        let natural_content_height = element.box_model.padding.vertical() + text_height;
+        let content_height = if element.clipping.rect.is_some() {
+            element
+                .box_model
+                .size
+                .height
+                .resolve(natural_content_height)
+        } else {
+            element
+                .box_model
+                .size
+                .height
+                .used()
+                .map_or(natural_content_height, |height| {
+                    natural_content_height.max(height)
+                })
+        } + element.box_model.border.vertical_width();
+        self.set(content_height, element.box_model.margins);
+    }
+
+    fn visit_image(&mut self, element: &Image) {
+        self.set(
+            element.geometry.size.height + element.geometry.flow.extra_end,
+            element.geometry.flow.margins,
+        );
+    }
+
+    fn visit_svg(&mut self, element: &Svg) {
+        self.set(
+            element.geometry.size.height + element.geometry.flow.extra_end,
+            element.geometry.flow.margins,
+        );
+    }
+
+    fn visit_progress_bar(&mut self, element: &ProgressBar) {
+        self.set(element.size.height, element.margins);
+    }
+
+    fn visit_math_block(&mut self, element: &MathBlock) {
+        self.set(element.layout.height(), element.margins);
+    }
+
+    fn visit_container(&mut self, element: &Container) {
+        let children_height = element
+            .children
+            .iter()
+            .map(|child| estimate_element_height(child.as_ref()))
+            .sum::<f32>();
+        let natural_content_height = element.box_model.padding.vertical()
+            + children_height
+            + element.box_model.border.vertical_width();
+        let content_height = if element.overflow.combined.clips() {
+            element
+                .box_model
+                .size
+                .height
+                .resolve(natural_content_height)
+        } else {
+            element
+                .box_model
+                .size
+                .height
+                .used()
+                .map_or(natural_content_height, |height| {
+                    natural_content_height.max(height)
+                })
+        };
+        self.set(content_height, element.box_model.margins);
+    }
+}
+
+fn element_flow_geometry(element: &dyn LayoutElement) -> ElementFlowGeometry {
+    let mut geometry = ElementFlowGeometry::default();
+    element.accept(&mut geometry);
+    geometry
+}
+
 /// Paginate with a single global content height (no per-page geometry). Thin
 /// wrapper over [`paginate_with_first_page`]; used by unit tests and any caller
 /// that does not need an `@page :first`/`:left`/`:right` override.
 #[allow(dead_code)]
 pub(crate) fn paginate(
-    elements: Vec<LayoutElement>,
+    elements: Vec<LayoutNode>,
     content_height: f32,
     root_margin_top: f32,
 ) -> Vec<Page> {
     paginate_with_first_page(
         elements,
-        content_height,
-        root_margin_top,
+        DocumentPageGeometry::new(content_height, content_height, root_margin_top),
         None,
         SpreadMargins::default(),
         HashMap::new(),
         FootnoteAreaLayout::default(),
+        &HashMap::new(),
     )
 }
 
@@ -1955,13 +2529,13 @@ pub(crate) fn paginate(
 /// empty this is identical to a single global `content_height`/margin for every
 /// page (the default path used by the whole corpus).
 pub(crate) fn paginate_with_first_page(
-    elements: Vec<LayoutElement>,
-    default_content_height: f32,
-    root_margin_top: f32,
+    elements: Vec<LayoutNode>,
+    default_geometry: DocumentPageGeometry,
     first_page: Option<FirstPageGeom>,
     spread: SpreadMargins,
     named_pages: HashMap<String, NamedPageGeom>,
     footnote_area: FootnoteAreaLayout,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
 ) -> Vec<Page> {
     // The content height in force for the page currently being filled. Page 1
     // uses the first-page override (if any); every page after page 1 reverts to
@@ -1969,7 +2543,10 @@ pub(crate) fn paginate_with_first_page(
     // first page is finalized.
     let mut content_height = first_page
         .map(|f| f.content_height)
-        .unwrap_or(default_content_height);
+        .unwrap_or(default_geometry.content_height);
+    let default_content_height = default_geometry.content_height;
+    let default_page_height = default_geometry.page_height;
+    let root_margin_top = default_geometry.root_margin_top;
     // The margin tag applied to the FIRST emitted page (page 1).
     let first_margin_override = first_page.map(|f| f.margin);
     // The per-page margin override for the page about to be pushed, chosen by
@@ -1999,8 +2576,8 @@ pub(crate) fn paginate_with_first_page(
     let mut pending_named_page: Option<NamedPageGeom> = None;
     let mut pending_named_page_name: Option<String> = None;
     let mut pages: Vec<Page> = Vec::new();
-    let mut current_elements: Vec<(f32, LayoutElement)> = Vec::new();
-    let mut current_running_elements: HashMap<String, LayoutElement> = HashMap::new();
+    let mut current_elements: Vec<(f32, LayoutNode)> = Vec::new();
+    let mut current_running_elements: HashMap<String, LayoutNode> = HashMap::new();
     let mut current_running_elements_started: HashSet<String> = HashSet::new();
     let mut current_named_strings: HashMap<String, String> = HashMap::new();
     let mut current_named_strings_first: HashMap<String, String> = HashMap::new();
@@ -2024,7 +2601,7 @@ pub(crate) fn paginate_with_first_page(
 
     // Collect synthetic full-page background elements that should be repeated
     // across every page during pagination.
-    let mut absolute_backgrounds: Vec<(f32, LayoutElement)> = Vec::new();
+    let mut absolute_backgrounds: Vec<(f32, LayoutNode)> = Vec::new();
     // Track the y-position of positioned ancestors by depth so absolute descendants
     // resolve against the nearest positioned ancestor rather than the most recent one.
     let mut positioned_y_by_depth: HashMap<usize, f32> = HashMap::new();
@@ -2032,14 +2609,14 @@ pub(crate) fn paginate_with_first_page(
     // Track the header rows of the currently-active table so pagination can
     // re-emit them at the top of each page the table spans (Chrome parity).
     // Cleared as soon as a non-TableRow element is encountered.
-    let mut pending_table_headers: Vec<LayoutElement> = Vec::new();
+    let mut pending_table_headers: Vec<LayoutNode> = Vec::new();
     // Track the `<tfoot>` rows of the active table so pagination can repeat them
     // as a running footer at the bottom of every page the table spans, directly
     // after the last body row (Chrome's LayoutNG table fragmentation). Collected
     // by a forward scan when the table is first entered, so their height is known
     // (and reserved) while body rows are placed — even though, after the
     // thead->tbody->tfoot reorder, the footer rows arrive LAST in the stream.
-    let mut pending_table_footers: Vec<LayoutElement> = Vec::new();
+    let mut pending_table_footers: Vec<LayoutNode> = Vec::new();
     // Total reserved height of `pending_table_footers` (content height of the
     // footer rows, mirroring the repeated-header advance). Subtracted from the
     // available page height when deciding whether a body row fits.
@@ -2050,18 +2627,28 @@ pub(crate) fn paginate_with_first_page(
     let mut in_table = false;
     #[allow(unused_assignments)]
     let mut in_table_body = false;
-    let mut previous_table_row_break_inside_avoid = false;
+    let mut previous_table_avoid_group = None;
 
     // Content height of a table row = the tallest cell's content height (the same
     // measure used for the repeated-header advance), excluding row margins.
-    let row_content_height = |element: &LayoutElement| -> f32 {
-        match element {
-            LayoutElement::TableRow { cells, .. } => cells
-                .iter()
-                .map(table_cell_content_height)
-                .fold(0.0f32, f32::max),
-            _ => 0.0,
+    let row_content_height = |element: &dyn LayoutElement| -> f32 {
+        #[derive(Default)]
+        struct RowHeight(f32);
+
+        impl LayoutVisitor for RowHeight {
+            fn visit_table_row(&mut self, element: &TableRow) {
+                self.0 = element
+                    .content
+                    .cells
+                    .iter()
+                    .map(table_cell_content_height)
+                    .fold(0.0, f32::max);
+            }
         }
+
+        let mut height = RowHeight::default();
+        element.accept(&mut height);
+        height.0
     };
 
     // Worklist of pending top-level elements. A box that is too tall for the
@@ -2070,14 +2657,23 @@ pub(crate) fn paginate_with_first_page(
     // on the next page. Elements that already fit are processed exactly as
     // before (every existing `continue`/placement is unchanged), so the whole
     // single-page corpus is byte-for-byte identical.
-    let mut work: std::collections::VecDeque<LayoutElement> = elements.into();
-    while let Some(mut element) = work.pop_front() {
-        if let LayoutElement::RunningElement { name, element } = element {
-            current_running_elements_started.insert(name.clone());
-            current_running_elements.insert(name, *element);
+    let mut work = prepare_pagination_work(elements);
+    while let Some(PendingElement {
+        mut element,
+        is_fragment_continuation,
+        avoid_group,
+    }) = work.pop_front()
+    {
+        if is_avoid_page_break(element.as_ref()) {
             continue;
         }
-        if let LayoutElement::NamedString { name, value } = element {
+        let marker = page_state_marker(element.as_ref());
+        if let Some((name, running)) = marker.running {
+            current_running_elements_started.insert(name.clone());
+            current_running_elements.insert(name, running);
+            continue;
+        }
+        if let Some((name, value)) = marker.named {
             if target_anchor_id(&name).is_some() {
                 pending_target_anchors.push(name);
             } else {
@@ -2107,112 +2703,89 @@ pub(crate) fn paginate_with_first_page(
         // that occur mid-table: the header at each page top, the footer at each
         // page bottom. Reset when leaving the table.
         let mut suppress_repeated_headers_after_break = false;
-        match &element {
-            LayoutElement::TableRow {
-                is_header,
-                is_footer,
-                break_inside_avoid,
-                ..
-            } => {
-                let table_avoid_group_starts_here =
-                    *break_inside_avoid && !previous_table_row_break_inside_avoid;
-                previous_table_row_break_inside_avoid = *break_inside_avoid;
-                if !in_table {
-                    // First row of a new table: scan ahead over the rest of this
-                    // table's contiguous row run to collect the `<tfoot>` rows
-                    // (which the thead->tbody->tfoot reorder places at the end of
-                    // the run) so their height is reserved while body rows are
-                    // placed and they can be repeated at each page bottom.
-                    in_table = true;
-                    pending_table_headers.clear();
-                    pending_table_footers.clear();
-                    pending_footer_height = 0.0;
-                    for w in work.iter() {
-                        match w {
-                            LayoutElement::TableRow {
-                                is_footer: w_foot, ..
-                            } => {
-                                if *w_foot {
-                                    pending_footer_height += row_content_height(w);
-                                    pending_table_footers.push(w.clone());
-                                }
-                            }
-                            _ => break,
-                        }
+        let row_state = table_row_pagination_state(element.as_ref());
+        if row_state.is_row {
+            let table_avoid_group_starts_here = row_state.avoid_group.is_some()
+                && row_state.avoid_group != previous_table_avoid_group;
+            previous_table_avoid_group = row_state.avoid_group;
+            if !in_table {
+                // First row of a new table: scan ahead over the rest of this
+                // table's contiguous row run to collect the `<tfoot>` rows
+                // (which the thead->tbody->tfoot reorder places at the end of
+                // the run) so their height is reserved while body rows are
+                // placed and they can be repeated at each page bottom.
+                in_table = true;
+                pending_table_headers.clear();
+                pending_table_footers.clear();
+                pending_footer_height = 0.0;
+                for w in work.iter() {
+                    let queued_state = table_row_pagination_state(w.element.as_ref());
+                    if !queued_state.is_row {
+                        break;
                     }
-                    // `break-inside: avoid` table keep-together (CSS Fragmentation
-                    // 3 §5.2 / legacy `page-break-inside: avoid`): sum the whole
-                    // table's row run (this first row plus every contiguous row
-                    // still queued). When the table is avoid-inside AND fits on a
-                    // full page, arm the whole-table break height so a table that
-                    // would straddle the boundary is moved WHOLE to the next page.
-                    // A table taller than a full page cannot be kept together, so
-                    // it falls back to the normal between-rows split.
-                    if *break_inside_avoid {
-                        let mut total = estimate_element_height(&element);
-                        for w in work.iter() {
-                            match w {
-                                LayoutElement::TableRow { .. } => {
-                                    total += estimate_element_height(w);
-                                }
-                                _ => break,
-                            }
-                        }
-                        if total <= content_height {
-                            table_keep_break_height = Some(total);
-                        }
+                    if queued_state.is_footer {
+                        pending_footer_height += row_content_height(&w.element);
+                        pending_table_footers.push(w.element.clone());
                     }
                 }
-                if table_keep_break_height.is_none() && table_avoid_group_starts_here {
+                // `break-inside: avoid` table keep-together (CSS Fragmentation
+                // 3 §5.2 / legacy `page-break-inside: avoid`): sum the whole
+                // table's row run (this first row plus every contiguous row
+                // still queued). When the table is avoid-inside AND fits on a
+                // full page, arm the whole-table break height so a table that
+                // would straddle the boundary is moved WHOLE to the next page.
+                // A table taller than a full page cannot be kept together, so
+                // it falls back to the normal between-rows split.
+                if row_state.avoid_inside {
                     let mut total = estimate_element_height(&element);
                     for w in work.iter() {
-                        match w {
-                            LayoutElement::TableRow {
-                                break_inside_avoid: true,
-                                is_header: w_header,
-                                is_footer: w_footer,
-                                ..
-                            } if *w_header == *is_header && *w_footer == *is_footer => {
-                                total += estimate_element_height(w);
-                            }
-                            _ => break,
+                        if !table_row_pagination_state(w.element.as_ref()).is_row {
+                            break;
                         }
+                        total += estimate_element_height(&w.element);
                     }
                     if total <= content_height {
                         table_keep_break_height = Some(total);
                     }
                 }
-                suppress_repeated_headers_after_break =
-                    table_keep_break_height.is_some() && table_avoid_group_starts_here;
-                // A header is collected for repetition; a footer is handled by the
-                // running-footer placement (below / at page breaks); only ordinary
-                // body rows count as "table body" for fit/break decisions.
-                in_table_body = !*is_header && !*is_footer;
-                if *is_header {
-                    pending_table_headers.push(element.clone());
+            }
+            if table_keep_break_height.is_none() && table_avoid_group_starts_here {
+                let avoid_group = row_state.avoid_group;
+                let mut total = estimate_element_height(&element);
+                for w in work.iter() {
+                    let queued_state = table_row_pagination_state(w.element.as_ref());
+                    if !queued_state.is_row || queued_state.avoid_group != avoid_group {
+                        break;
+                    }
+                    total += estimate_element_height(&w.element);
+                }
+                if total <= content_height {
+                    table_keep_break_height = Some(total);
                 }
             }
-            _ => {
-                pending_table_headers.clear();
-                pending_table_footers.clear();
-                pending_footer_height = 0.0;
-                in_table = false;
-                in_table_body = false;
-                previous_table_row_break_inside_avoid = false;
+            suppress_repeated_headers_after_break =
+                table_keep_break_height.is_some() && table_avoid_group_starts_here;
+            // A header is collected for repetition; a footer is handled by the
+            // running-footer placement (below / at page breaks); only ordinary
+            // body rows count as "table body" for fit/break decisions.
+            in_table_body = !row_state.is_header && !row_state.is_footer;
+            if row_state.is_header {
+                pending_table_headers.push(element.clone());
             }
+        } else {
+            pending_table_headers.clear();
+            pending_table_footers.clear();
+            pending_footer_height = 0.0;
+            in_table = false;
+            in_table_body = false;
+            previous_table_avoid_group = None;
         }
 
         // A `<tfoot>` row reaching the normal flow is the FINAL-page footer (the
         // reorder put it after every body row): place it directly after the last
         // body row on the current page. Its height was reserved while the body
         // rows were placed, so it always fits — skip the generic fit/break path.
-        if matches!(
-            &element,
-            LayoutElement::TableRow {
-                is_footer: true,
-                ..
-            }
-        ) {
+        if row_state.is_footer {
             let fh = row_content_height(&element);
             collect_footnotes_from_element(&element, &mut current_footnotes);
             current_elements.push((y, element));
@@ -2222,84 +2795,22 @@ pub(crate) fn paginate_with_first_page(
             continue;
         }
 
-        // Extract float/clear/position info from TextBlock elements
-        let (
-            elem_float,
-            elem_clear,
-            elem_position,
-            elem_offset_top,
-            _elem_offset_bottom,
-            elem_containing_block,
-            elem_positioned_depth,
-        ) = match &element {
-            LayoutElement::TextBlock {
-                float,
-                clear,
-                position,
-                offset_top,
-                offset_bottom,
-                containing_block,
-                positioned_depth,
-                ..
-            } => (
-                *float,
-                *clear,
-                *position,
-                *offset_top,
-                *offset_bottom,
-                *containing_block,
-                *positioned_depth,
-            ),
-            // A positioned Container (e.g. a `position: fixed`/`absolute` box
-            // with a background/border/explicit size) must also be recognised so
-            // it is removed from normal flow and anchored to its containing
-            // block. A root-level box has `containing_block: None` and resolves
-            // against the page content box; bottom/right are pre-resolved into
-            // top/left at layout time. Reading the real fields (rather than
-            // hardcoding None/0) keeps a top-level positioned Container that has
-            // a positioned ancestor anchored correctly and lets its own
-            // descendants resolve against it by depth.
-            LayoutElement::Container {
-                float,
-                clear,
-                position,
-                offset_top,
-                containing_block,
-                positioned_depth,
-                ..
-            } => (
-                *float,
-                *clear,
-                *position,
-                *offset_top,
-                0.0,
-                *containing_block,
-                *positioned_depth,
-            ),
-            _ => (
-                Float::None,
-                Clear::None,
-                Position::Static,
-                0.0,
-                0.0,
-                None,
-                0,
-            ),
-        };
+        let position = pagination_position(element.as_ref());
+        let elem_float = position.float;
+        let elem_clear = position.clear;
+        let elem_position = position.scheme;
+        let elem_offset_top = position.insets.top;
+        let elem_containing_block = position.containing_block;
+        let elem_positioned_depth = position.containing_block_depth;
 
         // A flex container (emitted as a FlexRow) that establishes a containing
         // block for absolute children records its padding-box top under its
         // `positioned_depth`, so abs children emitted after it anchor correctly.
         // (`top: 0` of such a child is the padding-box edge.) The padding-box top
         // is the FlexRow's flowed border-box top plus its top border.
-        let flex_cb_depth = match &element {
-            LayoutElement::FlexRow {
-                positioned_depth,
-                border,
-                ..
-            } if *positioned_depth > 0 => Some((*positioned_depth, border.top.width)),
-            _ => None,
-        };
+        let flex_cb_depth = position
+            .flex_padding_box_border_top
+            .map(|border_top| (position.containing_block_depth, border_top));
 
         // Handle clear: move y below active floats on the specified side
         match elem_clear {
@@ -2327,272 +2838,145 @@ pub(crate) fn paginate_with_first_page(
             Clear::None => {}
         }
 
-        // Returns (content_height_without_margins, margin_top, margin_bottom)
-        let (content_h_val, margin_top_val, margin_bottom_val) = match &element {
-            LayoutElement::PageBreak(side, name) => {
-                let mut side = *side;
-                let mut name = name.clone();
-                // CSS Fragmentation 3 break precedence is resolved at the
-                // shared class-A break point. The layout flattener emits
-                // `break-after` followed by `break-before`; coalesce adjacent
-                // forced breaks here so the later-in-flow `break-before` value
-                // wins instead of being ignored on the empty page just created.
-                while let Some(LayoutElement::PageBreak(next_side, next_name)) = work.front() {
-                    side = *next_side;
-                    name = next_name.clone();
-                    work.pop_front();
-                }
-                // A forced break before any real content on the current page is
-                // ignored (CSS Fragmentation 3: a forced break at the very start
-                // of the fragmentation flow produces no leading blank page).
-                // Consecutive forced breaks likewise collapse to one. A page that
-                // holds only repeated page-background elements counts as empty.
-                let page_has_content = current_elements.iter().any(|(_, el)| {
-                    !matches!(
-                        el,
-                        LayoutElement::TextBlock {
-                            repeat_on_each_page: true,
-                            ..
-                        }
-                    )
-                });
-                if !page_has_content {
-                    // A named box that opens the document (no preceding content)
-                    // still selects its page geometry: the leading break is
-                    // suppressed but the first page adopts the named margin.
-                    if let Some(geom) = name.as_ref().and_then(|n| named_pages.get(n)) {
-                        pending_named_page = Some(*geom);
-                        pending_named_page_name = name.clone();
-                        content_height = geom.content_height;
-                    }
-                    continue;
-                }
-                let consumed_height = y;
-                extend_open_column_flex_decoration_to_break(&mut current_elements, content_height);
-                // The page being finalized adopts the named margin in force while
-                // it was filled (if any), else the parity/`:first` override.
-                let margin_override = pending_named_page
-                    .map(|geom| geom.margin)
-                    .or_else(|| page_margin_override(pages.len()));
-                let page_size_override = pending_named_page.map(|geom| geom.page_size);
-                pages.push(Page {
-                    elements: std::mem::take(&mut current_elements),
-                    running_elements: current_running_elements.clone(),
-                    running_elements_started: std::mem::take(&mut current_running_elements_started),
-                    named_strings: current_named_strings.clone(),
-                    named_strings_first: current_named_strings_first.clone(),
-                    footnotes: std::mem::take(&mut current_footnotes),
-                    margin_override,
-                    page_size_override,
-                    page_name: pending_named_page_name.clone(),
-                    is_blank: false,
-                });
-                current_named_strings_first.clear();
-                // After page 1 is finalized, page 2+ use the default geometry —
-                // unless this break starts a named page (resolved just below).
-                content_height = default_content_height;
-                // Duplicate root background onto the new page.
-                for bg in &absolute_backgrounds {
-                    current_elements.push(bg.clone());
-                }
-                // CSS Paged Media 3 §3.4: a `page: <name>` break starts a page
-                // whose geometry is the matching `@page <name>` rule. Switch the
-                // active named margin (and fragmentainer height) to it; a break
-                // back to the default flow clears it.
-                pending_named_page = None;
-                pending_named_page_name = None;
+        if let Some((mut side, mut name)) = page_break_data(element.as_ref()) {
+            // CSS Fragmentation 3 break precedence is resolved at the
+            // shared class-A break point. The layout flattener emits
+            // `break-after` followed by `break-before`; coalesce adjacent
+            // forced breaks here so the later-in-flow `break-before` value
+            // wins instead of being ignored on the empty page just created.
+            while let Some((next_side, next_name)) = work
+                .front()
+                .and_then(|pending| page_break_data(pending.element.as_ref()))
+            {
+                side = next_side;
+                name = next_name;
+                work.pop_front();
+            }
+            // A forced break before any real content on the current page is
+            // ignored (CSS Fragmentation 3: a forced break at the very start
+            // of the fragmentation flow produces no leading blank page).
+            // Consecutive forced breaks likewise collapse to one. A page that
+            // holds only repeated page-background elements counts as empty.
+            let page_has_content = current_elements.iter().any(|(_, element)| {
+                element
+                    .page_content_role()
+                    .interrupts_forced_break_sequence()
+            });
+            if !page_has_content {
+                // A named box that opens the document (no preceding content)
+                // still selects its page geometry: the leading break is
+                // suppressed but the first page adopts the named margin.
                 if let Some(geom) = name.as_ref().and_then(|n| named_pages.get(n)) {
                     pending_named_page = Some(*geom);
                     pending_named_page_name = name.clone();
                     content_height = geom.content_height;
                 }
-                // Sided break (`break-*: left|right|recto|verso`): force the
-                // following content onto a page of the requested parity. Page 1
-                // is a right/recto page (LTR), so odd 1-based pages are right and
-                // even are left. When the natural next page is the wrong side,
-                // insert ONE blank page (carrying any repeated background) so the
-                // content lands correctly.
-                if matches!(
-                    side,
-                    PageBreakSide::Left
-                        | PageBreakSide::Right
-                        | PageBreakSide::Recto
-                        | PageBreakSide::Verso
-                ) {
-                    let next_page_no = pages.len() + 1; // 1-based content page
-                    let wants_right = matches!(side, PageBreakSide::Right | PageBreakSide::Recto);
-                    let next_is_right = next_page_no % 2 == 1;
-                    if wants_right != next_is_right {
-                        let mut blank: Vec<(f32, LayoutElement)> = Vec::new();
-                        for bg in &absolute_backgrounds {
-                            blank.push(bg.clone());
-                        }
-                        let margin_override = pending_named_page
-                            .map(|geom| geom.margin)
-                            .or_else(|| page_margin_override(pages.len()));
-                        let page_size_override = pending_named_page.map(|geom| geom.page_size);
-                        pages.push(Page {
-                            elements: blank,
-                            running_elements: current_running_elements.clone(),
-                            running_elements_started: HashSet::new(),
-                            named_strings: current_named_strings.clone(),
-                            named_strings_first: current_named_strings_first.clone(),
-                            footnotes: Vec::new(),
-                            margin_override,
-                            page_size_override,
-                            page_name: pending_named_page_name.clone(),
-                            is_blank: true,
-                        });
-                        current_named_strings_first.clear();
-                    }
-                }
-                y = 0.0;
-                prev_margin_bottom = 0.0;
-                first_on_page = true;
-                on_first_page = false;
-                left_floats.clear();
-                right_floats.clear();
-                advance_positioned_ancestors_after_page_break(
-                    &mut positioned_y_by_depth,
-                    consumed_height,
-                );
                 continue;
             }
-            LayoutElement::HorizontalRule {
-                margin_top,
-                margin_bottom,
-            } => (1.0, *margin_top, *margin_bottom),
-            LayoutElement::TableRow {
-                cells,
-                margin_top,
-                margin_bottom,
-                ..
-            } => {
-                let row_height = cells
-                    .iter()
-                    .map(table_cell_content_height)
-                    .fold(0.0f32, f32::max);
-                (row_height, *margin_top, *margin_bottom)
+            let consumed_height = y;
+            extend_open_column_flex_decoration_to_break(&mut current_elements, content_height);
+            // The page being finalized adopts the named margin in force while
+            // it was filled (if any), else the parity/`:first` override.
+            let margin_override = pending_named_page
+                .map(|geom| geom.margin)
+                .or_else(|| page_margin_override(pages.len()));
+            let page_size_override = pending_named_page.map(|geom| geom.page_size);
+            pages.push(Page {
+                elements: std::mem::take(&mut current_elements),
+                print_content_scale: Default::default(),
+                document_svg_defs: Default::default(),
+                running_elements: current_running_elements.clone(),
+                running_elements_started: std::mem::take(&mut current_running_elements_started),
+                named_strings: current_named_strings.clone(),
+                named_strings_first: current_named_strings_first.clone(),
+                footnotes: std::mem::take(&mut current_footnotes),
+                margin_override,
+                page_size_override,
+                page_name: pending_named_page_name.clone(),
+                is_blank: false,
+            });
+            current_named_strings_first.clear();
+            // After page 1 is finalized, page 2+ use the default geometry —
+            // unless this break starts a named page (resolved just below).
+            content_height = default_content_height;
+            // Duplicate root background onto the new page.
+            for bg in &absolute_backgrounds {
+                current_elements.push(bg.clone());
             }
-            LayoutElement::GridRow {
-                cells,
-                margin_top,
-                margin_bottom,
-                ..
-            } => {
-                // Grid track height (resolved at layout) — never grown by the
-                // cells' intrinsic content height (css-grid-1 §11).
-                let row_height = cells
-                    .iter()
-                    .map(|cell| cell.min_content_height)
-                    .fold(0.0f32, f32::max);
-                (row_height, *margin_top, *margin_bottom)
+            // CSS Paged Media 3 §3.4: a `page: <name>` break starts a page
+            // whose geometry is the matching `@page <name>` rule. Switch the
+            // active named margin (and fragmentainer height) to it; a break
+            // back to the default flow clears it.
+            pending_named_page = None;
+            pending_named_page_name = None;
+            if let Some(geom) = name.as_ref().and_then(|n| named_pages.get(n)) {
+                pending_named_page = Some(*geom);
+                pending_named_page_name = name.clone();
+                content_height = geom.content_height;
             }
-            LayoutElement::FlexRow {
-                row_height,
-                margin_top,
-                margin_bottom,
-                padding_top,
-                padding_bottom,
-                border,
-                ..
-            } => {
-                let content = padding_top + row_height + padding_bottom + border.vertical_width();
-                (content, *margin_top, *margin_bottom)
-            }
-            LayoutElement::TextBlock {
-                lines,
-                margin_top,
-                margin_bottom,
-                padding_top,
-                padding_bottom,
-                border,
-                block_height,
-                clip_rect,
-                ..
-            } => {
-                let text_height: f32 = lines.iter().map(|l| l.height).sum::<f32>()
-                    + footnote_call_multiline_extra_height(lines);
-                let border_extra = border.vertical_width();
-                let content_h = padding_top + text_height + padding_bottom;
-                let effective_content_h = if clip_rect.is_some() {
-                    // overflow:hidden — use specified height, don't expand
-                    block_height.unwrap_or(content_h)
-                } else {
-                    match block_height {
-                        Some(h) => content_h.max(*h),
-                        None => content_h,
+            // Sided break (`break-*: left|right|recto|verso`): force the
+            // following content onto a page of the requested parity. Page 1
+            // is a right/recto page (LTR), so odd 1-based pages are right and
+            // even are left. When the natural next page is the wrong side,
+            // insert ONE blank page (carrying any repeated background) so the
+            // content lands correctly.
+            if matches!(
+                side,
+                PageBreakSide::Left
+                    | PageBreakSide::Right
+                    | PageBreakSide::Recto
+                    | PageBreakSide::Verso
+            ) {
+                let next_page_no = pages.len() + 1; // 1-based content page
+                let wants_right = matches!(side, PageBreakSide::Right | PageBreakSide::Recto);
+                let next_is_right = next_page_no % 2 == 1;
+                if wants_right != next_is_right {
+                    let mut blank: Vec<(f32, LayoutNode)> = Vec::new();
+                    for bg in &absolute_backgrounds {
+                        blank.push(bg.clone());
                     }
-                };
-                (
-                    effective_content_h + border_extra,
-                    *margin_top,
-                    *margin_bottom,
-                )
+                    let margin_override = pending_named_page
+                        .map(|geom| geom.margin)
+                        .or_else(|| page_margin_override(pages.len()));
+                    let page_size_override = pending_named_page.map(|geom| geom.page_size);
+                    pages.push(Page {
+                        elements: blank,
+                        print_content_scale: Default::default(),
+                        document_svg_defs: Default::default(),
+                        running_elements: current_running_elements.clone(),
+                        running_elements_started: HashSet::new(),
+                        named_strings: current_named_strings.clone(),
+                        named_strings_first: current_named_strings_first.clone(),
+                        footnotes: Vec::new(),
+                        margin_override,
+                        page_size_override,
+                        page_name: pending_named_page_name.clone(),
+                        is_blank: true,
+                    });
+                    current_named_strings_first.clear();
+                }
             }
-            LayoutElement::Image {
-                height,
-                flow_extra_bottom,
-                margin_top,
-                margin_bottom,
-                ..
-            } => (*height + *flow_extra_bottom, *margin_top, *margin_bottom),
-            LayoutElement::Svg {
-                height,
-                flow_extra_bottom,
-                margin_top,
-                margin_bottom,
-                ..
-            } => (*height + *flow_extra_bottom, *margin_top, *margin_bottom),
-            LayoutElement::ProgressBar {
-                height,
-                margin_top,
-                margin_bottom,
-                ..
-            } => (*height, *margin_top, *margin_bottom),
-            LayoutElement::MathBlock {
-                layout,
-                margin_top,
-                margin_bottom,
-                ..
-            } => (layout.height(), *margin_top, *margin_bottom),
-            LayoutElement::RunningElement { .. } | LayoutElement::NamedString { .. } => {
-                (0.0, 0.0, 0.0)
-            }
-            LayoutElement::Container {
-                children,
-                padding_top,
-                padding_bottom,
-                border,
-                margin_top,
-                margin_bottom,
-                block_height,
-                overflow,
-                ..
-            } => {
-                let children_h: f32 = children
-                    .iter()
-                    .map(|c| estimate_element_height_bounded(c, 50))
-                    .sum();
-                let content_h = padding_top + children_h + padding_bottom + border.vertical_width();
-                let effective_h = if overflow.clips() {
-                    block_height.unwrap_or(content_h)
-                } else {
-                    block_height.map_or(content_h, |h| content_h.max(h))
-                };
-                (effective_h, *margin_top, *margin_bottom)
-            }
-        };
+            y = 0.0;
+            prev_margin_bottom = 0.0;
+            first_on_page = true;
+            on_first_page = false;
+            left_floats.clear();
+            right_floats.clear();
+            advance_positioned_ancestors_after_page_break(
+                &mut positioned_y_by_depth,
+                consumed_height,
+            );
+            continue;
+        }
+
+        let flow_geometry = element_flow_geometry(element.as_ref());
+        let content_h_val = flow_geometry.content_height;
+        let margin_top_val = flow_geometry.margins.start;
+        let margin_bottom_val = flow_geometry.margins.end;
 
         // Collapse margins: adjacent vertical margins merge (larger wins for positive,
         // most negative for negative, sum for mixed).
-        let collapsed_margin = if margin_top_val >= 0.0 && prev_margin_bottom >= 0.0 {
-            margin_top_val.max(prev_margin_bottom)
-        } else if margin_top_val < 0.0 && prev_margin_bottom < 0.0 {
-            margin_top_val.min(prev_margin_bottom)
-        } else {
-            margin_top_val + prev_margin_bottom
-        };
+        let collapsed_margin = collapse_vertical_margins(prev_margin_bottom, margin_top_val);
         // CSS margin collapse through the root applies ONLY on page 1 (where
         // body opens). On page 1, the first block's margin-top collapses with
         // body.margin.top: since paginate pre-seeded `y = root_margin_top`,
@@ -2608,12 +2992,47 @@ pub(crate) fn paginate_with_first_page(
         let element_height = margin_top_val + content_h_val + margin_bottom_val;
         let mut pending_footnotes = Vec::new();
         collect_footnotes_from_element(&element, &mut pending_footnotes);
-        let footnote_reserve = footnote_reserved_height(&current_footnotes, footnote_area)
-            + footnote_reserved_height(&pending_footnotes, footnote_area);
+        let pending_non_block_footnotes: Vec<_> = pending_footnotes
+            .iter()
+            .filter(|footnote| footnote.formatting.policy != FootnotePolicy::Block)
+            .cloned()
+            .collect();
+        let footnote_reserve = footnote_reserved_height(
+            &[
+                current_footnotes.as_slice(),
+                pending_non_block_footnotes.as_slice(),
+            ],
+            footnote_area,
+            fonts,
+        );
+        let content_height_before_pending_footnotes = (content_height
+            - footnote_reserved_height(&[current_footnotes.as_slice()], footnote_area, fonts))
+        .max(0.0);
         let effective_content_height = (content_height - footnote_reserve).max(0.0);
+        let block_footnote_requires_break = y > 0.0
+            && footnote_block_policy_requires_break(
+                &pending_footnotes,
+                &current_footnotes,
+                y,
+                element_height,
+                content_height,
+                footnote_area,
+                fonts,
+            );
+        let physical_page_height = pending_named_page
+            .map(|geom| geom.page_size.height)
+            .unwrap_or(default_page_height);
+        let empty_fixed_height_box = is_empty_fixed_height_box(element.as_ref());
+        // An empty definite-height box can extend into page margins when its
+        // border box still fits on the physical sheet. Once it exceeds that
+        // sheet, or it is already a continuation, it must fragment against the
+        // content box so the nonzero tail remains observable.
+        let may_fragment_internally = !empty_fixed_height_box
+            || is_fragment_continuation
+            || exceeds_with_roundoff(content_h_val, physical_page_height);
 
         // Handle position: absolute -- place at fixed position, don't affect flow
-        if elem_position == Position::Absolute {
+        if elem_position.is_absolute() {
             let abs_y = if let Some(cb) = elem_containing_block {
                 // Position relative to the containing block (nearest positioned ancestor).
                 // bottom/right offsets are pre-resolved into top/left in build_pseudo_block.
@@ -2625,14 +3044,7 @@ pub(crate) fn paginate_with_first_page(
             if elem_positioned_depth > 0 {
                 positioned_y_by_depth.insert(elem_positioned_depth, abs_y);
             }
-            let repeats_on_each_page = match &element {
-                LayoutElement::TextBlock {
-                    repeat_on_each_page,
-                    ..
-                } => *repeat_on_each_page,
-                _ => false,
-            };
-            if repeats_on_each_page {
+            if repeats_on_each_page(element.as_ref()) {
                 absolute_backgrounds.push((abs_y, element.clone()));
             }
             collect_footnotes_from_element(&element, &mut current_footnotes);
@@ -2653,109 +3065,53 @@ pub(crate) fn paginate_with_first_page(
         // already included in that sum) so the entire table moves to the next
         // page intact; otherwise decide against this row plus the reserved
         // running-footer height as before.
-        let (break_decision_height, break_footer_reserve) = match table_keep_break_height {
-            Some(total) => (total, 0.0),
-            None => (element_height, footer_reserve),
-        };
-        const PAGE_BREAK_EPSILON: f32 = 1.0;
-        let mut page_broke_mid_loop = y + break_decision_height + break_footer_reserve
-            > effective_content_height + PAGE_BREAK_EPSILON
-            && y > 0.0;
-        if page_broke_mid_loop
-            && current_footnotes.is_empty()
-            && pending_footnotes.is_empty()
-            && elem_position == Position::Static
-            && elem_float == Float::None
-            && !in_table_body
-        {
-            let movable = current_elements
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, (_, el))| {
-                    !matches!(
-                        el,
-                        LayoutElement::TextBlock {
-                            repeat_on_each_page: true,
-                            ..
-                        }
-                    ) && !element_is_absolute(el)
-                });
-            if let Some((idx, (last_y, last_element))) = movable {
-                let earlier_real_content = current_elements[..idx].iter().any(|(_, el)| {
-                    !matches!(
-                        el,
-                        LayoutElement::TextBlock {
-                            repeat_on_each_page: true,
-                            ..
-                        }
-                    )
-                });
-                let moved_flow_height = (y - *last_y).max(0.0);
-                let moved_footnote_free = {
-                    let mut notes = Vec::new();
-                    collect_footnotes_from_element(last_element, &mut notes);
-                    notes.is_empty()
-                };
-                if earlier_real_content
-                    && moved_footnote_free
-                    && moved_flow_height > 0.0
-                    && moved_flow_height < element_height * 0.9
-                    && moved_flow_height <= effective_content_height * 0.35
-                    && moved_flow_height + element_height
-                        <= effective_content_height + PAGE_BREAK_EPSILON
-                {
-                    let (moved_y, moved_element) = current_elements.remove(idx);
-                    y = moved_y;
-                    let consumed_height = y;
-                    let margin_override = pending_named_page
-                        .map(|geom| geom.margin)
-                        .or_else(|| page_margin_override(pages.len()));
-                    let page_size_override = pending_named_page.map(|geom| geom.page_size);
-                    pages.push(Page {
-                        elements: std::mem::take(&mut current_elements),
-                        running_elements: current_running_elements.clone(),
-                        running_elements_started: std::mem::take(
-                            &mut current_running_elements_started,
-                        ),
-                        named_strings: current_named_strings.clone(),
-                        named_strings_first: current_named_strings_first.clone(),
-                        footnotes: std::mem::take(&mut current_footnotes),
-                        margin_override,
-                        page_size_override,
-                        page_name: pending_named_page_name.clone(),
-                        is_blank: false,
-                    });
-                    current_named_strings_first.clear();
-                    content_height = pending_named_page
-                        .map(|geom| geom.content_height)
-                        .unwrap_or(default_content_height);
-                    for bg in &absolute_backgrounds {
-                        current_elements.push(bg.clone());
-                    }
-                    current_elements.push((0.0, moved_element.clone()));
-                    y = moved_flow_height;
-                    on_first_page = false;
-                    left_floats.clear();
-                    right_floats.clear();
-                    advance_positioned_ancestors_after_page_break(
-                        &mut positioned_y_by_depth,
-                        consumed_height,
-                    );
-                    page_broke_mid_loop = false;
-                }
-            }
-        }
+        let avoid_break_height = avoid_group.as_ref().and_then(|group| {
+            (!exceeds_with_roundoff(group.fresh_page_height(), effective_content_height))
+                .then(|| group.height_from_first(element_height))
+        });
+        let (break_decision_height, break_footer_reserve) = table_keep_break_height
+            .or(avoid_break_height)
+            .map_or((element_height, footer_reserve), |height| (height, 0.0));
+        let page_broke_mid_loop = (exceeds_with_roundoff(
+            y + break_decision_height + break_footer_reserve,
+            effective_content_height,
+        ) && y > 0.0)
+            || block_footnote_requires_break;
         if page_broke_mid_loop {
-            let painted_fixed_text = matches!(
-                &element,
-                LayoutElement::TextBlock {
-                    background_color: Some(_),
-                    block_height: Some(_),
-                    ..
-                }
-            );
-            if painted_fixed_text
+            // CSS GCPM §2.8: when a `footnote-policy: line` body cannot fit
+            // on this page, the break occurs at the start of the line with the
+            // reference — not before the containing paragraph. Process the
+            // two fragments through the normal work queue so page finalization,
+            // footnote collection, and decoration slicing remain centralized.
+            let line_policy_requires_break = avoid_group.is_none()
+                && break_footer_reserve == 0.0
+                && equal_with_roundoff(break_decision_height, element_height)
+                && !exceeds_with_roundoff(
+                    y + element_height,
+                    content_height_before_pending_footnotes,
+                );
+            if line_policy_requires_break
+                && let Some(index) = footnote_line_policy_break_index(
+                    &element,
+                    &current_footnotes,
+                    y,
+                    element_height,
+                    content_height,
+                    footnote_area,
+                    fonts,
+                )
+                && let Some((first, rest)) = split_text_block_at_line(&element, index)
+            {
+                work.push_front(PendingElement::continuation(rest));
+                work.push_front(PendingElement {
+                    element: first,
+                    is_fragment_continuation,
+                    avoid_group: None,
+                });
+                continue;
+            }
+            let fragmentable_fixed_text = is_fragmentable_fixed_text(element.as_ref());
+            if fragmentable_fixed_text
                 && elem_position == Position::Static
                 && elem_float == Float::None
                 && !in_table_body
@@ -2774,6 +3130,8 @@ pub(crate) fn paginate_with_first_page(
                     let page_size_override = pending_named_page.map(|geom| geom.page_size);
                     pages.push(Page {
                         elements: std::mem::take(&mut current_elements),
+                        print_content_scale: Default::default(),
+                        document_svg_defs: Default::default(),
                         running_elements: current_running_elements.clone(),
                         running_elements_started: std::mem::take(
                             &mut current_running_elements_started,
@@ -2803,7 +3161,7 @@ pub(crate) fn paginate_with_first_page(
                         &mut positioned_y_by_depth,
                         consumed_height,
                     );
-                    work.push_front(rest);
+                    work.push_front(PendingElement::continuation(rest));
                     continue;
                 }
             }
@@ -2820,6 +3178,8 @@ pub(crate) fn paginate_with_first_page(
                     let page_size_override = pending_named_page.map(|geom| geom.page_size);
                     pages.push(Page {
                         elements: std::mem::take(&mut current_elements),
+                        print_content_scale: Default::default(),
+                        document_svg_defs: Default::default(),
                         running_elements: current_running_elements.clone(),
                         running_elements_started: std::mem::take(
                             &mut current_running_elements_started,
@@ -2849,7 +3209,7 @@ pub(crate) fn paginate_with_first_page(
                         &mut positioned_y_by_depth,
                         consumed_height,
                     );
-                    work.push_front(rest);
+                    work.push_front(PendingElement::continuation(rest));
                     continue;
                 }
             }
@@ -2874,6 +3234,8 @@ pub(crate) fn paginate_with_first_page(
             let page_size_override = pending_named_page.map(|geom| geom.page_size);
             pages.push(Page {
                 elements: std::mem::take(&mut current_elements),
+                print_content_scale: Default::default(),
+                document_svg_defs: Default::default(),
                 running_elements: current_running_elements.clone(),
                 running_elements_started: std::mem::take(&mut current_running_elements_started),
                 named_strings: current_named_strings.clone(),
@@ -2910,13 +3272,7 @@ pub(crate) fn paginate_with_first_page(
                 && !pending_table_headers.is_empty()
             {
                 for header in pending_table_headers.clone() {
-                    let header_h = match &header {
-                        LayoutElement::TableRow { cells, .. } => cells
-                            .iter()
-                            .map(table_cell_content_height)
-                            .fold(0.0f32, f32::max),
-                        _ => 0.0,
-                    };
+                    let header_h = row_content_height(header.as_ref());
                     collect_footnotes_from_element(&header, &mut current_footnotes);
                     current_elements.push((y, header));
                     y += header_h;
@@ -2928,7 +3284,6 @@ pub(crate) fn paginate_with_first_page(
         // in-flow block on a continuation page. Its margin-top applies as-is
         // (no collapse with root — body is mid-flow across the page break).
         let effective_margin_top = margin_top_val;
-        let _ = page_broke_mid_loop;
 
         // Handle floated elements (floats don't participate in margin collapsing)
         if elem_float != Float::None {
@@ -2967,13 +3322,35 @@ pub(crate) fn paginate_with_first_page(
         // resolve (i.e. taller than a full empty page, or a too-tall box already
         // at the page top). Every box that fits — the entire existing corpus —
         // skips this block and takes the unchanged whole-placement path below.
-        // The small epsilon absorbs sub-point text-measurement rounding so a box
-        // that merely grazes the page bottom is not spuriously fragmented.
-        const FRAG_EPSILON: f32 = 2.0;
-        let followed_by_forced_break = matches!(work.front(), Some(LayoutElement::PageBreak(..)));
+        let followed_by_forced_break = work
+            .front()
+            .is_some_and(|pending| page_break_data(pending.element.as_ref()).is_some());
+        let avail_below_box_top = effective_content_height - (y + effective_margin_top);
+        // A forced break retained inside this box occurs before any top-level
+        // break marker that follows the box. The following marker must not make
+        // the earlier descendant break inert; after splitting, the ordinary
+        // adjacent-break coalescing logic resolves both in document order.
+        if elem_position == Position::Static
+            && let Some((first, rest, target)) =
+                split_flow_at_descendant_break(&element, avail_below_box_top)
+        {
+            if let Some(rest) = rest {
+                work.push_front(PendingElement::continuation(rest));
+            }
+            work.push_front(PendingElement::fresh(target.into_layout_element()));
+            if let Some(first) = first {
+                work.push_front(PendingElement {
+                    element: first,
+                    is_fragment_continuation,
+                    avoid_group: None,
+                });
+            }
+            continue;
+        }
         if elem_position == Position::Static
             && !followed_by_forced_break
-            && y + element_height > effective_content_height + FRAG_EPSILON
+            && may_fragment_internally
+            && exceeds_with_roundoff(y + element_height, effective_content_height)
         {
             let avail_below_box_top = effective_content_height - (y + effective_margin_top);
             // A too-tall text block splits at a line boundary; a too-tall raster
@@ -3001,6 +3378,8 @@ pub(crate) fn paginate_with_first_page(
                 let page_size_override = pending_named_page.map(|geom| geom.page_size);
                 pages.push(Page {
                     elements: std::mem::take(&mut current_elements),
+                    print_content_scale: Default::default(),
+                    document_svg_defs: Default::default(),
                     running_elements: current_running_elements.clone(),
                     running_elements_started: std::mem::take(&mut current_running_elements_started),
                     named_strings: current_named_strings.clone(),
@@ -3030,7 +3409,7 @@ pub(crate) fn paginate_with_first_page(
                     consumed_height,
                 );
                 // Resume with the continuation on the next page.
-                work.push_front(rest);
+                work.push_front(PendingElement::continuation(rest));
                 continue;
             }
         }
@@ -3038,16 +3417,14 @@ pub(crate) fn paginate_with_first_page(
         y += effective_margin_top;
 
         // Handle position: relative -- offset from normal position
-        let effective_y = if elem_position == Position::Relative {
+        let effective_y = if elem_position.is_relative() {
             y + elem_offset_top
         } else {
             y
         };
 
         // Track positioned ancestor y for absolute children.
-        if elem_positioned_depth > 0
-            && (elem_position == Position::Relative || elem_position == Position::Absolute)
-        {
+        if elem_positioned_depth > 0 && elem_position.is_positioned() {
             positioned_y_by_depth.insert(elem_positioned_depth, effective_y);
         }
         // A flex container records its PADDING-box top (border-box top + top
@@ -3077,15 +3454,9 @@ pub(crate) fn paginate_with_first_page(
     // not two), so only push the pending page if it carries real content — unless
     // it is the only page, so an otherwise-empty single-page document (e.g. an
     // empty body with a page background) still renders its one page.
-    let has_real_content = current_elements.iter().any(|(_, el)| {
-        !matches!(
-            el,
-            LayoutElement::TextBlock {
-                repeat_on_each_page: true,
-                ..
-            }
-        )
-    });
+    let has_real_content = current_elements
+        .iter()
+        .any(|(_, element)| element.page_content_role().retains_page());
     if !current_elements.is_empty() && (has_real_content || pages.is_empty()) {
         // The last page keeps the active named margin (a `page: <name>` block at
         // the document end, the common cover-page case).
@@ -3095,6 +3466,8 @@ pub(crate) fn paginate_with_first_page(
         let page_size_override = pending_named_page.map(|geom| geom.page_size);
         pages.push(Page {
             elements: current_elements,
+            print_content_scale: Default::default(),
+            document_svg_defs: Default::default(),
             running_elements: current_running_elements.clone(),
             running_elements_started: std::mem::take(&mut current_running_elements_started),
             named_strings: current_named_strings.clone(),
@@ -3110,6 +3483,8 @@ pub(crate) fn paginate_with_first_page(
     if pages.is_empty() {
         pages.push(Page {
             elements: Vec::new(),
+            print_content_scale: Default::default(),
+            document_svg_defs: Default::default(),
             running_elements: current_running_elements,
             running_elements_started: current_running_elements_started,
             named_strings: current_named_strings,
@@ -3122,33 +3497,756 @@ pub(crate) fn paginate_with_first_page(
         });
     }
 
-    // Sort elements within each page by z_index for correct rendering order.
-    // Static elements (z_index 0) stay in document order; positioned elements
-    // with higher z_index are moved later so they render on top.
-    for page in &mut pages {
-        page.elements
-            .sort_by_key(|(_, element)| layout_element_paint_order(element));
-    }
-
     pages
 }
 
 #[cfg(test)]
 mod break_tests {
     use super::*;
+    use crate::layout::cells::{CellBox, CellBoxModel, CellContent, GridCell, GridCellPlacement};
+    use crate::layout::elements::{
+        AvoidPageBreak, BoxFragmentation, BoxModel, FlexContent, FlexRow, GridContent, ImagePaint,
+        ImageSampling, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, LayoutSize,
+        PageBreak, ReplacedGeometry, SvgPaint,
+    };
+
+    fn narrow_footnote() -> FootnoteItem {
+        FootnoteItem {
+            marker: String::new(),
+            text: "i i i i".to_string(),
+            body: crate::layout::engine::FootnoteBodyStyle {
+                font_size: 0.5,
+                line_height_factor: 1.0,
+                ..Default::default()
+            },
+            marker_color: crate::types::Color::BLACK,
+            marker_prefix: String::new(),
+            formatting: Default::default(),
+        }
+    }
+
+    fn line_policy_call(marker: &str) -> TextRun {
+        TextRun {
+            text: marker.to_string(),
+            font_size: 9.6,
+            link_url: Some(crate::layout::engine::encode_footnote_link_data(
+                &crate::layout::engine::FootnoteLinkData {
+                    marker: marker.to_string(),
+                    text: "note".to_string(),
+                    marker_prefix: "{marker}. ".to_string(),
+                    body: Default::default(),
+                    marker_color: crate::types::Color::BLACK,
+                    formatting: crate::style::computed::FootnoteFormatting {
+                        policy: FootnotePolicy::Line,
+                        ..Default::default()
+                    },
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn line_policy_breaks_at_the_call_that_overflows_the_footnote_area() {
+        let fonts = HashMap::new();
+        let first_line = crate::layout::engine::TextLine {
+            runs: vec![line_policy_call("1")],
+            ..Default::default()
+        };
+        let second_line = crate::layout::engine::TextLine {
+            runs: vec![line_policy_call("2")],
+            ..Default::default()
+        };
+        let mut element = TextBlock::empty_spacer().boxed();
+        element
+            .update_text(|text| text.lines = vec![first_line.clone(), second_line.clone()])
+            .expect("empty spacer must be a text block");
+
+        let area = FootnoteAreaLayout {
+            content_width: 200.0,
+            ..Default::default()
+        };
+        let mut one = Vec::new();
+        let mut both = Vec::new();
+        let mut seen = HashSet::new();
+        collect_footnotes_from_runs(&first_line.runs, &mut seen, &mut one);
+        collect_footnotes_from_runs(&second_line.runs, &mut seen, &mut both);
+        both.splice(0..0, one.clone());
+        let empty: &[FootnoteItem] = &[];
+        let one_height = footnote_reserved_height(&[empty, one.as_slice()], area, &fonts);
+        let both_height = footnote_reserved_height(&[empty, both.as_slice()], area, &fonts);
+        let element_height = 50.0;
+        let content_height = element_height + (one_height + both_height) / 2.0;
+
+        assert_eq!(
+            footnote_line_policy_break_index(
+                &element,
+                empty,
+                0.0,
+                element_height,
+                content_height,
+                area,
+                &fonts,
+            ),
+            Some(1),
+        );
+    }
+
+    #[test]
+    fn block_policy_breaks_before_the_owning_block_only_when_its_body_overflows() {
+        let fonts = HashMap::new();
+        let area = FootnoteAreaLayout {
+            content_width: 200.0,
+            ..Default::default()
+        };
+        let element_y = 20.0;
+        let element_height = 20.0;
+        let mut block = narrow_footnote();
+        block.formatting.policy = FootnotePolicy::Block;
+        let body_height = footnote_reserved_height(&[std::slice::from_ref(&block)], area, &fonts);
+        let content_height = element_y + element_height + body_height / 2.0;
+
+        assert!(footnote_block_policy_requires_break(
+            std::slice::from_ref(&block),
+            &[],
+            element_y,
+            element_height,
+            content_height,
+            area,
+            &fonts,
+        ));
+
+        block.formatting.policy = FootnotePolicy::Auto;
+        assert!(!footnote_block_policy_requires_break(
+            std::slice::from_ref(&block),
+            &[],
+            element_y,
+            element_height,
+            content_height,
+            area,
+            &fonts,
+        ));
+    }
+
+    #[test]
+    fn footnote_wrapping_preserves_half_point_and_thousandth_point_widths() {
+        let fonts = HashMap::new();
+        let footnote = narrow_footnote();
+        let one_point = footnote_lines_height(std::slice::from_ref(&footnote), 1.0, &fonts);
+        let half_point = footnote_lines_height(std::slice::from_ref(&footnote), 0.5, &fonts);
+        let thousandth_point = footnote_lines_height(&[footnote], 0.001, &fonts);
+
+        assert!(
+            half_point > one_point,
+            "0.5pt footnote width snapped to 1pt"
+        );
+        assert!(
+            thousandth_point > half_point,
+            "0.001pt footnote width snapped to the half-point or 1pt lane"
+        );
+    }
+
+    #[test]
+    fn asymmetric_footnote_padding_reduces_wrapping_width() {
+        let fonts = HashMap::new();
+        let footnote = narrow_footnote();
+        let plain = FootnoteAreaLayout {
+            content_width: 1.0,
+            ..FootnoteAreaLayout::default()
+        };
+        let padded = FootnoteAreaLayout {
+            style: ResolvedFootnoteAreaStyle {
+                padding: EdgeSizes::new(0.0, 0.2, 0.0, 0.3),
+                ..ResolvedFootnoteAreaStyle::default()
+            },
+            ..plain
+        };
+
+        assert!(
+            footnote_content_height(std::slice::from_ref(&footnote), padded, &fonts)
+                > footnote_content_height(std::slice::from_ref(&footnote), plain, &fonts),
+            "left and right footnote padding must narrow the wrapping lane"
+        );
+    }
+
+    #[test]
+    fn footnote_area_reserves_vertical_geometry_once_for_all_groups() {
+        let fonts = HashMap::new();
+        let first = narrow_footnote();
+        let second = narrow_footnote();
+        let area = FootnoteAreaLayout {
+            content_width: 1.0,
+            style: ResolvedFootnoteAreaStyle {
+                padding: EdgeSizes::new(2.0, 0.0, 3.0, 0.0),
+                separator: FootnoteSeparator {
+                    width: 4.0,
+                    ..FootnoteSeparator::default()
+                },
+            },
+            ..FootnoteAreaLayout::default()
+        };
+        let first_slice = std::slice::from_ref(&first);
+        let second_slice = std::slice::from_ref(&second);
+        let content_height = footnote_content_height(first_slice, area, &fonts)
+            + footnote_content_height(second_slice, area, &fonts);
+        let reserved = footnote_reserved_height(&[first_slice, second_slice], area, &fonts);
+
+        assert!((reserved - (content_height + 2.0 + 3.0 + 4.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn footnote_max_height_constrains_content_box_not_padding_and_separator() {
+        let fonts = HashMap::new();
+        let footnote = narrow_footnote();
+        let footnotes = std::slice::from_ref(&footnote);
+        let mut area = FootnoteAreaLayout {
+            content_width: 1.0,
+            style: ResolvedFootnoteAreaStyle {
+                padding: EdgeSizes::new(2.0, 0.0, 3.0, 0.0),
+                separator: FootnoteSeparator {
+                    width: 4.0,
+                    ..FootnoteSeparator::default()
+                },
+            },
+            ..FootnoteAreaLayout::default()
+        };
+        let content_height = footnote_content_height(footnotes, area, &fonts);
+        area.max_height = Some(content_height);
+
+        // `max-height` uses the initial `box-sizing: content-box`; padding and
+        // the separator remain outside that limit but inside page reservation.
+        assert_eq!(
+            footnote_reserved_height(&[footnotes], area, &fonts),
+            content_height + 9.0
+        );
+    }
 
     /// A fixed-height, in-flow content block (counts as "real content" for the
     /// leading-blank-page suppression).
-    fn block(h: f32) -> LayoutElement {
-        let mut e = LayoutElement::empty_spacer();
-        if let LayoutElement::TextBlock { block_height, .. } = &mut e {
-            *block_height = Some(h);
+    fn block(h: f32) -> LayoutNode {
+        TextBlock {
+            box_model: BoxModel {
+                size: crate::layout::elements::LayoutSize {
+                    height: BlockSize::definite(h),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
         }
-        e
+        .boxed()
     }
 
-    fn brk(side: PageBreakSide) -> LayoutElement {
-        LayoutElement::PageBreak(side, None)
+    fn text_block(h: f32) -> LayoutNode {
+        let mut element = block(h);
+        element.update_text(|text| {
+            text.lines.push(crate::layout::engine::TextLine {
+                height: 12.0,
+                ..Default::default()
+            });
+        });
+        element
+    }
+
+    fn flow_container(children: Vec<LayoutNode>, padding: crate::types::EdgeSizes) -> LayoutNode {
+        Container {
+            children,
+            box_model: BoxModel {
+                padding,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .boxed()
+    }
+
+    fn nested_flow_containers(
+        depth: usize,
+        leaf_height: f32,
+        padding: crate::types::EdgeSizes,
+    ) -> LayoutNode {
+        (0..depth).fold(block(leaf_height), |child, _| {
+            flow_container(vec![child], padding)
+        })
+    }
+
+    fn brk(side: PageBreakSide) -> LayoutNode {
+        PageBreak {
+            side,
+            page_name: None,
+        }
+        .boxed()
+    }
+
+    fn grid_cell_with_nested(nested: LayoutNode, height: f32) -> GridCell {
+        GridCell {
+            layout: CellBox {
+                content: CellContent {
+                    children: vec![nested],
+                    ..Default::default()
+                },
+                box_model: CellBoxModel {
+                    minimum_block_size: height,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn grid_row(height: f32) -> LayoutNode {
+        GridRow {
+            content: GridContent {
+                cells: vec![GridCell {
+                    layout: CellBox {
+                        box_model: CellBoxModel {
+                            minimum_block_size: height,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                column_widths: vec![10.0],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .boxed()
+    }
+
+    fn svg(height: f32) -> LayoutNode {
+        Svg {
+            tree: crate::parser::svg::SvgTree {
+                width: 1.0,
+                height,
+                width_attr: None,
+                height_attr: None,
+                preserve_aspect_ratio: Default::default(),
+                view_box: Some(crate::parser::svg::ViewBox {
+                    min_x: 0.0,
+                    min_y: 0.0,
+                    width: 1.0,
+                    height,
+                }),
+                defs: Default::default(),
+                children: Vec::new(),
+                text_ctx: Default::default(),
+                source_markup: None,
+            },
+            geometry: ReplacedGeometry::new(
+                Size::new(1.0, height),
+                BlockMargins::default(),
+                Default::default(),
+            ),
+            positioning: Default::default(),
+            paint: SvgPaint::default(),
+            replaced: Default::default(),
+        }
+        .boxed()
+    }
+
+    fn raster_image(height: f32) -> LayoutNode {
+        Image {
+            source: crate::layout::engine::RasterImageAsset::source(
+                Vec::new(),
+                1,
+                4,
+                crate::layout::engine::ImageFormat::Png,
+                None,
+            ),
+            geometry: ReplacedGeometry::new(
+                Size::new(1.0, height),
+                BlockMargins::default(),
+                Default::default(),
+            ),
+            positioning: Default::default(),
+            sampling: ImageSampling {
+                object_fit: ObjectFit::Fill,
+                ..Default::default()
+            },
+            paint: ImagePaint::default(),
+        }
+        .boxed()
+    }
+
+    #[test]
+    fn height_estimation_preserves_the_former_depth_boundary() {
+        let padding = crate::types::EdgeSizes::new(1.0, 0.0, 1.0, 0.0);
+
+        for depth in [49, 50, 51] {
+            let element = nested_flow_containers(depth, 7.0, padding);
+            assert_eq!(
+                estimate_element_height(&element),
+                7.0 + depth as f32 * padding.vertical(),
+                "all wrapper and leaf geometry must survive at depth {depth}",
+            );
+        }
+    }
+
+    #[test]
+    fn height_estimation_uses_heap_work_stack_for_deep_nesting() {
+        let depth = 2048;
+        let element = nested_flow_containers(depth, 11.0, crate::types::EdgeSizes::ZERO);
+
+        assert_eq!(estimate_element_height(&element), 11.0);
+    }
+
+    #[test]
+    fn pagination_sees_content_across_the_former_depth_boundary() {
+        for depth in [49, 50, 51] {
+            let nested = nested_flow_containers(depth, 10.0, crate::types::EdgeSizes::ZERO);
+            let pages = paginate(vec![block(1.0), nested], 10.0, 0.0);
+
+            assert_eq!(pages.len(), 2, "depth {depth} must force the real break");
+            assert_eq!(pages[0].elements.len(), 1);
+            assert_eq!(pages[1].elements.len(), 1);
+            assert_eq!(estimate_element_height(&pages[1].elements[0].1), 10.0);
+        }
+    }
+
+    #[test]
+    fn grid_fragment_rest_height_is_its_measured_content_not_a_scaled_guess() {
+        let cell = grid_cell_with_nested(block(70.0), 70.0);
+        let (_first, rest) = split_grid_cell(&cell, 20.0, 50.0);
+
+        assert_eq!(rest.layout.content.children.len(), 1);
+        assert_eq!(
+            estimate_element_height(&rest.layout.content.children[0]),
+            50.0
+        );
+        assert_eq!(rest.layout.box_model.minimum_block_size, 50.0);
+    }
+
+    #[test]
+    fn grid_fragment_continuation_expands_to_its_trailing_nested_content() {
+        let cell = GridCell {
+            layout: CellBox {
+                content: CellContent {
+                    children: vec![block(70.0), block(15.0)],
+                    ..Default::default()
+                },
+                box_model: CellBoxModel {
+                    minimum_block_size: 85.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0);
+
+        assert_eq!(rest.layout.content.children.len(), 1);
+        assert_eq!(
+            estimate_element_height(&rest.layout.content.children[0]),
+            15.0
+        );
+        assert_eq!(rest.layout.box_model.minimum_block_size, 15.0);
+    }
+
+    #[test]
+    fn spanning_grid_fragment_keeps_the_resolved_track_remainder() {
+        let mut cell = grid_cell_with_nested(block(70.0), 85.0);
+        cell.layout.content.children.push(block(15.0));
+        cell.placement = GridCellPlacement {
+            row_span: 3,
+            ..Default::default()
+        };
+        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0);
+
+        assert_eq!(rest.layout.box_model.minimum_block_size, 5.0);
+    }
+
+    #[test]
+    fn fixed_height_text_with_inline_content_keeps_a_subpoint_continuation() {
+        let (first, rest) = split_fixed_height_text_block(&text_block(100.5), 100.0)
+            .expect("both positive fragments must survive");
+
+        let first_height = first
+            .inspect_text(|text| text.box_model.size.height.used())
+            .flatten()
+            .expect("expected a text fragment");
+        let rest_height = rest
+            .inspect_text(|text| text.box_model.size.height.used())
+            .flatten()
+            .expect("expected a text continuation");
+        assert_eq!(first_height, 100.0);
+        assert_eq!(rest_height, 0.5);
+    }
+
+    #[test]
+    fn fixed_height_container_clone_keeps_complete_fragment_decoration() {
+        let mut element = Container {
+            box_model: BoxModel {
+                size: LayoutSize::fixed_inline(80.0, BlockSize::definite(120.0)),
+                margins: BlockMargins::new(3.0, 5.0),
+                padding: EdgeSizes::new(7.0, 11.0, 13.0, 17.0),
+                ..Default::default()
+            },
+            fragmentation: BoxFragmentation {
+                decoration: BoxDecorationBreak::Clone,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        element.box_model.border.top.width = 2.0;
+        element.box_model.border.bottom.width = 4.0;
+
+        let (first, rest) =
+            split_fixed_height_container_node(&element, 70.0).expect("the definite box must split");
+        for fragment in [&first, &rest] {
+            let decoration = fragment
+                .inspect_container(|container| {
+                    (
+                        container.box_model.margins,
+                        container.box_model.padding,
+                        container.box_model.border.top.width,
+                        container.box_model.border.bottom.width,
+                        container.fragmentation.reference_slice,
+                    )
+                })
+                .expect("expected a container fragment");
+            assert_eq!(decoration.0, element.box_model.margins);
+            assert_eq!(decoration.1, element.box_model.padding);
+            assert_eq!(decoration.2, 2.0);
+            assert_eq!(decoration.3, 4.0);
+            assert_eq!(decoration.4, None);
+        }
+    }
+
+    #[test]
+    fn empty_fixed_height_blocks_can_extend_into_page_margins() {
+        let pages = paginate_with_first_page(
+            vec![block(100.0), block(100.0)],
+            DocumentPageGeometry::new(98.0, 100.0, 0.0),
+            None,
+            SpreadMargins::default(),
+            HashMap::new(),
+            FootnoteAreaLayout::default(),
+            &HashMap::new(),
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(|page| page.elements.len() == 1));
+    }
+
+    #[test]
+    fn empty_fixed_height_continuations_keep_fragmenting_to_the_content_box() {
+        let pages = paginate_with_first_page(
+            vec![block(220.0)],
+            DocumentPageGeometry::new(64.0, 104.0, 0.0),
+            None,
+            SpreadMargins::default(),
+            HashMap::new(),
+            FootnoteAreaLayout::default(),
+            &HashMap::new(),
+        );
+
+        assert_eq!(pages.len(), 4);
+        assert_eq!(estimate_element_height(&pages[3].elements[0].1), 28.0);
+    }
+
+    #[test]
+    fn raster_image_keeps_a_subpoint_continuation() {
+        let (first, rest) =
+            split_image_block(&raster_image(100.5), 100.0).expect("positive slices must survive");
+
+        let (first_height, first_crop) = first
+            .inspect_image(|image| (image.geometry.size.height, image.sampling.source_crop))
+            .and_then(|(height, crop)| crop.map(|crop| (height, crop)))
+            .expect("expected an image fragment");
+        let (rest_height, rest_crop) = rest
+            .inspect_image(|image| (image.geometry.size.height, image.sampling.source_crop))
+            .and_then(|(height, crop)| crop.map(|crop| (height, crop)))
+            .expect("expected an image continuation");
+        assert_eq!(first_height, 100.0);
+        assert_eq!(rest_height, 0.5);
+        assert_eq!(first_crop[3] + rest_crop[3], 4.0);
+    }
+
+    #[test]
+    fn subpoint_svg_splits_into_two_valid_fragments() {
+        let (first, rest) =
+            split_svg_block(&svg(0.75), 0.375).expect("positive SVG slices must survive");
+
+        let (first_height, first_source_height, first_offset) = first
+            .inspect_svg(|svg| {
+                (
+                    svg.geometry.size.height,
+                    svg.tree.view_box.map(|view_box| view_box.height),
+                    svg.replaced
+                        .fragment
+                        .map(|fragment| fragment.content_offset_top),
+                )
+            })
+            .expect("expected an SVG fragment");
+        let (rest_height, rest_source_height, rest_offset) = rest
+            .inspect_svg(|svg| {
+                (
+                    svg.geometry.size.height,
+                    svg.tree.view_box.map(|view_box| view_box.height),
+                    svg.replaced
+                        .fragment
+                        .map(|fragment| fragment.content_offset_top),
+                )
+            })
+            .expect("expected an SVG continuation");
+        assert_eq!(first_height, 0.375);
+        assert_eq!(rest_height, 0.375);
+        assert_eq!(first_source_height, Some(0.75));
+        assert_eq!(rest_source_height, Some(0.75));
+        assert_eq!(first_offset, Some(0.0));
+        assert_eq!(rest_offset, Some(0.375));
+    }
+
+    #[test]
+    fn subpoint_space_is_offered_to_a_grid_row_splitter() {
+        let container = flow_container(
+            vec![block(10.0), grid_row(2.0)],
+            crate::types::EdgeSizes::ZERO,
+        );
+        let (first, rest) =
+            split_container(&container, 10.5).expect("the grid row has 0.5pt to fragment into");
+
+        let first_grid_height = first
+            .inspect_container(|container| {
+                container.children.get(1).and_then(|child| {
+                    child.inspect_grid(|grid| {
+                        grid.content.cells[0].layout.box_model.minimum_block_size
+                    })
+                })
+            })
+            .flatten()
+            .expect("the grid fragment must remain on the first page");
+        assert_eq!(first_grid_height, 0.5);
+
+        let rest_grid_height = rest
+            .inspect_container(|container| {
+                container.children.first().and_then(|child| {
+                    child.inspect_grid(|grid| {
+                        grid.content.cells[0].layout.box_model.minimum_block_size
+                    })
+                })
+            })
+            .flatten()
+            .expect("the grid continuation must move to the next page");
+        assert_eq!(rest_grid_height, 1.5);
+    }
+
+    #[test]
+    fn ordinary_sibling_is_not_backtracked_without_break_avoidance() {
+        let pages = paginate(vec![block(20.0), block(10.0), block(80.0)], 100.0, 0.0);
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 2);
+        assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn avoid_page_break_keeps_adjacent_fitting_boxes_together() {
+        let pages = paginate(
+            vec![
+                block(55.0),
+                block(20.0),
+                AvoidPageBreak.boxed(),
+                block(30.0),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 2);
+        assert_eq!(pages[1].elements[0].0, 0.0);
+        assert_eq!(pages[1].elements[1].0, 20.0);
+    }
+
+    #[test]
+    fn avoid_page_break_crosses_anchor_metadata() {
+        let pages = paginate(
+            vec![
+                block(25.0),
+                block(50.0),
+                NamedString {
+                    name: "target-anchor".into(),
+                    value: String::new(),
+                }
+                .boxed(),
+                AvoidPageBreak.boxed(),
+                block(30.0),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 2);
+    }
+
+    #[test]
+    fn avoid_page_break_uses_collapsed_group_margins() {
+        let mut first = block(20.0);
+        let mut second = block(20.0);
+        first.update_text(|text| text.box_model.margins.end = 50.0);
+        second.update_text(|text| text.box_model.margins.start = 50.0);
+
+        let pages = paginate(
+            vec![block(20.0), first, AvoidPageBreak.boxed(), second],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 2);
+    }
+
+    #[test]
+    fn avoid_page_break_yields_when_the_adjacent_group_cannot_fit_a_page() {
+        let pages = paginate(
+            vec![
+                block(40.0),
+                block(60.0),
+                AvoidPageBreak.boxed(),
+                block(50.0),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 2);
+        assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn forced_break_overrides_adjacent_avoidance() {
+        let pages = paginate(
+            vec![
+                block(20.0),
+                AvoidPageBreak.boxed(),
+                brk(PageBreakSide::Any),
+                block(20.0),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn visible_subpoint_overflow_is_not_hidden_by_a_page_break_epsilon() {
+        let pages = paginate(vec![block(50.0), block(50.01)], 100.0, 0.0);
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[1].elements.len(), 1);
     }
 
     #[test]
@@ -3162,6 +4260,56 @@ mod break_tests {
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].elements.len(), 1);
         assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    fn overflow_continuation() -> LayoutNode {
+        FlexRow {
+            content: FlexContent {
+                cells: vec![crate::layout::engine::FlexCell {
+                    nested_elements: vec![block(10.0)],
+                    ..Default::default()
+                }],
+                fragment_role:
+                    crate::layout::engine::FlexFragmentRole::ParallelOverflowContinuation,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .boxed()
+    }
+
+    #[test]
+    fn painted_overflow_continuation_retains_the_final_page() {
+        let pages = paginate(
+            vec![
+                block(10.0),
+                brk(PageBreakSide::Any),
+                overflow_continuation(),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn overflow_continuation_does_not_interrupt_forced_break_sequence() {
+        let pages = paginate(
+            vec![
+                block(10.0),
+                brk(PageBreakSide::Any),
+                overflow_continuation(),
+                brk(PageBreakSide::Any),
+                block(10.0),
+            ],
+            100.0,
+            0.0,
+        );
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1].elements.len(), 2);
     }
 
     #[test]
@@ -3190,15 +4338,19 @@ mod break_tests {
         let pages = paginate_with_first_page(
             vec![
                 block(100.0),
-                LayoutElement::PageBreak(PageBreakSide::Any, Some("wide".to_string())),
+                PageBreak {
+                    side: PageBreakSide::Any,
+                    page_name: Some("wide".to_string()),
+                }
+                .boxed(),
                 block(100.0),
             ],
-            1000.0,
-            0.0,
+            DocumentPageGeometry::new(1000.0, 1000.0, 0.0),
             None,
             SpreadMargins::default(),
             named,
             FootnoteAreaLayout::default(),
+            &HashMap::new(),
         );
         assert_eq!(pages.len(), 2);
         assert_eq!(
@@ -3219,15 +4371,19 @@ mod break_tests {
         let pages = paginate_with_first_page(
             vec![
                 block(100.0),
-                LayoutElement::PageBreak(PageBreakSide::Any, Some("ghost".to_string())),
+                PageBreak {
+                    side: PageBreakSide::Any,
+                    page_name: Some("ghost".to_string()),
+                }
+                .boxed(),
                 block(100.0),
             ],
-            1000.0,
-            0.0,
+            DocumentPageGeometry::new(1000.0, 1000.0, 0.0),
             None,
             SpreadMargins::default(),
             HashMap::new(),
             FootnoteAreaLayout::default(),
+            &HashMap::new(),
         );
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].margin_override, None);

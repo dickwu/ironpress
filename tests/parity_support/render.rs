@@ -4,21 +4,71 @@
 //! Extracted verbatim from the former monolithic `mod.rs` (C1 mechanical split).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use super::util::contains;
 
-/// (css-family, font-bytes) loaded ONCE and shared immutably across all parallel
-/// fixture jobs. Each per-fixture render registers these into its own freshly
-/// constructed `HtmlConverter` (no mutable converter is ever shared across
-/// threads).
-pub(crate) type SharedFonts = Arc<Vec<(&'static str, Vec<u8>)>>;
+/// Immutable deterministic font inputs shared by reference across parallel
+/// fixture jobs. Registration aliases point at uniquely owned byte buffers;
+/// only the fresh converter receives the owned clones required by its builder.
+pub(crate) struct FontBundle {
+    faces: Vec<Vec<u8>>,
+    registrations: Vec<(&'static str, usize)>,
+}
+
+/// Repository-owned author stylesheet that replaces renderer-specific HTML UA
+/// choices with one explicit, zero-specificity parity baseline.
+pub(crate) struct PinnedUaStylesheet {
+    css: String,
+}
+
+impl PinnedUaStylesheet {
+    pub(crate) fn load(parity_dir: &Path) -> Result<Self, String> {
+        let path = parity_dir.join("ua-pins.css");
+        let css = std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "cannot read pinned UA stylesheet {}: {error}",
+                path.display()
+            )
+        })?;
+        if css.trim().is_empty() {
+            return Err(format!("pinned UA stylesheet {} is empty", path.display()));
+        }
+        Ok(Self { css })
+    }
+
+    pub(crate) fn inject(&self, html: &str) -> Result<String, String> {
+        let lower = html.to_ascii_lowercase();
+        let head_start = lower
+            .match_indices("<head")
+            .find_map(|(offset, _)| {
+                lower
+                    .as_bytes()
+                    .get(offset + "<head".len())
+                    .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'>')
+                    .then_some(offset)
+            })
+            .ok_or_else(|| "fixture has no <head> for pinned UA stylesheet".to_string())?;
+        let head_end = lower[head_start..]
+            .find('>')
+            .map(|offset| head_start + offset + 1)
+            .ok_or_else(|| "fixture has an unterminated <head> tag".to_string())?;
+
+        let mut pinned = String::with_capacity(html.len() + self.css.len() + 64);
+        pinned.push_str(&html[..head_end]);
+        pinned.push_str("\n<style data-parity-ua-pins>\n");
+        pinned.push_str(&self.css);
+        pinned.push_str("\n</style>\n");
+        pinned.push_str(&html[head_end..]);
+        Ok(pinned)
+    }
+}
 
 pub(crate) fn render_pdf(
     html: &str,
     sanitize: bool,
-    fonts: &[(&'static str, Vec<u8>)],
+    fonts: &FontBundle,
+    ua_stylesheet: &PinnedUaStylesheet,
     base_path: Option<&std::path::Path>,
 ) -> Result<Vec<u8>, String> {
     use ironpress::{HtmlConverter, Margin, PageSize};
@@ -29,9 +79,9 @@ pub(crate) fn render_pdf(
 
     // Resolve a fixture's relative resource URLs (e.g. `@font-face { src:
     // url('../../fonts/ParitySerif.ttf') }`) against the fixture's own directory,
-    // exactly as the reference rasterizer did when it loaded that font from disk.
-    // This is a determinism fix — it gives ironpress the SAME font input the
-    // ref-gen had — not a comparator/threshold change.
+    // exactly as the Chrome oracle PDF producer did when it loaded that font
+    // from disk. This is a determinism fix: it gives ironpress the SAME font
+    // input used to produce the oracle PDF; it does not alter comparison.
     if let Some(base) = base_path {
         conv = conv.base_path(base);
     }
@@ -43,104 +93,60 @@ pub(crate) fn render_pdf(
     // bytes are loaded ONCE (see `load_bundled_fonts`) and shared immutably; this
     // builds a FRESH converter per render so no mutable state is shared across
     // parallel jobs.
-    for (family, bytes) in fonts {
-        conv = conv.add_font(family, bytes.clone());
+    for &(family, face_index) in &fonts.registrations {
+        conv = conv.add_font(family, fonts.faces[face_index].clone());
     }
 
-    conv.convert(html).map_err(|e| e.to_string())
+    let html = ua_stylesheet.inject(html)?;
+    conv.convert(&html).map_err(|e| e.to_string())
 }
 
 /// Load every bundled face's bytes ONCE so the parallel per-fixture renders can
 /// share immutable font data instead of re-reading each face from disk per
-/// render. Missing files are silently skipped (mirrors the previous per-render
-/// `if let Ok(bytes)` behavior, so scores are unchanged).
-pub(crate) fn load_bundled_fonts() -> Vec<(&'static str, Vec<u8>)> {
-    let mut out: Vec<(&'static str, Vec<u8>)> = Vec::new();
-    // De-dup identical file reads across families that map to the same face.
-    let mut cache: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-    for (family, file) in bundled_font_faces() {
-        let bytes = if let Some(b) = cache.get(&file) {
-            b.clone()
+/// render. Every declared face is part of the authenticated oracle contract, so
+/// a missing file aborts the run instead of changing font fallback silently.
+pub(crate) fn load_bundled_fonts(root: &std::path::Path) -> Result<FontBundle, String> {
+    let mut faces = Vec::new();
+    let mut registrations = Vec::new();
+    let mut by_path: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    for (family, file) in bundled_font_faces(root) {
+        let face_index = if let Some(&index) = by_path.get(&file) {
+            index
         } else {
-            match std::fs::read(&file) {
-                Ok(b) => {
-                    cache.insert(file.clone(), b.clone());
-                    b
-                }
-                Err(_) => continue,
-            }
+            let bytes = std::fs::read(&file)
+                .map_err(|error| format!("required parity font {}: {error}", file.display()))?;
+            let index = faces.len();
+            faces.push(bytes);
+            by_path.insert(file, index);
+            index
         };
-        out.push((family, bytes));
+        registrations.push((family, face_index));
     }
-    out
+    Ok(FontBundle {
+        faces,
+        registrations,
+    })
 }
 
 /// (css-family, ttf-path) for every bundled face.
 ///
-/// CRITICAL — font-resolution parity with the actual reference rasterizer.
-///
-/// The reference PNGs are produced by the locally-available Chromium, which is
-/// the *strictly-confined snap* (`/snap/bin/chromium`). A snap ignores the host
-/// `FONTCONFIG_FILE` and cannot see the bundled `tests/parity/fonts/Parity*.ttf`
-/// at all; it ships and uses its OWN font set (the Liberation family). Verified
-/// empirically with `pdffonts` on snap-produced PDFs:
-///   * `font-family: sans-serif`  -> LiberationSans
-///   * `font-family: serif`       -> LiberationSerif
-///   * `font-family: monospace`   -> LiberationMono
-///   * a bare unknown family such as `ParitySans` / `ParitySerif` /
-///     `ParityMono` -> LiberationSerif  (the snap's last-resort serif default;
-///     the bundled DejaVu-based Parity faces are invisible to the snap).
-///
-/// To measure REAL rendering parity rather than a font mismatch, ironpress must
-/// shape with the SAME physical outlines the reference engine used. We therefore
-/// register, under each CSS generic, the EXACT face the snap embeds for that
-/// generic, AND mirror the snap's actual fallback for the bare `Parity*` names
-/// (-> Liberation Serif). This is not score-gaming: it aligns the candidate's
-/// font resolution with the reference engine's *observed* behavior on this
-/// toolchain. If/when an unconfined Chrome that honors `FONTCONFIG_FILE` becomes
-/// available, this mapping (and the refs) should be regenerated so the bundled
-/// Parity faces resolve directly.
-///
-/// Empirically verified with `pdffonts` on snap-produced PDFs rendered under
-/// `FONTCONFIG_FILE=tests/parity/fonts/fonts.conf`:
-///   * `font-family: sans-serif` -> LiberationSans
-///   * `font-family: serif`      -> LiberationSerif
-///   * `font-family: monospace`  -> DejaVuSansMono (NOT LiberationMono — the
-///     snap ships its own DejaVu mono and uses it)
-///   * bare `ParitySans`/`ParitySerif`/`ParityMono` -> LiberationSerif (the
-///     snap's last-resort serif default; the bundled DejaVu-based Parity faces
-///     are invisible to the confined snap).
-pub(crate) fn bundled_font_faces() -> Vec<(&'static str, PathBuf)> {
+/// The snap Chromium oracle resolves CSS generics to these three host faces and
+/// explicit `Parity*` names to the installed bundled faces. The oracle lock
+/// hashes every file listed here, and the parity runner fails if one is absent,
+/// so a host-font change cannot masquerade as a renderer change.
+pub(crate) fn bundled_font_faces(root: &std::path::Path) -> Vec<(&'static str, PathBuf)> {
     let lib = PathBuf::from("/usr/share/fonts/truetype/liberation");
     let sans = lib.join("LiberationSans-Regular.ttf");
     let serif = lib.join("LiberationSerif-Regular.ttf");
-    // The snap resolves `monospace` to its own DejaVu Sans Mono, which is the
-    // SAME outline as the bundled ParityMono.ttf (a renamed DejaVu Sans Mono).
-    // Use the system DejaVu mono so ironpress shapes identical glyphs.
     let mono = PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf");
-    // The `Parity*` families are the deterministic faces this harness bundles
-    // (DejaVu Sans/Serif/Mono renamed). `scripts/parity-gen-refs.sh` INSTALLS
-    // them into the user font dir before generating refs, so Chrome resolves
-    // `font-family: ParitySans/ParitySerif/ParityMono` to THESE exact outlines.
-    // ironpress must shape with the same files — the previous serif fallback
-    // mis-rendered every `ParitySans`/`ParityMono` fixture (proportional serif
-    // instead of the reference's sans / monospace, breaking glyph shapes and
-    // monospace column alignment).
-    let parity = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("parity")
-        .join("fonts");
+    let parity = root.join("tests").join("parity").join("fonts");
     vec![
-        // Generics: resolve exactly as the snap chromium does.
         ("sans-serif", sans),
-        ("serif", serif.clone()),
+        ("serif", serif),
         ("monospace", mono),
-        // Bare Parity* names resolve to the installed bundled faces.
         ("ParitySans", parity.join("ParitySans.ttf")),
         ("ParitySerif", parity.join("ParitySerif.ttf")),
         ("ParityMono", parity.join("ParityMono.ttf")),
-        // Any @font-face-declared ParityCustom falls back to the serif default.
-        ("ParityCustom", serif),
     ]
 }
 
@@ -155,4 +161,32 @@ pub(crate) fn check_pdf_valid(pdf: &[u8]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PinnedUaStylesheet;
+
+    #[test]
+    fn pinned_ua_stylesheet_precedes_fixture_author_styles() {
+        let stylesheet = PinnedUaStylesheet {
+            css: ":where(body) { margin: 0; }".to_string(),
+        };
+        let html =
+            "<!doctype html><html><head><style>body{margin:8px}</style></head><body></body></html>";
+
+        let pinned = stylesheet.inject(html).unwrap();
+        assert!(
+            pinned.find("data-parity-ua-pins").unwrap() < pinned.find("body{margin:8px}").unwrap()
+        );
+    }
+
+    #[test]
+    fn pinned_ua_stylesheet_requires_an_explicit_head() {
+        let stylesheet = PinnedUaStylesheet {
+            css: ":where(body) { margin: 0; }".to_string(),
+        };
+        let error = stylesheet.inject("<p>implicit document</p>").unwrap_err();
+        assert!(error.contains("no <head>"), "{error}");
+    }
 }

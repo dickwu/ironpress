@@ -3,23 +3,21 @@
 <head>
 <meta charset="utf-8">
 <style>
-@page{size:154px 130px;margin:0}
+@page{size:160px 136px;margin:0}
 html{font-family:ParitySans;line-height:1.5}
 *{margin:0;box-sizing:border-box}
 html,body{background:#fff}
 body{padding:12px}
-.outer{border-collapse:collapse;width:104px}
+.outer{border-collapse:collapse;table-layout:fixed;width:104px}
 .outer>tbody>tr>td{border:2px solid #222;padding:5px;vertical-align:top;background:#f1f5f9}
 .inner{border-collapse:collapse;width:54px}
 .inner td{border:4px solid #d61f69;padding:0}
 .fill{width:46px;height:46px;background:#00a651}
-.bar{width:12px;height:8px;background:#1f6fb2}
 </style>
 </head>
 <body>
 <table class="outer"><tr>
 <td><table class="inner"><tr><td><div class="fill"></div></td></tr></table></td>
-<td><div class="bar"></div></td>
 </tr></table>
 </body>
 </html>

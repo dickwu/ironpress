@@ -1,6 +1,7 @@
 use crate::parser::css::CssRule;
 use crate::parser::dom::ElementNode;
 use crate::parser::ttf::TtfFont;
+use crate::style::font_metrics::FontMetrics;
 use std::collections::HashMap;
 
 use super::engine::CounterState;
@@ -20,6 +21,14 @@ pub(crate) struct LayoutEnv<'a> {
     /// Rasterization DPI for layout-time filter bitmaps such as replaced-image
     /// `filter: blur()` and `filter: drop-shadow()`.
     pub filter_dpi: f32,
+}
+
+impl<'a> LayoutEnv<'a> {
+    /// Font-relative CSS units resolve through the same borrowed font map that
+    /// text layout and shaping use.
+    pub(crate) const fn font_metrics(&self) -> FontMetrics<'a> {
+        FontMetrics::new(self.fonts)
+    }
 }
 
 /// Containing block information for `position: absolute` elements.

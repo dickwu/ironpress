@@ -220,29 +220,11 @@ pub(crate) fn first_strong_is_rtl(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::computed::{FontFamily, VerticalAlign};
 
     fn make_run(text: &str) -> TextRun {
         TextRun {
             text: text.to_string(),
-            font_size: 12.0,
-            bold: false,
-            italic: false,
-            underline: false,
-            line_through: false,
-            overline: false,
-            decoration_color: None,
-            color: (0.0, 0.0, 0.0),
-            link_url: None,
-            font_family: FontFamily::Helvetica,
-            background_color: None,
-            padding: (0.0, 0.0),
-            border_radius: 0.0,
-            line_height_factor: f32::NAN,
-            inline_box: None,
-            disable_ligatures: false,
-            vertical_align: VerticalAlign::Baseline,
-            text_shadow: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>logical border cascade across writing modes</title>
+<style>
+  @page { size: 360px 264px; margin: 0; }
+  html, body { width: 360px; height: 260px; background: #fff; }
+  html, body, div { box-sizing: border-box; margin: 0; padding: 0; }
+  .box { position: absolute; width: 140px; height: 88px; border: 8px solid #d9dee3; background: #f6f7f8; }
+  .horizontal { left: 24px; top: 24px; border-inline-start: 14px solid #e63946; border-left-color: #315fce; border-start-start-radius: 28px 16px; border-top-left-radius: 7px; }
+  .rtl { direction: rtl; left: 196px; top: 24px; border-right: 6px solid #2a9d8f; border-inline-start-width: 16px; border-inline-start-color: #7b2cbf; border-start-start-radius: 25px 13px; }
+  .vertical { writing-mode: vertical-lr; left: 24px; top: 148px; border-block-start: 13px solid #f4a261; border-inline-start: 11px solid #264653; border-start-start-radius: 24px 14px; }
+  .sideways { writing-mode: sideways-lr; left: 196px; top: 148px; border-block-start: 13px solid #f4a261; border-inline-start: 11px solid #264653; border-start-start-radius: 24px 14px; }
+</style>
+</head>
+<body>
+  <div class="box horizontal"></div>
+  <div class="box rtl"></div>
+  <div class="box vertical"></div>
+  <div class="box sideways"></div>
+</body>
+</html>

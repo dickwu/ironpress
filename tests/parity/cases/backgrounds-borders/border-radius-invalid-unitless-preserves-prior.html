@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid unitless border-radius preserves prior declaration</title>
+<style>
+  @page { size: 176px 104px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 160px;
+    height: 96px;
+    background: #00695c;
+    border-radius: 32px;
+    border-radius: 12;
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

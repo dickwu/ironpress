@@ -2,20 +2,13 @@
 """Well-defined + page-sized fixture transform (parity harness).
 
 For each fixture this:
-  1. Injects shared GLOBAL DEFAULTS (`html { font-family: ParitySans;
-     line-height: 1.5 }`) so every fixture is calibrated to one well-defined
-     baseline. Both are otherwise implementation-defined (generic family mapping;
-     Blink rounds hhea metrics for line-height:normal, ironpress uses usWin), so
-     pinning them makes ironpress and Chrome render identically. Element-level
-     rules still override the defaults (feature tests for a specific font /
-     line-height keep working).
-  2. Normalizes any explicit non-bundled / UA-discretionary family token in a
+  1. Normalizes any explicit non-bundled / UA-discretionary family token in a
      font-family value (sans-serif / serif / monospace / 'Parity Sans' /
      ParityCustom) to a deterministic bundled bare Parity face. Bare ParitySans
      resolves to the bundled face in BOTH engines (ironpress add_font; Chrome via
      the gen-refs font install) — verified with pdffonts — so no @font-face is
      needed.
-  3. Sizes @page to the rendered content extent with margin:0 so the page is
+  2. Sizes @page to the rendered content extent with margin:0 so the page is
      (almost) all content, not white space, and the page-origin offset is 0
      (content sits at the page origin in both engines).
 
@@ -33,14 +26,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CASES = os.path.join(ROOT, "tests", "parity", "cases")
 CLI = os.path.join(ROOT, "target", "release", "ironpress")
 CSS_PX = 3.125  # device px per CSS px @300dpi
-
-# Global calibration defaults injected into EVERY fixture so all fixtures share
-# one well-defined baseline (font + line box). `line-height: normal` and generic
-# families are implementation-defined; pinning the bundled face + a numeric
-# line-height makes every fixture render identically in ironpress and Chrome.
-# Element-level rules in a fixture still override these (so feature tests for a
-# specific font/line-height work normally).
-GLOBAL_DEFAULTS = "  html { font-family: ParitySans; line-height: 1.5; }\n"
 
 # Map every non-bundled / UA-discretionary family token to a deterministic bundled
 # Parity face (applied ONLY inside font-family values). Order matters: the longer
@@ -97,17 +82,14 @@ def _map_family_value(val):
 
 
 def transform_text(html):
-    """Normalize fonts to bundled Parity faces and inject the global calibration
-    defaults. Returns (new_html, changed)."""
+    """Normalize fonts to bundled Parity faces. The parity runner injects the
+    authenticated UA baseline centrally. Returns (new_html, changed)."""
     # Rewrite every font-family VALUE (only) to the bundled bare names.
     html = re.sub(
         r"(font-family\s*:)([^;}]*)",
         lambda m: m.group(1) + _map_family_value(m.group(2)),
         html,
     )
-    # Inject the shared global defaults once, right after <style> (element-level
-    # rules in the fixture override them by specificity / source order).
-    html = _inject_after_style(html, GLOBAL_DEFAULTS)
     return html, True
 
 

@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""Generate the complete supported feature-family interaction product.
+
+Each unordered pair, including the diagonal, gets its own fixture.  A fixture
+contains three compositions: both families on one element, A outside B, and B
+outside A.  The source manifest is derived from the non-generated feature
+manifests, so adding a supported family makes this generator fail until a
+representative is defined.
+
+Usage:
+    scripts/generate-interaction-cartesian.py
+    scripts/generate-interaction-cartesian.py --check
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PARITY = ROOT / "tests" / "parity"
+MANIFESTS = PARITY / "manifest"
+GENERATED_MANIFEST = MANIFESTS / "interactions.json"
+CASES = PARITY / "cases" / "interactions"
+PREFIX = "interactions-cartesian-"
+CONTROL_ID = "interaction-product-carrier-control"
+
+IMAGE_DATA = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="
+)
+
+
+@dataclass(frozen=True)
+class Family:
+    slug: str
+    css: str
+
+
+FAMILIES = {
+    family.slug: family
+    for family in (
+        Family(
+            "backgrounds-borders",
+            "border:3px double #355070;border-radius:12px;background-color:#dceeff;",
+        ),
+        Family(
+            "backgrounds-gradients",
+            "background-image:linear-gradient(135deg,rgba(255,209,102,.82),rgba(6,214,160,.42));",
+        ),
+        Family(
+            "block-box-model",
+            "box-sizing:border-box;padding:11px 7px;min-width:92px;max-width:132px;",
+        ),
+        Family("clip-mask", "clip-path:polygon(5% 0,100% 8%,94% 100%,0 88%);"),
+        Family("color-opacity", "color:#5a189a;opacity:.76;"),
+        Family("effects", "box-shadow:7px 5px 0 rgba(239,71,111,.35),inset 0 0 0 2px #ffd166;"),
+        Family("filters", "filter:grayscale(.18) contrast(1.08) drop-shadow(2px 1px 0 #90a4ae);"),
+        Family("flexbox", "display:flex;align-items:center;justify-content:space-around;gap:4px;"),
+        Family("fonts-advanced", "font-family:MatrixSans;font-style:oblique 20deg;"),
+        Family("generated-content", ""),
+        Family("grid", "display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:3px;"),
+        Family("images-replaced", ""),
+        Family("inline-text", "line-height:1.35;word-spacing:5px;"),
+        Family("lists-counters", "counter-reset:pair-item;"),
+        Family("multicol", "column-count:2;column-gap:7px;column-rule:2px solid #577590;"),
+        Family("overflow-clipping", "overflow:hidden;max-height:58px;border-radius:9px;"),
+        Family("paged-media", "break-before:page;break-inside:avoid;"),
+        Family("positioning", "position:relative;"),
+        Family("selectors-cascade", ""),
+        Family("tables", "display:table;border-collapse:separate;border-spacing:3px;"),
+        Family(
+            "text-advanced",
+            "text-decoration-line:underline;text-decoration-style:solid;"
+            "text-decoration-color:#ef476f;text-decoration-thickness:2px;"
+            "text-underline-offset:3px;text-shadow:1px 1px 0 #fff;",
+        ),
+        Family("transforms", "transform:translate(2px,-1px) rotate(5deg);transform-origin:20% 70%;"),
+        Family("typography", "font-size:18px;font-weight:700;letter-spacing:.7px;"),
+        Family("units-values", "width:calc(100% - 9px);padding-left:5%;"),
+    )
+}
+
+
+SHARED_CSS_TEMPLATE = """
+  @font-face {
+    font-family: MatrixSans;
+    src: url('../../fonts/ParitySans.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+  }
+  html { font-family: ParitySans; font-size: 16px; line-height: 1.2; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; color: #17324d; font-size: 0; white-space: nowrap; }
+  .stage {
+    display: inline-flex;
+    width: 156px;
+    __STAGE_BLOCK_CONSTRAINT__
+    margin-right: 8px;
+    align-items: center;
+    justify-content: center;
+    background: #f7fafc;
+    border: 1px solid #cbd5e1;
+    font-size: 16px;
+    vertical-align: top;
+  }
+  .stage:last-child { margin-right: 0; }
+  .node {
+    width: 126px;
+    __NODE_BLOCK_CONSTRAINT__
+    padding: 7px;
+    border: 2px solid #577590;
+    background-color: #e7f5ff;
+    color: #17324d;
+  }
+  .node.inner {
+    width: 58px;
+    height: 48px;
+    padding: 5px;
+  }
+  .node.outer { __OUTER_BLOCK_CONSTRAINT__ }
+  .own { height: 22px; white-space: nowrap; }
+  .asset { display: none; width: 34px; height: 24px; object-fit: cover; object-position: 70% 50%; }
+  .f-generated-content::before { content: '‹'; color: #d62828; font-weight: 700; }
+  .f-generated-content::after { content: '›'; color: #2a9d8f; font-weight: 700; }
+  .f-images-replaced > .own > .asset { display: inline-block; }
+  .f-inline-text > .own > .token:first-of-type { font-size: .72em; vertical-align: super; }
+  .f-lists-counters > .own > .token { counter-increment: pair-item; }
+  .f-lists-counters > .own > .token::before { content: counter(pair-item) '.'; color: #d62828; }
+  .f-positioning > .own > .token:last-of-type { position: absolute; right: 4px; bottom: 4px; }
+  .f-selectors-cascade:is(.node) > .own > .token:nth-of-type(2) { color: #c1121f; }
+  @supports (display:grid) {
+    .f-selectors-cascade { border-left-color: #06d6a0; border-right-color: #06d6a0; }
+  }
+  .f-tables > .own > .token { display: table-cell; vertical-align: middle; }
+"""
+
+
+def shared_css(paged: bool) -> str:
+    constraints = {
+        "    __STAGE_BLOCK_CONSTRAINT__\n": (
+            "    min-height: 164px;\n" if paged else "    height: 164px;\n"
+        ),
+        "    __NODE_BLOCK_CONSTRAINT__\n": (
+            "" if paged else "    height: 68px;\n"
+        ),
+        "  .node.outer { __OUTER_BLOCK_CONSTRAINT__ }\n": (
+            "  .node.outer { min-height: 96px; }\n"
+            if paged
+            else "  .node.outer { height: 96px; }\n"
+        ),
+    }
+    css = SHARED_CSS_TEMPLATE
+    for placeholder, constraint in constraints.items():
+        css = css.replace(placeholder, constraint)
+    return css
+
+
+def source_families() -> set[str]:
+    families: set[str] = set()
+    for path in sorted(MANIFESTS.rglob("*.json")):
+        if GENERATED_MANIFEST == path:
+            continue
+        for entry in json.loads(path.read_text(encoding="utf-8")):
+            if (
+                entry.get("kind", "feature") == "feature"
+                and entry.get("expected_support", "implemented") != "unsupported"
+                and entry["category"] not in {"interactions", "probes"}
+            ):
+                families.add(entry["category"])
+    return families
+
+
+def validate_registry(families: set[str]) -> None:
+    registered = set(FAMILIES)
+    if families != registered:
+        missing = sorted(families - registered)
+        stale = sorted(registered - families)
+        raise SystemExit(
+            "interaction family registry does not match supported manifests: "
+            f"missing={missing}, stale={stale}"
+        )
+
+
+def class_rule(family: Family) -> str:
+    return f"  .f-{family.slug} {{{family.css}}}\n"
+
+
+def node(classes: str, nested: str = "", role: str = "") -> str:
+    token_a, token_b = ("A", "B") if role == "inner" else ("Ag", "Bb")
+    return (
+        f'<div class="node {role} {classes}">'
+        f'<div class="own"><span class="token">{token_a}</span>'
+        f'<span class="token">{token_b}</span>'
+        f'<img class="asset" alt="" src="{IMAGE_DATA}"></div>{nested}</div>'
+    )
+
+
+def document(title: str, pair_css: str, stages: list[str], paged: bool = False) -> str:
+    # Integer CSS-pixel dimensions must be multiples of eight to map exactly at
+    # the pinned 300 DPI (one CSS pixel is 3.125 raster pixels).
+    page_rule = "@page { size: 192px 200px; margin: 0; }" if paged else "@page { size: 520px 200px; margin: 0; }"
+    # Keep paged interactions in ordinary block flow. A flex carrier would add
+    # flex fragmentation to every nominally pairwise paged-media fixture, and
+    # CSS Flexbox deliberately leaves that exact fragmented layout undefined.
+    paged_css = """
+  body { display: block; padding: 0; font-size: 16px; white-space: normal; }
+  .stage { display: block; margin: 0; break-before: page; }
+  .stage > .node { min-height: 68px; margin: 47px auto 0; }
+  .stage > .node.outer { margin-top: 33px; }
+""" if paged else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  {page_rule}
+{shared_css(paged)}{paged_css}{pair_css}</style>
+</head>
+<body>
+  <div class="stage">{stages[0]}</div>
+  <div class="stage">{stages[1]}</div>
+  <div class="stage">{stages[2]}</div>
+</body>
+</html>
+"""
+
+
+def fixture_html(first: Family, second: Family) -> str:
+    pair_css = class_rule(first)
+    if second != first:
+        pair_css += class_rule(second)
+    stages = [
+        node(f"f-{first.slug} f-{second.slug}"),
+        node(f"f-{first.slug}", node(f"f-{second.slug}", role="inner"), role="outer"),
+        node(f"f-{second.slug}", node(f"f-{first.slug}", role="inner"), role="outer"),
+    ]
+    return document(
+        f"{first.slug} x {second.slug} interaction",
+        pair_css,
+        stages,
+        paged="paged-media" in {first.slug, second.slug},
+    )
+
+
+def carrier_html() -> str:
+    return document(
+        "interaction product neutral carrier control",
+        "",
+        [
+            node(""),
+            node("", node("", role="inner"), role="outer"),
+            node("", node("", role="inner"), role="outer"),
+        ],
+    )
+
+
+def manifest_entry(first: Family, second: Family) -> dict[str, object]:
+    fixture_id = f"{PREFIX}{first.slug}-x-{second.slug}"
+    return {
+        "id": fixture_id,
+        "category": "interactions",
+        "feature": "supported-family-cartesian-product",
+        "subfeature": "same-element-and-bidirectional-nesting",
+        "description": (
+            f"Cartesian family interaction for {first.slug} and {second.slug}: "
+            "both representatives compose on one element and in both outer/inner orders. "
+            "Paged-media representatives force actual page breaks."
+        ),
+        "file": f"cases/interactions/{fixture_id}.html",
+        "interaction_of": [first.slug, second.slug],
+        "kind": "interaction",
+        "oracle": "chrome",
+        "expected_support": "implemented",
+        "depends_on": [
+            "probe-text-baseline",
+            "probe-fill-box",
+            "probe-border-box",
+            "probe-color-swatch",
+        ],
+    }
+
+
+def generated_files() -> dict[Path, str]:
+    families = source_families()
+    validate_registry(families)
+    generated: dict[Path, str] = {}
+    manifest: list[dict[str, object]] = []
+    if GENERATED_MANIFEST.is_file():
+        manifest.extend(
+            entry
+            for entry in json.loads(GENERATED_MANIFEST.read_text(encoding="utf-8"))
+            if entry.get("id") != CONTROL_ID
+            and not str(entry.get("id", "")).startswith(PREFIX)
+        )
+    ordered = [FAMILIES[slug] for slug in sorted(families)]
+    for first, second in itertools.combinations_with_replacement(ordered, 2):
+        entry = manifest_entry(first, second)
+        path = PARITY / str(entry["file"])
+        generated[path] = fixture_html(first, second)
+        manifest.append(entry)
+    control_file = f"cases/interactions/{CONTROL_ID}.html"
+    generated[PARITY / control_file] = carrier_html()
+    manifest.append(
+        {
+            "id": CONTROL_ID,
+            "category": "interactions",
+            "feature": "interaction-product-carrier",
+            "subfeature": "neutral-same-element-and-nested-control",
+            "description": "Neutral control for the generated Cartesian carrier: one plain node and two identical nested-node compositions, with no family representative styles.",
+            "file": control_file,
+            "kind": "probe",
+            "oracle": "chrome",
+            "expected_support": "implemented",
+            "depends_on": ["probe-text-baseline", "probe-fill-box", "probe-border-box"],
+        }
+    )
+    generated[GENERATED_MANIFEST] = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    return generated
+
+
+def stale_generated_cases(expected: set[Path]) -> list[Path]:
+    candidates = list(CASES.glob(f"{PREFIX}*.html")) + [CASES / f"{CONTROL_ID}.html"]
+    return sorted(path for path in candidates if path.is_file() and path not in expected)
+
+
+def check(files: dict[Path, str]) -> int:
+    problems = []
+    for path, expected in files.items():
+        if not path.is_file():
+            problems.append(f"missing {path.relative_to(ROOT)}")
+        elif path.read_text(encoding="utf-8") != expected:
+            problems.append(f"stale {path.relative_to(ROOT)}")
+    problems.extend(
+        f"unexpected {path.relative_to(ROOT)}" for path in stale_generated_cases(set(files))
+    )
+    if problems:
+        print("interaction Cartesian generation is stale:")
+        print("\n".join(f"  - {problem}" for problem in problems))
+        return 1
+    print(f"interaction Cartesian generation is current: {len(files) - 2} pairs + carrier control")
+    return 0
+
+
+def write(files: dict[Path, str]) -> None:
+    for path in stale_generated_cases(set(files)):
+        path.unlink()
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    print(f"generated {len(files) - 2} Cartesian interaction pairs + carrier control")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    files = generated_files()
+    if args.check:
+        return check(files)
+    write(files)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
