@@ -28,7 +28,11 @@ wasm = ["wasm-bindgen", "js-sys", "getrandom/wasm_js"]
 [dependencies]
 cssparser-color = "0.1"
 html5ever = "0.38"
-lightningcss = { version = "1.0.0-alpha.71", default-features = false }
+lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+# lightningcss alpha.71 declares `parcel_selectors = "0.28.2"`, which also
+# admits 0.28.3 even though that release moved to an incompatible cssparser.
+# Keep the transitive selector API on the version alpha.71 was built against.
+parcel_selectors = "=0.28.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 png_decoder = { package = "png", version = "0.18" }
 pulldown-cmark = "0.13"
