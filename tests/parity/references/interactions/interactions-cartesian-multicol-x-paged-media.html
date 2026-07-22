@@ -5,8 +5,8 @@
   CSS Break 3 section 4.3 requires the inner break-before:page to break
   through the multicol fragmentation context. CSS Multicol 1 sections 2 and
   8.2 require the subsequent column box to move to the next page, while the
-  multicol principal box continues there. A column rule is present only
-  between columns that both contain content in the same multicol line.
+  multicol principal box continues there. Section 4 paints a rule between the
+  two columns occupied by the balanced fragments of the fixed-height .own box.
 
   Chromium 150 instead leaves the inner box in page 2's second column and
   therefore produces only three pages. This source materializes the specified
@@ -57,6 +57,26 @@
     margin: 0;
     padding: 5px;
   }
+  .inner.multicol { position: relative; }
+  .inner.multicol::after {
+    content: '';
+    position: absolute;
+    left: 26px;
+    top: 5px;
+    width: 2px;
+    height: 34px;
+    background: #577590;
+  }
+  .node.wide-multicol { position: relative; }
+  .node.wide-multicol::after {
+    content: '';
+    position: absolute;
+    left: 60px;
+    top: 7px;
+    width: 2px;
+    height: 19.2px;
+    background: #577590;
+  }
   .own { height: 22px; white-space: nowrap; }
 
   .stage-open {
@@ -85,7 +105,7 @@
 </head>
 <body>
   <div class="stage">
-    <div class="node"><div class="own"><span>Ag</span><span>Bb</span></div></div>
+    <div class="node wide-multicol"><div class="own"><span>Ag</span><span>Bb</span></div></div>
   </div>
   <div class="stage stage-open">
     <div class="node outer outer-open"><div class="own"><span>Ag</span><span>Bb</span></div></div>
@@ -96,7 +116,7 @@
   <div class="stage">
     <div class="node outer">
       <div class="own"><span>Ag</span><span>Bb</span></div>
-      <div class="node inner"><div class="own"><span>A</span><span>B</span></div></div>
+      <div class="node inner multicol"><div class="own"><span>A</span><span>B</span></div></div>
     </div>
   </div>
 </body>

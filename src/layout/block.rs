@@ -2163,17 +2163,15 @@ pub(crate) fn layout_block_element(
                     float: style.float,
                     clear: style.clear,
                 },
-                positioning: crate::layout::elements::Positioning {
-                    insets: EdgeSizes::new(
+                positioning: crate::layout::elements::Positioning::from_style(style)
+                    .with_resolved_insets(EdgeSizes::new(
                         wrapper_top,
                         style.right.unwrap_or_default(),
                         style.bottom.unwrap_or_default(),
                         wrapper_left + auto_offset_left,
-                    ),
-                    containing_block: wrapper_cb,
-                    containing_block_depth: positioned_depth,
-                    ..crate::layout::elements::Positioning::from_style(style)
-                },
+                    ))
+                    .with_containing_block(wrapper_cb)
+                    .with_containing_block_depth(positioned_depth),
                 fragmentation: crate::layout::elements::BoxFragmentation {
                     decoration: style.box_decoration_break,
                     ..Default::default()

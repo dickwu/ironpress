@@ -904,13 +904,10 @@ fn emit_multicol_wrapper(
             float: style.float,
             clear: style.clear,
         },
-        positioning: Positioning {
-            insets: crate::types::EdgeSizes {
-                left: geometry.inline_offset.value(),
-                ..Default::default()
-            },
-            ..Positioning::from_style(style)
-        },
+        positioning: Positioning::from_style(style).with_resolved_insets(crate::types::EdgeSizes {
+            left: geometry.inline_offset.value(),
+            ..Default::default()
+        }),
         fragmentation: BoxFragmentation {
             decoration: crate::style::computed::BoxDecorationBreak::Slice,
             ..Default::default()

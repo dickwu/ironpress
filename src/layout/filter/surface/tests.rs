@@ -4,8 +4,8 @@ use crate::layout::elements::{IntoLayoutNode, LayoutSize};
 use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight};
 use crate::style::computed::{
     BorderStyle, BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition,
-    GradientRamp, GradientStop, LinearGradient, Overflow, Position, TextDecoration,
-    TextDecorationLines, TextDecorationStyle,
+    GradientRamp, GradientStop, LinearGradient, Overflow, TextDecoration, TextDecorationLines,
+    TextDecorationStyle,
 };
 
 fn test_fonts() -> HashMap<String, TtfFont> {
@@ -369,11 +369,7 @@ fn absolute_descendant_skips_a_static_intermediate_containing_box() {
             },
             ..Default::default()
         },
-        positioning: Positioning {
-            scheme: Position::Absolute,
-            insets: EdgeSizes::new(10.0, 0.0, 0.0, 20.0),
-            ..Default::default()
-        },
+        positioning: Positioning::absolute_at(Point::new(20.0, 10.0)),
         ..Default::default()
     };
     let static_intermediate = Container {

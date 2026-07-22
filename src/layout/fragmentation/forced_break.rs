@@ -49,6 +49,191 @@ struct FragmentainerSpace {
     remaining: f32,
 }
 
+/// Continuous containing-block geometry shared by positioned descendants on
+/// both sides of one fragmentation break.
+#[derive(Clone, Copy, Debug)]
+struct PositionedFragmentPlan {
+    containing_block_depth: usize,
+    composite_block_size: f32,
+    continuation_offset: f32,
+}
+
+impl PositionedFragmentPlan {
+    fn from_fragments(before: &Container, after: &Container) -> Option<Self> {
+        let first = before.fragmentation.reference_slice?;
+        let continuation = after.fragmentation.reference_slice?;
+        Some(Self {
+            containing_block_depth: before.positioning.containing_block_depth,
+            composite_block_size: first.composite_block_size(),
+            continuation_offset: continuation.block_offset(),
+        })
+        .filter(|plan| plan.containing_block_depth > 0)
+    }
+}
+
+fn positioned_in_plan(element: &dyn LayoutElement, plan: PositionedFragmentPlan) -> bool {
+    element.positioning_owner().is_some_and(|owner| {
+        let positioning = owner.positioning();
+        positioning.scheme.is_absolute()
+            && positioning
+                .containing_block
+                .is_some_and(|block| block.depth == plan.containing_block_depth)
+    })
+}
+
+fn rebase_positioned_element(
+    element: &mut dyn LayoutElement,
+    plan: PositionedFragmentPlan,
+    fragment_offset: f32,
+) -> f32 {
+    let extent = element.block_fragmentation_source().map_or_else(
+        || fragment_box_extent(element),
+        |source| source.block_extent(),
+    );
+    element.positioning_owner_mut().map_or(0.0, |owner| {
+        owner.positioning_mut().resolve_fragmented_block_offset(
+            plan.composite_block_size,
+            extent,
+            fragment_offset,
+        )
+    })
+}
+
+/// Re-resolve matching absolute descendants already retained by a fragment.
+/// The visitor follows every structural child store through the same operation
+/// instead of adding a pagination-only path for one concrete box type.
+fn rebase_positioned_descendants(
+    elements: &mut [LayoutNode],
+    plan: PositionedFragmentPlan,
+    fragment_offset: f32,
+) {
+    struct Rebase {
+        plan: PositionedFragmentPlan,
+        fragment_offset: f32,
+    }
+
+    impl crate::layout::elements::LayoutVisitorMut for Rebase {
+        fn visit_container(&mut self, element: &mut Container) {
+            rebase_positioned_descendants(&mut element.children, self.plan, self.fragment_offset);
+        }
+
+        fn visit_flex_row(&mut self, element: &mut FlexRow) {
+            for cell in &mut element.content.cells {
+                rebase_positioned_descendants(
+                    &mut cell.nested_elements,
+                    self.plan,
+                    self.fragment_offset,
+                );
+            }
+        }
+
+        fn visit_grid_row(&mut self, element: &mut GridRow) {
+            for cell in &mut element.content.cells {
+                rebase_positioned_descendants(
+                    &mut cell.layout.content.children,
+                    self.plan,
+                    self.fragment_offset,
+                );
+            }
+        }
+
+        fn visit_table_row(&mut self, element: &mut TableRow) {
+            for cell in &mut element.content.cells {
+                rebase_positioned_descendants(
+                    &mut cell.layout.content.children,
+                    self.plan,
+                    self.fragment_offset,
+                );
+            }
+        }
+    }
+
+    for element in elements {
+        if positioned_in_plan(element.as_ref(), plan) {
+            rebase_positioned_element(element.as_mut(), plan, fragment_offset);
+        } else {
+            element.accept_mut(&mut Rebase {
+                plan,
+                fragment_offset,
+            });
+        }
+    }
+}
+
+/// Remove absolute descendants whose continuous block-start lies after the
+/// break. They are returned as direct out-of-flow children of the continued
+/// containing block; their stored containing-block identity preserves the
+/// correct padding-box anchor while ordinary intermediary boxes remain in
+/// normal flow on the first fragment.
+fn take_positioned_continuations(
+    elements: &mut Vec<LayoutNode>,
+    plan: PositionedFragmentPlan,
+) -> Vec<LayoutNode> {
+    struct Take<'a> {
+        plan: PositionedFragmentPlan,
+        moved: &'a mut Vec<LayoutNode>,
+    }
+
+    impl crate::layout::elements::LayoutVisitorMut for Take<'_> {
+        fn visit_container(&mut self, element: &mut Container) {
+            self.moved.extend(take_positioned_continuations(
+                &mut element.children,
+                self.plan,
+            ));
+        }
+
+        fn visit_flex_row(&mut self, element: &mut FlexRow) {
+            for cell in &mut element.content.cells {
+                self.moved.extend(take_positioned_continuations(
+                    &mut cell.nested_elements,
+                    self.plan,
+                ));
+            }
+        }
+
+        fn visit_grid_row(&mut self, element: &mut GridRow) {
+            for cell in &mut element.content.cells {
+                self.moved.extend(take_positioned_continuations(
+                    &mut cell.layout.content.children,
+                    self.plan,
+                ));
+            }
+        }
+
+        fn visit_table_row(&mut self, element: &mut TableRow) {
+            for cell in &mut element.content.cells {
+                self.moved.extend(take_positioned_continuations(
+                    &mut cell.layout.content.children,
+                    self.plan,
+                ));
+            }
+        }
+    }
+
+    let mut moved = Vec::new();
+    let mut index = 0;
+    while index < elements.len() {
+        if positioned_in_plan(elements[index].as_ref(), plan) {
+            let continuous_offset = rebase_positioned_element(elements[index].as_mut(), plan, 0.0);
+            if !exceeds_with_roundoff(plan.continuation_offset, continuous_offset) {
+                let mut continuation = elements.remove(index);
+                rebase_positioned_element(continuation.as_mut(), plan, plan.continuation_offset);
+                moved.push(continuation);
+                continue;
+            }
+        } else {
+            let mut nested = Vec::new();
+            elements[index].accept_mut(&mut Take {
+                plan,
+                moved: &mut nested,
+            });
+            moved.extend(nested);
+        }
+        index += 1;
+    }
+    moved
+}
+
 impl FragmentainerSpace {
     fn new(remaining: f32) -> Self {
         Self {
@@ -455,6 +640,11 @@ fn split_container_principal(
             before.fragmentation.reference_slice = Some(first_slice);
             after.fragmentation.reference_slice = Some(continuation_slice);
         }
+    }
+    if let Some(plan) = PositionedFragmentPlan::from_fragments(&before, &after) {
+        let moved = take_positioned_continuations(&mut before.children, plan);
+        rebase_positioned_descendants(&mut after.children, plan, plan.continuation_offset);
+        after.children.extend(moved);
     }
     ForcedBreak {
         before: Some(before),

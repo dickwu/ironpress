@@ -10168,7 +10168,7 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-effects-x-paged-media.html",
       "html_sha256": "f9ccdff1cbd9fadaca2912806f96c421d7f089b625e142e8109d688c2f34b301",
-      "manifest_sha256": "860da646d04b3ba5b9cfd870e2f6c2ab8793e3cd4270f20c25c9141d46a91177",
+      "manifest_sha256": "b85d8d91a18f0128936ee0a942dadfd6ec8e6aa007133579ccce5d1c2ef14798",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-effects-x-paged-media.pdf",
@@ -11936,11 +11936,11 @@
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-multicol-x-paged-media.pdf",
-        "sha256": "ce6e33b7fd783850daa49fcb631804dc5d5738d4599cb10838f63467c5df1de8"
+        "sha256": "41f47b6b3da781a6d80787b3e07a2dcbbe8d3f8138975ce6fc3cf72232da6bf4"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "references/interactions/interactions-cartesian-multicol-x-paged-media.html",
-      "reference_html_sha256": "aabb391c803579a381f3542d41227107bf7b584e87425b70890b197f8eb260ce"
+      "reference_html_sha256": "2cae9c76bfbaf9a086190917e74163d581e891871f0be4c1e92bd6e64823437e"
     },
     "interactions-cartesian-multicol-x-positioning": {
       "category": "interactions",

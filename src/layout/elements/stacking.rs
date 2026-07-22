@@ -193,10 +193,7 @@ mod tests {
 
     #[test]
     fn positioned_auto_and_integer_zero_share_a_level_but_not_a_value() {
-        let positioning = Positioning {
-            scheme: Position::Relative,
-            ..Default::default()
-        };
+        let positioning = Positioning::default().with_scheme(Position::Relative);
         for z_index in [ZIndex::Auto, ZIndex::integer(0)] {
             let stacking = Stacking {
                 z_index,
@@ -213,10 +210,7 @@ mod tests {
     #[test]
     fn fixed_and_sticky_auto_form_stacking_contexts() {
         for scheme in [Position::Fixed, Position::Sticky] {
-            let positioning = Positioning {
-                scheme,
-                ..Default::default()
-            };
+            let positioning = Positioning::default().with_scheme(scheme);
             let stacking = Stacking::default();
             assert_eq!(
                 stacking.level(Some(&positioning), None, &group(stacking)),

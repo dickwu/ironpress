@@ -414,14 +414,11 @@ fn flex_cell_positioning(
         return flex_item_positioning(elements, is_positioned);
     }
 
-    Positioning {
-        scheme: if is_positioned {
-            Position::Relative
-        } else {
-            Position::Static
-        },
-        ..Default::default()
-    }
+    Positioning::default().with_scheme(if is_positioned {
+        Position::Relative
+    } else {
+        Position::Static
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -456,10 +453,8 @@ fn flex_row_node(
             border: LayoutBorder::from_computed(&style.border, style.color),
         },
         paint,
-        positioning: crate::layout::elements::Positioning {
-            containing_block_depth,
-            ..crate::layout::elements::Positioning::from_style(style)
-        },
+        positioning: crate::layout::elements::Positioning::from_style(style)
+            .with_containing_block_depth(containing_block_depth),
         inline_offset: crate::layout::elements::InlineOffset::new(inline_offset),
     }
     .boxed()
@@ -4151,8 +4146,10 @@ pub(crate) fn layout_flex_container(
                                             margins: BlockMargins::new(leading, 0.0),
                                             ..Default::default()
                                         },
-                                        positioning: crate::layout::elements::Positioning {
-                                            scheme: if x_offset > 0.0
+                                        positioning: crate::layout::elements::Positioning::default(
+                                        )
+                                        .with_scheme(
+                                            if x_offset > 0.0
                                                 || style.padding.left > 0.0
                                                 || style.border.left.used_width() > 0.0
                                             {
@@ -4160,16 +4157,15 @@ pub(crate) fn layout_flex_container(
                                             } else {
                                                 Position::Static
                                             },
-                                            insets: EdgeSizes::new(
-                                                0.0,
-                                                0.0,
-                                                0.0,
-                                                x_offset
-                                                    + style.padding.left
-                                                    + style.border.left.used_width(),
-                                            ),
-                                            ..Default::default()
-                                        },
+                                        )
+                                        .with_resolved_insets(EdgeSizes::new(
+                                            0.0,
+                                            0.0,
+                                            0.0,
+                                            x_offset
+                                                + style.padding.left
+                                                + style.border.left.used_width(),
+                                        )),
                                         ..Default::default()
                                     }
                                     .boxed(),

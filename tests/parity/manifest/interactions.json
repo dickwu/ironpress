@@ -3213,6 +3213,10 @@
     "kind": "interaction",
     "oracle": "chrome",
     "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Fragmentation 3 section 5.4 requires box-decoration-break:slice to render the unbroken box and then slice it, with no box-shadow drawn at a broken edge. WPT box-shadow-002 tests that rule directly, while box-shadow-005 reserves a shadow around every fragment for box-decoration-break:clone. Ironpress leaves the page 2/3 cut undecorated; Chromium paints the yellow inset-shadow band at both cut edges as if the fragments were cloned. Its PDF remains a compatibility canary, not a normative oracle, and the raw shared-pdftoppm evidence remains reported."
+    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

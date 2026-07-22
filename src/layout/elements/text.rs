@@ -106,16 +106,7 @@ impl TextBlock {
                 },
                 ..Default::default()
             },
-            positioning: super::Positioning {
-                scheme: crate::style::computed::Position::Absolute,
-                insets: crate::types::EdgeSizes::new(
-                    geometry.origin.y,
-                    0.0,
-                    0.0,
-                    geometry.origin.x,
-                ),
-                ..Default::default()
-            },
+            positioning: super::Positioning::absolute_at(geometry.origin),
             fragmentation: super::TextFragmentation {
                 box_fragmentation: super::BoxFragmentation {
                     content_role: if geometry.repeat_on_each_page {
@@ -198,15 +189,8 @@ impl ContainingBlockConsumer for TextBlock {
                 .fold(0.0, f32::max)
         });
 
-        if self.positioning.insets.left == 0.0 && self.positioning.insets.right > 0.0 {
-            self.positioning.insets.left =
-                containing_block.width - width - self.positioning.insets.right;
-        }
-        if self.positioning.insets.top == 0.0 && self.positioning.insets.bottom > 0.0 {
-            self.positioning.insets.top =
-                containing_block.height - height - self.positioning.insets.bottom;
-        }
-        self.positioning.containing_block = Some(containing_block);
+        self.positioning
+            .resolve_against(containing_block, Size::new(width, height));
     }
 }
 

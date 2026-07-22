@@ -2125,22 +2125,19 @@ pub(crate) fn build_pseudo_block(
             float: pseudo_style.float,
             clear: pseudo_style.clear,
         },
-        positioning: Positioning {
-            scheme: pseudo_style.position,
-            insets: EdgeSizes::new(
+        positioning: Positioning::from_style(pseudo_style)
+            .with_resolved_insets(EdgeSizes::new(
                 resolved_top,
                 pseudo_style.right.unwrap_or_default(),
                 pseudo_style.bottom.unwrap_or_default(),
                 resolved_left,
-            ),
-            containing_block: containing_block_info,
-            containing_block_depth: if pseudo_style.position.is_positioned() {
+            ))
+            .with_containing_block(containing_block_info)
+            .with_containing_block_depth(if pseudo_style.position.is_positioned() {
                 positioned_ancestor_depth + 1
             } else {
                 positioned_ancestor_depth
-            },
-            ..Default::default()
-        },
+            }),
         fragmentation: TextFragmentation::default(),
         text: TextBlockStyle {
             alignment: pseudo_style.text_align,

@@ -1435,11 +1435,7 @@ fn empty_abs_container_value(
             },
             ..Default::default()
         },
-        positioning: Positioning {
-            scheme: Position::Absolute,
-            insets: crate::types::EdgeSizes::new(off_top, 0.0, 0.0, off_left),
-            ..Default::default()
-        },
+        positioning: Positioning::absolute_at(crate::types::Point::new(off_left, off_top)),
         ..Default::default()
     }
 }
@@ -1454,10 +1450,7 @@ pub(super) fn empty_flow_anchor() -> LayoutNode {
             visible: false,
             ..Default::default()
         },
-        positioning: Positioning {
-            scheme: Position::Static,
-            ..Default::default()
-        },
+        positioning: Positioning::default(),
         ..Default::default()
     }
     .boxed()

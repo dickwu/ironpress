@@ -1,7 +1,7 @@
 use super::support::layout_pages_at;
 use crate::layout::cells::GridInset;
 use crate::layout::elements::{
-    ColumnRule, Container, FlexRow, GridRow, LayoutVisitor, MulticolContainer,
+    ColumnRule, Container, FlexRow, GridRow, LayoutVisitor, MulticolContainer, TextBlock,
 };
 use crate::layout::engine::{FlexFragmentRole, visit_layout_tree};
 use crate::types::PageSize;
@@ -226,6 +226,56 @@ fn page_break_inside_auto_multicol_keeps_ordinary_ancestors_fragmentable() {
         }),
         "page 3: {page_three:#?}"
     );
+
+    let mut page_four = PagedFragments::default();
+    for (_, element) in &pages[3].elements {
+        visit_layout_tree(element.as_ref(), &mut page_four);
+    }
+    assert_eq!(page_four.column_rules, 1, "page 4: {page_four:#?}");
+}
+
+#[derive(Debug, Default)]
+struct AbsoluteText(Vec<String>);
+
+impl LayoutVisitor for AbsoluteText {
+    fn visit_text_block(&mut self, block: &TextBlock) {
+        if !block.positioning.scheme.is_absolute() {
+            return;
+        }
+        let text = block
+            .lines
+            .iter()
+            .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
+            .collect::<String>();
+        if !text.is_empty() {
+            self.0.push(text);
+        }
+    }
+}
+
+#[test]
+fn bottom_positioned_descendant_uses_continuous_fragmented_containing_block() {
+    let pages = layout_pages_at(
+        include_str!(
+            "../../../tests/parity/cases/interactions/interactions-cartesian-paged-media-x-positioning.html"
+        ),
+        PageSize::new(144.0, 150.0),
+    );
+
+    assert_eq!(pages.len(), 4);
+    let absolute_text = pages
+        .iter()
+        .map(|page| {
+            let mut text = AbsoluteText::default();
+            for (_, element) in &page.elements {
+                visit_layout_tree(element.as_ref(), &mut text);
+            }
+            text.0
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(absolute_text[2], Vec::<String>::new());
+    assert_eq!(absolute_text[3], ["Bb"]);
 }
 
 #[derive(Debug, Default)]

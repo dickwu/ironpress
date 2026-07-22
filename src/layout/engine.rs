@@ -7647,10 +7647,7 @@ mod tests {
                     size: LayoutSize::fixed(100.0, Some(height)),
                     ..Default::default()
                 },
-                positioning: Positioning {
-                    scheme: position,
-                    ..Default::default()
-                },
+                positioning: Positioning::default().with_scheme(position),
                 paint: BoxPaint {
                     group: crate::layout::elements::PaintGroup {
                         stacking: crate::layout::elements::Stacking {
@@ -7733,10 +7730,7 @@ mod tests {
                     size: LayoutSize::fixed(100.0, Some(40.0)),
                     ..Default::default()
                 },
-                positioning: Positioning {
-                    scheme: Position::Absolute,
-                    ..Default::default()
-                },
+                positioning: Positioning::default().with_scheme(Position::Absolute),
                 paint: BoxPaint {
                     group: crate::layout::elements::PaintGroup {
                         stacking: crate::layout::elements::Stacking {
@@ -12976,21 +12970,20 @@ line 3</pre>
             depth: 1,
         };
 
-        let mut elements = vec![
-            TextBlock {
-                box_model: BoxModel {
-                    size: LayoutSize::fixed(100.0, Some(50.0)),
+        let mut elements =
+            vec![
+                TextBlock {
+                    box_model: BoxModel {
+                        size: LayoutSize::fixed(100.0, Some(50.0)),
+                        ..Default::default()
+                    },
+                    positioning: Positioning::absolute_from_lengths(
+                        crate::types::PhysicalEdges::new(None, Some(40.0), Some(30.0), None),
+                    ),
                     ..Default::default()
-                },
-                positioning: Positioning {
-                    scheme: Position::Absolute,
-                    insets: EdgeSizes::new(0.0, 40.0, 30.0, 0.0),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-            .boxed(),
-        ];
+                }
+                .boxed(),
+            ];
 
         patch_absolute_children_containing_block(&mut elements, cb);
 

@@ -7,7 +7,7 @@ use crate::style::computed::{
     BlendMode, BoxDecorationBreak, BoxShadow, Clear, ClipPath, Float, Isolation, MaskMode,
     MaskSource, Overflow, Position, TextAlign, Transform, TransformOrigin, Visibility, WritingMode,
 };
-use crate::types::{Color, CornerRadii, EdgeSizes, Point, Rect};
+use crate::types::{Color, CornerRadii, EdgeSizes, PhysicalEdges, Point, Rect};
 
 /// Inline-axis sizing carried by a laid-out box.
 ///
@@ -654,17 +654,139 @@ impl std::ops::Add<f32> for InlineOffset {
     }
 }
 
-/// Physical positioned-layout state. Insets use the same top/right/bottom/left
-/// edge representation as padding and borders.
+/// One authored CSS inset, retained past initial layout so fragmented
+/// containing blocks can resolve the same constraint against their continuous
+/// reference box instead of treating an early top/left result as authored.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+enum PositionInset {
+    #[default]
+    Auto,
+    Length(f32),
+    Percentage(f32),
+}
+
+impl PositionInset {
+    const fn from_style(length: Option<f32>, percentage: Option<f32>) -> Self {
+        match (percentage, length) {
+            (Some(value), _) => Self::Percentage(value),
+            (None, Some(value)) => Self::Length(value),
+            (None, None) => Self::Auto,
+        }
+    }
+
+    fn resolve(self, reference: f32) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Length(value) => Some(value),
+            Self::Percentage(value) => Some(reference * value / 100.0),
+        }
+    }
+}
+
+/// Authored absolute-position constraints on both physical axes.
+///
+/// [`Positioning::insets`] is the resolved top-left placement consumed by
+/// layout and paint. This structure is the source constraint that can be
+/// resolved again when fragmentation changes the containing block's composite
+/// block size.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct PositionConstraints {
+    edges: PhysicalEdges<PositionInset>,
+}
+
+impl PositionConstraints {
+    fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
+        Self {
+            edges: PhysicalEdges::new(
+                PositionInset::from_style(style.top, style.percentage_insets.top),
+                PositionInset::from_style(style.right, style.percentage_insets.right),
+                PositionInset::from_style(style.bottom, style.percentage_insets.bottom),
+                PositionInset::from_style(style.left, style.percentage_insets.left),
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_lengths(edges: PhysicalEdges<Option<f32>>) -> Self {
+        Self {
+            edges: edges.map(|value| value.map_or(PositionInset::Auto, PositionInset::Length)),
+        }
+    }
+
+    fn resolve_axis(
+        start: PositionInset,
+        end: PositionInset,
+        reference: f32,
+        extent: f32,
+        fallback: f32,
+    ) -> f32 {
+        start.resolve(reference).unwrap_or_else(|| {
+            end.resolve(reference)
+                .map_or(fallback, |end| reference - extent - end)
+        })
+    }
+
+    fn resolve_origin(
+        self,
+        reference: crate::types::Size,
+        extent: crate::types::Size,
+        fallback: Point,
+    ) -> Point {
+        Point::new(
+            Self::resolve_axis(
+                self.edges.left,
+                self.edges.right,
+                reference.width,
+                extent.width,
+                fallback.x,
+            ),
+            Self::resolve_axis(
+                self.edges.top,
+                self.edges.bottom,
+                reference.height,
+                extent.height,
+                fallback.y,
+            ),
+        )
+    }
+}
+
+/// Physical positioned-layout state. The resolved placement and authored
+/// constraints stay together so pagination never has to infer whether a
+/// top-left coordinate came from `top`/`left`, `bottom`/`right`, or `auto`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Positioning {
     pub(crate) scheme: Position,
     pub(crate) insets: EdgeSizes,
+    constraints: PositionConstraints,
     pub(crate) containing_block: Option<ContainingBlock>,
     pub(crate) containing_block_depth: usize,
 }
 
 impl Positioning {
+    pub(crate) fn with_scheme(mut self, scheme: Position) -> Self {
+        self.scheme = scheme;
+        self
+    }
+
+    pub(crate) fn with_resolved_insets(mut self, insets: EdgeSizes) -> Self {
+        self.insets = insets;
+        self
+    }
+
+    pub(crate) fn with_containing_block(
+        mut self,
+        containing_block: Option<ContainingBlock>,
+    ) -> Self {
+        self.containing_block = containing_block;
+        self
+    }
+
+    pub(crate) fn with_containing_block_depth(mut self, depth: usize) -> Self {
+        self.containing_block_depth = depth;
+        self
+    }
+
     /// Position an implementation-owned child from its containing padding box.
     ///
     /// Anonymous layout boxes such as multicolumn columns and rules use the
@@ -675,6 +797,14 @@ impl Positioning {
         Self {
             scheme: Position::Absolute,
             insets: EdgeSizes::new(origin.y, 0.0, 0.0, origin.x),
+            constraints: PositionConstraints {
+                edges: PhysicalEdges::new(
+                    PositionInset::Length(origin.y),
+                    PositionInset::Auto,
+                    PositionInset::Auto,
+                    PositionInset::Length(origin.x),
+                ),
+            },
             containing_block: None,
             containing_block_depth: 0,
         }
@@ -694,8 +824,59 @@ impl Positioning {
                 style.bottom.unwrap_or_default(),
                 style.left.unwrap_or_default(),
             ),
+            constraints: PositionConstraints::from_style(style),
             ..Default::default()
         }
+    }
+
+    /// Build an authored absolute position before a containing block is known.
+    /// `None` is CSS `auto`; a present zero remains distinguishable from it.
+    #[cfg(test)]
+    pub(crate) fn absolute_from_lengths(edges: PhysicalEdges<Option<f32>>) -> Self {
+        Self {
+            scheme: Position::Absolute,
+            insets: edges.map(Option::unwrap_or_default),
+            constraints: PositionConstraints::from_lengths(edges),
+            ..Default::default()
+        }
+    }
+
+    /// Resolve authored constraints against one containing block.
+    pub(crate) fn resolve_against(
+        &mut self,
+        containing_block: ContainingBlock,
+        extent: crate::types::Size,
+    ) {
+        let reference = crate::types::Size::new(containing_block.width, containing_block.height);
+        let origin = self
+            .constraints
+            .resolve_origin(reference, extent, self.origin());
+        self.insets.top = origin.y;
+        self.insets.left = origin.x;
+        self.containing_block = Some(containing_block);
+    }
+
+    /// Re-resolve the block coordinate against a fragmented containing block's
+    /// continuous padding box, then express it in one fragment's local space.
+    /// Returns the continuous block-start coordinate for fragment selection.
+    pub(crate) fn resolve_fragmented_block_offset(
+        &mut self,
+        composite_block_size: f32,
+        extent: f32,
+        fragment_offset: f32,
+    ) -> f32 {
+        let continuous = PositionConstraints::resolve_axis(
+            self.constraints.edges.top,
+            self.constraints.edges.bottom,
+            composite_block_size,
+            extent,
+            self.insets.top,
+        );
+        self.insets.top = continuous - fragment_offset;
+        if let Some(containing_block) = &mut self.containing_block {
+            containing_block.height = composite_block_size;
+        }
+        continuous
     }
 
     pub(crate) const fn is_in_normal_flow(&self) -> bool {
