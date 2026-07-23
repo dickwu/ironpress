@@ -12796,6 +12796,20 @@
       "reference_file": "cases/interactions/interactions-gradients-transforms-pattern-space-red-team.html",
       "reference_html_sha256": "2c07fc557cb82cad6810df4b0c33fcd170c5f467e65324332512cdd3f874e86b"
     },
+    "interactions-grid-fragmentation-jpeg-background-single-owner": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.html",
+      "html_sha256": "071c06619f9ce55310207b8a86a1ac2877c57f233967fa5d68c588f02cba9722",
+      "manifest_sha256": "60f45c373e020d50c42ca65b089808a20f6f859f3424ebcb9d05ae770ac06c65",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.pdf",
+        "sha256": "afcebd905f6fbafcd82822a8a7eedc6b28ae95b9194c6c973ddd36ed8b5437ae"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.html",
+      "reference_html_sha256": "071c06619f9ce55310207b8a86a1ac2877c57f233967fa5d68c588f02cba9722"
+    },
     "interactions-grid-fragmentation-raster-background-single-owner": {
       "category": "interactions",
       "file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",

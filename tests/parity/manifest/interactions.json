@@ -7092,6 +7092,20 @@
     "depends_on": ["probe-fill-box", "probe-block-flow"]
   },
   {
+    "id": "interactions-grid-fragmentation-jpeg-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-jpeg",
+    "description": "JPEG counterpart to the certificate reproduction: a conspicuous decoded tile must paint only in its first fragment while every flattened grid row and final marker survives.",
+    "file": "cases/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.html",
+    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
+    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
     "id": "interactions-grid-fragmentation-svg-background-single-owner",
     "category": "interactions",
     "feature": "fragmented-background-ownership",
