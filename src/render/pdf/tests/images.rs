@@ -567,8 +567,8 @@
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(
-            content.contains("/Width 72 /Height 72"),
-            "transparent filter padding should not survive PDF embedding"
+            content.contains("/Width 76 /Height 76"),
+            "the complete filter-DPI surface should retain its transparent sampling border"
         );
         assert!(
             !content.contains("/Width 152 /Height 152"),
@@ -605,8 +605,8 @@
         let content = String::from_utf8_lossy(&pdf);
 
         assert!(
-            content.contains("/Width 72 /Height 72"),
-            "source and shadow should share one tightly bounded filter-DPI surface"
+            content.contains("/Width 76 /Height 76"),
+            "source and shadow should share one complete filter-DPI surface"
         );
         assert!(
             !content.contains("/Width 192 /Height 192"),
@@ -643,8 +643,8 @@
         let content = String::from_utf8_lossy(&pdf);
 
         assert!(
-            content.contains("/Width 72 /Height 72"),
-            "the tightly bounded filtered composite should use filter DPI"
+            content.contains("/Width 76 /Height 76"),
+            "the complete filtered composite should use filter DPI"
         );
         assert!(
             !content.contains("/Width 16 /Height 16"),

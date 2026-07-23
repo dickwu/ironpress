@@ -1316,16 +1316,46 @@ pub struct PngMetadata {
 /// Source images may be downscaled to the configured source-image DPI. Rendered
 /// rasters already embody a distinct quality setting (for example filter DPI),
 /// so embedding must retain their native pixel dimensions.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum RasterImageOrigin {
     #[default]
     Source,
-    Rendered,
+    Rendered(RasterPixelDensity),
 }
 
 impl RasterImageOrigin {
     pub(crate) const fn preserves_native_resolution(self) -> bool {
-        matches!(self, Self::Rendered)
+        matches!(self, Self::Rendered(_))
+    }
+
+    pub(crate) const fn pixel_density(self) -> Option<RasterPixelDensity> {
+        match self {
+            Self::Source => None,
+            Self::Rendered(density) => Some(density),
+        }
+    }
+}
+
+/// Physical sampling density owned by a renderer-generated raster.
+///
+/// Unlike a document image, whose pixels are mapped into an independently
+/// resolved CSS box, a generated surface has a fixed physical pixel footprint.
+/// Retaining that footprint prevents PDF paint from reconstructing its size
+/// through lossy point-space arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RasterPixelDensity {
+    dpi: f32,
+}
+
+impl RasterPixelDensity {
+    pub(crate) fn from_dpi(dpi: f32) -> Self {
+        Self {
+            dpi: crate::style::raster_quality::raster_dpi_at_least(dpi, 1.0),
+        }
+    }
+
+    pub(crate) const fn dpi(self) -> f32 {
+        self.dpi
     }
 }
 
@@ -1365,6 +1395,7 @@ impl RasterImageAsset {
         source_height: u32,
         format: ImageFormat,
         png_metadata: Option<PngMetadata>,
+        dpi: f32,
     ) -> Self {
         Self::with_origin(
             data,
@@ -1372,7 +1403,7 @@ impl RasterImageAsset {
             source_height,
             format,
             png_metadata,
-            RasterImageOrigin::Rendered,
+            RasterImageOrigin::Rendered(RasterPixelDensity::from_dpi(dpi)),
         )
     }
 
@@ -1430,7 +1461,30 @@ pub enum PageBreakSide {
 pub enum StackingContext {
     #[default]
     None,
+    /// The element's source subtree still needs to be isolated before its
+    /// filter operations are evaluated.
     Filter,
+    /// The source subtree and filter operations have already been composited
+    /// into one atomic raster. The stacking boundary remains, but wrapping the
+    /// raster in another transparency group would only quantize it again.
+    FilteredOutput,
+}
+
+impl StackingContext {
+    pub(crate) const fn establishes(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub(crate) const fn needs_source_isolation(self) -> bool {
+        matches!(self, Self::Filter)
+    }
+
+    pub(crate) const fn materialized(self) -> Self {
+        match self {
+            Self::Filter => Self::FilteredOutput,
+            Self::None | Self::FilteredOutput => self,
+        }
+    }
 }
 
 impl From<&crate::style::computed::FilterEffects> for StackingContext {
@@ -5044,7 +5098,7 @@ mod tests {
 
     fn tree_has_rendered_image(element: &dyn LayoutElement) -> bool {
         if element
-            .inspect_image(|image| image.source.origin == RasterImageOrigin::Rendered)
+            .inspect_image(|image| image.source.origin.preserves_native_resolution())
             .unwrap_or(false)
         {
             return true;

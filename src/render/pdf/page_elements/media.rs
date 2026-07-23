@@ -6,25 +6,24 @@ fn paint_image_effect_raster(
     effect: &crate::layout::engine::ImageEffectRaster,
     image_box: PdfRect,
     rendering: crate::style::computed::ImageRendering,
-    pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
+    ctx: &mut PageRenderContext<'_>,
 ) {
     let effect_box = image_box.outset_uniform(effect.overflow);
-    let image_id = pdf_writer.add_layout_image_object(
+    let image_id = ctx.text.pdf_writer.add_layout_image_object(
         &effect.image,
         effect_box.width,
         effect_box.height,
         rendering,
     );
     let image_name = format!("Im{image_id}");
-    content.push_str(&format!(
-        "q\n{width} 0 0 {height} {left} {bottom} cm\n/{image_name} Do\nQ\n",
-        width = effect_box.width,
-        height = effect_box.height,
-        left = effect_box.left,
-        bottom = effect_box.bottom,
-    ));
-    page_images.push(ImageRef {
+    push_raster_xobject(
+        content,
+        &image_name,
+        effect_box,
+        &effect.image,
+        ctx.text.pdf_writer,
+    );
+    ctx.text.page_images.push(ImageRef {
         name: image_name,
         obj_id: image_id,
     });
@@ -83,13 +82,13 @@ pub(in crate::render::pdf) fn paint_image_box(
             PdfImageInterpolation::for_css_image_rendering(element.sampling.rendering),
         );
         let image_name = format!("Im{image_id}");
-        content.push_str(&format!(
-            "q\n{width} 0 0 {height} {x} {y} cm\n/{image_name} Do\nQ\n",
-            width = expanded_box.width,
-            height = expanded_box.height,
-            x = expanded_box.left,
-            y = expanded_box.bottom,
-        ));
+        push_raster_xobject(
+            content,
+            &image_name,
+            expanded_box,
+            image,
+            ctx.text.pdf_writer,
+        );
         ctx.text.page_images.push(ImageRef {
             name: image_name,
             obj_id: image_id,
@@ -100,14 +99,7 @@ pub(in crate::render::pdf) fn paint_image_box(
 
     let group = PaintGroupScope::begin(content, element, fragment_geometry, ctx);
     if let Some(effect) = &element.paint.filter_effect {
-        paint_image_effect_raster(
-            content,
-            effect,
-            image_box,
-            element.sampling.rendering,
-            ctx.text.pdf_writer,
-            ctx.text.page_images,
-        );
+        paint_image_effect_raster(content, effect, image_box, element.sampling.rendering, ctx);
     }
     if let Some(background) = element.paint.background_color
         && background.alpha() > 0.0
@@ -150,17 +142,25 @@ pub(in crate::render::pdf) fn paint_image_box(
         element.sampling.rendering,
     );
     let image_name = format!("Im{image_id}");
-    content.push_str("q\n");
     if placement.clip {
+        content.push_str("q\n");
         content.push_str(&format!("{}W n\n", image_content.rect_path()));
     }
-    content.push_str(&format!(
-        "{width} 0 0 {height} {x} {y} cm\n/{image_name} Do\nQ\n",
-        width = placement.width,
-        height = placement.height,
-        x = image_content.left + placement.offset_x,
-        y = image_content.top() - placement.offset_y - placement.height,
-    ));
+    push_raster_xobject(
+        content,
+        &image_name,
+        PdfRect::new(
+            image_content.left + placement.offset_x,
+            image_content.top() - placement.offset_y - placement.height,
+            placement.width,
+            placement.height,
+        ),
+        source,
+        ctx.text.pdf_writer,
+    );
+    if placement.clip {
+        content.push_str("Q\n");
+    }
     ctx.text.page_images.push(ImageRef {
         name: image_name,
         obj_id: image_id,

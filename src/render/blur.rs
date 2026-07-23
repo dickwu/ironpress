@@ -19,6 +19,10 @@ use crate::parser::ttf::TtfFont;
 use crate::style::computed::{BoxShadow, DropShadow, ImageRendering};
 use crate::types::{CornerRadii, EdgeSizes};
 
+mod discrete;
+
+use discrete::{DiscreteGaussianPlan, box_blur_axes};
+
 /// Points per CSS pixel (1px = 0.75pt). `blur_radius` is stored in points.
 const PT_PER_PX: f32 = 0.75;
 /// Maximum device-pixel shortfall treated as arithmetic noise at a half-pixel
@@ -114,33 +118,6 @@ fn nonnegative_pixel_ceil(value: f32) -> Option<u32> {
     (pixels <= f64::from(u32::MAX)).then_some(pixels as u32)
 }
 
-/// A three-pass box approximation to a CSS gaussian at one raster resolution.
-///
-/// Chromium's Skia mask blur uses this plan for `sigma >= 2`: derive one base
-/// box width from the CSS standard deviation, then use a final box one pixel
-/// wider when the base width is even. That keeps the aggregate kernel centred.
-#[derive(Clone, Copy, Debug)]
-struct DiscreteGaussianPlan {
-    pass_widths: [u32; 3],
-}
-
-impl DiscreteGaussianPlan {
-    fn from_sigma(sigma_px: f32) -> Option<Self> {
-        if !sigma_px.is_normal() || sigma_px < 2.0 {
-            return None;
-        }
-        let width =
-            (f64::from(sigma_px) * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor();
-        if !(1.0..=f64::from(u32::MAX - 1)).contains(&width) {
-            return None;
-        }
-        let width = width as u32;
-        Some(Self {
-            pass_widths: [width, width, width + u32::from(width % 2 == 0)],
-        })
-    }
-}
-
 /// The sampling method used for one CSS filter blur.
 #[derive(Clone, Copy, Debug)]
 enum FilterBlurSampling {
@@ -178,9 +155,9 @@ pub(crate) fn blur_css_filter(
     img: &image::RgbaImage,
     kernel: FilterBlurKernel,
 ) -> Option<image::RgbaImage> {
-    let premultiplied = premultiply_rgba(img);
+    let premultiplied = crate::render::raster_pixels::premultiply_rgba8(img);
     let blurred = blur_css_filter_premultiplied(&premultiplied, kernel)?;
-    Some(unpremultiply_rgba(&blurred))
+    Some(crate::render::raster_pixels::unpremultiply_rgba8(&blurred))
 }
 
 /// Blur an already-premultiplied CSS filter buffer and preserve that encoding.
@@ -195,7 +172,7 @@ fn blur_css_filter_premultiplied(
         FilterBlurSampling::SmallGaussian { sigma_px } => {
             Some(image::imageops::blur(premultiplied, sigma_px))
         }
-        FilterBlurSampling::ThreeBox(plan) => box_blur_axes(premultiplied, plan.pass_widths),
+        FilterBlurSampling::ThreeBox(plan) => box_blur_axes(premultiplied, plan),
     }
 }
 
@@ -207,9 +184,9 @@ fn gaussian_blur_premultiplied(img: &image::RgbaImage, sigma: f32) -> Option<ima
     if !sigma.is_normal() || sigma <= 0.0 {
         return None;
     }
-    let premultiplied = premultiply_rgba(img);
+    let premultiplied = crate::render::raster_pixels::premultiply_rgba8(img);
     let blurred = blur_premultiplied_at_sigma(&premultiplied, sigma)?;
-    Some(unpremultiply_rgba(&blurred))
+    Some(crate::render::raster_pixels::unpremultiply_rgba8(&blurred))
 }
 
 /// Apply the discrete Gaussian sampling Chromium uses for sufficiently broad
@@ -226,134 +203,18 @@ fn blur_premultiplied_at_sigma(
         return None;
     }
     match DiscreteGaussianPlan::from_sigma(sigma) {
-        Some(plan) => box_blur_axes(premultiplied, plan.pass_widths),
+        Some(plan) => box_blur_axes(premultiplied, plan),
         None => Some(image::imageops::blur(premultiplied, sigma)),
     }
-}
-
-/// Apply three box passes on each axis without quantizing between passes.
-///
-/// Skia quantizes after completing one axis, not after each individual box
-/// pass. Keeping the intermediate pixels as floats preserves that discrete
-/// kernel while the final eight-bit image remains a normal PDF soft mask.
-fn box_blur_axes(img: &image::RgbaImage, pass_widths: [u32; 3]) -> Option<image::RgbaImage> {
-    let horizontal = box_blur_axis(img, pass_widths, true)?;
-    box_blur_axis(&horizontal, pass_widths, false)
-}
-
-fn box_blur_axis(
-    img: &image::RgbaImage,
-    pass_widths: [u32; 3],
-    horizontal: bool,
-) -> Option<image::RgbaImage> {
-    let (width, height) = img.dimensions();
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let pixel_count = usize::try_from(width)
-        .ok()?
-        .checked_mul(usize::try_from(height).ok()?)?;
-    let channel_count = pixel_count.checked_mul(4)?;
-    let mut current = Vec::new();
-    current.try_reserve_exact(channel_count).ok()?;
-    current.extend(img.as_raw().iter().map(|&channel| f32::from(channel)));
-    let mut next = Vec::new();
-    next.try_reserve_exact(channel_count).ok()?;
-    next.resize(channel_count, 0.0);
-
-    let (line_length, line_count) = if horizontal {
-        (usize::try_from(width).ok()?, usize::try_from(height).ok()?)
-    } else {
-        (usize::try_from(height).ok()?, usize::try_from(width).ok()?)
-    };
-    for pass_width in pass_widths {
-        let pass_width = usize::try_from(pass_width).ok()?;
-        if pass_width == 0 {
-            return None;
-        }
-        let left_radius = (pass_width - 1) / 2;
-        let right_radius = pass_width - left_radius - 1;
-        for line in 0..line_count {
-            let mut sums = [0.0; 4];
-            for index in 0..=right_radius.min(line_length - 1) {
-                let pixel = axis_pixel_index(index, line, width, horizontal);
-                let offset = pixel.checked_mul(4)?;
-                for channel in 0..4 {
-                    sums[channel] += current[offset + channel];
-                }
-            }
-            for index in 0..line_length {
-                let pixel = axis_pixel_index(index, line, width, horizontal);
-                let offset = pixel.checked_mul(4)?;
-                for channel in 0..4 {
-                    next[offset + channel] = sums[channel] / pass_width as f32;
-                }
-                if index >= left_radius {
-                    let removed = axis_pixel_index(index - left_radius, line, width, horizontal);
-                    let offset = removed.checked_mul(4)?;
-                    for channel in 0..4 {
-                        sums[channel] -= current[offset + channel];
-                    }
-                }
-                if let Some(added_index) = index.checked_add(right_radius + 1)
-                    && added_index < line_length
-                {
-                    let added = axis_pixel_index(added_index, line, width, horizontal);
-                    let offset = added.checked_mul(4)?;
-                    for channel in 0..4 {
-                        sums[channel] += current[offset + channel];
-                    }
-                }
-            }
-        }
-        std::mem::swap(&mut current, &mut next);
-    }
-
-    let bytes = current
-        .into_iter()
-        .map(|channel| channel.round().clamp(0.0, 255.0) as u8)
-        .collect();
-    image::RgbaImage::from_raw(width, height, bytes)
-}
-
-fn axis_pixel_index(index: usize, line: usize, width: u32, horizontal: bool) -> usize {
-    let width = width as usize;
-    if horizontal {
-        line * width + index
-    } else {
-        index * width + line
-    }
-}
-
-fn premultiply_rgba(img: &image::RgbaImage) -> image::RgbaImage {
-    let mut premultiplied = img.clone();
-    for pixel in premultiplied.pixels_mut() {
-        let alpha = u16::from(pixel[3]);
-        for channel in &mut pixel.0[..3] {
-            *channel = (u16::from(*channel) * alpha / 255) as u8;
-        }
-    }
-    premultiplied
-}
-
-fn unpremultiply_rgba(img: &image::RgbaImage) -> image::RgbaImage {
-    let mut unpremultiplied = img.clone();
-    for pixel in unpremultiplied.pixels_mut() {
-        let alpha = u32::from(pixel[3]);
-        for channel in &mut pixel.0[..3] {
-            *channel = ((u32::from(*channel) * 255)
-                .checked_div(alpha)
-                .unwrap_or(0)
-                .min(255)) as u8;
-        }
-    }
-    unpremultiplied
 }
 
 /// Encode a (possibly padded) RGBA buffer as a full PNG file and wrap it in a
 /// `PngAlpha` asset, whose embedding path decodes colour + soft-mask so the
 /// transparent feathered border survives into the PDF.
-pub(crate) fn rgba_to_png_alpha_asset(img: image::RgbaImage) -> Option<RasterImageAsset> {
+pub(crate) fn rgba_to_png_alpha_asset(
+    img: image::RgbaImage,
+    filter_dpi: f32,
+) -> Option<RasterImageAsset> {
     let (width, height) = (img.width(), img.height());
     let mut encoded = Vec::new();
     image::DynamicImage::ImageRgba8(img)
@@ -368,6 +229,7 @@ pub(crate) fn rgba_to_png_alpha_asset(img: image::RgbaImage) -> Option<RasterIma
         height,
         ImageFormat::PngAlpha,
         None,
+        filter_dpi,
     ))
 }
 
@@ -439,7 +301,7 @@ pub(crate) fn blur_shadow_rect(
     };
 
     let overflow_pt = box_shadow_blur_overflow(shadow.blur, filter_dpi)?;
-    let asset = rgba_to_png_alpha_asset(rgba)?;
+    let asset = rgba_to_png_alpha_asset(rgba, filter_dpi)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
@@ -513,7 +375,7 @@ pub(crate) fn blur_inset_shadow_rect(
         radii * pt_to_px,
     )?;
     let overflow_pt = pad as f32 / s * PT_PER_PX;
-    let asset = rgba_to_png_alpha_asset(rgba)?;
+    let asset = rgba_to_png_alpha_asset(rgba, filter_dpi)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
@@ -678,7 +540,7 @@ pub(crate) fn blur_shadow_alpha_mask(
     };
 
     let overflow_pt = pad as f32 / s * PT_PER_PX;
-    let asset = rgba_to_png_alpha_asset(blurred)?;
+    let asset = rgba_to_png_alpha_asset(blurred, filter_dpi)?;
     Some((BlurredRaster { asset, overflow_pt }, pad))
 }
 
@@ -917,10 +779,13 @@ pub(crate) fn blur_box(
     );
 
     let premultiplied = crate::render::raster_pixels::pixmap_to_premultiplied_rgba(&pixmap);
-    let rgba = unpremultiply_rgba(&blur_css_filter_premultiplied(&premultiplied, kernel)?);
+    let rgba = crate::render::raster_pixels::unpremultiply_rgba8(&blur_css_filter_premultiplied(
+        &premultiplied,
+        kernel,
+    )?);
 
     let overflow_pt = pad as f32 / s * PT_PER_PX;
-    let asset = rgba_to_png_alpha_asset(rgba)?;
+    let asset = rgba_to_png_alpha_asset(rgba, filter_dpi)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
@@ -1160,8 +1025,12 @@ fn nearest_pixelated_multiple(source_axis: u32, display_axis_pt: f32) -> u32 {
 }
 
 /// Encode an already-built blurred RGBA buffer + overflow into a `BlurredRaster`.
-pub(crate) fn raster_from_buffer(buf: image::RgbaImage, overflow_pt: f32) -> Option<BlurredRaster> {
-    let asset = rgba_to_png_alpha_asset(buf)?;
+pub(crate) fn raster_from_buffer(
+    buf: image::RgbaImage,
+    overflow_pt: f32,
+    filter_dpi: f32,
+) -> Option<BlurredRaster> {
+    let asset = rgba_to_png_alpha_asset(buf, filter_dpi)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
@@ -1217,7 +1086,7 @@ pub(crate) fn blur_painted_buffer(
         return None;
     }
     let (blurred, overflow_pt) = blur_painted_buffer_to_rgba(source, blur_radius_pt, filter_dpi)?;
-    raster_from_buffer(blurred, overflow_pt)
+    raster_from_buffer(blurred, overflow_pt, filter_dpi)
 }
 
 pub(crate) struct SvgTurbulenceDisplacement {
@@ -1304,7 +1173,7 @@ pub(crate) fn turbulence_displacement_rect(
     }
 
     Some(SvgFilterRaster {
-        asset: rgba_to_png_alpha_asset(out)?,
+        asset: rgba_to_png_alpha_asset(out, filter_dpi)?,
         raster_overflow: overflow * PT_PER_PX,
     })
 }
@@ -1561,7 +1430,7 @@ pub(crate) fn drop_shadow_image(
     }
 
     let overflow_pt = surface.overflow_pt();
-    let asset = rgba_to_png_alpha_asset(composed)?;
+    let asset = rgba_to_png_alpha_asset(composed, filter_dpi)?;
     Some(BlurredRaster { asset, overflow_pt })
 }
 
@@ -1801,12 +1670,10 @@ mod tests {
     fn css_filter_kernel_keeps_authored_overflow_and_selects_three_boxes() {
         let kernel = FilterBlurKernel::new(4.5, 300.0).unwrap();
         assert_eq!(kernel.padding_px, 57); // 3 × 6 CSS px × 300 / 96.
-        assert!(matches!(
-            kernel.sampling,
-            FilterBlurSampling::ThreeBox(DiscreteGaussianPlan {
-                pass_widths: [35, 35, 35]
-            })
-        ));
+        let FilterBlurSampling::ThreeBox(plan) = kernel.sampling else {
+            panic!("broad CSS blur should use the bounded integer plan");
+        };
+        assert_eq!(plan.pass_widths(), [35, 35, 35]);
     }
 
     #[test]
@@ -1818,7 +1685,7 @@ mod tests {
     #[test]
     fn discrete_gaussian_matches_chromium_pdf_alpha_profile() {
         let plan = DiscreteGaussianPlan::from_sigma(15.625).expect("finite sigma has a plan");
-        assert_eq!(plan.pass_widths, [29, 29, 29]);
+        assert_eq!(plan.pass_widths(), [29, 29, 29]);
 
         let mut source = image::RgbaImage::new(594, 594);
         for y in 47..547 {
@@ -1826,8 +1693,8 @@ mod tests {
                 source.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
             }
         }
-        let blurred = box_blur_axes(&source, plan.pass_widths)
-            .expect("valid image and plan produce a blurred image");
+        let blurred =
+            box_blur_axes(&source, plan).expect("valid image and plan produce a blurred image");
         let expected = [
             (10, 1),
             (15, 3),

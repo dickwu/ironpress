@@ -24,9 +24,7 @@ impl PaintGroupScope {
     ) -> Self {
         let group = owner.paint_group();
         let effects = &group.effects;
-        let grouped = effects.opacity < 1.0
-            || effects.mix_blend_mode != crate::style::computed::BlendMode::Normal
-            || effects.stacking_context != crate::layout::engine::StackingContext::None;
+        let grouped = effects.needs_source_isolation();
         let group_start = grouped.then_some(content.len());
 
         let resolved_transform = group.transform.value.as_ref().map(|transform| {

@@ -217,7 +217,7 @@
     "category": "filters",
     "feature": "filter: chained",
     "subfeature": "ordered-contrast-blur",
-    "description": "contrast(5) blur(8px) and blur(8px) contrast(5) produce different edge softness; catches implementations that reorder filter functions.",
+    "description": "contrast(5) blur(8px) and blur(8px) contrast(5) process the same exact-size four-colour field in list order; catches implementations that reorder filter functions without coupling the assertion to replaced-image scaling.",
     "file": "cases/filters/filter-chain-order-contrast-blur.html",
     "kind": "interaction",
     "interaction_of": [
@@ -226,7 +226,6 @@
     ],
     "expected_support": "implemented",
     "depends_on": [
-      "probe-image-render",
       "probe-fill-box"
     ]
   },

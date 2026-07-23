@@ -160,6 +160,34 @@ pub(super) struct PdfDeviceSpace {
     page_height: f64,
 }
 
+/// One renderer-generated bitmap placed in Chromium's top-down print-device
+/// coordinate system.
+///
+/// The bitmap dimensions come from the surface's retained physical density,
+/// while its absolute origin is rounded out to the device-pixel boundary that
+/// owns the offscreen surface. This avoids rebuilding both values from noisy
+/// point extents at PDF serialization time.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PdfDeviceRasterPlacement {
+    device: PdfDeviceSpace,
+    image_matrix: PdfMatrix,
+}
+
+impl PdfDeviceRasterPlacement {
+    pub(super) fn operators(self) -> String {
+        format!(
+            "{}{}",
+            self.device.enter_operator(),
+            self.image_matrix.cm_operator()
+        )
+    }
+
+    #[cfg(test)]
+    const fn image_matrix(self) -> PdfMatrix {
+        self.image_matrix
+    }
+}
+
 impl PdfDeviceSpace {
     pub(super) const CSS_TO_DEVICE: f64 = PageContentTransform::POINT_TO_DEVICE * 0.75;
 
@@ -438,6 +466,49 @@ impl PageContentTransform {
         })
     }
 
+    /// Place a renderer-owned raster without cancelling and rebuilding the
+    /// print-device transform through point-space floats.
+    pub(super) fn device_raster_placement(
+        self,
+        rect: PdfRect,
+        dimensions: crate::util::RasterDimensions,
+        density: crate::layout::engine::RasterPixelDensity,
+    ) -> Option<PdfDeviceRasterPlacement> {
+        const DEVICE_EDGE_EPSILON: f64 = 0.001;
+        const PRINT_DEVICE_DPI: f64 = 72.0 * PageContentTransform::POINT_TO_DEVICE;
+
+        let device = self.device_space()?;
+        let stabilize_edge = |value: f64| {
+            let integer = value.round();
+            if (value - integer).abs() <= DEVICE_EDGE_EPSILON {
+                integer
+            } else {
+                value
+            }
+        };
+        let left = stabilize_edge(f64::from(rect.left) * Self::POINT_TO_DEVICE).floor();
+        let top =
+            stabilize_edge((device.page_height() - f64::from(rect.top())) * Self::POINT_TO_DEVICE)
+                .floor();
+        let source_to_device = PRINT_DEVICE_DPI / f64::from(density.dpi());
+        let width = f64::from(dimensions.width) * source_to_device;
+        let height = f64::from(dimensions.height) * source_to_device;
+        if ![left, top, width, height].into_iter().all(f64::is_finite)
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return None;
+        }
+        Some(PdfDeviceRasterPlacement {
+            device,
+            image_matrix: PdfMatrix::new(
+                PdfVector::new(width as f32, 0.0),
+                PdfVector::new(0.0, -(height as f32)),
+                PdfPoint::new(left as f32, (top + height) as f32),
+            ),
+        })
+    }
+
     /// Whether a layout-space rectangle reaches a physical page boundary.
     /// Only those boundary clips need the browser's device-space coverage
     /// semantics; interior border-box fills retain their ordinary PDF path.
@@ -680,6 +751,50 @@ mod tests {
         assert_eq!(
             transform.snap_layout_box(authored),
             PdfRect::new(8.25, 126.75, 15.0, 15.0),
+        );
+    }
+
+    #[test]
+    fn generated_raster_retains_its_device_pixel_footprint() {
+        let transform = PageContentTransform::print(PdfVector::new(192.0, 192.0));
+        let placement = transform
+            .device_raster_placement(
+                PdfRect::new(21.12, 33.119_987, 137.760_01, 137.760_01),
+                crate::util::RasterDimensions {
+                    width: 574,
+                    height: 574,
+                },
+                crate::layout::engine::RasterPixelDensity::from_dpi(300.0),
+            )
+            .expect("print raster placement");
+
+        assert_eq!(
+            placement.image_matrix(),
+            PdfMatrix::new(
+                PdfVector::new(574.0, 0.0),
+                PdfVector::new(0.0, -574.0),
+                PdfPoint::new(88.0, 662.0),
+            )
+        );
+    }
+
+    #[test]
+    fn generated_raster_origin_rounds_out_fractional_device_bounds() {
+        let transform = PageContentTransform::print(PdfVector::new(192.0, 192.0));
+        let placement = transform
+            .device_raster_placement(
+                PdfRect::from_top(13.695, 178.155, 92.88, 93.12),
+                crate::util::RasterDimensions {
+                    width: 387,
+                    height: 388,
+                },
+                crate::layout::engine::RasterPixelDensity::from_dpi(300.0),
+            )
+            .expect("print raster placement");
+
+        assert_eq!(
+            placement.image_matrix().translation,
+            PdfPoint::new(57.0, 445.0)
         );
     }
 }

@@ -78,6 +78,7 @@ mod pdf_text;
 mod projection;
 mod radial_gradients;
 mod raster_effects;
+mod raster_placement;
 mod resources;
 mod shadows;
 mod stacking;
@@ -160,6 +161,7 @@ pub(crate) use pdf_text::{
 use projection::*;
 use radial_gradients::*;
 use raster_effects::*;
+use raster_placement::*;
 use resources::*;
 use shadows::{render_box_shadows, render_box_shadows_inset};
 use stacking::{StackingPaintPlan, StackingScope, StackingTraversal};

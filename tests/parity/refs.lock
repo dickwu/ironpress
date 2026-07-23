@@ -3041,16 +3041,16 @@
     "filter-chain-order-contrast-blur": {
       "category": "filters",
       "file": "cases/filters/filter-chain-order-contrast-blur.html",
-      "html_sha256": "191532ac8b48f4d2f2da4223169b57790c2dab66cc1f6f6fa9100db86929e166",
-      "manifest_sha256": "9afc8af5b3fe4734d5ff4963ad018696faf0b9df3c2822a7ee40756f292988b3",
+      "html_sha256": "6d123936cae20d60139f2f2b253ddf17e67c3630122bca3a2d98d74aa700c759",
+      "manifest_sha256": "a34800270c971edf928c043c21c5abd3b238fb9796fff1aa654c1ed78efa2b36",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/filters/filter-chain-order-contrast-blur.pdf",
-        "sha256": "4f63fc914f5500f4cd154da827641f583f671bb95bd2eed42db5d4b863016e45"
+        "sha256": "e6577627dd39d67ea51333be553b3b9e8de94a579c21608a84e2aeeb12c09b35"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "1cd14b0b0a6659d8e37eb8a8f5a92ed6555bb10b1a61d59427a8506907f229a3",
       "reference_file": "cases/filters/filter-chain-order-contrast-blur.html",
-      "reference_html_sha256": "191532ac8b48f4d2f2da4223169b57790c2dab66cc1f6f6fa9100db86929e166"
+      "reference_html_sha256": "6d123936cae20d60139f2f2b253ddf17e67c3630122bca3a2d98d74aa700c759"
     },
     "filter-chained": {
       "category": "filters",

@@ -79,6 +79,10 @@ impl PdfWriter {
         self.graphics_state.local_to_layout * local
     }
 
+    pub(super) fn has_active_paint_transform(&self) -> bool {
+        self.graphics_state.local_to_layout != PdfMatrix::IDENTITY
+    }
+
     pub(super) fn transformed_paint_space(&self, page_bounds: PdfRect) -> Option<PdfPaintSpace> {
         let local_to_layout = self.graphics_state.local_to_layout;
         (local_to_layout != PdfMatrix::IDENTITY)

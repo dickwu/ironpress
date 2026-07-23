@@ -406,14 +406,13 @@ impl RasterCanvas<'_> {
             sampling.object_fit,
             sampling.object_position,
         );
-        let target_width = positive_device_length(placement.width, self.pixels_per_point)?;
-        let target_height = positive_device_length(placement.height, self.pixels_per_point)?;
-        let resized = crate::render::blur::resize_image_for_display(
+        let resized = crate::render::blur::rasterize_image_buffer(
             &decoded,
-            target_width,
-            target_height,
+            placement.width,
+            placement.height,
             sampling.rendering,
-        );
+            self.pixels_per_point * 72.0,
+        )?;
         let destination = DevicePoint::new(
             ((content_box.origin.x + placement.offset_x) * self.pixels_per_point).round() as i32,
             ((content_box.origin.y + placement.offset_y) * self.pixels_per_point).round() as i32,
@@ -625,11 +624,6 @@ pub(super) fn box_shadow_overflow(
             .max((rect.origin.y + rect.size.height - size.height).max(0.0));
     }
     Some(overflow)
-}
-
-fn positive_device_length(points: f32, scale: f32) -> Option<u32> {
-    (points.is_finite() && points > 0.0 && scale.is_finite() && scale > 0.0)
-        .then(|| (points * scale).round().max(1.0) as u32)
 }
 
 fn device_floor(points: f32, scale: f32, maximum: u32) -> u32 {

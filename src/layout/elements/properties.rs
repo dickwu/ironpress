@@ -371,8 +371,17 @@ impl GroupEffects {
         self.opacity >= 1.0
             && self.mix_blend_mode == BlendMode::Normal
             && !self.isolation.isolates()
-            && self.stacking_context == StackingContext::None
+            && !self.stacking_context.establishes()
             && self.masking.is_none()
+    }
+
+    /// Whether PDF painting still needs an isolated transparency group around
+    /// this box's source stream.
+    pub(crate) fn needs_source_isolation(&self) -> bool {
+        self.opacity < 1.0
+            || self.mix_blend_mode != BlendMode::Normal
+            || self.isolation.isolates()
+            || self.stacking_context.needs_source_isolation()
     }
 }
 
@@ -430,8 +439,15 @@ impl PaintGroup {
             || self.effects.opacity < 1.0
             || self.effects.mix_blend_mode != BlendMode::Normal
             || self.effects.isolation.isolates()
-            || self.effects.stacking_context != StackingContext::None
+            || self.effects.stacking_context.establishes()
             || !self.effects.masking.is_none()
+    }
+
+    /// Preserve the CSS stacking boundary after replacing a filtered subtree
+    /// with its already-isolated raster output.
+    pub(crate) fn with_materialized_filter(mut self) -> Self {
+        self.effects.stacking_context = self.effects.stacking_context.materialized();
+        self
     }
 }
 

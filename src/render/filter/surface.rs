@@ -7,86 +7,6 @@ pub(crate) struct FilteredSurface {
     pub(crate) overflow: EdgeSizes,
 }
 
-impl FilteredSurface {
-    /// Remove fully transparent device-pixel borders without changing the
-    /// pixel-to-page transform represented by `overflow`.
-    fn compact(mut self, source_size: Size, filter_dpi: f32) -> Self {
-        let (width, height) = self.pixels.dimensions();
-        let mut bounds = AlphaBounds::empty(width, height);
-        for (x, y, pixel) in self.pixels.enumerate_pixels() {
-            if pixel[3] != 0 {
-                bounds.include(x, y);
-            }
-        }
-        if bounds.is_empty() || bounds.covers(width, height) {
-            return self;
-        }
-
-        let point_per_pixel = 1.0 / crate::render::blur::px_per_pt_at_dpi(filter_dpi);
-        let left = self.overflow.left - bounds.left as f32 * point_per_pixel;
-        let top = self.overflow.top - bounds.top as f32 * point_per_pixel;
-        let compact_width = bounds.width() as f32 * point_per_pixel;
-        let compact_height = bounds.height() as f32 * point_per_pixel;
-        self.overflow = EdgeSizes::new(
-            top,
-            compact_width - source_size.width - left,
-            compact_height - source_size.height - top,
-            left,
-        );
-        self.pixels = image::imageops::crop_imm(
-            &self.pixels,
-            bounds.left,
-            bounds.top,
-            bounds.width(),
-            bounds.height(),
-        )
-        .to_image();
-        self
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AlphaBounds {
-    left: u32,
-    top: u32,
-    right: u32,
-    bottom: u32,
-}
-
-impl AlphaBounds {
-    const fn empty(width: u32, height: u32) -> Self {
-        Self {
-            left: width,
-            top: height,
-            right: 0,
-            bottom: 0,
-        }
-    }
-
-    fn include(&mut self, x: u32, y: u32) {
-        self.left = self.left.min(x);
-        self.top = self.top.min(y);
-        self.right = self.right.max(x + 1);
-        self.bottom = self.bottom.max(y + 1);
-    }
-
-    const fn is_empty(self) -> bool {
-        self.left >= self.right || self.top >= self.bottom
-    }
-
-    const fn covers(self, width: u32, height: u32) -> bool {
-        self.left == 0 && self.top == 0 && self.right == width && self.bottom == height
-    }
-
-    const fn width(self) -> u32 {
-        self.right - self.left
-    }
-
-    const fn height(self) -> u32 {
-        self.bottom - self.top
-    }
-}
-
 /// Evaluate one ordered filter list over an already-composited source graphic.
 ///
 /// Returning `None` for an unsupported SVG graph operation is deliberate: the
@@ -161,7 +81,7 @@ pub(crate) fn apply_operations_to_surface(
     if let Some(start) = color_run_start {
         apply_color_operations(&mut pixels, &operations[start..], linear_rgb);
     }
-    Some(FilteredSurface { pixels, overflow }.compact(source_size, filter_dpi))
+    Some(FilteredSurface { pixels, overflow })
 }
 
 fn is_color_operation(operation: &FilterOperation) -> bool {
@@ -388,32 +308,5 @@ mod tests {
         .expect("finite colour functions produce a surface");
 
         assert_eq!(filtered.pixels.get_pixel(0, 0).0, [242, 254, 255, 255]);
-    }
-
-    #[test]
-    fn compact_surface_retains_the_configured_device_pixel_scale() {
-        let mut pixels = image::RgbaImage::new(11, 7);
-        for y in 1..6 {
-            for x in 1..9 {
-                pixels.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
-            }
-        }
-        let compact = FilteredSurface {
-            pixels,
-            overflow: EdgeSizes::new(0.24, 0.96, 0.24, 0.48),
-        }
-        .compact(Size::new(1.2, 1.2), 300.0);
-
-        assert_eq!(compact.pixels.dimensions(), (8, 5));
-        assert!((compact.overflow.left - 0.24).abs() < f32::EPSILON);
-        assert!((compact.overflow.right - 0.48).abs() < f32::EPSILON);
-        assert!(compact.overflow.top.abs() < f32::EPSILON);
-        assert!(compact.overflow.bottom.abs() < f32::EPSILON);
-        assert!(
-            ((1.2 + compact.overflow.horizontal()) * crate::render::blur::px_per_pt_at_dpi(300.0)
-                - compact.pixels.width() as f32)
-                .abs()
-                < f32::EPSILON
-        );
     }
 }

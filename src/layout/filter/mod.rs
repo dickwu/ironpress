@@ -212,7 +212,8 @@ pub(crate) fn composite_source(
             .paint_group_owner()
             .map(crate::layout::elements::PaintGroupOwner::paint_group)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .with_materialized_filter(),
     })
 }
 
@@ -245,7 +246,7 @@ pub(crate) fn composite_source_graphic(
     let raster_overflow = source.geometry.paint_overflow + filtered.overflow;
     Some((
         FilterRasterOutput {
-            asset: crate::render::blur::rgba_to_png_alpha_asset(filtered.pixels)?,
+            asset: crate::render::blur::rgba_to_png_alpha_asset(filtered.pixels, filter_dpi)?,
             raster_overflow,
         },
         layout_geometry,

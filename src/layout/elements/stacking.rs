@@ -301,6 +301,13 @@ mod tests {
                 },
                 ..Default::default()
             },
+            PaintGroup {
+                effects: GroupEffects {
+                    stacking_context: StackingContext::FilteredOutput,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         ];
 
         for group in groups {
