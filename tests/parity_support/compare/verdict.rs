@@ -113,6 +113,10 @@ fn visible_color_difference(
     }
 
     visibility_tally.color_pct > VISUAL_EDGE_COLOR_PCT
+        || super::visibility::has_visible_unproven_color_change(
+            visibility_tally,
+            visibility_regions,
+        )
 }
 
 /// A page-wide colour error can be an imperceptible outline phase only if it
@@ -177,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn per_pixel_sub_half_percent_color_residue_is_not_visible() {
+    fn per_pixel_sub_one_percent_color_residue_is_not_visible() {
         let within_tolerance = ClassTally {
             color_px: 10,
             color_pct: 10.0,

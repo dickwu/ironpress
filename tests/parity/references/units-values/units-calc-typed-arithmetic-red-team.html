@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-calc-typed-arithmetic-red-team reference</title>
+<style>
+  /* CSS Values 4 section 10.9 assigns exponent maps to length, percentage,
+     angle, time, frequency, resolution and flex dimensions. Each expression
+     in the candidate cancels to a length with a 120px used value. Chromium's
+     print path still rejects the flex cancellation, so this authenticated
+     equivalent source materializes the standard-required result. */
+  @page { size: 480px 608px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane {
+    position: relative;
+    width: 406px;
+    height: 54px;
+    margin-bottom: 10px;
+    background: #ffd166;
+    border: 3px solid #111;
+  }
+  .lane:last-child { margin-bottom: 0; }
+  .bar {
+    position: relative;
+    width: 120px;
+    height: 100%;
+    background: #e63946;
+    border-right: 6px solid #087e8b;
+  }
+  .target {
+    position: absolute;
+    z-index: 2;
+    left: 116px;
+    top: 0;
+    width: 8px;
+    height: 100%;
+    background: #111;
+  }
+</style></head><body>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane"><div class="bar"></div><div class="target"></div></div>
+</body></html>

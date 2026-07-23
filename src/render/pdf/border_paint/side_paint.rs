@@ -54,14 +54,36 @@ pub(super) fn paint_rounded_patterned_side(
 ) {
     content.push_str("q\n");
     ring.side_region(edge).push_clip(content);
+    paint_closed_rounded_pattern(content, ring, stroke, side);
+    content.push_str("Q\n");
+}
+
+/// Paint one closed rounded dash/dot cadence through the canonical ring.
+/// Uniform and mixed-side borders deliberately share this path so the same
+/// authored geometry cannot acquire a different cadence through dispatch.
+pub(super) fn paint_closed_rounded_pattern(
+    content: &mut String,
+    ring: BorderRingGeometry,
+    stroke: BorderStrokeGeometry,
+    side: &crate::layout::engine::LayoutBorderSide,
+) {
+    content.push_str("q\n");
     ring.push_clip(content);
     content.push_str(&PdfRgb::from(side.color).stroke_operator());
-    content.push_str(&side_dash_pattern_for_style(
+    content.push_str(&closed_border_pattern_for_style(
         side.style,
         side.width,
-        stroke.span(edge),
+        stroke.path_length(),
     ));
-    content.push_str(&format!("{} w\n", side.width));
+    let stroke_width = if side.style == BorderStyle::Dashed {
+        // Blink deliberately oversizes curved dashed paint, then lets the
+        // rounded border ring own both visible edges. Coincident stroke and
+        // clip edges otherwise antialias independently and leave a fringe.
+        side.width * 2.2
+    } else {
+        side.width
+    };
+    content.push_str(&format!("{stroke_width} w\n"));
     content.push_str(&stroke.centerline.path_or_rect());
     content.push_str("S\n");
     content.push_str(reset_dash_pattern(side.style));

@@ -597,7 +597,7 @@ impl SourcePainter<'_> {
                 rect.size.width,
                 Some(rect.size.height),
             ),
-            padding: cell.layout.box_model.content_insets,
+            padding: cell.layout.box_model.padding(),
             border,
             ..Default::default()
         };
@@ -619,7 +619,7 @@ impl SourcePainter<'_> {
         self.canvas
             .paint_border(rect, &border, cell.layout.paint.border_radii)?;
         let area = DescendantPaintArea {
-            content_box: rect.inset(border.widths() + cell.layout.box_model.content_insets),
+            content_box: rect.inset(cell.layout.box_model.content_insets),
             absolute_containing_block: Some(rect.inset(border.widths())),
             direct_child_effects: RootEffectHandling::DeferToOwner,
         };

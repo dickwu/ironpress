@@ -1,7 +1,7 @@
 use crate::types::Color;
 use cssparser_color::{Color as ParsedColor, hsl_to_rgb, hwb_to_rgb, parse_color_keyword};
 
-use super::{CalcOp, CalcToken, CssValue, SpecifiedColor};
+use super::{CssMathExpression, CssValue, SpecifiedColor};
 
 pub(crate) fn is_css_wide_keyword(value: &str) -> bool {
     matches!(
@@ -17,12 +17,8 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
         return Some(var_value);
     }
 
-    if let Some(calc_value) = parse_calc_expression(val) {
-        return Some(calc_value);
-    }
-
-    if let Some(clamp_value) = parse_clamp_expression(val) {
-        return Some(clamp_value);
+    if let Some(math_value) = parse_math_expression(val) {
+        return Some(math_value);
     }
 
     if let Some(number) = val.strip_suffix("px") {
@@ -131,10 +127,21 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
     }
 
     if let Some(number) = val.strip_suffix("em") {
-        return number.parse::<f32>().ok().map(CssValue::Number);
+        return number.parse::<f32>().ok().map(CssValue::Em);
     }
 
-    val.parse::<f32>().ok().map(CssValue::Length)
+    val.parse::<f32>().ok().map(|value| {
+        // CSS Values 4 permits a unitless zero wherever a <length> is
+        // expected. Preserve non-zero bare values as numbers so typed
+        // arithmetic and number-valued properties cannot confuse them with
+        // lengths, while letting every length consumer handle the universal
+        // zero without property-by-property exceptions.
+        if value == 0.0 {
+            CssValue::Length(0.0)
+        } else {
+            CssValue::Number(value)
+        }
+    })
 }
 
 pub(crate) fn parse_var_function(val: &str) -> Option<CssValue> {
@@ -151,136 +158,21 @@ pub(crate) fn parse_var_function(val: &str) -> Option<CssValue> {
     Some(CssValue::Var(name.to_string(), fallback))
 }
 
-pub(crate) fn parse_calc_expression(val: &str) -> Option<CssValue> {
-    let inner = val.strip_prefix("calc(")?.strip_suffix(')')?.trim();
-    if inner.is_empty() {
-        return None;
-    }
-
-    tokenize_calc(inner).map(CssValue::Calc)
-}
-
-/// Parse a `clamp(min, preferred, max)` expression. Each of the three operands
-/// is a length-like value (length, percentage, calc, var, …) parsed via
-/// [`parse_length`] and stored lazily so the percentage basis can be applied at
-/// resolution time. Resolves to `max(min, min(preferred, max))`.
-pub(crate) fn parse_clamp_expression(val: &str) -> Option<CssValue> {
-    let inner = val.strip_prefix("clamp(")?.strip_suffix(')')?.trim();
-    let parts = split_top_level_args(inner);
-    if parts.len() != 3 {
-        return None;
-    }
-    let min = parse_length(parts[0].trim())?;
-    let preferred = parse_length(parts[1].trim())?;
-    let max = parse_length(parts[2].trim())?;
-    Some(CssValue::Clamp(
-        Box::new(min),
-        Box::new(preferred),
-        Box::new(max),
-    ))
-}
-
-/// Split a comma-separated argument list at top level, ignoring commas nested
-/// inside parentheses (e.g. `calc(50% - 1px), 2px`).
-fn split_top_level_args(inner: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0u32;
-    for ch in inner.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                depth = depth.saturating_sub(1);
-                current.push(ch);
-            }
-            ',' if depth == 0 => parts.push(std::mem::take(&mut current)),
-            _ => current.push(ch),
-        }
-    }
-    if !current.is_empty() || !parts.is_empty() {
-        parts.push(current);
-    }
-    parts
-}
-
-pub(crate) fn tokenize_calc(expr: &str) -> Option<Vec<CalcToken>> {
-    let chars: Vec<char> = expr.chars().collect();
-    let mut tokens = Vec::new();
-    let mut index = 0;
-    let mut expects_value = true;
-
-    while index < chars.len() {
-        while chars.get(index).is_some_and(|ch| ch.is_whitespace()) {
-            index += 1;
-        }
-
-        let Some(ch) = chars.get(index).copied() else {
-            break;
-        };
-
-        if matches!(ch, '*' | '/') || ((ch == '+' || ch == '-') && !expects_value) {
-            if expects_value {
-                return None;
-            }
-            let operator = match ch {
-                '+' => CalcOp::Add,
-                '-' => CalcOp::Sub,
-                '*' => CalcOp::Mul,
-                '/' => CalcOp::Div,
-                _ => return None,
-            };
-            tokens.push(CalcToken::Op(operator));
-            index += 1;
-            expects_value = true;
-            continue;
-        }
-
-        let start = index;
-        if matches!(chars.get(index), Some('+') | Some('-')) {
-            index += 1;
-        }
-
-        while chars
-            .get(index)
-            .is_some_and(|next| next.is_ascii_digit() || *next == '.')
-        {
-            index += 1;
-        }
-
-        if start == index {
-            return None;
-        }
-
-        while chars
-            .get(index)
-            .is_some_and(|next| next.is_ascii_alphabetic() || *next == '%')
-        {
-            index += 1;
-        }
-
-        let token = chars[start..index].iter().collect::<String>();
-        match parse_length(&token)? {
-            CssValue::Length(value) => tokens.push(CalcToken::Length(value)),
-            CssValue::Percentage(value) => tokens.push(CalcToken::Percent(value)),
-            CssValue::Number(value) => tokens.push(CalcToken::Em(value)),
-            CssValue::Rem(value) => tokens.push(CalcToken::Rem(value)),
-            CssValue::Vw(value) => tokens.push(CalcToken::Vw(value)),
-            CssValue::Vh(value) => tokens.push(CalcToken::Vh(value)),
-            CssValue::Vmin(value) => tokens.push(CalcToken::Vmin(value)),
-            CssValue::Vmax(value) => tokens.push(CalcToken::Vmax(value)),
-            _ => return None,
-        }
-        expects_value = false;
-    }
-
-    if tokens.is_empty() || expects_value {
-        None
-    } else {
-        Some(tokens)
-    }
+pub(crate) fn parse_math_expression(value: &str) -> Option<CssValue> {
+    const FUNCTIONS: &[&str] = &[
+        "calc(", "min(", "max(", "clamp(", "round(", "rem(", "mod(", "sin(", "cos(", "tan(",
+        "asin(", "acos(", "atan(", "atan2(", "pow(", "sqrt(", "hypot(", "log(", "exp(", "abs(",
+        "sign(",
+    ];
+    let value = value.trim();
+    FUNCTIONS
+        .iter()
+        .any(|function| {
+            value
+                .get(..function.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(function))
+        })
+        .then(|| CssMathExpression::parse(value).map(CssValue::Math))?
 }
 
 pub(crate) fn parse_color(val: &str) -> Option<CssValue> {
@@ -413,7 +305,7 @@ fn line_width_token_is_valid(value: &str) -> bool {
     match parse_length(value) {
         Some(
             CssValue::Length(value)
-            | CssValue::Number(value)
+            | CssValue::Em(value)
             | CssValue::Ex(value)
             | CssValue::Ch(value)
             | CssValue::Rem(value)
@@ -422,8 +314,9 @@ fn line_width_token_is_valid(value: &str) -> bool {
             | CssValue::Vmin(value)
             | CssValue::Vmax(value),
         ) => value.is_finite() && value >= 0.0,
+        Some(CssValue::Number(value)) => value.is_finite() && value == 0.0,
         // Math and deferred substitutions are checked at computed-value time.
-        Some(CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Math(_) | CssValue::Var(_, _)) => true,
         Some(CssValue::Keyword(value)) => value
             .strip_suffix("cap")
             .or_else(|| value.strip_suffix("lh"))
@@ -541,7 +434,7 @@ fn radius_component_is_valid(value: &str) -> bool {
     match parse_length(value) {
         Some(
             CssValue::Length(value)
-            | CssValue::Number(value)
+            | CssValue::Em(value)
             | CssValue::Percentage(value)
             | CssValue::Ex(value)
             | CssValue::Ch(value)
@@ -551,7 +444,8 @@ fn radius_component_is_valid(value: &str) -> bool {
             | CssValue::Vmin(value)
             | CssValue::Vmax(value),
         ) => value.is_finite() && value >= 0.0,
-        Some(CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Number(value)) => value.is_finite() && value == 0.0,
+        Some(CssValue::Math(_) | CssValue::Var(_, _)) => true,
         Some(CssValue::Keyword(value)) => value
             .strip_suffix("cap")
             .or_else(|| value.strip_suffix("lh"))
@@ -584,12 +478,8 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
         return Some(var_value);
     }
 
-    if let Some(calc_value) = parse_calc_expression(val) {
-        return Some(calc_value);
-    }
-
-    if let Some(clamp_value) = parse_clamp_expression(val) {
-        return Some(clamp_value);
+    if let Some(math_value) = parse_math_expression(val) {
+        return Some(math_value);
     }
 
     if is_css_wide_keyword(&lower) {

@@ -2,11 +2,12 @@
 //!
 //! A fixed-size box can contribute overflow on a later fragmentainer without
 //! occupying normal flow there. Ordinary content on that page supplies the
-//! backdrop, so those continuations paint after main-flow boxes. Flex boxes
-//! additionally expose separate decoration/content phases: their decoration
-//! belongs to the backdrop while their item content stays above the overflow.
+//! backdrop, so those continuations paint after main-flow boxes. Page-level
+//! phase splitting is reserved for that overflow relationship: an ordinary
+//! principal box stays atomic here and resolves its descendant phases inside
+//! its own recursive stacking context.
 
-use crate::layout::elements::{LayoutElement, LayoutNode, LayoutVisitor, PageContentRole};
+use crate::layout::elements::{LayoutElement, LayoutNode, PageContentRole};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ElementPaintPhase {
@@ -86,30 +87,9 @@ fn plan_participants(participants: &[PaintParticipant]) -> Vec<PlannedPageElemen
 }
 
 fn supports_phased_paint(element: &dyn LayoutElement) -> bool {
-    #[derive(Default)]
-    struct PhaseSupport(Option<bool>);
-
-    impl LayoutVisitor for PhaseSupport {
-        fn visit_container(&mut self, element: &crate::layout::elements::Container) {
-            self.0 = Some(
-                element.paint.group.is_identity()
-                    && element.paint.background.layers.blur_radius == 0.0
-                    && element.paint.filter.is_none(),
-            );
-        }
-
-        fn visit_flex_row(&mut self, element: &crate::layout::elements::FlexRow) {
-            self.0 = Some(
-                element.paint.group.is_identity()
-                    && element.paint.background.layers.blur_radius == 0.0
-                    && element.paint.filter.is_none(),
-            );
-        }
-    }
-
-    let mut visitor = PhaseSupport::default();
-    element.accept(&mut visitor);
-    visitor.0.unwrap_or(false)
+    element
+        .box_paint_owner()
+        .is_some_and(crate::layout::elements::BoxPaintOwner::supports_phased_paint)
 }
 
 #[cfg(test)]
@@ -134,6 +114,28 @@ mod tests {
             vec![
                 PlannedPageElement::new(1, ElementPaintPhase::All),
                 PlannedPageElement::new(0, ElementPaintPhase::All),
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_pages_keep_principal_box_hierarchies_atomic() {
+        let participants = [
+            PaintParticipant {
+                role: PageContentRole::MainFlow,
+                supports_phases: true,
+            },
+            PaintParticipant {
+                role: PageContentRole::MainFlow,
+                supports_phases: false,
+            },
+        ];
+
+        assert_eq!(
+            plan_participants(&participants),
+            vec![
+                PlannedPageElement::new(0, ElementPaintPhase::All),
+                PlannedPageElement::new(1, ElementPaintPhase::All),
             ]
         );
     }

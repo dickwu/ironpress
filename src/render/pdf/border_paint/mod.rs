@@ -140,7 +140,7 @@ fn paint_partitioned_border(
     let ring = BorderRingGeometry::new(border_box, radii, widths);
     let stroke = BorderStrokeGeometry::new(border_box, radii, widths);
     let half_widths = widths * 0.5;
-    let double_rules = widths.map(double_rule_width);
+    let double_rules = widths.map(|width| DoubleBorderMetrics::new(width).stripe_width());
     let outer_double =
         BorderRingGeometry::between(border_box, radii, EdgeSizes::ZERO, double_rules);
     let inner_double =

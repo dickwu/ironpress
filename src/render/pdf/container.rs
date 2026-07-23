@@ -17,21 +17,25 @@ use text::render_text_child;
 #[derive(Clone, Copy)]
 pub(super) struct ContainerFrame {
     content_origin: PdfPoint,
-    width: f32,
+    size: crate::types::Size,
     padding_origin: PdfPoint,
 }
 
 impl ContainerFrame {
     pub(super) const fn new(
         content_origin: PdfPoint,
-        width: f32,
+        size: crate::types::Size,
         padding_origin: PdfPoint,
     ) -> Self {
         Self {
             content_origin,
-            width,
+            size,
             padding_origin,
         }
+    }
+
+    const fn width(self) -> f32 {
+        self.size.width
     }
 }
 
@@ -52,6 +56,7 @@ impl Default for ContainerRenderOptions {
     }
 }
 
+#[derive(Clone, Copy)]
 struct ContainerFlowContext<'a> {
     frame: ContainerFrame,
     container_top_y: f32,
@@ -61,6 +66,13 @@ struct ContainerFlowContext<'a> {
     right_float_bottom: f32,
     device_space_available: bool,
     paint_phase: ElementPaintPhase,
+}
+
+impl ContainerFlowContext<'_> {
+    fn with_paint_phase(mut self, paint_phase: ElementPaintPhase) -> Self {
+        self.paint_phase = paint_phase;
+        self
+    }
 }
 
 fn is_nested_row(element: &dyn LayoutElement) -> bool {
@@ -115,17 +127,19 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
     }
 
     fn visit_column_rule(&mut self, element: &ColumnRule) {
-        let origin = element.positioning.origin();
-        paint_column_rule_line(
-            self.content,
-            self.flow.frame.padding_origin.x + origin.x,
-            self.flow.frame.padding_origin.y - origin.y,
-            element.paint.width,
-            element.height,
-            &element.paint,
-            self.ctx.page_ext_gstates,
-            self.ctx.bg_alpha_counter,
-        );
+        if self.flow.paint_phase.paints_decoration() {
+            let origin = element.positioning.origin();
+            paint_column_rule_line(
+                self.content,
+                self.flow.frame.padding_origin.x + origin.x,
+                self.flow.frame.padding_origin.y - origin.y,
+                element.paint.width,
+                element.height,
+                &element.paint,
+                self.ctx.page_ext_gstates,
+                self.ctx.bg_alpha_counter,
+            );
+        }
         self.finish(self.position);
     }
 
@@ -149,6 +163,7 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             self.child_index,
             self.flow,
             self.position,
+            self.abs_origins,
             self.ctx,
         );
         self.finish(result);
@@ -161,6 +176,7 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             self.child_index,
             self.flow,
             self.position,
+            self.abs_origins,
             self.ctx,
         );
         self.finish(result);
@@ -193,20 +209,22 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             PdfRect::from_top(
                 self.flow.frame.content_origin.x,
                 position.y,
-                self.flow.frame.width,
+                self.flow.frame.width(),
                 1.0,
             ),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         )
         .for_fragment(Default::default());
-        let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
-        paint_horizontal_rule(
-            self.content,
-            PdfPoint::new(self.flow.frame.content_origin.x, position.y),
-            self.flow.frame.width,
-        );
-        group.finish(self.content, self.ctx);
+        if self.flow.paint_phase.paints_contents() {
+            let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
+            paint_horizontal_rule(
+                self.content,
+                PdfPoint::new(self.flow.frame.content_origin.x, position.y),
+                self.flow.frame.width(),
+            );
+            group.finish(self.content, self.ctx);
+        }
         if planned_flow_top.is_none() {
             position.cursor_y -= 1.0 + element.margins.end;
             position.y = position.cursor_y;
@@ -233,9 +251,11 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
         );
         let geometry = BoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO)
             .for_fragment(Default::default());
-        let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
-        paint_progress_bar(self.content, element, rect);
-        group.finish(self.content, self.ctx);
+        if self.flow.paint_phase.paints_contents() {
+            let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
+            paint_progress_bar(self.content, element, rect);
+            group.finish(self.content, self.ctx);
+        }
         if planned_flow_top.is_none() {
             position.cursor_y -= element.size.height + element.margins.end;
             position.y = position.cursor_y;
@@ -258,21 +278,23 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             PdfRect::from_top(
                 self.flow.frame.content_origin.x,
                 top,
-                self.flow.frame.width,
+                self.flow.frame.width(),
                 element.layout.height(),
             ),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         )
         .for_fragment(Default::default());
-        let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
-        paint_math_block(
-            self.content,
-            element,
-            PdfPoint::new(self.flow.frame.content_origin.x, top),
-            self.flow.frame.width,
-        );
-        group.finish(self.content, self.ctx);
+        if self.flow.paint_phase.paints_contents() {
+            let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
+            paint_math_block(
+                self.content,
+                element,
+                PdfPoint::new(self.flow.frame.content_origin.x, top),
+                self.flow.frame.width(),
+            );
+            group.finish(self.content, self.ctx);
+        }
         if planned_flow_top.is_none() {
             position.cursor_y -= element.layout.height() + element.margins.end;
             position.y = position.cursor_y;
@@ -290,6 +312,10 @@ pub(super) fn render_container_children(
     ctx: &mut PageRenderContext<'_>,
     options: ContainerRenderOptions,
 ) {
+    // Depth zero denotes the initial containing block. In paged media fixed
+    // positioned descendants resolve against the page area, regardless of the
+    // positioned ancestors they happen to be nested under.
+    abs_origins.entry(0).or_insert(ctx.initial_fixed_origin);
     // Padding-box origin (left x, top y in PDF coords) of THIS container, used
     // as the default anchor for absolutely-positioned children. An abs child
     // whose containing block names a *different* positioned ancestor (because it
@@ -382,6 +408,8 @@ pub(super) fn render_container_children(
                 &nested_batch,
                 x,
                 NestedRowsFlow::pending(nested_batch_position),
+                paint_phase.paints_contents(),
+                abs_origins,
                 ctx,
             );
             let descendants = ctx.stacking.take_since(marker);
@@ -399,31 +427,85 @@ pub(super) fn render_container_children(
             nested_batch.clear();
         }
 
-        let marker = ctx.stacking.marker();
-        let mut child_content = String::new();
-        let (handled, result) = {
-            let mut renderer = DirectChildRenderer {
-                content: &mut child_content,
-                child_index,
-                flow: &flow_context,
-                position: FlowPosition::new(y, cursor_y, prev_margin_bottom),
-                abs_origins,
-                ctx,
-                handled: false,
-                result: None,
+        let child_position = FlowPosition::new(y, cursor_y, prev_margin_bottom);
+        let split_in_flow = paint_phase == ElementPaintPhase::All
+            && child_paint_order(child).is_in_flow()
+            && child
+                .in_flow_paint_phase_owner()
+                .is_some_and(crate::layout::elements::BoxPaintOwner::supports_phased_paint);
+        let (handled, result) = if split_in_flow {
+            let render_phase = |phase,
+                                abs_origins: &mut HashMap<usize, PdfPoint>,
+                                ctx: &mut PageRenderContext<'_>| {
+                let marker = ctx.stacking.marker();
+                let mut phase_content = String::new();
+                let phase_flow = flow_context.with_paint_phase(phase);
+                let (handled, result) = {
+                    let mut renderer = DirectChildRenderer {
+                        content: &mut phase_content,
+                        child_index,
+                        flow: &phase_flow,
+                        position: child_position,
+                        abs_origins,
+                        ctx,
+                        handled: false,
+                        result: None,
+                    };
+                    child.accept(&mut renderer);
+                    (renderer.handled, renderer.result)
+                };
+                let descendants = ctx.stacking.take_since(marker);
+                (handled, result, phase_content, descendants)
             };
-            child.accept(&mut renderer);
-            (renderer.handled, renderer.result)
+            let (decoration_handled, _, decoration, decoration_descendants) =
+                render_phase(ElementPaintPhase::Decoration, abs_origins, ctx);
+            ctx.stacking.commit(
+                stacking_scope,
+                content,
+                &mut stacking_plan,
+                crate::layout::elements::StackingLevel::in_flow_decoration(),
+                decoration,
+                decoration_descendants,
+            );
+            let (contents_handled, result, contents, contents_descendants) =
+                render_phase(ElementPaintPhase::Contents, abs_origins, ctx);
+            ctx.stacking.commit(
+                stacking_scope,
+                content,
+                &mut stacking_plan,
+                crate::layout::elements::StackingLevel::in_flow_contents(),
+                contents,
+                contents_descendants,
+            );
+            (decoration_handled || contents_handled, result)
+        } else {
+            let marker = ctx.stacking.marker();
+            let mut child_content = String::new();
+            let (handled, result) = {
+                let mut renderer = DirectChildRenderer {
+                    content: &mut child_content,
+                    child_index,
+                    flow: &flow_context,
+                    position: child_position,
+                    abs_origins,
+                    ctx,
+                    handled: false,
+                    result: None,
+                };
+                child.accept(&mut renderer);
+                (renderer.handled, renderer.result)
+            };
+            let descendants = ctx.stacking.take_since(marker);
+            ctx.stacking.commit(
+                stacking_scope,
+                content,
+                &mut stacking_plan,
+                child_paint_order(child),
+                child_content,
+                descendants,
+            );
+            (handled, result)
         };
-        let descendants = ctx.stacking.take_since(marker);
-        ctx.stacking.commit(
-            stacking_scope,
-            content,
-            &mut stacking_plan,
-            child_paint_order(child),
-            child_content,
-            descendants,
-        );
         if let Some(position) = result {
             y = position.y;
             cursor_y = position.cursor_y;
@@ -451,6 +533,8 @@ pub(super) fn render_container_children(
             &nested_batch,
             x,
             NestedRowsFlow::pending(nested_batch_position),
+            paint_phase.paints_contents(),
+            abs_origins,
             ctx,
         );
         let descendants = ctx.stacking.take_since(marker);

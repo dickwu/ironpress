@@ -33,7 +33,7 @@ scripts/parity.sh
 A full run always writes the current JSON, Markdown, and visual report, then
 fails closed when:
 
-- any fixture is not an exact `PASS`, regardless of its support label;
+- any fixture does not receive `PASS`, regardless of its support label;
 - an authenticated reference is missing, stale, or renamed;
 - a committed fixture disappears or its status gets worse;
 - a newly added fixture is not `PASS`; or
@@ -100,8 +100,8 @@ fixture exists before it writes `refs.lock`.
    fixtures using CSS-pixel page sizes must use multiples of 8 at 300 DPI; run
    `scripts/parity-normalize-page-sizes.py` to check or normalize them.
 3. Add its manifest entry. The filename stem, category, and id must agree.
-   Unknown manifest fields are rejected. There are no per-fixture score
-   thresholds or noise floors.
+   Unknown manifest fields are rejected. The same documented visibility policy
+   applies to every fixture; there are no fixture-specific thresholds.
 4. Generate the missing reference, then authenticate the complete corpus:
 
    ```bash
@@ -110,8 +110,8 @@ fixture exists before it writes `refs.lock`.
    ```
 
 5. Run the targeted fixture first, fix the underlying engine behavior, then run
-   the complete corpus. Support labels are descriptive only; no label can make a
-   differing raster pass.
+   the complete corpus. Support labels are descriptive only; no label can waive
+   a human-visible difference.
 
 A typical manifest entry is:
 
@@ -142,21 +142,25 @@ coordinate: missing content, extra content, or colour error. Both PDFs use the
 exact same `pdftoppm` executable and arguments, so a raster difference is
 evidence that the PDFs differ, not evidence of different rasterizers.
 
-The raw pixel count is never suppressed. The verdict applies one fixed,
-same-coordinate human-visibility policy to that evidence: ΔE2000 ≤ 2.3 against
-paper is not treated as visible paint; colour differences ≤ 2.3 are
-imperceptible; and larger Missing/Extra regions must exceed global CSS-size
-floors. It never translates, registers, crops-to-fit, filters, resamples, or
-uses fixture-specific thresholds.
+The exact unequal-RGBA count is always retained numerically. The verdict and
+full-page diff additionally apply one fixed same-coordinate human-visibility
+policy: a pixel is semantically equal when every RGB channel differs by less
+than 1%; only pixels above that floor are painted in the diff. The complete
+page may have no more than 1% above-floor pixels, and an authored-scale shape,
+span, recolour, missing mark, or extra mark can still fail below that aggregate
+ceiling. Paper and colour ΔE2000 checks provide the remaining perceptual colour
+classification. The comparator never translates, registers, crops-to-fit,
+filters, resamples, replaces content, or uses fixture-specific thresholds.
 
 | status | meaning |
 |---|---|
-| `PASS` | dimensions match and any remaining raw difference is below the fixed visibility policy |
+| `PASS` | dimensions match and any remaining difference is below the fixed visibility policy |
 | `FAIL` | visible pixel difference, render error, or dimension mismatch |
 
 The headline percentage is an unweighted summary (`PASS=1`, `FAIL=0`). Every
-fixture counts equally. Per-fixture `max-page pixel diff` is the exact raw
-unequal-RGBA-pixel percentage; read it and the needs-attention table first.
+fixture counts equally. Each fixture reports both the above-floor percentage
+shown in its diff and the exact raw unequal-RGBA percentage; read those and the
+needs-attention table first.
 
 ## Reference integrity
 

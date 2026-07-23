@@ -8,11 +8,14 @@ fn paint_root_row(
     ctx: &mut PageRenderContext<'_>,
 ) {
     let top = frame.page_size.height - frame.margin.top - frame.y_pos;
+    let mut abs_origins = HashMap::new();
     render_rows(
         content,
         &[element],
         frame.margin.left,
         NestedRowsFlow::resolved(FlowPosition::new(top, top, 0.0)),
+        true,
+        &mut abs_origins,
         ctx,
     );
 }

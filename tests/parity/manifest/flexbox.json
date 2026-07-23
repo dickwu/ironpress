@@ -1829,5 +1829,17 @@
       "probe-fill-box",
       "probe-block-flow"
     ]
+  },
+  {
+    "id": "flexbox-root-page-carrier-single-page",
+    "category": "flexbox",
+    "feature": "root-formatting-context",
+    "subfeature": "body-flex-page-carrier",
+    "description": "A body flex formatting context keeps three horizontally fitting children on one page instead of flattening them into separate root-flow blocks.",
+    "file": "cases/flexbox/flexbox-root-page-carrier-single-page.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
   }
 ]

@@ -1996,11 +1996,11 @@
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/block-box-model/box-decoration-break-slice-border-image-shadow.pdf",
-        "sha256": "c22827ac097cd4e07679b71f385848584fadf1cbe0d2747ee1bf98500c076d7f"
+        "sha256": "2eddf07d75ad72e98edc57f88d0dc4636fa4e172a402741ab5ce4e8c67a2258c"
       },
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "references/block-box-model/box-decoration-break-slice-border-image-shadow.html",
-      "reference_html_sha256": "7c0a1934bf760f2b2a478a42cf8771fd1c8ba69618b40bb426f1f367b7da665f"
+      "reference_html_sha256": "b9fc83d780b772b9e353858e7b136ada265976c7494c3ae52e11bcea07c54bad"
     },
     "box-decoration-break-slice-radius": {
       "category": "block-box-model",
@@ -4970,6 +4970,20 @@
       "reference_file": "cases/flexbox/flexbox-place-self-end.html",
       "reference_html_sha256": "99693cb59ef7545a3656a7d3a30358883153abea89d4157c5218c9c6a51a9372"
     },
+    "flexbox-root-page-carrier-single-page": {
+      "category": "flexbox",
+      "file": "cases/flexbox/flexbox-root-page-carrier-single-page.html",
+      "html_sha256": "c5d5dd4d0c414eac15b0bfd6ad54f35aa5b139903e14dd1a7443c4ec01c0ec9b",
+      "manifest_sha256": "42243531e0d19ffb50221718d61805c5c3c661731a66010b0ecad780b9dc22e1",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/flexbox/flexbox-root-page-carrier-single-page.pdf",
+        "sha256": "7cd5611a6f99e4d379ac14670069dc92c819bd9f618bf66058d94ee3354efca5"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/flexbox/flexbox-root-page-carrier-single-page.html",
+      "reference_html_sha256": "c5d5dd4d0c414eac15b0bfd6ad54f35aa5b139903e14dd1a7443c4ec01c0ec9b"
+    },
     "flexbox-row-column-gap": {
       "category": "flexbox",
       "file": "cases/flexbox/flexbox-row-column-gap.html",
@@ -6356,6 +6370,20 @@
       "reference_file": "cases/grid/grid-direct-text-creates-anonymous-grid-items.html",
       "reference_html_sha256": "a216ef26f08930a1446774c4c5df4efa7a627a5c181f32e983fada6235996ece"
     },
+    "grid-display-contents-auto-rows-text": {
+      "category": "grid",
+      "file": "cases/grid/grid-display-contents-auto-rows-text.html",
+      "html_sha256": "7fbac2fe09a44e5ae4acfa6c166168f7c42aa854918b6512e01f7fc7d5724316",
+      "manifest_sha256": "58fbfeac5d3bae6ef17827e0ff3746eb0bb18be873ecf4d02cc23dbd4a6121ad",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-display-contents-auto-rows-text.pdf",
+        "sha256": "07c1214fc5352ae1348cf12d61750f328663810bbe405712fa6f4262a490c304"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "references/grid/grid-display-contents-auto-rows-text.html",
+      "reference_html_sha256": "ade0ad4b231f5e34b201fabb0ed2ef1ccbbd992b29ccc6eec7323bd5fecb8f95"
+    },
     "grid-display-contents-flattens-children-into-grid": {
       "category": "grid",
       "file": "cases/grid/grid-display-contents-flattens-children-into-grid.html",
@@ -6369,6 +6397,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/grid/grid-display-contents-flattens-children-into-grid.html",
       "reference_html_sha256": "f106f53279f1f60216d714c22e106442c837add4b9d140782ad0470a26d6cf0f"
+    },
+    "grid-display-contents-fragmentation-text-survival": {
+      "category": "grid",
+      "file": "cases/grid/grid-display-contents-fragmentation-text-survival.html",
+      "html_sha256": "3fdac472dd7b3f91b081047511877aebba15921f3973e4ba06bba497e51ce186",
+      "manifest_sha256": "fbf817a60eaa21ff9dedc7d5d2a7a34d614ea666c6efdbc661f0ec85f2d66206",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-display-contents-fragmentation-text-survival.pdf",
+        "sha256": "c81af1179e3019c24d2b9cec88a6bbb737b851ff7dcc78aa079bad1304df2329"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "references/grid/grid-display-contents-fragmentation-text-survival.html",
+      "reference_html_sha256": "af20ebcad84976c1e5662b89c412291e4b2155d35a70cd73c6da15e83d8ab1b1"
     },
     "grid-display-grid": {
       "category": "grid",
@@ -6397,6 +6439,48 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/grid/grid-explicit-start-end-lines-create-an-implicit-named-area.html",
       "reference_html_sha256": "bf55d25a43e6c2fca03262bf5d4b2f020163b69eac89f1b0b62b8e1af6d7527d"
+    },
+    "grid-fit-content-calc-length-range": {
+      "category": "grid",
+      "file": "cases/grid/grid-fit-content-calc-length-range.html",
+      "html_sha256": "e84da60ce07da380fa556d182a8b4a8df9aee9d2e2f66ecf5bbad99707532df7",
+      "manifest_sha256": "7b8205f9e07c7343ab5c3871a0c4a1004f55b9b496432acb888d80796f781d6c",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-fit-content-calc-length-range.pdf",
+        "sha256": "dcb2c741ed3643c94d0329fe4dafdcf6f2324b408b32853a2b459b4394778f04"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/grid/grid-fit-content-calc-length-range.html",
+      "reference_html_sha256": "e84da60ce07da380fa556d182a8b4a8df9aee9d2e2f66ecf5bbad99707532df7"
+    },
+    "grid-fit-content-percentage-basis-boxes": {
+      "category": "grid",
+      "file": "cases/grid/grid-fit-content-percentage-basis-boxes.html",
+      "html_sha256": "f8bbed29d1f6e89cc8c5695a667196c4e50bd209b04552280e08922565fe24cc",
+      "manifest_sha256": "eb07384bd1261198765dbcb329ce21f7130c28fe3f3fa7470fe6782cae5c8231",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-fit-content-percentage-basis-boxes.pdf",
+        "sha256": "49356e46331b6cee87779a3098d0b4ed475b015f7f2d12f2c7dba668e01f2060"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/grid/grid-fit-content-percentage-basis-boxes.html",
+      "reference_html_sha256": "f8bbed29d1f6e89cc8c5695a667196c4e50bd209b04552280e08922565fe24cc"
+    },
+    "grid-fit-content-percentage-range": {
+      "category": "grid",
+      "file": "cases/grid/grid-fit-content-percentage-range.html",
+      "html_sha256": "91e38814f0467cea8f2f4bc554327f7827c47ced0e3b2f9bf7258becad302207",
+      "manifest_sha256": "88ad90eba1bacca22b9e9e4b6e058061f150306f223c3f70fa8ad1add7c573c5",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-fit-content-percentage-range.pdf",
+        "sha256": "2dd04688287f5f6ad3c2335de9fabb0beb649d0b0936296d45f1bb2f36f63757"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/grid/grid-fit-content-percentage-range.html",
+      "reference_html_sha256": "91e38814f0467cea8f2f4bc554327f7827c47ced0e3b2f9bf7258becad302207"
     },
     "grid-fit-content-track": {
       "category": "grid",
@@ -6873,6 +6957,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/grid/grid-repeated-named-lines-resolve-nth-occurrence.html",
       "reference_html_sha256": "d22d5f6977dfd4415cac13c4051ac39eec10e0ac80ce0e0d5ce6d27ef6942f82"
+    },
+    "grid-root-page-carrier-single-page": {
+      "category": "grid",
+      "file": "cases/grid/grid-root-page-carrier-single-page.html",
+      "html_sha256": "9c83776a6cb631cefab09280e09578c2c0a00854c03f7a4f2600a2a444fe493d",
+      "manifest_sha256": "d182d1f00f3e2ca16e20f025c3fd8418b1b559b1901fa0a00ad9aed05e82d203",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/grid/grid-root-page-carrier-single-page.pdf",
+        "sha256": "2bec25d7f008f355d1fda3240ca2ca87fcca856add69359c94d91e9cbae1b32a"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/grid/grid-root-page-carrier-single-page.html",
+      "reference_html_sha256": "9c83776a6cb631cefab09280e09578c2c0a00854c03f7a4f2600a2a444fe493d"
     },
     "grid-row-line-numbers": {
       "category": "grid",
@@ -12684,6 +12782,48 @@
       "reference_file": "cases/interactions/interactions-float-x-margin-collapse.html",
       "reference_html_sha256": "a8628255eabee922014fd41a77d25b441b3206d16c05fb7dd8ee2b276211f006"
     },
+    "interactions-gradients-transforms-pattern-space-red-team": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-gradients-transforms-pattern-space-red-team.html",
+      "html_sha256": "2c07fc557cb82cad6810df4b0c33fcd170c5f467e65324332512cdd3f874e86b",
+      "manifest_sha256": "89179fa02bfa0f592e407af8496a530ece73c4df970331efc1fd385524562a0f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-gradients-transforms-pattern-space-red-team.pdf",
+        "sha256": "cae6591a13ff5b9af42a78d80baaedaff1a3cdf40d6b8935cfef2d1693b9ae8f"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-gradients-transforms-pattern-space-red-team.html",
+      "reference_html_sha256": "2c07fc557cb82cad6810df4b0c33fcd170c5f467e65324332512cdd3f874e86b"
+    },
+    "interactions-grid-fragmentation-raster-background-single-owner": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",
+      "html_sha256": "09186cb0e537d6736093f291f00f7f22c9545dae392876a9146f06229f6cf36d",
+      "manifest_sha256": "549d1aacaa94a61f3ecb81623b132f81b03fadff5e8d8e3ca059eb0bd3e02688",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-grid-fragmentation-raster-background-single-owner.pdf",
+        "sha256": "909eeb7ffc4d4cf4f03eb1e5fe6b74aa790935e482512e0ff77f86c3c1987edd"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",
+      "reference_html_sha256": "09186cb0e537d6736093f291f00f7f22c9545dae392876a9146f06229f6cf36d"
+    },
+    "interactions-grid-fragmentation-svg-background-single-owner": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-grid-fragmentation-svg-background-single-owner.html",
+      "html_sha256": "a1f121cd41ba976a5f33948859cae33ea0fb80d0334d69228f112acb0f710ccb",
+      "manifest_sha256": "5aced014ed975e0f42121fff21bc40497175cf5d1de9e6e74ea2383acfc7f513",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-grid-fragmentation-svg-background-single-owner.pdf",
+        "sha256": "6bec8a7898d79c708f766cf6cc378a2a32d13635d4fd37f928078929a9429927"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-grid-fragmentation-svg-background-single-owner.html",
+      "reference_html_sha256": "a1f121cd41ba976a5f33948859cae33ea0fb80d0334d69228f112acb0f710ccb"
+    },
     "interactions-object-fit-cover-x-rounded-overflow": {
       "category": "interactions",
       "file": "cases/interactions/interactions-object-fit-cover-x-rounded-overflow.html",
@@ -12865,6 +13005,62 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "references/interactions/interactions-transforms-x-font-synthesis-matrix.html",
       "reference_html_sha256": "47093f43189438bf73748398b2427d22233c142e954dae4c7e5ffb61c9a34164"
+    },
+    "interactions-z-index-context-boundaries": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-z-index-context-boundaries.html",
+      "html_sha256": "b8c840179a181981732d75e1cf8930964a0b240330991cd20288edd3dfbe5333",
+      "manifest_sha256": "87708892383956e27487666bd881df12c75cd7b0dd61cdbbfa631c7a315c329b",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-z-index-context-boundaries.pdf",
+        "sha256": "3974c78589531f8031dcb7213b9a14777cae6c115b61c69991b2d6a372d9c08c"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-z-index-context-boundaries.html",
+      "reference_html_sha256": "b8c840179a181981732d75e1cf8930964a0b240330991cd20288edd3dfbe5333"
+    },
+    "interactions-z-index-core-layers": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-z-index-core-layers.html",
+      "html_sha256": "1920a69ce5effd0ac5220b6a312280795772b56e881a51e9f95d8263346376bf",
+      "manifest_sha256": "f82aea6c3cbd6fd4484a0abfa71c7c3f58b59c86c051e813638c11aa4d735a4b",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-z-index-core-layers.pdf",
+        "sha256": "7a081cec64d4c41aa81edc4ce939cebbda9f678636c33425e429c9455360fbfd"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-z-index-core-layers.html",
+      "reference_html_sha256": "1920a69ce5effd0ac5220b6a312280795772b56e881a51e9f95d8263346376bf"
+    },
+    "interactions-z-index-flex-grid-items": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-z-index-flex-grid-items.html",
+      "html_sha256": "3d408eaab0c7c5afc55f21b6feeba5734cb0ee540fade377f57189abc1ddccb6",
+      "manifest_sha256": "2e1cfd862b37e0fd127cf4d19622ae843a7e952fb30637d1079281fe4382fd5f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-z-index-flex-grid-items.pdf",
+        "sha256": "09ee31b9700e34b58c9b9f5e2ecb318a6b1e5545252936dd6df9635bc9730277"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-z-index-flex-grid-items.html",
+      "reference_html_sha256": "3d408eaab0c7c5afc55f21b6feeba5734cb0ee540fade377f57189abc1ddccb6"
+    },
+    "interactions-z-index-generated-replaced-svg": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-z-index-generated-replaced-svg.html",
+      "html_sha256": "a945a4e806114cba74eb504e67a508f3c3331687f9e8030bdb27b72429ee890c",
+      "manifest_sha256": "02d259e7b7240c5ab5b30c6baece8f3014dc76fef506f945a61704fdf3a303e2",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-z-index-generated-replaced-svg.pdf",
+        "sha256": "6e1d86aa245a2d7662465dd47f48c59a5081e5ab4f1913fd14c116d75a87ad4b"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/interactions/interactions-z-index-generated-replaced-svg.html",
+      "reference_html_sha256": "a945a4e806114cba74eb504e67a508f3c3331687f9e8030bdb27b72429ee890c"
     },
     "linear-gradient-alpha-stops": {
       "category": "backgrounds-gradients",
@@ -22022,6 +22218,20 @@
       "reference_file": "cases/units-values/units-aspect-ratio-height-derived-width.html",
       "reference_html_sha256": "859d8c721ba295eea7d23b4ed9fcc5940a9e36be219f178595d1875ae3a0b991"
     },
+    "units-calc-arithmetic-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-calc-arithmetic-red-team.html",
+      "html_sha256": "bf21c66aee3824a437ce4e87911021c8b9158affc1d599384704143d9d90190b",
+      "manifest_sha256": "c2f7ab3df665164c9536ed024796d469bdbe0dc2075488ffc5f240575d45c2a8",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-calc-arithmetic-red-team.pdf",
+        "sha256": "0f65fdeb87b4cab120647b924bccaf75272383bcb0f25f14c72d2df9d6ac4684"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-calc-arithmetic-red-team.html",
+      "reference_html_sha256": "bf21c66aee3824a437ce4e87911021c8b9158affc1d599384704143d9d90190b"
+    },
     "units-calc-division": {
       "category": "units-values",
       "file": "cases/units-values/units-calc-division.html",
@@ -22035,6 +22245,34 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/units-values/units-calc-division.html",
       "reference_html_sha256": "523765a26abc3e12ab6e12c9c0d813df2358c2e44f78eda01658dcb677147df0"
+    },
+    "units-calc-invalid-type-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-calc-invalid-type-red-team.html",
+      "html_sha256": "b847e9d7afd9572c9f08a298de721c0d9e4867a14b8a9748bbcdd621953a0ceb",
+      "manifest_sha256": "f423b9741e6150e1ad30885f9b9026a40a7e21e68ab039e7e1eb0d969bc15730",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-calc-invalid-type-red-team.pdf",
+        "sha256": "f5761699c17bc3b1946fffefe167312dc80a18629996b41783188cd415d3c0d3"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-calc-invalid-type-red-team.html",
+      "reference_html_sha256": "b847e9d7afd9572c9f08a298de721c0d9e4867a14b8a9748bbcdd621953a0ceb"
+    },
+    "units-calc-length-units-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-calc-length-units-red-team.html",
+      "html_sha256": "31b92e58abcdb8cb2ee15bba1ea4fec2a60dba35a1143ec73b0452bcd524c277",
+      "manifest_sha256": "498fd3af608cf98e6bedff4a2a857b975a662b37a8bf1c41988ad76223f4258d",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-calc-length-units-red-team.pdf",
+        "sha256": "c550dcb3cd8209e762803d051bd37eb46768b7f564de511883598bc4a248d511"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-calc-length-units-red-team.html",
+      "reference_html_sha256": "31b92e58abcdb8cb2ee15bba1ea4fec2a60dba35a1143ec73b0452bcd524c277"
     },
     "units-calc-mixed-percent": {
       "category": "units-values",
@@ -22077,6 +22315,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/units-values/units-calc-precedence.html",
       "reference_html_sha256": "2444c6bb20c59be942fd1ed9f8d765754c8593bda80783104166fd00a839a1d2"
+    },
+    "units-calc-typed-arithmetic-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-calc-typed-arithmetic-red-team.html",
+      "html_sha256": "de3d646feb813ccab9cd176bf0b50e23479db4640935657bc886f69f787dcd4e",
+      "manifest_sha256": "f3a7d050add2f6a43cbc6565962635409f3ba559524f3264c668ba9dfed02f16",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-calc-typed-arithmetic-red-team.pdf",
+        "sha256": "4e9e6a77bafea08c9522e7759abb07ec53f921f0ff679e0bb24ff359c4fdae25"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "references/units-values/units-calc-typed-arithmetic-red-team.html",
+      "reference_html_sha256": "4affd397d8744a2697c9b7e8ae2a6f7785105c7eaee53194100c7e7fa7100045"
     },
     "units-cap-height": {
       "category": "units-values",
@@ -22301,6 +22553,48 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/units-values/units-lh-line-height.html",
       "reference_html_sha256": "c45cd8d20d3c275c9f21da5945dfaaf4ba5bb5e6dded128d39ea11fa00614dc2"
+    },
+    "units-math-comparison-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-math-comparison-red-team.html",
+      "html_sha256": "0f34e46b99a7c45deb5b1f704e7f4edb7741f0df157ecc5a2831b6873e685ccf",
+      "manifest_sha256": "21175802195cf7c1cbd44299d025319e3aebdc8b0b6df2f2cdc04380e734bb9f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-math-comparison-red-team.pdf",
+        "sha256": "c29c9c6849e8b093cee7cb5277f940448f56c9079cf9abf54b2405f2b8012494"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-math-comparison-red-team.html",
+      "reference_html_sha256": "0f34e46b99a7c45deb5b1f704e7f4edb7741f0df157ecc5a2831b6873e685ccf"
+    },
+    "units-math-stepped-sign-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-math-stepped-sign-red-team.html",
+      "html_sha256": "906fc378ff9bfa49a8dc3ee4119eb158f8670721d7a60f8223f2b882099bca6e",
+      "manifest_sha256": "05205ff62c12598ddc82c794a62fd48a79bd8601e179f6d343cc0fd7f94349b7",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-math-stepped-sign-red-team.pdf",
+        "sha256": "177debeec099a85c7ae375c91903555cc54116c2a3e0633b96941a4d8dbf67fa"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-math-stepped-sign-red-team.html",
+      "reference_html_sha256": "906fc378ff9bfa49a8dc3ee4119eb158f8670721d7a60f8223f2b882099bca6e"
+    },
+    "units-math-trig-exponential-red-team": {
+      "category": "units-values",
+      "file": "cases/units-values/units-math-trig-exponential-red-team.html",
+      "html_sha256": "ef8bcefb62c52634a1f6a0f4789e55b9cf06b9a6cdb52fde939ac470f6673504",
+      "manifest_sha256": "ca8a07c707032a1c1e856b3e9aaab018e3bb649c5573997049bd7e4b5bff049f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-math-trig-exponential-red-team.pdf",
+        "sha256": "39c0be13a6f4110229ae14b8699b5af7a580c8160ee70b12922b6ed76a45b7bf"
+      },
+      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "reference_file": "cases/units-values/units-math-trig-exponential-red-team.html",
+      "reference_html_sha256": "ef8bcefb62c52634a1f6a0f4789e55b9cf06b9a6cdb52fde939ac470f6673504"
     },
     "units-min-max": {
       "category": "units-values",

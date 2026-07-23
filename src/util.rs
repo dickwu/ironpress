@@ -161,7 +161,31 @@ enum AxisRepeatPlacement {
 }
 
 impl AxisRepeatPattern {
+    #[cfg(test)]
     pub(crate) fn new(mode: AxisRepeatMode, origin: f32, size: f32, extent: f32) -> Option<Self> {
+        Self::resolve(mode, origin, size, extent, |value| value)
+    }
+
+    /// Resolve CSS repetition in point coordinates, truncating a computed
+    /// `round` tile size to the canonical 26.6 layout grid.
+    pub(crate) fn new_layout(
+        mode: AxisRepeatMode,
+        origin: f32,
+        size: f32,
+        extent: f32,
+    ) -> Option<Self> {
+        Self::resolve(mode, origin, size, extent, |value| {
+            crate::layout::units::LayoutUnit::from_points(value).to_points()
+        })
+    }
+
+    fn resolve(
+        mode: AxisRepeatMode,
+        origin: f32,
+        size: f32,
+        extent: f32,
+        quantize_round_size: impl FnOnce(f32) -> f32,
+    ) -> Option<Self> {
         if ![origin, size, extent].into_iter().all(f32::is_finite) || size <= 0.0 || extent <= 0.0 {
             return None;
         }
@@ -217,7 +241,10 @@ impl AxisRepeatPattern {
             }
             AxisRepeatMode::Round => {
                 let count = (extent / size).round().max(1.0);
-                let rounded_size = extent / count;
+                let rounded_size = f64::from(quantize_round_size((extent / count) as f32));
+                if !rounded_size.is_finite() || rounded_size <= 0.0 {
+                    return None;
+                }
                 Some(Self {
                     tile_size: rounded_size,
                     placement: AxisRepeatPlacement::Periodic {
@@ -246,6 +273,41 @@ impl AxisRepeatPattern {
             AxisRepeatPlacement::One { .. } => None,
             AxisRepeatPlacement::Periodic { stride, .. } => Some(stride as f32),
         }
+    }
+
+    /// Extend a periodic image-shader lattice beyond its eventual paint clip.
+    ///
+    /// Browser PDF backends materialize the shader over a page surface and
+    /// apply the CSS patch clip afterwards. The finite CSS repeat count still
+    /// determines its spacing; only the invisible lattice outside that clip is
+    /// extended here.
+    pub(crate) fn unbounded_lattice(mut self) -> Self {
+        if let AxisRepeatPlacement::Periodic { count, .. } = &mut self.placement {
+            *count = None;
+        }
+        self
+    }
+
+    /// Extend the image shader cell beyond its eventual CSS clip.
+    ///
+    /// Even a stretched axis is materialized as a repeating shader cell by
+    /// browser paint backends. The destination clip exposes only the authored
+    /// cell, while the neighbouring invisible cells keep interpolation at that
+    /// clip edge from sampling transparent black.
+    pub(crate) fn shader_lattice(mut self) -> Self {
+        self.placement = match self.placement {
+            AxisRepeatPlacement::One { offset } => AxisRepeatPlacement::Periodic {
+                first: offset,
+                stride: self.tile_size,
+                count: None,
+            },
+            AxisRepeatPlacement::Periodic { first, stride, .. } => AxisRepeatPlacement::Periodic {
+                first,
+                stride,
+                count: None,
+            },
+        };
+        self
     }
 
     pub(crate) fn translated(mut self, offset: f32) -> Option<Self> {

@@ -1,7 +1,6 @@
 use super::{
-    CalcOp, CalcToken, CssValue, SpecifiedColor, parse_border_spacing_component,
-    parse_calc_expression, parse_clamp_expression, parse_color, parse_length, parse_property_value,
-    parse_var_function, tokenize_calc,
+    CssValue, MathUnitContext, SpecifiedColor, parse_border_spacing_component, parse_color,
+    parse_length, parse_math_expression, parse_property_value, parse_var_function,
 };
 
 #[test]
@@ -9,7 +8,7 @@ fn border_spacing_component_preserves_calc_and_var_tokens() {
     let spacing = "calc(1rem + 2pt) var(--gap, 3pt)";
     assert!(matches!(
         parse_border_spacing_component(spacing, 0),
-        Some(CssValue::Calc(_))
+        Some(CssValue::Math(_))
     ));
     assert!(matches!(
         parse_border_spacing_component(spacing, 1),
@@ -25,6 +24,14 @@ fn border_spacing_component_rejects_more_than_two_values() {
 
 #[test]
 fn parse_length_units() {
+    assert!(matches!(
+        parse_length("0"),
+        Some(CssValue::Length(value)) if value == 0.0
+    ));
+    assert!(matches!(
+        parse_length("1"),
+        Some(CssValue::Number(value)) if value == 1.0
+    ));
     assert!(matches!(
         parse_length("10px"),
         Some(CssValue::Length(v)) if (v - 7.5).abs() < 0.01
@@ -51,7 +58,7 @@ fn parse_length_units() {
     ));
     assert!(matches!(
         parse_length("1.5em"),
-        Some(CssValue::Number(v)) if (v - 1.5).abs() < 0.01
+        Some(CssValue::Em(v)) if (v - 1.5).abs() < 0.01
     ));
     // ex/ch preserve the raw coefficient for font-metric resolution downstream.
     assert!(matches!(
@@ -112,71 +119,74 @@ fn parse_var_function_invalid_name() {
     assert!(parse_var_function("var(invalid, fallback)").is_none());
 }
 
+fn math_units() -> MathUnitContext {
+    MathUnitContext::from_font_and_viewport(12.0, 15.0, 600.0, 800.0)
+}
+
 #[test]
-fn parse_calc_expression_basic() {
-    let Some(CssValue::Calc(tokens)) = parse_calc_expression("calc(100% - 20pt)") else {
-        panic!("expected calc tokens");
+fn parse_math_expression_preserves_affine_length_percentage_terms() {
+    let Some(CssValue::Math(expression)) = parse_math_expression("calc(100% - 20pt)") else {
+        panic!("expected typed length-percentage math");
     };
-    assert_eq!(tokens.len(), 3);
-    assert!(matches!(&tokens[0], CalcToken::Percent(v) if (*v - 100.0).abs() < 0.01));
-    assert!(matches!(&tokens[1], CalcToken::Op(CalcOp::Sub)));
-    assert!(matches!(&tokens[2], CalcToken::Length(v) if (*v - 20.0).abs() < 0.01));
+    assert_eq!(
+        expression.affine(math_units()).map(|value| value.terms()),
+        Some((-20.0, 100.0))
+    );
 }
 
 #[test]
-fn parse_calc_expression_empty_is_none() {
-    assert!(parse_calc_expression("calc()").is_none());
+fn empty_and_dimensionally_invalid_math_are_rejected_transactionally() {
+    for invalid in [
+        "calc()",
+        "calc(2px * 3px)",
+        "calc(10px / 2px)",
+        "calc(10px + 2)",
+        "clamp(10px, 20px)",
+        "clamp(10px)",
+        "min()",
+    ] {
+        assert!(
+            parse_math_expression(invalid).is_none(),
+            "invalid math survived: {invalid}"
+        );
+    }
 }
 
 #[test]
-fn parse_clamp_expression_basic() {
-    let Some(CssValue::Clamp(min, preferred, max)) =
-        parse_clamp_expression("clamp(120px, 50%, 240px)")
+fn comparison_math_resolves_nested_expressions_against_the_eventual_basis() {
+    let Some(CssValue::Math(expression)) =
+        parse_math_expression("clamp(120px, calc(50% - 4pt), 240px)")
     else {
-        panic!("expected clamp value");
+        panic!("expected typed clamp expression");
     };
-    // 120px -> 90pt, 240px -> 180pt (px*0.75); preferred stays a percentage.
-    assert!(matches!(*min, CssValue::Length(v) if (v - 90.0).abs() < 0.01));
-    assert!(matches!(*preferred, CssValue::Percentage(v) if (v - 50.0).abs() < 0.01));
-    assert!(matches!(*max, CssValue::Length(v) if (v - 180.0).abs() < 0.01));
+    assert_eq!(expression.resolve(math_units(), 300.0), Some(146.0));
+    assert_eq!(expression.resolve(math_units(), 600.0), Some(180.0));
 }
 
 #[test]
-fn parse_clamp_expression_with_calc_arg() {
-    // A clamp arg may itself be a calc(); top-level comma splitting must not
-    // break on the comma-free calc, and nested parens must be respected.
-    let Some(CssValue::Clamp(_, preferred, _)) =
-        parse_clamp_expression("clamp(10pt, calc(50% - 4pt), 200pt)")
-    else {
-        panic!("expected clamp with calc preferred");
-    };
-    assert!(matches!(*preferred, CssValue::Calc(_)));
-}
-
-#[test]
-fn parse_clamp_expression_wrong_arity_is_none() {
-    assert!(parse_clamp_expression("clamp(10px, 20px)").is_none());
-    assert!(parse_clamp_expression("clamp(10px)").is_none());
-}
-
-#[test]
-fn parse_property_value_recognizes_clamp() {
+fn parse_property_value_recognizes_typed_math() {
     assert!(matches!(
         parse_property_value("width", "clamp(120px, 50%, 240px)"),
-        Some(CssValue::Clamp(_, _, _))
+        Some(CssValue::Math(_))
     ));
 }
 
 #[test]
-fn tokenize_calc_variants() {
-    assert_eq!(tokenize_calc("10px   ").unwrap().len(), 1);
-    assert!(tokenize_calc("-5px + 10px").is_some());
-    assert!(matches!(
-        tokenize_calc("1em").as_deref(),
-        Some([CalcToken::Em(value)]) if (*value - 1.0).abs() < 0.01
-    ));
-    assert!(tokenize_calc("+").is_none());
-    assert!(tokenize_calc("10xyz").is_none());
+fn typed_math_parser_handles_precedence_parentheses_and_nested_functions() {
+    let cases = [
+        ("calc(10pt + 5pt * 3)", 25.0),
+        ("calc((10pt + 5pt) * 3)", 45.0),
+        ("min(40pt, max(12pt, 30pt))", 30.0),
+        ("calc((sqrt(16) + sin(pi / 2)) * 3pt)", 15.0),
+        ("hypot(3pt, 4pt)", 5.0),
+    ];
+    for (source, expected) in cases {
+        let Some(CssValue::Math(expression)) = parse_math_expression(source) else {
+            panic!("typed math rejected {source}");
+        };
+        let actual = expression.resolve(math_units(), 400.0);
+        assert_eq!(actual, Some(expected), "wrong used value for {source}");
+    }
 }
 
 #[test]

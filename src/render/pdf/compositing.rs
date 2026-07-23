@@ -7,7 +7,7 @@ use super::*;
 /// opacity/blending of the isolated result.
 pub(super) struct PaintGroupScope {
     group_start: Option<usize>,
-    transformed: bool,
+    prior_paint_transform: Option<PdfMatrix>,
     clipped: bool,
     mask: Option<MaskedTransparencyGroup>,
     opacity: f32,
@@ -33,10 +33,15 @@ impl PaintGroupScope {
             let reference = geometry.painting().transform_reference(&group.transform);
             resolve_css_transform(transform, reference.pivot(), reference.size())
         });
-        if let Some(transform) = resolved_transform {
+        let prior_paint_transform = resolved_transform.map(|transform| {
+            let prior = ctx
+                .text
+                .pdf_writer
+                .enter_paint_transform(transform.matrix());
             content.push_str("q\n");
             push_resolved_transform_cm(content, transform);
-        }
+            prior
+        });
 
         let clipped = effects.masking.clip_path.is_some();
         if let Some(clip_path) = &effects.masking.clip_path {
@@ -62,7 +67,7 @@ impl PaintGroupScope {
 
         Self {
             group_start,
-            transformed: resolved_transform.is_some(),
+            prior_paint_transform,
             clipped,
             mask,
             opacity: effects.opacity,
@@ -83,8 +88,9 @@ impl PaintGroupScope {
         if self.clipped {
             content.push_str("Q\n");
         }
-        if self.transformed {
+        if let Some(prior) = self.prior_paint_transform {
             content.push_str("Q\n");
+            ctx.text.pdf_writer.restore_paint_transform(prior);
         }
         if let Some(group_start) = self.group_start {
             finish_transparency_group(

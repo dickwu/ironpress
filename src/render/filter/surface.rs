@@ -111,6 +111,24 @@ pub(crate) fn apply_operations_to_surface(
             apply_color_operations(&mut pixels, &operations[start..operation_index], linear_rgb);
         }
         match *operation {
+            FilterOperation::BlendWithFlood {
+                color,
+                mode,
+                region,
+            } => {
+                let filtered = blend_with_flood(
+                    &pixels,
+                    source_size,
+                    overflow,
+                    color,
+                    mode,
+                    region,
+                    linear_rgb,
+                    filter_dpi,
+                )?;
+                pixels = filtered.pixels;
+                overflow = filtered.overflow;
+            }
             FilterOperation::Blur(radius) if radius > 0.0 => {
                 let (filtered, amount) =
                     crate::render::blur::blur_painted_buffer_to_rgba(&pixels, radius, filter_dpi)?;
@@ -136,9 +154,7 @@ pub(crate) fn apply_operations_to_surface(
                 overflow += EdgeSizes::uniform(filtered.overflow_pt);
             }
             FilterOperation::Blur(_) => {}
-            FilterOperation::Flood { .. }
-            | FilterOperation::Offset { .. }
-            | FilterOperation::MorphologyDilate(_) => return None,
+            FilterOperation::Offset { .. } | FilterOperation::MorphologyDilate(_) => return None,
             _ => {}
         }
     }
@@ -161,6 +177,100 @@ fn is_color_operation(operation: &FilterOperation) -> bool {
             | FilterOperation::Opacity(_)
             | FilterOperation::Matrix(_)
     )
+}
+
+#[derive(Clone, Copy)]
+struct RasterScale {
+    horizontal: f32,
+    vertical: f32,
+}
+
+impl RasterScale {
+    fn at_dpi(dpi: f32) -> Option<Self> {
+        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
+        (pixels_per_point.is_finite() && pixels_per_point > 0.0).then_some(Self {
+            horizontal: pixels_per_point,
+            vertical: pixels_per_point,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RasterRegion {
+    left: i64,
+    top: i64,
+    right: i64,
+    bottom: i64,
+}
+
+impl RasterRegion {
+    fn resolve(region: crate::types::Rect, source_size: Size, scale: RasterScale) -> Option<Self> {
+        let width = f64::from(source_size.width * scale.horizontal);
+        let height = f64::from(source_size.height * scale.vertical);
+        let resolved = Self {
+            left: rounded_coordinate(f64::from(region.origin.x) * width)?,
+            top: rounded_coordinate(f64::from(region.origin.y) * height)?,
+            right: rounded_coordinate(f64::from(region.right()) * width)?,
+            bottom: rounded_coordinate(f64::from(region.bottom()) * height)?,
+        };
+        (resolved.right > resolved.left && resolved.bottom > resolved.top).then_some(resolved)
+    }
+
+    fn dimensions(self) -> Option<(u32, u32)> {
+        Some((
+            u32::try_from(self.right.checked_sub(self.left)?).ok()?,
+            u32::try_from(self.bottom.checked_sub(self.top)?).ok()?,
+        ))
+    }
+}
+
+fn rounded_coordinate(value: f64) -> Option<i64> {
+    (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64)
+        .then(|| value.round() as i64)
+}
+
+fn blend_with_flood(
+    source: &image::RgbaImage,
+    source_size: Size,
+    source_overflow: EdgeSizes,
+    color: crate::types::Color,
+    mode: crate::style::computed::BlendMode,
+    region: crate::types::Rect,
+    linear_rgb: bool,
+    filter_dpi: f32,
+) -> Option<FilteredSurface> {
+    let scale = RasterScale::at_dpi(filter_dpi)?;
+    let raster_region = RasterRegion::resolve(region, source_size, scale)?;
+    let (width, height) = raster_region.dimensions()?;
+    let source_left = rounded_coordinate(-f64::from(source_overflow.left * scale.horizontal))?;
+    let source_top = rounded_coordinate(-f64::from(source_overflow.top * scale.vertical))?;
+    let flood = image::Rgba(color.to_rgba8());
+    let transparent = image::Rgba([0, 0, 0, 0]);
+    let mut output = image::RgbaImage::new(width, height);
+
+    for (x, y, output_pixel) in output.enumerate_pixels_mut() {
+        let global_x = raster_region.left.checked_add(i64::from(x))?;
+        let global_y = raster_region.top.checked_add(i64::from(y))?;
+        let local_x = global_x.checked_sub(source_left)?;
+        let local_y = global_y.checked_sub(source_top)?;
+        let source_pixel = u32::try_from(local_x)
+            .ok()
+            .zip(u32::try_from(local_y).ok())
+            .filter(|(x, y)| *x < source.width() && *y < source.height())
+            .map_or(transparent, |(x, y)| *source.get_pixel(x, y));
+        *output_pixel =
+            crate::render::blend::composite_pixel(source_pixel, flood, mode, linear_rgb)?;
+    }
+
+    Some(FilteredSurface {
+        pixels: output,
+        overflow: EdgeSizes::new(
+            -region.origin.y * source_size.height,
+            (region.right() - 1.0) * source_size.width,
+            (region.bottom() - 1.0) * source_size.height,
+            -region.origin.x * source_size.width,
+        ),
+    })
 }
 
 /// Evaluate one uninterrupted colour-function run in floating point and
@@ -192,8 +302,38 @@ fn channel(value: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::computed::DropShadow;
-    use crate::types::Color;
+    use crate::style::computed::{BlendMode, DropShadow};
+    use crate::types::{Color, Rect};
+
+    #[test]
+    fn flood_blend_preserves_the_flood_only_region() {
+        let source = image::RgbaImage::from_pixel(10, 6, image::Rgba([213, 0, 0, 255]));
+        let flood = Color::rgb(21, 101, 192);
+        let filtered = apply_operations_to_surface(
+            &source,
+            Size::new(10.0, 6.0),
+            &[FilterOperation::BlendWithFlood {
+                color: flood,
+                mode: BlendMode::Multiply,
+                region: Rect::from_xywh(-0.2, -0.5, 1.4, 2.0),
+            }],
+            true,
+            72.0,
+        )
+        .expect("a finite flood and source produce one blended surface");
+
+        assert_eq!(filtered.pixels.dimensions(), (14, 12));
+        for (actual, expected) in [
+            (filtered.overflow.top, 3.0),
+            (filtered.overflow.right, 2.0),
+            (filtered.overflow.bottom, 3.0),
+            (filtered.overflow.left, 2.0),
+        ] {
+            assert!((actual - expected).abs() < 0.000_01);
+        }
+        assert_eq!(filtered.pixels.get_pixel(0, 0).0, flood.to_rgba8());
+        assert_eq!(filtered.pixels.get_pixel(2, 3).0, [13, 0, 0, 255]);
+    }
 
     #[test]
     fn ordered_drop_shadow_consumes_the_composited_source() {

@@ -531,5 +531,91 @@
       "probe-color-swatch",
       "probe-border-box"
     ]
+  },
+  {
+    "id": "units-calc-arithmetic-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "grammar-precedence-nesting-unary",
+    "description": "WPT-derived visual lanes cover mixed percentage arithmetic, scalar multiplication on both sides, division, grouping, nested calc(), unary signs and operator precedence; result edges must hit conspicuous markers.",
+    "file": "cases/units-values/units-calc-arithmetic-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-length-units-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "absolute-font-viewport-percentage-units",
+    "description": "WPT-derived unit matrix combines calc() with em, rem, in, cm, mm, viewport, vmin, inherited lh, distinct root rlh and percentage terms, using a common 120px visual target where applicable.",
+    "file": "cases/units-values/units-calc-length-units-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-comparison-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "min-max-clamp-nested-mixed",
+    "description": "WPT-derived loud lanes exercise min(), max(), clamp(), nested comparison functions and calc/comparison composition with unresolved percentages.",
+    "file": "cases/units-values/units-math-comparison-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-stepped-sign-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "round-mod-rem-abs-sign-hypot",
+    "description": "WPT-derived matrix covers every rounding strategy, positive and negative mod/rem semantics, abs(), sign() and hypot() with large result-edge markers.",
+    "file": "cases/units-values/units-math-stepped-sign-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-trig-exponential-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "trig-inverse-pow-sqrt-log-exp-constants",
+    "description": "WPT-derived matrix covers trig, inverse trig nesting, pow(), sqrt(), log(), exp() and numeric constants; each expression produces the same unmistakable 120px boundary.",
+    "file": "cases/units-values/units-math-trig-exponential-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-invalid-type-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "grammar-dimensional-type-rejection",
+    "description": "WPT-derived invalid matrix proves unmatched compound dimensions, mixed number/length sums, angle/length sums, malformed expressions, incompatible comparisons and wrong function arity are discarded without overriding a loud 120px fallback.",
+    "file": "cases/units-values/units-calc-invalid-type-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-typed-arithmetic-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "typed-dimensional-products-and-quotients",
+    "description": "WPT-derived loud lanes require compound length, percentage, angle, time, frequency, resolution, flex and font-relative dimensions to cancel to a 120px used width; old number-only multiplication rules leave an unmistakable 8px fallback. The authenticated standards-derived source materializes the specified flex cancellation because Chromium's print path still drops that valid lane.",
+    "file": "cases/units-values/units-calc-typed-arithmetic-red-team.html",
+    "reference_file": "references/units-values/units-calc-typed-arithmetic-red-team.html",
+    "reference": { "status": "verified" },
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
   }
 ]

@@ -4,10 +4,10 @@ use crate::layout::engine::{ContainingBlock, LayoutBorder, StackingContext};
 use crate::layout::flow_metrics::BlockMargins;
 use crate::layout::helpers::BackgroundFields;
 use crate::style::computed::{
-    BlendMode, BoxDecorationBreak, BoxShadow, Clear, ClipPath, Float, Isolation, MaskMode,
-    MaskSource, Overflow, Position, TextAlign, Transform, TransformOrigin, Visibility, WritingMode,
+    BlendMode, BoxShadow, Clear, ClipPath, Float, Isolation, MaskMode, MaskSource, Overflow,
+    Position, TextAlign, Transform, TransformOrigin, Visibility, WritingMode,
 };
-use crate::types::{Color, CornerRadii, EdgeSizes, PhysicalEdges, Point, Rect};
+use crate::types::{Color, CornerRadii, EdgeSizes, PhysicalEdges, Point, Rect, Size};
 
 /// Inline-axis sizing carried by a laid-out box.
 ///
@@ -154,6 +154,39 @@ impl BlockSize {
         self.definite
     }
 
+    /// Split one used principal-box extent without losing its sizing semantics.
+    /// A definite height stays definite in both fragments; a content-dependent
+    /// minimum becomes one painted slice plus the remaining composite floor.
+    pub(crate) fn split_fragment_at(self, consumed: f32) -> Option<(Self, Self)> {
+        let total = self.used?;
+        let consumed = consumed.clamp(0.0, total);
+        let remainder = total - consumed;
+        if !crate::layout::roundoff::is_positive_with_roundoff(consumed)
+            || !crate::layout::roundoff::is_positive_with_roundoff(remainder)
+        {
+            return None;
+        }
+
+        Some(if self.definite {
+            (Self::definite(consumed), Self::definite(remainder))
+        } else {
+            (Self::fragment(consumed), Self::minimum(remainder))
+        })
+    }
+
+    /// Remaining composite minimum after one fragment consumes a block-axis
+    /// extent. A content-dependent floor belongs to the unfragmented principal
+    /// box; copying it to every continuation multiplies `min-height`, while
+    /// dropping it shortens the composite box.
+    pub(crate) fn remaining_fragment_floor(self, consumed: f32) -> Self {
+        match (self.used, self.definite) {
+            (Some(minimum), false) if minimum > consumed => {
+                Self::minimum(minimum - consumed.max(0.0))
+            }
+            _ => Self::AUTO,
+        }
+    }
+
     pub(crate) fn resolve(self, content_height: f32) -> f32 {
         match (self.used, self.definite) {
             (Some(used), true) => used,
@@ -227,95 +260,6 @@ pub(crate) struct BoxModel {
     pub(crate) margins: BlockMargins,
     pub(crate) padding: EdgeSizes,
     pub(crate) border: LayoutBorder,
-}
-
-/// Original edge geometry of the reference box shared by every fragment.
-///
-/// Individual fragments remove edges adjoining a break, while percentage
-/// shapes and image positioning for `box-decoration-break: slice` resolve
-/// against the reassembled box with its authored border and padding restored.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct FragmentReferenceEdges {
-    border: EdgeSizes,
-    padding: EdgeSizes,
-}
-
-impl FragmentReferenceEdges {
-    pub(crate) fn from_box_model(box_model: &BoxModel) -> Self {
-        Self {
-            border: box_model.border.widths(),
-            padding: box_model.padding,
-        }
-    }
-
-    pub(crate) const fn border(self) -> EdgeSizes {
-        self.border
-    }
-
-    pub(crate) const fn padding(self) -> EdgeSizes {
-        self.padding
-    }
-}
-
-/// Position of one fragment inside the composite reference box required by
-/// CSS Break 3 for `box-decoration-break: slice`.
-///
-/// This is shared by backgrounds, masks, and shape reference boxes so a
-/// fragmented element cannot resolve those graphical effects against
-/// competing geometries.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BoxFragmentSlice {
-    block_offset: f32,
-    composite_block_size: f32,
-    edges: FragmentReferenceEdges,
-}
-
-impl BoxFragmentSlice {
-    pub(crate) fn split(
-        first_block_size: f32,
-        continuation_block_size: f32,
-        box_model: &BoxModel,
-    ) -> (Self, Self) {
-        let composite_block_size = first_block_size + continuation_block_size;
-        let edges = FragmentReferenceEdges::from_box_model(box_model);
-        (
-            Self {
-                block_offset: 0.0,
-                composite_block_size,
-                edges,
-            },
-            Self {
-                block_offset: first_block_size,
-                composite_block_size,
-                edges,
-            },
-        )
-    }
-
-    pub(crate) const fn block_offset(self) -> f32 {
-        self.block_offset
-    }
-
-    pub(crate) const fn composite_block_size(self) -> f32 {
-        self.composite_block_size
-    }
-
-    pub(crate) const fn edges(self) -> FragmentReferenceEdges {
-        self.edges
-    }
-
-    /// Split an already-sliced continuation without losing its position in the
-    /// original reference box. The first result keeps this fragment's current
-    /// offset; the continuation advances by the consumed border-box extent.
-    const fn split_continuation(self, first_block_size: f32) -> (Self, Self) {
-        (
-            self,
-            Self {
-                block_offset: self.block_offset + first_block_size,
-                ..self
-            },
-        )
-    }
 }
 
 impl BoxModel {
@@ -749,6 +693,64 @@ impl PositionConstraints {
             ),
         )
     }
+
+    fn resolved_edges(self, reference: Size) -> PhysicalEdges<Option<f32>> {
+        PhysicalEdges::new(
+            self.edges.top.resolve(reference.height),
+            self.edges.right.resolve(reference.width),
+            self.edges.bottom.resolve(reference.height),
+            self.edges.left.resolve(reference.width),
+        )
+    }
+}
+
+/// Resolve one sticky-positioned axis at the initial scroll position.
+///
+/// `normal_start` is the border edge produced by ordinary flow. Insets define
+/// the sticky view rectangle; they are constraints, never unconditional
+/// translations. The end inset is reduced when necessary so the view rectangle
+/// can contain the border box, as required by CSS Positioned Layout 3 section
+/// 3.4.
+fn resolve_sticky_axis(
+    normal_start: f32,
+    extent: f32,
+    scrollport_extent: f32,
+    start: Option<f32>,
+    end: Option<f32>,
+) -> f32 {
+    if !normal_start.is_finite()
+        || !extent.is_finite()
+        || !scrollport_extent.is_finite()
+        || scrollport_extent <= 0.0
+    {
+        return normal_start;
+    }
+
+    let view_start = start.unwrap_or_default();
+    let mut view_end = scrollport_extent - end.unwrap_or_default();
+    if view_end - view_start < extent {
+        view_end = view_start + extent;
+    }
+
+    let mut used_start = normal_start;
+    if start.is_some() && used_start < view_start {
+        used_start = view_start;
+    }
+    if end.is_some() && used_start + extent > view_end {
+        used_start = view_end - extent;
+    }
+
+    // Sticky positioning may move the box only insofar as its position box
+    // remains in its containing block. At this stage the nearest scrollport is
+    // also the local containing frame; preserve already-overflowing normal
+    // positions instead of pulling ordinary overflow back into the box.
+    if used_start > normal_start {
+        used_start.min((scrollport_extent - extent).max(normal_start))
+    } else if used_start < normal_start {
+        used_start.max(0.0f32.min(normal_start))
+    } else {
+        used_start
+    }
 }
 
 /// Physical positioned-layout state. The resolved placement and authored
@@ -813,6 +815,50 @@ impl Positioning {
     /// Physical top-left inset represented as a point.
     pub(crate) const fn origin(&self) -> Point {
         Point::new(self.insets.left, self.insets.top)
+    }
+
+    /// Resolve the painted origin of an in-flow box in its nearest scrollport.
+    ///
+    /// `normal_origin` is the box's ordinary-flow border-box origin before any
+    /// relative/sticky adjustment. For historical layout nodes the resolved
+    /// inline margin/centering contribution is already folded into `insets`;
+    /// subtracting the authored sticky inset recovers that ordinary position.
+    /// Keeping this interpretation in one method prevents concrete renderers
+    /// from implementing incompatible `relative`/`sticky` special cases.
+    pub(crate) fn resolve_in_flow_origin(
+        &self,
+        normal_origin: Point,
+        extent: Size,
+        scrollport: Size,
+    ) -> Point {
+        if self.scheme != Position::Sticky {
+            return Point::new(
+                normal_origin.x + self.insets.left,
+                normal_origin.y + self.insets.top,
+            );
+        }
+
+        let resolved = self.constraints.resolved_edges(scrollport);
+        let ordinary = Point::new(
+            normal_origin.x + self.insets.left - resolved.left.unwrap_or_default(),
+            normal_origin.y,
+        );
+        Point::new(
+            resolve_sticky_axis(
+                ordinary.x,
+                extent.width,
+                scrollport.width,
+                resolved.left,
+                resolved.right,
+            ),
+            resolve_sticky_axis(
+                ordinary.y,
+                extent.height,
+                scrollport.height,
+                resolved.top,
+                resolved.bottom,
+            ),
+        )
     }
 
     pub(crate) fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
@@ -881,74 +927,6 @@ impl Positioning {
 
     pub(crate) const fn is_in_normal_flow(&self) -> bool {
         self.scheme.is_in_flow()
-    }
-
-    /// Preserve the subset of positioned state supported by replaced elements.
-    pub(crate) fn for_replaced(style: &crate::style::computed::ComputedStyle) -> Self {
-        let relative = style.position.is_relative();
-        Self {
-            scheme: relative
-                .then_some(style.position)
-                .unwrap_or(Position::Static),
-            insets: EdgeSizes::new(
-                relative
-                    .then(|| style.top.unwrap_or_default())
-                    .unwrap_or_default(),
-                0.0,
-                0.0,
-                relative
-                    .then(|| style.left.unwrap_or_default())
-                    .unwrap_or_default(),
-            ),
-            ..Self::default()
-        }
-    }
-}
-
-/// Fragmentation behavior common to decorated box fragments.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct BoxFragmentation {
-    pub(crate) decoration: BoxDecorationBreak,
-    pub(crate) content_role: super::PageContentRole,
-    pub(crate) reference_slice: Option<BoxFragmentSlice>,
-}
-
-impl BoxFragmentation {
-    /// Reference-box slices for two fragments produced from this box.
-    ///
-    /// A continuation can fragment more than once. In that case both new
-    /// fragments retain the original composite extent and authored edges;
-    /// only the continuation offset advances.
-    pub(crate) fn split_reference_box(
-        self,
-        first_block_size: f32,
-        continuation_block_size: f32,
-        box_model: &BoxModel,
-    ) -> Option<(BoxFragmentSlice, BoxFragmentSlice)> {
-        (self.decoration == BoxDecorationBreak::Slice).then(|| {
-            self.reference_slice.map_or_else(
-                || BoxFragmentSlice::split(first_block_size, continuation_block_size, box_model),
-                |slice| slice.split_continuation(first_block_size),
-            )
-        })
-    }
-}
-
-/// Line constraints used when a text box fragments.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TextFragmentation {
-    pub(crate) box_fragmentation: BoxFragmentation,
-    pub(crate) orphans: u8,
-    pub(crate) widows: u8,
-}
-
-impl Default for TextFragmentation {
-    fn default() -> Self {
-        Self {
-            box_fragmentation: BoxFragmentation::default(),
-            orphans: 2,
-            widows: 2,
-        }
     }
 }
 
@@ -1023,8 +1001,85 @@ impl Masking {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockSize, BoxFragmentation, BoxModel, InlineSize, SizeConstraints};
-    use crate::style::computed::{BoxDecorationBreak, ComputedStyle};
+    use super::{BlockSize, BoxModel, InlineSize, Positioning, SizeConstraints};
+    use crate::layout::elements::BoxFragmentation;
+    use crate::style::computed::{BoxDecorationBreak, ComputedStyle, Position};
+    use crate::types::{EdgeSizes, Point, Size};
+
+    #[test]
+    fn sticky_insets_constrain_normal_flow_instead_of_translating_it() {
+        let style = ComputedStyle {
+            position: Position::Sticky,
+            top: Some(12.0),
+            left: Some(12.0),
+            ..ComputedStyle::default()
+        };
+        // Layout has folded the 12px normal-flow inline margin and the authored
+        // 12px left inset into the legacy used inline offset.
+        let positioning = Positioning::from_style(&style)
+            .with_resolved_insets(EdgeSizes::new(12.0, 0.0, 0.0, 24.0));
+
+        assert_eq!(
+            positioning.resolve_in_flow_origin(
+                Point::new(0.0, 12.0),
+                Size::new(104.0, 96.0),
+                Size::new(152.0, 136.0),
+            ),
+            Point::new(12.0, 12.0),
+        );
+    }
+
+    #[test]
+    fn sticky_start_and_end_constraints_move_only_outside_edges_inward() {
+        let start = Positioning::from_style(&ComputedStyle {
+            position: Position::Sticky,
+            top: Some(12.0),
+            left: Some(10.0),
+            ..ComputedStyle::default()
+        });
+        assert_eq!(
+            start.resolve_in_flow_origin(
+                Point::ORIGIN,
+                Size::new(30.0, 20.0),
+                Size::new(120.0, 100.0),
+            ),
+            Point::new(10.0, 12.0),
+        );
+
+        let end = Positioning::from_style(&ComputedStyle {
+            position: Position::Sticky,
+            right: Some(10.0),
+            bottom: Some(8.0),
+            ..ComputedStyle::default()
+        });
+        assert_eq!(
+            end.resolve_in_flow_origin(
+                Point::new(100.0, 90.0),
+                Size::new(30.0, 20.0),
+                Size::new(120.0, 100.0),
+            ),
+            Point::new(80.0, 72.0),
+        );
+    }
+
+    #[test]
+    fn relative_insets_remain_visual_translations() {
+        let positioning = Positioning::from_style(&ComputedStyle {
+            position: Position::Relative,
+            top: Some(8.0),
+            left: Some(12.0),
+            ..ComputedStyle::default()
+        });
+
+        assert_eq!(
+            positioning.resolve_in_flow_origin(
+                Point::new(4.0, 6.0),
+                Size::new(30.0, 20.0),
+                Size::new(120.0, 100.0),
+            ),
+            Point::new(16.0, 14.0),
+        );
+    }
 
     #[test]
     fn inline_size_distinguishes_fill_available_from_fixed_geometry() {
@@ -1046,6 +1101,40 @@ mod tests {
         assert_eq!(size.resolve(20.0), 50.0);
         assert_eq!(size.resolve(80.0), 80.0);
         assert!(!size.is_definite());
+    }
+
+    #[test]
+    fn fragment_continuation_keeps_only_the_unconsumed_minimum() {
+        let minimum = BlockSize::minimum(680.0);
+
+        assert_eq!(
+            minimum.remaining_fragment_floor(312.0),
+            BlockSize::minimum(368.0)
+        );
+        assert_eq!(
+            minimum
+                .remaining_fragment_floor(312.0)
+                .remaining_fragment_floor(312.0),
+            BlockSize::minimum(56.0)
+        );
+        assert_eq!(minimum.remaining_fragment_floor(680.0), BlockSize::AUTO);
+        assert_eq!(
+            BlockSize::AUTO.remaining_fragment_floor(10.0),
+            BlockSize::AUTO
+        );
+    }
+
+    #[test]
+    fn splitting_used_extents_preserves_definite_and_minimum_semantics() {
+        assert_eq!(
+            BlockSize::definite(120.0).split_fragment_at(70.0),
+            Some((BlockSize::definite(70.0), BlockSize::definite(50.0)))
+        );
+        assert_eq!(
+            BlockSize::minimum(120.0).split_fragment_at(70.0),
+            Some((BlockSize::fragment(70.0), BlockSize::minimum(50.0)))
+        );
+        assert_eq!(BlockSize::minimum(120.0).split_fragment_at(120.0), None);
     }
 
     #[test]

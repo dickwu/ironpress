@@ -52,6 +52,7 @@ impl NestedRowsFlow {
 
 struct NestedRowsRenderer<'call, 'fonts> {
     content: &'call mut String,
+    paint: bool,
     origin_x: f32,
     cursor_y: f32,
     page_ext_gstates: &'call mut Vec<(String, f32)>,
@@ -64,7 +65,12 @@ struct NestedRowsRenderer<'call, 'fonts> {
     page_images: &'call mut Vec<ImageRef>,
     annotations: &'call mut Vec<LinkAnnotation>,
     stacking: &'call mut StackingTraversal,
+    /// Positioned ancestors established outside the row/cell formatting path.
+    /// A static grid item must keep resolving against them after rows are
+    /// delegated to this specialized painter.
+    abs_origins: &'call mut HashMap<usize, PdfPoint>,
     page_paint_box: PdfRect,
+    initial_fixed_origin: PdfPoint,
     page_height: f32,
     previous_margin_bottom: f32,
     first_margin: FirstMarginState,
@@ -89,6 +95,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
         let page_images = &mut *self.page_images;
         let annotations = &mut *self.annotations;
         let page_paint_box = self.page_paint_box;
+        let initial_fixed_origin = self.initial_fixed_origin;
         let page_height = self.page_height;
         let cells = &element.content.cells;
         let col_widths = &element.content.column_widths;
@@ -112,6 +119,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
         let row_y = cursor_y;
         let row_origin_x = table_row_origin_x(origin_x, offset_left);
         let row_height = compute_row_height(cells);
+        if !self.paint {
+            cursor_y -= row_height + internal_spacing.end + flow_extra_bottom + outer_margins.end;
+            self.cursor_y = cursor_y;
+            self.previous_margin_bottom = outer_margins.end;
+            return;
+        }
         let baseline_shifts = row_baseline_shifts(cells, custom_fonts);
         let mut col_pos: usize = 0;
         let stacking_scope = StackingScope::for_element(element);
@@ -151,7 +164,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 let cell_geometry = BoxGeometry::from_layout(
                     PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
                     &cell.layout.box_model.border,
-                    cell.layout.box_model.content_insets,
+                    cell.layout.box_model.padding(),
                 );
                 let cell_border_box = cell_geometry
                     .border_box
@@ -169,7 +182,8 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     PaintGroupScope::begin(
                         content,
                         &cell.layout,
@@ -190,7 +204,8 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     paint_box_filter_output(content, &cell.layout, cell_geometry, &mut cell_ctx)
                 };
                 if filtered {
@@ -206,7 +221,8 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     cell_group.finish(content, &mut cell_ctx);
                     break 'paint_cell;
                 }
@@ -258,10 +274,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
-                    paint_cell_gradient_backgrounds(
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
+                    paint_box_gradient_backgrounds(
                         content,
-                        &cell.layout,
+                        &cell.layout.paint,
+                        &cell.layout.box_model.border,
                         cell_geometry,
                         &mut cell_ctx,
                     );
@@ -425,13 +443,15 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     annotations,
                     page_paint_box,
                     page_height,
-                );
+                )
+                .with_initial_fixed_origin(initial_fixed_origin);
                 page_context.stacking = self.stacking.fork();
                 render_cell_content(
                     content,
                     &cell.layout,
                     CellRenderBox::new(PdfPoint::new(cell_x, row_y), cell_w, row_height)
                         .with_baseline_shift(baseline_shifts.get(cell_idx).copied().unwrap_or(0.0)),
+                    self.abs_origins,
                     &mut page_context,
                 );
                 cell_group.finish(content, &mut page_context);
@@ -471,6 +491,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
         let page_images = &mut *self.page_images;
         let annotations = &mut *self.annotations;
         let page_paint_box = self.page_paint_box;
+        let initial_fixed_origin = self.initial_fixed_origin;
         let page_height = self.page_height;
         let cells = &element.content.cells;
         let col_widths = &element.content.column_widths;
@@ -487,6 +508,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
         let row_y = cursor_y;
         let row_height =
             compute_grid_row_height(cells) + grid_padding.vertical() + grid_border.vertical_width();
+        if !self.paint {
+            cursor_y -= row_height + margin_bottom;
+            self.cursor_y = cursor_y;
+            self.previous_margin_bottom = 0.0;
+            return;
+        }
         let grid_total_w: f32 = col_widths.iter().sum::<f32>()
             + gap * col_widths.len().saturating_sub(1) as f32
             + grid_padding.horizontal()
@@ -496,9 +523,11 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
             grid_border,
             *grid_padding,
         );
+        let grid_paint_geometry =
+            grid_geometry.snapped_for_paint(pdf_writer.page_content_transform);
         paint_box_decoration(
             content,
-            grid_geometry.for_fragment(Default::default()),
+            grid_paint_geometry.for_fragment(Default::default()),
             grid_border,
             CornerRadii::ZERO,
             None,
@@ -516,7 +545,9 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
         let cell_content_h = compute_grid_row_height(cells);
         let stacking_scope = StackingScope::for_element(element);
         let mut stacking_plan = StackingPaintPlan::default();
-        for cell in cells.iter() {
+        let mut cells_in_paint_order: Vec<_> = cells.iter().collect();
+        cells_in_paint_order.sort_by_key(|cell| cell.placement.paint_order);
+        for cell in cells_in_paint_order {
             let column_start = cell.placement.column_start;
             let span = cell.placement.column_span.max(1);
             let marker = self.stacking.marker();
@@ -549,9 +580,11 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 let cell_geometry = BoxGeometry::from_layout(
                     PdfRect::new(box_x, box_y, box_w, box_h),
                     &cell.layout.box_model.border,
-                    cell.layout.box_model.content_insets,
+                    cell.layout.box_model.padding(),
                 );
-                let cell_border_box = cell_geometry
+                let cell_paint_geometry =
+                    cell_geometry.snapped_for_paint(pdf_writer.page_content_transform);
+                let cell_border_box = cell_paint_geometry
                     .border_box
                     .rounded(cell.layout.paint.border_radii);
                 let cell_content_box = cell_geometry.content_box();
@@ -568,11 +601,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     PaintGroupScope::begin(
                         content,
                         &cell.layout,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_paint_geometry.for_fragment(Default::default()),
                         &mut cell_ctx,
                     )
                 };
@@ -590,8 +624,14 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
-                    paint_box_filter_output(content, &cell.layout, cell_geometry, &mut filter_ctx)
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
+                    paint_box_filter_output(
+                        content,
+                        &cell.layout,
+                        cell_paint_geometry,
+                        &mut filter_ctx,
+                    )
                 };
                 if filtered {
                     let mut cell_ctx = PageRenderContext::new(
@@ -606,14 +646,15 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     cell_group.finish(content, &mut cell_ctx);
                     break 'paint_cell;
                 }
                 render_box_shadows(
                     content,
                     &cell.layout.paint.shadows,
-                    cell_geometry.for_fragment(Default::default()),
+                    cell_paint_geometry.for_fragment(Default::default()),
                     cell.layout.paint.border_radii,
                     page_ext_gstates,
                     bg_alpha_counter,
@@ -656,17 +697,19 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
-                    paint_cell_gradient_backgrounds(
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
+                    paint_box_gradient_backgrounds(
                         content,
-                        &cell.layout,
-                        cell_geometry,
+                        &cell.layout.paint,
+                        &cell.layout.box_model.border,
+                        cell_paint_geometry,
                         &mut cell_ctx,
                     );
                     render_box_shadows_inset(
                         content,
                         &cell.layout.paint.shadows,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_paint_geometry.for_fragment(Default::default()),
                         cell.layout.paint.border_radii,
                         cell_ctx.page_ext_gstates,
                         cell_ctx.bg_alpha_counter,
@@ -678,7 +721,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 // Draw the cell border through the shared rounded ring.
                 paint_box_decoration(
                     content,
-                    cell_geometry.for_fragment(Default::default()),
+                    cell_paint_geometry.for_fragment(Default::default()),
                     &cell.layout.box_model.border,
                     cell.layout.paint.border_radii,
                     cell.layout.paint.border_image.as_ref(),
@@ -694,7 +737,10 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
 
                 // Render cell text
                 let cell_inner_w = cell_content_box.width;
-                let mut baseline_cursor = TextBaselineCursor::new(cell_content_box.top());
+                let mut baseline_cursor = TextBaselineCursor::new(
+                    cell_content_box.top(),
+                    pdf_writer.page_content_transform,
+                );
                 for line in &cell.layout.content.lines {
                     let metrics = line_box_metrics(line, custom_fonts);
                     let text_y = baseline_cursor.next_horizontal(metrics);
@@ -703,7 +749,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     if text_content.is_empty() {
                         continue;
                     }
-                    let merged = merge_runs(&line.runs);
+                    let merged = crate::text::coalesce_text_runs(&line.runs);
                     let line_width: f32 = merged
                         .iter()
                         .map(|run| estimate_run_width_with_fonts(run, custom_fonts))
@@ -754,7 +800,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         .sum();
                     let nested_clip = cell.placement.clips;
                     let clip_command = nested_clip.then(|| {
-                        cell_geometry
+                        cell_paint_geometry
                             .padding_box()
                             .rounded(CornerRadii::ZERO)
                             .clip_command()
@@ -765,7 +811,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     let nested_x = cell_content_box.left;
                     let nested_w = cell_content_box.width;
                     let nested_y = cell_content_box.top() - text_h;
-                    let mut nested_abs: HashMap<usize, PdfPoint> = HashMap::new();
+                    let mut nested_abs = self.abs_origins.clone();
+                    if let Some(depth) = cell.layout.established_containing_block_depth() {
+                        let padding_box = cell_geometry.padding_box();
+                        nested_abs
+                            .insert(depth, PdfPoint::new(padding_box.left, padding_box.top()));
+                    }
                     let mut child_ctx = PageRenderContext::new(
                         pdf_writer,
                         page_images,
@@ -778,7 +829,8 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         annotations,
                         page_paint_box,
                         page_height,
-                    );
+                    )
+                    .with_initial_fixed_origin(initial_fixed_origin);
                     child_ctx.stacking = self.stacking.fork();
                     if let Some(command) = &clip_command {
                         child_ctx.stacking.push_clip(command.clone());
@@ -788,7 +840,10 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         &cell.layout.content.children,
                         ContainerFrame::new(
                             PdfPoint::new(nested_x, nested_y),
-                            nested_w,
+                            crate::types::Size::new(
+                                nested_w,
+                                (cell_content_box.height - text_h).max(0.0),
+                            ),
                             PdfPoint::new(
                                 nested_x - cell.layout.box_model.content_insets.left,
                                 nested_y + cell.layout.box_model.content_insets.top,
@@ -824,7 +879,8 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     annotations,
                     page_paint_box,
                     page_height,
-                );
+                )
+                .with_initial_fixed_origin(initial_fixed_origin);
                 cell_group.finish(content, &mut cell_ctx);
             }
             let descendants = self.stacking.take_since(marker);
@@ -855,6 +911,8 @@ pub(super) fn render_rows(
     elements: &[&dyn LayoutElement],
     origin_x: f32,
     flow: NestedRowsFlow,
+    paint: bool,
+    abs_origins: &mut HashMap<usize, PdfPoint>,
     ctx: &mut PageRenderContext<'_>,
 ) -> FlowPosition {
     let row_heights = elements
@@ -863,6 +921,7 @@ pub(super) fn render_rows(
         .collect();
     let mut renderer = NestedRowsRenderer {
         content,
+        paint,
         origin_x,
         cursor_y: flow.position.cursor_y,
         page_ext_gstates: ctx.page_ext_gstates,
@@ -875,7 +934,9 @@ pub(super) fn render_rows(
         page_images: ctx.text.page_images,
         annotations: ctx.text.annotations,
         stacking: &mut ctx.stacking,
+        abs_origins,
         page_paint_box: ctx.paint_box,
+        initial_fixed_origin: ctx.initial_fixed_origin,
         page_height: ctx.text.page_height,
         previous_margin_bottom: flow.position.previous_margin_bottom,
         first_margin: flow.first_margin,

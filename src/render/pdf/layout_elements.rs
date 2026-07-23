@@ -47,6 +47,9 @@ impl<'a> TextRenderContext<'a> {
 
 pub(super) struct PageRenderContext<'a> {
     pub(super) paint_box: PdfRect,
+    /// Top-left of the initial fixed containing block (the page area in paged
+    /// media), in PDF page coordinates.
+    pub(super) initial_fixed_origin: PdfPoint,
     pub(super) shadings: &'a mut Vec<ShadingEntry>,
     pub(super) shading_counter: &'a mut usize,
     pub(super) page_ext_gstates: &'a mut Vec<(String, f32)>,
@@ -72,6 +75,7 @@ impl<'a> PageRenderContext<'a> {
     ) -> Self {
         Self {
             paint_box,
+            initial_fixed_origin: PdfPoint::new(paint_box.left, paint_box.top()),
             shadings,
             shading_counter,
             page_ext_gstates,
@@ -86,6 +90,11 @@ impl<'a> PageRenderContext<'a> {
                 page_images,
             ),
         }
+    }
+
+    pub(super) const fn with_initial_fixed_origin(mut self, origin: PdfPoint) -> Self {
+        self.initial_fixed_origin = origin;
+        self
     }
 }
 
@@ -305,6 +314,7 @@ pub(super) fn render_cell_content(
     content: &mut String,
     cell: &CellBox,
     placement: CellRenderBox,
+    inherited_abs_origins: &HashMap<usize, PdfPoint>,
     ctx: &mut PageRenderContext<'_>,
 ) {
     let content_top =
@@ -342,6 +352,8 @@ pub(super) fn render_cell_content(
             } else {
                 StackingScope::Ancestor
             },
+            cell,
+            inherited_abs_origins,
             ctx,
         );
         return;
@@ -363,13 +375,22 @@ fn render_cell_child_elements(
     elements: &[LayoutNode],
     frame: NestedLayoutFrame,
     stacking_scope: StackingScope,
+    cell: &CellBox,
+    inherited_abs_origins: &HashMap<usize, PdfPoint>,
     ctx: &mut PageRenderContext<'_>,
 ) {
-    let mut abs_origins: HashMap<usize, PdfPoint> = HashMap::new();
+    let mut abs_origins = inherited_abs_origins.clone();
+    if let Some(depth) = cell.established_containing_block_depth() {
+        abs_origins.insert(depth, frame.initial_origin);
+    }
     render_container_children(
         content,
         elements,
-        ContainerFrame::new(frame.origin, frame.available_width, frame.initial_origin),
+        ContainerFrame::new(
+            frame.origin,
+            crate::types::Size::new(frame.available_width, f32::INFINITY),
+            frame.initial_origin,
+        ),
         &mut abs_origins,
         ctx,
         ContainerRenderOptions {
@@ -386,7 +407,8 @@ pub(super) fn render_cell_text(
     ctx: &mut TextRenderContext<'_>,
 ) {
     let cell_inner_w = placement.col_width - cell.box_model.content_insets.horizontal();
-    let mut baseline_cursor = TextBaselineCursor::new(placement.origin.y);
+    let mut baseline_cursor =
+        TextBaselineCursor::new(placement.origin.y, ctx.pdf_writer.page_content_transform);
     let mut first_drawn_line = true;
     for line in &cell.content.lines {
         let metrics = line_box_metrics(line, ctx.custom_fonts);
@@ -408,7 +430,7 @@ pub(super) fn render_cell_text(
             0.0
         };
         first_drawn_line = false;
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let line_width: f32 = merged
             .iter()
             .map(|run| estimate_run_width_with_fonts(run, ctx.custom_fonts))

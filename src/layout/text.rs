@@ -1097,24 +1097,29 @@ fn measure_normal_token(
     paint_word: &str,
     template: &TextRun,
     line_has_content: bool,
-    previous_run: Option<&TextRun>,
+    preceding_runs: &[TextRun],
     previous_ends_whitespace: bool,
     preserve_spacing: bool,
     joins_prev: bool,
     fonts: &HashMap<String, TtfFont>,
 ) -> NormalTokenMeasurement {
     let word_width = estimate_text_width_for_run(paint_word, template, fonts);
+    let contextual_width = joins_prev
+        .then(|| joined_token_advance(preceding_runs, paint_word, template, fonts))
+        .flatten()
+        .unwrap_or(word_width);
     let needs_space =
         line_has_content && !preserve_spacing && !previous_ends_whitespace && !joins_prev;
     if !needs_space {
         return NormalTokenMeasurement {
             inter_word_space: InterWordSpace::None,
             leading_width: 0.0,
-            text_width: word_width,
+            text_width: contextual_width,
             word_width,
         };
     }
 
+    let previous_run = preceding_runs.last();
     let previous_background = previous_run.and_then(|run| run.background_color);
     if previous_background != template.background_color && template.background_color.is_some() {
         let previous_run = previous_run.unwrap_or(template);
@@ -1135,6 +1140,50 @@ fn measure_normal_token(
             word_width,
         }
     }
+}
+
+/// Incremental advance for a token that remains in the shaping buffer of the
+/// immediately preceding source text. The whole trailing buffer is reshaped,
+/// then its prior advance is subtracted; this retains ligatures, contextual
+/// substitutions, pair positioning, and letter spacing across soft-wrap token
+/// boundaries without allowing shaping across a paint boundary.
+fn joined_token_advance(
+    preceding_runs: &[TextRun],
+    text: &str,
+    template: &TextRun,
+    fonts: &HashMap<String, TtfFont>,
+) -> Option<f32> {
+    let last = preceding_runs.last()?;
+    if !crate::text::text_runs_share_shaping_buffer(last, template) {
+        return None;
+    }
+
+    let mut start = preceding_runs.len() - 1;
+    while start > 0
+        && crate::text::text_runs_share_shaping_buffer(
+            &preceding_runs[start - 1],
+            &preceding_runs[start],
+        )
+    {
+        start -= 1;
+    }
+    let prefix = preceding_runs[start..]
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<String>();
+    let mut combined = String::with_capacity(prefix.len() + text.len());
+    combined.push_str(&prefix);
+    combined.push_str(text);
+
+    let prefix_width = estimate_text_width_for_run(&prefix, &preceding_runs[start], fonts);
+    let measured_combined = estimate_text_width_for_run(&combined, template, fonts);
+    let combined_width = if combined == template.text {
+        measured_combined
+    } else {
+        template.shaped_advance(measured_combined)
+    };
+    let advance = combined_width - prefix_width;
+    advance.is_finite().then_some(advance)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1212,13 +1261,13 @@ fn split_preserving_spaces(segment: &str, run_index: usize, out: &mut Vec<Styled
     }
 }
 
-/// Push a whitespace-delimited word, splitting it at internal hyphen-minus break
-/// opportunities. UAX #14 allows a line break *after* a U+002D hyphen that sits
-/// between two letters (e.g. "pseudo-element" → "pseudo-", "element"), which is
-/// how Chrome wraps hyphenated words. The hyphen stays with the preceding
-/// segment; later segments `join` the prior one (no inter-word space) so they
-/// render contiguously yet may begin a new line. Restricting to letter-flanked
-/// hyphens avoids breaking number ranges, dates, or signs ("12-34", "-5").
+/// Split a whitespace-delimited word at UAX #14 hyphen opportunities.
+///
+/// The Unicode algorithm supplies the base opportunities; CSS Text 4's
+/// interoperability tailoring additionally permits a break before a digit when
+/// the hyphen follows a letter or digit (for example `LABEL-02`). The hyphen
+/// remains on the preceding segment, and later segments stay in the same
+/// shaping buffer.
 fn push_word_with_hyphen_breaks(
     word: &str,
     run_index: usize,
@@ -1246,18 +1295,34 @@ fn push_word_with_hyphen_breaks(
         return;
     }
 
-    let chars: Vec<char> = word.chars().collect();
+    let break_offsets = unicode_linebreak::linebreaks(word)
+        .map(|(offset, _)| offset)
+        .filter(|offset| *offset < word.len())
+        .filter(|offset| {
+            word[..*offset]
+                .chars()
+                .next_back()
+                .is_some_and(|character| {
+                    character == '-' || (hyphens_manual && character == '\u{00ad}')
+                })
+        })
+        .collect::<Vec<_>>();
     let mut seg = String::new();
     let mut first = true;
-    for (i, &c) in chars.iter().enumerate() {
-        seg.push(c);
-        let can_break = (hyphens_manual && c == '\u{00ad}')
-            || (c == '-'
-                && i > 0
-                && i + 1 < chars.len()
-                && chars[i - 1].is_alphabetic()
-                && chars[i + 1].is_alphabetic());
-        if can_break {
+    for (offset, character) in word.char_indices() {
+        seg.push(character);
+        let boundary = offset + character.len_utf8();
+        let css_hyphen_digit_tailoring = character == '-'
+            && word[..offset].chars().next_back().is_some_and(|preceding| {
+                preceding.is_alphabetic()
+                    || unicode_linebreak::break_property(preceding as u32)
+                        == unicode_linebreak::BreakClass::Numeric
+            })
+            && word[boundary..].chars().next().is_some_and(|following| {
+                unicode_linebreak::break_property(following as u32)
+                    == unicode_linebreak::BreakClass::Numeric
+            });
+        if break_offsets.binary_search(&boundary).is_ok() || css_hyphen_digit_tailoring {
             out.push(StyledWord {
                 text: std::mem::take(&mut seg),
                 run_index,
@@ -1803,7 +1868,7 @@ fn measure_styled_token_end(
     token: &StyledWord,
     runs: &[TextRun],
     line_width: f32,
-    previous_run: Option<&TextRun>,
+    preceding_runs: &[TextRun],
     previous_ends_whitespace: bool,
     options: TextWrapOptions,
     fonts: &HashMap<String, TtfFont>,
@@ -1843,7 +1908,7 @@ fn measure_styled_token_end(
         &paint_word,
         run,
         line_width > 0.0,
-        previous_run,
+        preceding_runs,
         previous_ends_whitespace,
         token.preserve_spacing,
         token.joins_prev,
@@ -1915,13 +1980,13 @@ pub(crate) fn measure_text_intrinsic_widths(
 
     let mut max_content = 0.0f32;
     let mut max_line_width = 0.0f32;
-    let mut max_previous_run: Option<&TextRun> = None;
+    let mut max_context = Vec::new();
     let mut max_previous_ends_whitespace = true;
     let mut forced_line_index = 0usize;
 
     let mut min_content = 0.0f32;
     let mut min_group_width = 0.0f32;
-    let mut min_previous_run: Option<&TextRun> = None;
+    let mut min_context = Vec::new();
     let mut min_previous_ends_whitespace = true;
     let mut min_group_index = 0usize;
 
@@ -1941,11 +2006,11 @@ pub(crate) fn measure_text_intrinsic_widths(
                 line_exclusion(forced_line_index),
             ));
             max_line_width = 0.0;
-            max_previous_run = None;
+            max_context.clear();
             max_previous_ends_whitespace = true;
             forced_line_index += 1;
             min_group_width = 0.0;
-            min_previous_run = None;
+            min_context.clear();
             min_previous_ends_whitespace = true;
             continue;
         }
@@ -1954,18 +2019,18 @@ pub(crate) fn measure_text_intrinsic_widths(
             token,
             &runs,
             max_line_width,
-            max_previous_run,
+            &max_context,
             max_previous_ends_whitespace,
             options,
             fonts,
         );
-        max_previous_run = Some(run);
+        push_token_shaping_context(&mut max_context, token, run);
         max_previous_ends_whitespace =
             run.inline_box.is_none() && token.text.chars().last().is_some_and(char::is_whitespace);
 
-        if token.break_before || min_previous_run.is_none() {
+        if token.break_before || min_context.is_empty() {
             min_group_width = 0.0;
-            min_previous_run = None;
+            min_context.clear();
             min_previous_ends_whitespace = true;
             min_group_index += 1;
         }
@@ -1989,19 +2054,19 @@ pub(crate) fn measure_text_intrinsic_widths(
                 token,
                 &runs,
                 min_group_width,
-                min_previous_run,
+                &min_context,
                 min_previous_ends_whitespace,
                 options,
                 fonts,
             );
         }
+        push_token_shaping_context(&mut min_context, token, run);
         let min_exclusion = if min_group_index == 1 && forced_line_index == 0 {
             options.text_indent
         } else {
             0.0
         };
         min_content = min_content.max(required_outer_width(min_group_width, min_exclusion));
-        min_previous_run = Some(run);
         min_previous_ends_whitespace =
             run.inline_box.is_none() && token.text.chars().last().is_some_and(char::is_whitespace);
     }
@@ -2012,11 +2077,41 @@ pub(crate) fn measure_text_intrinsic_widths(
     ));
     if !allow_soft_wrap {
         min_content = max_content;
+    } else if options.overflow_wrap == OverflowWrap::Anywhere {
+        // CSS Text 3 makes the emergency opportunities introduced by
+        // `anywhere` part of min-content sizing. `break-word` deliberately
+        // does not. Derive this from the same prepared runs used above so
+        // shaping, letter spacing, fallback fonts, and atomic inline boxes do
+        // not acquire a second intrinsic-measurement implementation.
+        min_content = runs
+            .iter()
+            .map(|run| {
+                run.inline_box.as_deref().map_or_else(
+                    || {
+                        run.text
+                            .chars()
+                            .filter(|character| *character != '\n')
+                            .map(|character| {
+                                estimate_text_width_for_run(&character.to_string(), run, fonts)
+                            })
+                            .fold(0.0_f32, f32::max)
+                    },
+                    InlineBox::outer_width,
+                )
+            })
+            .fold(0.0_f32, f32::max);
+        min_content = required_outer_width(min_content, options.text_indent);
     }
     TextIntrinsicWidths {
         min_content,
         max_content,
     }
+}
+
+fn push_token_shaping_context(context: &mut Vec<TextRun>, token: &StyledWord, template: &TextRun) {
+    let mut emitted = template.clone();
+    emitted.text = strip_soft_hyphens(&token.text);
+    context.push(emitted);
 }
 
 /// Simple text wrapping using character width estimation.
@@ -2372,7 +2467,7 @@ pub(crate) fn wrap_text_runs(
             &paint_word,
             &template,
             current_width > 0.0,
-            previous_run,
+            &current_runs,
             previous_ends_whitespace,
             preserve_spacing,
             joins_prev,
@@ -2411,7 +2506,7 @@ pub(crate) fn wrap_text_runs(
                     &paint_word,
                     &template,
                     false,
-                    None,
+                    &[],
                     true,
                     preserve_spacing,
                     joins_prev,
@@ -2459,7 +2554,7 @@ pub(crate) fn wrap_text_runs(
                 &paint_word,
                 &template,
                 false,
-                None,
+                &[],
                 true,
                 preserve_spacing,
                 joins_prev,
@@ -3788,6 +3883,24 @@ mod indent_tests {
     }
 
     #[test]
+    fn hyphen_breaks_follow_uax14_and_css_digit_tailoring() {
+        let parts = |word: &str| {
+            let mut tokens = Vec::new();
+            push_word_with_hyphen_breaks(word, 0, &mut tokens, false, true);
+            tokens
+                .into_iter()
+                .map(|token| token.text)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            parts("MATERIALS-LABEL-02-LONG"),
+            ["MATERIALS-", "LABEL-", "02-", "LONG"]
+        );
+        assert_eq!(parts("-5"), ["-5"]);
+    }
+
+    #[test]
     fn line_extents_use_css_pixel_font_metrics_and_block_start_leading() {
         let fonts = parity_sans_fonts();
         let family = FontFamily::Custom("ParitySans".to_string());
@@ -4160,6 +4273,20 @@ mod indent_tests {
     }
 
     #[test]
+    fn anywhere_tokens_use_the_same_ligature_buffer_as_paint() {
+        let fonts = parity_sans_fonts();
+        let run = parity_run("verification/path");
+        let prefix_width = estimate_text_width_for_run("verification", &run, &fonts);
+        let options = TextWrapOptions::new(prefix_width, 16.0, 1.2, OverflowWrap::Normal);
+
+        let lines = wrap_text_runs(vec![run], options, &fonts);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(line_text(&lines[0]), "verification");
+        assert_eq!(line_text(&lines[1]), "/path");
+    }
+
+    #[test]
     fn intrinsic_and_wrap_share_cross_run_background_space_metrics() {
         let fonts = parity_sans_fonts();
         let first = parity_run("alpha ");
@@ -4231,6 +4358,44 @@ mod indent_tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn anywhere_but_not_break_word_reduces_the_shared_min_content_measure() {
+        let fonts = parity_sans_fonts();
+        let mut run = parity_run("Supercalifragilistic");
+        run.metadata.letter_spacing = 0.75;
+        let base = TextWrapOptions::new(500.0, 16.0, 1.2, OverflowWrap::Normal);
+
+        let normal = measure_text_intrinsic_widths(vec![run.clone()], base, true, &fonts);
+        let break_word = measure_text_intrinsic_widths(
+            vec![run.clone()],
+            TextWrapOptions {
+                overflow_wrap: OverflowWrap::BreakWord,
+                ..base
+            },
+            true,
+            &fonts,
+        );
+        let anywhere = measure_text_intrinsic_widths(
+            vec![run.clone()],
+            TextWrapOptions {
+                overflow_wrap: OverflowWrap::Anywhere,
+                ..base
+            },
+            true,
+            &fonts,
+        );
+        let widest_character = run
+            .text
+            .chars()
+            .map(|character| estimate_text_width_for_run(&character.to_string(), &run, &fonts))
+            .fold(0.0_f32, f32::max);
+
+        assert_eq!(normal.min_content, normal.max_content);
+        assert_eq!(break_word, normal);
+        assert_eq!(anywhere.max_content, normal.max_content);
+        assert_eq!(anywhere.min_content, widest_character);
     }
 
     #[test]

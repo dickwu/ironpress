@@ -668,18 +668,23 @@ fn render_running_text_margin_element(
             ));
         }
     }
-    let mut baseline_cursor =
-        TextBaselineCursor::new(band_center_y + total_h / 2.0 - border.top.width - padding.top);
+    let mut baseline_cursor = TextBaselineCursor::new(
+        band_center_y + total_h / 2.0 - border.top.width - padding.top,
+        pdf_writer.page_content_transform,
+    );
     for line in lines {
         let metrics = page_margin_line_box_metrics(line, custom_fonts);
-        let baseline_y = baseline_cursor.next_horizontal(metrics);
+        // Margin boxes are centered directly in the physical page band rather
+        // than participating in document-flow print snapping. Preserve their
+        // fractional center-derived baseline.
+        let baseline_y = baseline_cursor.next_raw(metrics);
         let line_w = estimate_line_width_with_fonts(line, custom_fonts);
         let line_x = match text_align {
             TextAlign::Center => x + border.left.width + padding.left + (content_w - line_w) / 2.0,
             TextAlign::Right => x + border.left.width + padding.left + content_w - line_w,
             _ => x + border.left.width + padding.left,
         };
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let mut cursor_x = line_x;
         let parent_font_size = crate::layout::text::line_primary_font_size(&merged);
         for (run_index, run) in merged.iter().enumerate() {
@@ -804,15 +809,17 @@ pub(super) fn render_page_footnotes(
         end_border_alpha(content, applied_alpha);
     }
 
-    let mut baseline_cursor =
-        TextBaselineCursor::new(margin.bottom + area.padding.bottom + total_h);
+    let mut baseline_cursor = TextBaselineCursor::new(
+        margin.bottom + area.padding.bottom + total_h,
+        pdf_writer.page_content_transform,
+    );
     for line in &lines {
         // `wrapped_footnote_lines` established this fresh inline formatting
         // context at the page foot. Reuse its resolved baseline instead of
         // resolving the same font metrics a second time during PDF paint.
         let metrics = line_box_metrics(line, custom_fonts);
         let baseline_y = baseline_cursor.next_horizontal(metrics);
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         paint_horizontal_line_text(
             content,
             &merged,

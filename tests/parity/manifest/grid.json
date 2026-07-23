@@ -1323,5 +1323,80 @@
       "probe-fill-box",
       "probe-block-flow"
     ]
+  },
+  {
+    "id": "grid-root-page-carrier-single-page",
+    "category": "grid",
+    "feature": "root-formatting-context",
+    "subfeature": "body-grid-page-carrier",
+    "description": "A body grid formatting context keeps three explicitly tracked children on one page instead of flattening them into separate root-flow blocks.",
+    "file": "cases/grid/grid-root-page-carrier-single-page.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "grid-fit-content-percentage-range",
+    "category": "grid",
+    "feature": "grid-template-columns",
+    "subfeature": "fit-content-percentage-clamp-range",
+    "description": "Flagrant six-lane matrix exercises fit-content() limits from 0% through 150%, exposing dropped percentages and failure to clamp between min-content and max-content.",
+    "file": "cases/grid/grid-fit-content-percentage-range.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "grid-fit-content-calc-length-range",
+    "category": "grid",
+    "feature": "grid-template-columns",
+    "subfeature": "fit-content-length-percentage-calc",
+    "description": "Large split-color tracks distinguish fixed lengths, mixed percentage/length calculations, zero and overlarge limits inside fit-content().",
+    "file": "cases/grid/grid-fit-content-calc-length-range.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "grid-fit-content-percentage-basis-boxes",
+    "category": "grid",
+    "feature": "grid-template-columns",
+    "subfeature": "fit-content-percentage-content-box-basis",
+    "description": "Content-box, border-box and nested percentage-width grids prove fit-content percentages resolve against the grid content box before gaps, padding and borders are removed.",
+    "file": "cases/grid/grid-fit-content-percentage-basis-boxes.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-border-box"]
+  },
+  {
+    "id": "grid-display-contents-auto-rows-text",
+    "category": "grid",
+    "feature": "display-contents",
+    "subfeature": "flattened-text-auto-row-contribution",
+    "description": "Four loud colored rows require display:contents grandchildren to contribute text heights to auto rows; any zero-height row, overlap, missing text or selector ancestry error dominates the page. The authenticated standards-derived source directly substitutes the flattened children required by CSS Display 3 because Chromium clips their text while sizing auto rows through display:contents wrappers.",
+    "file": "cases/grid/grid-display-contents-auto-rows-text.html",
+    "reference_file": "references/grid/grid-display-contents-auto-rows-text.html",
+    "reference": { "status": "verified" },
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"]
+  },
+  {
+    "id": "grid-display-contents-fragmentation-text-survival",
+    "category": "grid",
+    "feature": "fragmentation",
+    "subfeature": "display-contents-auto-rows-marker-survival",
+    "description": "A reduced certificate grid forces flattened auto rows across pages with unique label/value end markers, exposing overlap, duplicate words, dropped text and incorrect continuation placement.",
+    "file": "cases/grid/grid-display-contents-fragmentation-text-survival.html",
+    "reference_file": "references/grid/grid-display-contents-fragmentation-text-survival.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow", "probe-text-baseline"]
   }
 ]

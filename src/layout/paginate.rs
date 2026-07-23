@@ -1,16 +1,16 @@
 use super::engine::{
-    FootnoteItem, GridCell, Page, PageBreakSide, SvgFragment, TextRun, decode_footnote_link_data,
-    table_cell_content_height, target_anchor_id,
+    FootnoteItem, GridCell, Page, PageBreakSide, SvgFragment, TextLine, TextRun,
+    decode_footnote_link_data, table_cell_content_height, target_anchor_id,
 };
 use super::flow_metrics::BlockMargins;
 use super::fragmentation::split_flow_at_descendant_break;
 use super::roundoff::{equal_with_roundoff, exceeds_with_roundoff, is_positive_with_roundoff};
 use super::text::{OverflowWrap, TextWrapOptions, wrap_text_runs};
 use crate::layout::elements::{
-    BlockSize, Container, FlexRow, GridRow, HorizontalRule, Image, IntoLayoutNode, LayoutElement,
-    LayoutNode, LayoutVisitor, LayoutVisitorMut, MathBlock, NamedString, PageContentRole,
-    ProgressBar, RunningElement, Svg, Table, TableFragmentGroup, TableRow, TextBlock,
-    visit_layout_tree,
+    BlockSize, Container, FlexRow, FragmentBreakRule, GridRow, HorizontalRule, Image,
+    IntoLayoutNode, LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut, MathBlock,
+    NamedString, PageContentRole, ProgressBar, RunningElement, Svg, Table, TableFragmentGroup,
+    TableRow, TextBlock, visit_layout_tree,
 };
 use crate::style::computed::{
     BoxDecorationBreak, Clear, Float, FootnotePolicy, ObjectFit, Position,
@@ -719,20 +719,23 @@ pub(crate) fn simulate_block_flow(children: &[LayoutNode]) -> BlockFlowResult {
 fn split_text_block(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     struct SplitVisitor {
         available: f32,
+        rule: FragmentBreakRule,
         result: Option<(LayoutNode, LayoutNode)>,
     }
 
     impl LayoutVisitor for SplitVisitor {
         fn visit_text_block(&mut self, element: &TextBlock) {
-            self.result = split_text_block_node(element, self.available);
+            self.result = split_text_block_node(element, self.available, self.rule);
         }
     }
 
     let mut visitor = SplitVisitor {
         available: avail_below_box_top,
+        rule,
         result: None,
     };
     element.accept(&mut visitor);
@@ -742,6 +745,7 @@ fn split_text_block(
 fn split_text_block_node(
     element: &TextBlock,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     let lines = &element.lines;
     // Only a plain, auto-height, in-flow text block is splittable here. A box
@@ -793,28 +797,15 @@ fn split_text_block_node(
         return None;
     }
 
-    // CSS Fragmentation 3 §3.4 (orphans / widows): a break between line N and
-    // N+1 is permitted only when at least `orphans` lines remain on this
-    // fragment (N >= orphans) AND at least `widows` lines move to the next
-    // ((total − N) >= widows). `idx` is the greedy maximum that *fits*, so it
-    // can only be REDUCED (move lines to the continuation) without overflowing;
-    // it cannot be increased (the extra lines do not fit). Reducing it satisfies
-    // widows. Orphans is then satisfied automatically when feasible — after the
-    // reduction `idx >= n − widows >= orphans` — and is unsatisfiable only when
-    // even the greedy maximum already keeps fewer than `orphans` lines (lines
-    // taller than the fragmentainer). `split_text_block` is reached only for a
-    // block taller than a full fragmentainer, so when the constraint cannot be
-    // honoured it is DROPPED (split greedily) to guarantee forward progress,
-    // exactly as the spec requires when a full page cannot satisfy it.
-    let orphans = element.fragmentation.orphans.max(1) as usize;
-    let widows = element.fragmentation.widows.max(1) as usize;
-    let n = lines.len();
-    if n >= orphans + widows {
-        let max_idx = n - widows;
-        if idx > max_idx {
-            idx = max_idx;
-        }
-    }
+    // CSS Fragmentation 3 §3.4 first admits only boundaries satisfying both
+    // `orphans` and `widows`. Pagination asks again with the emergency rule only
+    // after a fresh-fragmentainer retry cannot yield a compliant break. Keeping
+    // that relaxation explicit prevents an ordinary partially filled page from
+    // silently stranding a line.
+    idx = element
+        .fragmentation
+        .lines
+        .split_index(lines.len(), idx, rule)?;
 
     split_text_block_at_line_node(element, idx)
 }
@@ -1174,22 +1165,31 @@ fn split_svg_block_node(
 fn split_element(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
+    if element
+        .box_fragmentation_owner()
+        .is_some_and(|owner| !owner.box_fragmentation().permits_split(rule))
+    {
+        return None;
+    }
+
     split_fixed_height_text_block(element, avail_below_box_top)
-        .or_else(|| split_text_block(element, avail_below_box_top))
+        .or_else(|| split_text_block(element, avail_below_box_top, rule))
         .or_else(|| split_image_block(element, avail_below_box_top))
         .or_else(|| split_svg_block(element, avail_below_box_top))
-        .or_else(|| split_fixed_height_container(element, avail_below_box_top))
-        .or_else(|| split_table_row(element, avail_below_box_top))
-        .or_else(|| split_grid_row(element, avail_below_box_top))
+        .or_else(|| split_empty_sized_container(element, avail_below_box_top))
+        .or_else(|| split_table_row(element, avail_below_box_top, rule))
+        .or_else(|| split_grid_row(element, avail_below_box_top, rule))
         .or_else(|| split_flex_row(element, avail_below_box_top))
-        .or_else(|| split_container(element, avail_below_box_top))
+        .or_else(|| split_container(element, avail_below_box_top, rule))
 }
 
-/// Split an empty definite-height container only after pagination establishes
-/// that it needs an internal fragment. Containers with children use
-/// [`split_container`] to break at child boundaries instead.
-fn split_fixed_height_container(
+/// Split an empty container with a used block extent only after pagination
+/// establishes that it needs an internal fragment. This covers both authored
+/// definite heights and content-dependent `min-height` floors. Containers with
+/// children use [`split_container`] to break at child boundaries instead.
+fn split_empty_sized_container(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
 ) -> Option<(LayoutNode, LayoutNode)> {
@@ -1200,7 +1200,7 @@ fn split_fixed_height_container(
 
     impl LayoutVisitor for SplitVisitor {
         fn visit_container(&mut self, element: &Container) {
-            self.result = split_fixed_height_container_node(element, self.available);
+            self.result = split_empty_sized_container_node(element, self.available);
         }
     }
 
@@ -1212,14 +1212,12 @@ fn split_fixed_height_container(
     visitor.result
 }
 
-fn split_fixed_height_container_node(
+fn split_empty_sized_container_node(
     element: &Container,
     avail_below_box_top: f32,
 ) -> Option<(LayoutNode, LayoutNode)> {
-    if !element.box_model.size.height.is_definite() {
-        return None;
-    }
-    let box_h = element.box_model.size.height.used()?;
+    let block_size = element.box_model.size.height;
+    let box_h = block_size.used()?;
     if element.positioning.scheme != Position::Static
         || element.flow.float != Float::None
         || !element.children.is_empty()
@@ -1231,11 +1229,11 @@ fn split_fixed_height_container_node(
     }
 
     let consumed_h = avail_below_box_top.min(box_h).max(0.0);
-    let rest_h = split_remainder(box_h, consumed_h)?;
+    let (first_size, rest_size) = block_size.split_fragment_at(consumed_h)?;
     let clone = element.fragmentation.decoration == BoxDecorationBreak::Clone;
 
     let mut first = element.clone();
-    first.box_model.size.height = BlockSize::definite(consumed_h);
+    first.box_model.size.height = first_size;
     if !clone {
         first.box_model.margins.end = 0.0;
         first.box_model.padding.bottom = 0.0;
@@ -1244,7 +1242,7 @@ fn split_fixed_height_container_node(
     }
 
     let mut rest = element.clone();
-    rest.box_model.size.height = BlockSize::definite(rest_h);
+    rest.box_model.size.height = rest_size;
     if !clone {
         rest.box_model.margins.start = 0.0;
         rest.box_model.padding.top = 0.0;
@@ -1260,6 +1258,7 @@ fn split_fixed_height_container_node(
 fn split_nested_rows_at(
     rows: &[LayoutNode],
     available_height: f32,
+    rule: FragmentBreakRule,
 ) -> (Vec<LayoutNode>, Vec<LayoutNode>) {
     if rows.is_empty() || !is_positive_with_roundoff(available_height) {
         return (Vec::new(), rows.to_vec());
@@ -1280,8 +1279,8 @@ fn split_nested_rows_at(
             .unwrap_or_default();
         let child_avail = (available_height - used - margin_start).max(0.0);
         if is_positive_with_roundoff(child_avail) {
-            if let Some((head, tail)) = split_fixed_height_container(child, child_avail)
-                .or_else(|| split_element(child, child_avail))
+            if let Some((head, tail)) = split_empty_sized_container(child, child_avail)
+                .or_else(|| split_element(child, child_avail, rule))
             {
                 first.push(head);
                 rest.push(tail);
@@ -1295,32 +1294,136 @@ fn split_nested_rows_at(
     (first, rest)
 }
 
-fn split_grid_cell(cell: &GridCell, first_h: f32, rest_h: f32) -> (GridCell, GridCell) {
-    let available_lines = (first_h - cell.layout.box_model.content_insets.top).max(0.0);
-    let mut acc = 0.0_f32;
-    let mut cut = 0usize;
-    for (idx, line) in cell.layout.content.lines.iter().enumerate() {
-        let next = acc + line.height;
-        if idx > 0 && exceeds_with_roundoff(next, available_lines) {
+/// Content capacity of a cell fragment after both retained logical edge
+/// insets have participated in fragmentation. The first painted slice drops
+/// its block-end border/padding later for `box-decoration-break: slice`, but
+/// that edge still belongs to the unsplit principal box and constrains the
+/// class-B line break chosen before slicing. Reserving it prevents a final
+/// line from being admitted only to leave a decoration-only continuation.
+fn cell_fragment_content_capacity(
+    cell: &crate::layout::cells::CellBox,
+    fragment_height: f32,
+) -> f32 {
+    (fragment_height - cell.box_model.content_insets.vertical()).max(0.0)
+}
+
+fn fitting_line_count(lines: &[TextLine], available_height: f32, rule: FragmentBreakRule) -> usize {
+    let mut used = 0.0_f32;
+    let mut count = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let next = used + line.height;
+        // Only the emergency pass may consume a first line taller than the
+        // available content lane. An incoming ordinary row must move intact;
+        // otherwise the line is clipped at the fragmentainer boundary even
+        // though a legal break exists before the row.
+        if exceeds_with_roundoff(next, available_height)
+            && (index > 0 || rule != FragmentBreakRule::Emergency)
+        {
             break;
         }
-        acc = next;
-        cut = idx + 1;
+        used = next;
+        count = index + 1;
+    }
+    count
+}
+
+fn fragment_line_count(
+    cell: &crate::layout::cells::CellBox,
+    available_height: f32,
+    rule: FragmentBreakRule,
+) -> usize {
+    let line_count = cell.content.lines.len();
+    let fitting = fitting_line_count(&cell.content.lines, available_height, rule).min(line_count);
+    if fitting >= line_count {
+        return line_count;
+    }
+    cell.fragmentation
+        .lines
+        .split_index(line_count, fitting, rule)
+        .unwrap_or_default()
+}
+
+fn cell_content_has_flow(content: &crate::layout::cells::CellContent) -> bool {
+    !content.lines.is_empty() || !content.children.is_empty()
+}
+
+/// Whether a break advances at least one of a row's parallel cell flows.
+///
+/// CSS Break 3 treats the contents of the cells in a row as parallel
+/// fragmentation flows. Each flow chooses its own legal break: one cell may
+/// contribute content to the current fragment while another moves all of its
+/// content to the next fragment to satisfy `orphans` and `widows`. Requiring
+/// every non-empty flow to advance incorrectly makes the row monolithic.
+fn parallel_cell_break_advances_content<'a, 'b>(
+    original: impl Iterator<Item = &'a crate::layout::cells::CellContent>,
+    first_fragments: impl Iterator<Item = &'b crate::layout::cells::CellContent>,
+    rule: FragmentBreakRule,
+) -> bool {
+    if rule == FragmentBreakRule::Emergency {
+        return true;
     }
 
-    let text_first_h: f32 = cell.layout.content.lines[..cut.min(cell.layout.content.lines.len())]
+    let mut has_flow = false;
+    let mut advances_flow = false;
+    for (source, first) in original.zip(first_fragments) {
+        has_flow |= cell_content_has_flow(source);
+        advances_flow |= cell_content_has_flow(first);
+    }
+
+    !has_flow || advances_flow
+}
+
+fn cell_content_block_extent(content: &crate::layout::cells::CellContent) -> f32 {
+    content.lines.iter().map(|line| line.height).sum::<f32>()
+        + content
+            .children
+            .iter()
+            .map(|child| estimate_element_height(child.as_ref()))
+            .sum::<f32>()
+}
+
+fn split_cell_content(
+    cell: &crate::layout::cells::CellBox,
+    fragment_height: f32,
+    rule: FragmentBreakRule,
+) -> (
+    crate::layout::cells::CellContent,
+    crate::layout::cells::CellContent,
+) {
+    let available_content = cell_fragment_content_capacity(cell, fragment_height);
+    let cut = fragment_line_count(cell, available_content, rule).min(cell.content.lines.len());
+    let text_first_height = cell.content.lines[..cut]
         .iter()
         .map(|line| line.height)
-        .sum();
-    let nested_avail = (first_h - cell.layout.box_model.content_insets.top - text_first_h).max(0.0);
-    let (first_nested, rest_nested) =
-        split_nested_rows_at(&cell.layout.content.children, nested_avail);
+        .sum::<f32>();
+    let nested_available = (available_content - text_first_height).max(0.0);
+    let (first_children, rest_children) =
+        split_nested_rows_at(&cell.content.children, nested_available, rule);
+
+    (
+        crate::layout::cells::CellContent {
+            lines: cell.content.lines[..cut].to_vec(),
+            children: first_children,
+        },
+        crate::layout::cells::CellContent {
+            lines: cell.content.lines[cut..].to_vec(),
+            children: rest_children,
+        },
+    )
+}
+
+fn split_grid_cell(
+    cell: &GridCell,
+    first_h: f32,
+    rest_h: f32,
+    rule: FragmentBreakRule,
+) -> (GridCell, GridCell) {
+    let (first_content, rest_content) = split_cell_content(&cell.layout, first_h, rule);
 
     let mut first = cell.clone();
-    first.layout.content.lines =
-        first.layout.content.lines[..cut.min(first.layout.content.lines.len())].to_vec();
-    first.layout.content.children = first_nested;
+    first.layout.content = first_content;
     first.layout.box_model.border.bottom.width = 0.0;
+    first.layout.box_model.border_insets.bottom = 0.0;
     first.layout.box_model.content_insets.bottom = 0.0;
     first.layout.box_model.minimum_block_size = first_h;
     if let Some(inset) = &mut first.placement.inset {
@@ -1329,33 +1432,18 @@ fn split_grid_cell(cell: &GridCell, first_h: f32, rest_h: f32) -> (GridCell, Gri
     }
 
     let mut rest = cell.clone();
-    let cut = cut.min(rest.layout.content.lines.len());
-    rest.layout.content.lines = rest.layout.content.lines[cut..].to_vec();
-    rest.layout.content.children = rest_nested;
+    rest.layout.content = rest_content;
     rest.layout.box_model.border.top.width = 0.0;
+    rest.layout.box_model.border_insets.top = 0.0;
     rest.layout.box_model.content_insets.top = 0.0;
     let rest_intrinsic_h = rest.layout.box_model.content_insets.top
-        + rest
-            .layout
-            .content
-            .lines
-            .iter()
-            .map(|line| line.height)
-            .sum::<f32>()
-        + rest
-            .layout
-            .content
-            .children
-            .iter()
-            .map(|row| estimate_element_height(row.as_ref()))
-            .sum::<f32>()
+        + cell_content_block_extent(&rest.layout.content)
         + rest.layout.box_model.content_insets.bottom;
-    let adjusted_rest_h =
-        if cell.placement.row_span == 1 && is_positive_with_roundoff(rest_intrinsic_h) {
-            rest_intrinsic_h
-        } else {
-            rest_h
-        };
+    let adjusted_rest_h = if cell.placement.row_span == 1 {
+        rest_h.max(rest_intrinsic_h)
+    } else {
+        rest_h
+    };
     rest.layout.box_model.minimum_block_size = adjusted_rest_h;
     if let Some(inset) = &mut rest.placement.inset {
         inset.size.height = adjusted_rest_h;
@@ -1368,20 +1456,23 @@ fn split_grid_cell(cell: &GridCell, first_h: f32, rest_h: f32) -> (GridCell, Gri
 fn split_grid_row(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     struct SplitVisitor {
         available: f32,
+        rule: FragmentBreakRule,
         result: Option<(LayoutNode, LayoutNode)>,
     }
 
     impl LayoutVisitor for SplitVisitor {
         fn visit_grid_row(&mut self, element: &GridRow) {
-            self.result = split_grid_row_node(element, self.available);
+            self.result = split_grid_row_node(element, self.available, self.rule);
         }
     }
 
     let mut visitor = SplitVisitor {
         available: avail_below_box_top,
+        rule,
         result: None,
     };
     element.accept(&mut visitor);
@@ -1391,6 +1482,7 @@ fn split_grid_row(
 fn split_grid_row_node(
     element: &GridRow,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     let row_h = element
         .content
@@ -1414,8 +1506,19 @@ fn split_grid_row_node(
         .content
         .cells
         .iter()
-        .map(|cell| split_grid_cell(cell, first_h, rest_h))
+        .map(|cell| split_grid_cell(cell, first_h, rest_h, rule))
         .collect();
+    if !parallel_cell_break_advances_content(
+        element
+            .content
+            .cells
+            .iter()
+            .map(|cell| &cell.layout.content),
+        split_cells.iter().map(|(first, _)| &first.layout.content),
+        rule,
+    ) {
+        return None;
+    }
 
     let mut first = element.clone();
     first.content.cells = split_cells.iter().map(|(cell, _)| cell.clone()).collect();
@@ -1439,20 +1542,23 @@ fn split_grid_row_node(
 fn split_table_row(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     struct SplitVisitor {
         available: f32,
+        rule: FragmentBreakRule,
         result: Option<(LayoutNode, LayoutNode)>,
     }
 
     impl LayoutVisitor for SplitVisitor {
         fn visit_table_row(&mut self, element: &TableRow) {
-            self.result = split_table_row_node(element, self.available);
+            self.result = split_table_row_node(element, self.available, self.rule);
         }
     }
 
     let mut visitor = SplitVisitor {
         available: avail_below_box_top,
+        rule,
         result: None,
     };
     element.accept(&mut visitor);
@@ -1462,7 +1568,16 @@ fn split_table_row(
 fn split_table_row_node(
     element: &TableRow,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
+    // `break-inside: avoid` constrains normal row fragmentation at every
+    // nesting depth, including rows reached through a table's principal-box
+    // container. Only the emergency pass may relax it for a row taller than a
+    // fresh fragmentainer.
+    if element.fragmentation.avoid_inside && rule != FragmentBreakRule::Emergency {
+        return None;
+    }
+
     let row_h = element
         .content
         .cells
@@ -1484,30 +1599,30 @@ fn split_table_row_node(
     // at the fragmentainer boundary.
     let first_painted_h = consumed_h;
 
-    let mut line_cut_by_cell = Vec::with_capacity(element.content.cells.len());
-    for cell in &element.content.cells {
-        let available_lines = (first_painted_h - cell.layout.box_model.content_insets.top).max(0.0);
-        let mut acc = 0.0f32;
-        let mut cut = 0usize;
-        for (idx, line) in cell.layout.content.lines.iter().enumerate() {
-            let next = acc + line.height;
-            if idx > 0 && exceeds_with_roundoff(next, available_lines) {
-                break;
-            }
-            acc = next;
-            cut = idx + 1;
-        }
-        line_cut_by_cell.push(cut);
+    let split_content = element
+        .content
+        .cells
+        .iter()
+        .map(|cell| split_cell_content(&cell.layout, first_painted_h, rule))
+        .collect::<Vec<_>>();
+    if !parallel_cell_break_advances_content(
+        element
+            .content
+            .cells
+            .iter()
+            .map(|cell| &cell.layout.content),
+        split_content.iter().map(|(first, _)| first),
+        rule,
+    ) {
+        return None;
     }
 
     let mut first = element.clone();
     first.flow.margins.end = 0.0;
     first.flow.internal.end = 0.0;
     first.flow.extra_end = 0.0;
-    for (cell, &cut) in first.content.cells.iter_mut().zip(&line_cut_by_cell) {
-        cell.layout.content.lines =
-            cell.layout.content.lines[..cut.min(cell.layout.content.lines.len())].to_vec();
-        cell.layout.content.children.clear();
+    for (cell, (content, _)) in first.content.cells.iter_mut().zip(&split_content) {
+        cell.layout.content = content.clone();
         cell.layout.box_model.border.bottom.width = 0.0;
         cell.layout.box_model.border_insets.bottom = 0.0;
         cell.layout.box_model.content_insets.bottom = 0.0;
@@ -1518,10 +1633,8 @@ fn split_table_row_node(
     let mut rest = element.clone();
     rest.flow.margins.start = 0.0;
     rest.flow.internal.start = 0.0;
-    for (cell, &cut) in rest.content.cells.iter_mut().zip(&line_cut_by_cell) {
-        let cut = cut.min(cell.layout.content.lines.len());
-        cell.layout.content.lines = cell.layout.content.lines[cut..].to_vec();
-        cell.layout.content.children.clear();
+    for (cell, (_, content)) in rest.content.cells.iter_mut().zip(split_content) {
+        cell.layout.content = content;
         cell.layout.box_model.border.top.width = 0.0;
         cell.layout.box_model.border_insets.top = 0.0;
         cell.layout.box_model.content_insets.top = 0.0;
@@ -1688,25 +1801,28 @@ fn split_flex_row_node(
 fn split_container(
     element: &dyn LayoutElement,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(LayoutNode, LayoutNode)> {
     struct SplitVisitor {
         available: f32,
+        rule: FragmentBreakRule,
         result: Option<(LayoutNode, LayoutNode)>,
     }
 
     impl LayoutVisitor for SplitVisitor {
         fn visit_container(&mut self, element: &Container) {
-            self.result = split_container_node(element, self.available)
+            self.result = split_container_node(element, self.available, self.rule)
                 .map(|(before, after)| (before.boxed(), after.boxed()));
         }
 
         fn visit_table(&mut self, element: &Table) {
-            self.result = split_table_node(element, self.available);
+            self.result = split_table_node(element, self.available, self.rule);
         }
     }
 
     let mut visitor = SplitVisitor {
         available: avail_below_box_top,
+        rule,
         result: None,
     };
     element.accept(&mut visitor);
@@ -1716,6 +1832,7 @@ fn split_container(
 fn split_container_node(
     element: &Container,
     avail_below_box_top: f32,
+    rule: FragmentBreakRule,
 ) -> Option<(Container, Container)> {
     let children = &element.children;
     // Only a plain, auto-height, in-flow container is splittable here. A definite
@@ -1755,6 +1872,12 @@ fn split_container_node(
     } else {
         avail_below_box_top - element.box_model.border.top.width - element.box_model.padding.top
     };
+    let continuation_size = element
+        .box_model
+        .size
+        .height
+        .remaining_fragment_floor(avail_below_box_top);
+    let has_floor_continuation = continuation_size.used().is_some();
 
     // The page-fit check that brought us here sums the children's outer heights
     // WITHOUT adjacent-sibling margin collapse, so a box whose children collapse
@@ -1763,7 +1886,9 @@ fn split_container_node(
     // (`simulate_block_flow`): if the children genuinely fit, the box is not
     // overflowing — place it whole (unchanged behaviour) rather than spuriously
     // fragmenting a box that lands on a single page in Chrome.
-    if !exceeds_with_roundoff(simulate_block_flow(children).height, avail_children) {
+    if !exceeds_with_roundoff(simulate_block_flow(children).height, avail_children)
+        && !has_floor_continuation
+    {
         return None;
     }
 
@@ -1791,7 +1916,7 @@ fn split_container_node(
     // the first child can be the too-tall one (every later kept child fit), so this
     // single check covers every nested-too-tall case (CSS Fragmentation 3 §3).
     let first_child_h = estimate_element_height(children[0].as_ref());
-    let (f_children_vec, r_children_vec) = if idx == 1 && first_child_h > avail_children {
+    let (f_children_vec, mut r_children_vec) = if idx == 1 && first_child_h > avail_children {
         let first_child = &children[0];
         // The child's border-box top sits at the container's content-box top plus
         // its own margin-top, so it has that much less room than the content box.
@@ -1800,7 +1925,7 @@ fn split_container_node(
                 .margin_holder()
                 .map(|holder| holder.margins().start)
                 .unwrap_or_default();
-        match split_element(first_child.as_ref(), child_avail) {
+        match split_element(first_child.as_ref(), child_avail, rule) {
             Some((c_first, c_rest)) => {
                 let mut rest_children = vec![c_rest];
                 rest_children.extend_from_slice(&children[1..]);
@@ -1820,8 +1945,8 @@ fn split_container_node(
             .map(|holder| holder.margins().start)
             .unwrap_or_default();
         let child_avail = (avail_children - acc - margin_start).max(0.0);
-        if is_positive_with_roundoff(child_avail) && is_grid_row(next_child.as_ref()) {
-            if let Some((c_first, c_rest)) = split_element(next_child.as_ref(), child_avail) {
+        if is_positive_with_roundoff(child_avail) {
+            if let Some((c_first, c_rest)) = split_element(next_child.as_ref(), child_avail, rule) {
                 let mut first_children = children[..idx].to_vec();
                 first_children.push(c_first);
                 let mut rest_children = vec![c_rest];
@@ -1834,12 +1959,20 @@ fn split_container_node(
             (children[..idx].to_vec(), children[idx..].to_vec())
         }
     } else if idx >= children.len() {
-        // Every child fits at this boundary (nothing to move to a continuation):
-        // not actually overflowing between children.
-        return None;
+        // Every child fits at this boundary. Usually there is nothing to move,
+        // but a composite `min-height` can still have an unconsumed floor. Emit
+        // an empty continuation for that remaining principal-box geometry.
+        if has_floor_continuation {
+            (children.to_vec(), Vec::new())
+        } else {
+            return None;
+        }
     } else {
         (children[..idx].to_vec(), children[idx..].to_vec())
     };
+    if let Some(first) = r_children_vec.first_mut() {
+        first.suppress_first_fragment_spacing();
+    }
 
     // First fragment: the children that fit, with the box's top decoration. Under
     // `slice` drop the bottom border/padding/margin (box stays open at the page
@@ -1871,7 +2004,7 @@ fn split_container_node(
     // LAST fragment closes it; under `clone` keep the full decoration.
     let mut rest = element.clone();
     rest.children = r_children_vec;
-    rest.box_model.size.height = BlockSize::AUTO;
+    rest.box_model.size.height = continuation_size;
     if !clone {
         rest.box_model.margins.start = 0.0;
         rest.box_model.padding.top = 0.0;
@@ -1887,7 +2020,11 @@ fn split_container_node(
     Some((first, rest))
 }
 
-fn split_table_node(element: &Table, avail_below_box_top: f32) -> Option<(LayoutNode, LayoutNode)> {
+fn split_table_node(
+    element: &Table,
+    avail_below_box_top: f32,
+    rule: FragmentBreakRule,
+) -> Option<(LayoutNode, LayoutNode)> {
     let principal = &element.principal;
     let headers = principal
         .children
@@ -1914,7 +2051,7 @@ fn split_table_node(element: &Table, avail_below_box_top: f32) -> Option<(Layout
     } else {
         avail_below_box_top
     };
-    let (mut before, mut after) = split_container_node(principal, available_before_footer)?;
+    let (mut before, mut after) = split_container_node(principal, available_before_footer, rule)?;
 
     // A row-group with break-inside:avoid moves as a unit when the tentative
     // cut falls inside it. The table header remains on the preceding fragment;
@@ -1966,21 +2103,6 @@ fn split_table_node(element: &Table, avail_below_box_top: f32) -> Option<(Layout
     }
 
     Some((Table::new(before).boxed(), Table::new(after).boxed()))
-}
-
-fn is_grid_row(element: &dyn LayoutElement) -> bool {
-    #[derive(Default)]
-    struct GridRowVisitor(bool);
-
-    impl LayoutVisitor for GridRowVisitor {
-        fn visit_grid_row(&mut self, _element: &GridRow) {
-            self.0 = true;
-        }
-    }
-
-    let mut visitor = GridRowVisitor::default();
-    element.accept(&mut visitor);
-    visitor.0
 }
 
 /// Geometry override for the first page (CSS Paged Media 3 §3.3 `@page :first`).
@@ -3072,10 +3194,34 @@ pub(crate) fn paginate_with_first_page(
         let (break_decision_height, break_footer_reserve) = table_keep_break_height
             .or(avoid_break_height)
             .map_or((element_height, footer_reserve), |height| (height, 0.0));
-        let page_broke_mid_loop = (exceeds_with_roundoff(
-            y + break_decision_height + break_footer_reserve,
-            effective_content_height,
-        ) && y > 0.0)
+        // A class-A break before the box is useful only when the box (or the
+        // keep-together group being judged) can fit in a fresh fragmentainer.
+        // If it cannot, moving it merely wastes the current page before the
+        // same internal split happens on the next one. CSS Fragmentation 3
+        // requires the remaining current fragmentainer to be used in that
+        // case; the internal splitter below then relaxes avoid constraints as
+        // needed and preserves forward progress.
+        let fresh_fit_height = if may_fragment_internally {
+            effective_content_height
+        } else {
+            physical_page_height
+        };
+        let fits_fresh_fragmentainer = !exceeds_with_roundoff(
+            break_decision_height + break_footer_reserve,
+            fresh_fit_height,
+        );
+        let page_broke_mid_loop = (fits_fresh_fragmentainer
+            && exceeds_with_roundoff(
+                y + break_decision_height + break_footer_reserve,
+                effective_content_height,
+            )
+            // A nonzero cursor does not prove that the fragmentainer already
+            // contains flow content: page 1 starts after the projected root
+            // margin/padding gutter. Breaking before its first principal box
+            // would manufacture a blank leading page and retry the same box at
+            // the top of page 2. Use the semantic flow state instead; the
+            // internal splitter below can then consume page 1 when necessary.
+            && !first_on_page)
             || block_footnote_requires_break;
         if page_broke_mid_loop {
             // CSS GCPM §2.8: when a `footnote-policy: line` body cannot fit
@@ -3167,7 +3313,9 @@ pub(crate) fn paginate_with_first_page(
             }
             if in_table_body && elem_position == Position::Static && elem_float == Float::None {
                 let avail_below_box_top = effective_content_height - (y + margin_top_val);
-                if let Some((first, rest)) = split_table_row(&element, avail_below_box_top) {
+                if let Some((first, rest)) =
+                    split_table_row(&element, avail_below_box_top, FragmentBreakRule::Normal)
+                {
                     y += margin_top_val;
                     collect_footnotes_from_element(&first, &mut current_footnotes);
                     current_elements.push((y, first));
@@ -3278,12 +3426,21 @@ pub(crate) fn paginate_with_first_page(
                     y += header_h;
                 }
             }
+            element.suppress_first_fragment_spacing();
         }
 
         // After a mid-loop page break, the current element is now the first
         // in-flow block on a continuation page. Its margin-top applies as-is
         // (no collapse with root — body is mid-flow across the page break).
-        let effective_margin_top = margin_top_val;
+        let effective_flow_geometry = element_flow_geometry(element.as_ref());
+        let effective_margin_top = if page_broke_mid_loop {
+            effective_flow_geometry.margins.start
+        } else {
+            margin_top_val
+        };
+        let effective_element_height = effective_margin_top
+            + effective_flow_geometry.content_height
+            + effective_flow_geometry.margins.end;
 
         // Handle floated elements (floats don't participate in margin collapsing)
         if elem_float != Float::None {
@@ -3350,14 +3507,17 @@ pub(crate) fn paginate_with_first_page(
         if elem_position == Position::Static
             && !followed_by_forced_break
             && may_fragment_internally
-            && exceeds_with_roundoff(y + element_height, effective_content_height)
+            && exceeds_with_roundoff(y + effective_element_height, effective_content_height)
         {
             let avail_below_box_top = effective_content_height - (y + effective_margin_top);
             // A too-tall text block splits at a line boundary; a too-tall raster
             // image slices at the page edge (each page embeds only its slice); a
             // too-tall container splits between its children, re-enqueuing the
             // continuation so it resumes on the next page.
-            let split = split_element(&element, avail_below_box_top);
+            let split = split_element(&element, avail_below_box_top, FragmentBreakRule::Normal)
+                .or_else(|| {
+                    split_element(&element, avail_below_box_top, FragmentBreakRule::Emergency)
+                });
             if let Some((first, rest)) = split {
                 // Place the first fragment at the (margin-adjusted) cursor; it
                 // fills the remainder of this page.
@@ -3503,11 +3663,14 @@ pub(crate) fn paginate_with_first_page(
 #[cfg(test)]
 mod break_tests {
     use super::*;
-    use crate::layout::cells::{CellBox, CellBoxModel, CellContent, GridCell, GridCellPlacement};
+    use crate::layout::cells::{
+        CellBox, CellBoxModel, CellContent, CellFragmentation, GridCell, GridCellPlacement,
+        TableCell,
+    };
     use crate::layout::elements::{
         AvoidPageBreak, BoxFragmentation, BoxModel, FlexContent, FlexRow, GridContent, ImagePaint,
         ImageSampling, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, LayoutSize,
-        PageBreak, ReplacedGeometry, SvgPaint,
+        LineFragmentation, PageBreak, ReplacedGeometry, SvgPaint,
     };
 
     fn narrow_footnote() -> FootnoteItem {
@@ -3737,6 +3900,17 @@ mod break_tests {
         .boxed()
     }
 
+    fn avoiding_block(h: f32) -> LayoutNode {
+        let mut element = block(h);
+        element
+            .update_text(|text| {
+                text.fragmentation.box_fragmentation.inside =
+                    crate::layout::elements::FragmentBreakAvoidance::Avoid;
+            })
+            .expect("test block must expose text fragmentation");
+        element
+    }
+
     fn text_block(h: f32) -> LayoutNode {
         let mut element = block(h);
         element.update_text(|text| {
@@ -3909,7 +4083,7 @@ mod break_tests {
     #[test]
     fn grid_fragment_rest_height_is_its_measured_content_not_a_scaled_guess() {
         let cell = grid_cell_with_nested(block(70.0), 70.0);
-        let (_first, rest) = split_grid_cell(&cell, 20.0, 50.0);
+        let (_first, rest) = split_grid_cell(&cell, 20.0, 50.0, FragmentBreakRule::Normal);
 
         assert_eq!(rest.layout.content.children.len(), 1);
         assert_eq!(
@@ -3935,7 +4109,7 @@ mod break_tests {
             },
             ..Default::default()
         };
-        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0);
+        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0, FragmentBreakRule::Normal);
 
         assert_eq!(rest.layout.content.children.len(), 1);
         assert_eq!(
@@ -3953,8 +4127,34 @@ mod break_tests {
             row_span: 3,
             ..Default::default()
         };
-        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0);
+        let (_first, rest) = split_grid_cell(&cell, 70.0, 5.0, FragmentBreakRule::Normal);
 
+        assert_eq!(rest.layout.box_model.minimum_block_size, 5.0);
+    }
+
+    #[test]
+    fn grid_cell_keeps_shared_row_geometry_after_its_content_is_consumed() {
+        let cell = GridCell {
+            layout: CellBox {
+                content: CellContent {
+                    lines: vec![TextLine {
+                        height: 10.0,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                box_model: CellBoxModel {
+                    minimum_block_size: 50.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (_, rest) = split_grid_cell(&cell, 45.0, 5.0, FragmentBreakRule::Normal);
+
+        assert!(rest.layout.content.lines.is_empty());
         assert_eq!(rest.layout.box_model.minimum_block_size, 5.0);
     }
 
@@ -3994,7 +4194,7 @@ mod break_tests {
         element.box_model.border.bottom.width = 4.0;
 
         let (first, rest) =
-            split_fixed_height_container_node(&element, 70.0).expect("the definite box must split");
+            split_empty_sized_container_node(&element, 70.0).expect("the definite box must split");
         for fragment in [&first, &rest] {
             let decoration = fragment
                 .inspect_container(|container| {
@@ -4013,6 +4213,59 @@ mod break_tests {
             assert_eq!(decoration.3, 4.0);
             assert_eq!(decoration.4, None);
         }
+    }
+
+    #[test]
+    fn empty_min_height_container_fragments_its_single_composite_floor() {
+        let container = Container {
+            box_model: BoxModel {
+                size: LayoutSize {
+                    height: BlockSize::minimum(220.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .boxed();
+
+        let pages = paginate(vec![container], 100.0, 0.0);
+
+        assert_eq!(pages.len(), 3);
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| estimate_element_height(page.elements[0].1.as_ref()))
+                .collect::<Vec<_>>(),
+            [100.0, 100.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn normal_container_fragmentation_moves_an_avoided_child_intact() {
+        let element = Container {
+            children: vec![block(48.0), block(48.0), block(48.0), avoiding_block(48.0)],
+            box_model: BoxModel {
+                padding: EdgeSizes::new(18.0, 0.0, 0.0, 0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (first, rest) = split_container_node(&element, 180.0, FragmentBreakRule::Normal)
+            .expect("the final child must continue on the next fragmentainer");
+
+        assert_eq!(first.children.len(), 3);
+        assert_eq!(rest.children.len(), 1);
+        assert_eq!(estimate_element_height(rest.children[0].as_ref()), 48.0);
+    }
+
+    #[test]
+    fn emergency_fragmentation_can_split_an_over_tall_avoided_box() {
+        let element = avoiding_block(120.0);
+
+        assert!(split_element(element.as_ref(), 100.0, FragmentBreakRule::Normal).is_none());
+        assert!(split_element(element.as_ref(), 100.0, FragmentBreakRule::Emergency).is_some());
     }
 
     #[test]
@@ -4106,8 +4359,8 @@ mod break_tests {
             vec![block(10.0), grid_row(2.0)],
             crate::types::EdgeSizes::ZERO,
         );
-        let (first, rest) =
-            split_container(&container, 10.5).expect("the grid row has 0.5pt to fragment into");
+        let (first, rest) = split_container(&container, 10.5, FragmentBreakRule::Normal)
+            .expect("the grid row has 0.5pt to fragment into");
 
         let first_grid_height = first
             .inspect_container(|container| {
@@ -4135,12 +4388,449 @@ mod break_tests {
     }
 
     #[test]
+    fn partially_fitting_nested_flow_uses_the_shared_recursive_splitter() {
+        let nested = flow_container(
+            vec![block(30.0), block(30.0)],
+            crate::types::EdgeSizes::ZERO,
+        );
+        let outer = flow_container(vec![block(40.0), nested], crate::types::EdgeSizes::ZERO);
+
+        let (first, rest) = split_container(&outer, 60.0, FragmentBreakRule::Normal)
+            .expect("the nested flow has 20pt available in the first fragment");
+        let nested_fragments = |fragment: &LayoutNode| {
+            fragment
+                .inspect_container(|outer| {
+                    outer
+                        .children
+                        .iter()
+                        .filter_map(|child| {
+                            child.inspect_container(|inner| {
+                                inner
+                                    .children
+                                    .iter()
+                                    .map(|child| estimate_element_height(child.as_ref()))
+                                    .collect::<Vec<_>>()
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .expect("expected the outer flow fragment")
+        };
+
+        assert_eq!(nested_fragments(&first), [vec![20.0]]);
+        assert_eq!(nested_fragments(&rest), [vec![10.0, 30.0]]);
+    }
+
+    #[test]
+    fn fragmented_container_preserves_its_composite_minimum_height() {
+        let container = Container {
+            children: (0..6).map(|_| block(100.0)).collect(),
+            box_model: BoxModel {
+                size: LayoutSize {
+                    height: BlockSize::minimum(680.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .boxed();
+
+        let pages = paginate(vec![container], 312.0, 0.0);
+
+        assert_eq!(pages.len(), 3);
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| estimate_element_height(page.elements[0].1.as_ref()))
+                .collect::<Vec<_>>(),
+            [312.0, 312.0, 56.0]
+        );
+    }
+
+    #[test]
+    fn grid_cell_fragment_reserves_both_principal_box_edges_before_line_break() {
+        let mut cell = GridCell::default();
+        cell.layout.box_model.border_insets = EdgeSizes::new(2.0, 0.0, 2.0, 0.0);
+        cell.layout.box_model.content_insets = EdgeSizes::new(5.0, 0.0, 5.0, 0.0);
+        cell.layout.box_model.border.top.width = 2.0;
+        cell.layout.box_model.border.bottom.width = 2.0;
+        cell.layout.fragmentation = CellFragmentation {
+            lines: LineFragmentation::new(1, 1),
+        };
+        cell.layout.content.lines = (0..3)
+            .map(|_| TextLine {
+                height: 10.0,
+                ..Default::default()
+            })
+            .collect();
+
+        let (first, rest) = split_grid_cell(&cell, 35.0, 5.0, FragmentBreakRule::Normal);
+
+        assert_eq!(first.layout.content.lines.len(), 2);
+        assert_eq!(rest.layout.content.lines.len(), 1);
+        assert_eq!(first.layout.box_model.border_insets.bottom, 0.0);
+        assert_eq!(rest.layout.box_model.border_insets.top, 0.0);
+        assert_eq!(first.layout.box_model.padding().bottom, 0.0);
+        assert_eq!(rest.layout.box_model.padding().top, 0.0);
+    }
+
+    #[test]
+    fn grid_row_moves_intact_when_only_one_orphan_would_fit() {
+        let lines = (0..4)
+            .map(|_| TextLine {
+                height: 10.0,
+                ..Default::default()
+            })
+            .collect();
+        let row = GridRow {
+            content: GridContent {
+                cells: vec![GridCell {
+                    layout: CellBox {
+                        content: CellContent {
+                            lines,
+                            ..Default::default()
+                        },
+                        box_model: CellBoxModel {
+                            minimum_block_size: 40.0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            split_grid_row_node(&row, 10.0, FragmentBreakRule::Normal).is_none(),
+            "the default orphans:2 must move a one-line fragment"
+        );
+        let (first, rest) = split_grid_row_node(&row, 20.0, FragmentBreakRule::Normal)
+            .expect("two orphans and two widows form a legal break");
+        assert_eq!(
+            first.inspect_grid(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(2)
+        );
+        assert_eq!(
+            rest.inspect_grid(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(2)
+        );
+
+        let (first, rest) = split_grid_row_node(&row, 10.0, FragmentBreakRule::Emergency)
+            .expect("the emergency rule must fragment an over-tall grid flow");
+        assert_eq!(
+            first.inspect_grid(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(1)
+        );
+        assert_eq!(
+            rest.inspect_grid(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn grid_row_fragments_parallel_cells_at_their_independent_legal_breaks() {
+        let cell = |line_count| GridCell {
+            layout: CellBox {
+                content: CellContent {
+                    lines: (0..line_count)
+                        .map(|_| TextLine {
+                            height: 10.0,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                box_model: CellBoxModel {
+                    minimum_block_size: 30.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let row = GridRow {
+            content: GridContent {
+                cells: vec![cell(3), cell(1)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (first, rest) = split_grid_row_node(&row, 10.0, FragmentBreakRule::Normal)
+            .expect("the one-line cell advances while the three-line cell observes orphans");
+        let line_counts = |fragment: &LayoutNode| {
+            fragment
+                .inspect_grid(|row| {
+                    row.content
+                        .cells
+                        .iter()
+                        .map(|cell| cell.layout.content.lines.len())
+                        .collect::<Vec<_>>()
+                })
+                .expect("expected a grid-row fragment")
+        };
+        assert_eq!(line_counts(&first), [0, 1]);
+        assert_eq!(line_counts(&rest), [3, 0]);
+        assert!(
+            split_grid_row_node(&row, 10.0, FragmentBreakRule::Emergency).is_some(),
+            "an over-tall row must still make emergency progress in every cell"
+        );
+    }
+
+    #[test]
+    fn grid_row_does_not_emit_a_decoration_only_fragment_when_no_cell_can_break() {
+        let cell = || GridCell {
+            layout: CellBox {
+                content: CellContent {
+                    lines: (0..2)
+                        .map(|_| TextLine {
+                            height: 10.0,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+                box_model: CellBoxModel {
+                    minimum_block_size: 20.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let row = GridRow {
+            content: GridContent {
+                cells: vec![cell(), cell()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            split_grid_row_node(&row, 10.0, FragmentBreakRule::Normal).is_none(),
+            "two-line cells must move together when only one line could fit"
+        );
+    }
+
+    #[test]
+    fn incoming_single_line_grid_row_moves_instead_of_clipping_the_line() {
+        let row = GridRow {
+            content: GridContent {
+                cells: vec![GridCell {
+                    layout: CellBox {
+                        content: CellContent {
+                            lines: vec![TextLine {
+                                height: 20.0,
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                        box_model: CellBoxModel {
+                            minimum_block_size: 30.0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(split_grid_row_node(&row, 10.0, FragmentBreakRule::Normal).is_none());
+        assert!(split_grid_row_node(&row, 10.0, FragmentBreakRule::Emergency).is_some());
+    }
+
+    #[test]
+    fn table_row_moves_intact_when_only_one_orphan_would_fit() {
+        let lines = (0..4)
+            .map(|_| TextLine {
+                height: 10.0,
+                ..Default::default()
+            })
+            .collect();
+        let row = TableRow {
+            content: crate::layout::elements::TableCells {
+                cells: vec![TableCell {
+                    layout: CellBox {
+                        content: CellContent {
+                            lines,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            split_table_row_node(&row, 10.0, FragmentBreakRule::Normal).is_none(),
+            "the default orphans:2 must move a one-line table fragment"
+        );
+        let (first, rest) = split_table_row_node(&row, 20.0, FragmentBreakRule::Normal)
+            .expect("two table-cell orphans and widows form a legal break");
+        assert_eq!(
+            first.inspect_table(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(2)
+        );
+        assert_eq!(
+            rest.inspect_table(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(2)
+        );
+
+        let (first, rest) = split_table_row_node(&row, 10.0, FragmentBreakRule::Emergency)
+            .expect("the emergency rule must fragment an over-tall table-cell flow");
+        assert_eq!(
+            first.inspect_table(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(1)
+        );
+        assert_eq!(
+            rest.inspect_table(|row| row.content.cells[0].layout.content.lines.len()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn avoided_table_row_moves_before_repeated_header_instead_of_being_sliced() {
+        let row = |height: f32, repeats_as_header: bool| {
+            TableRow {
+                content: crate::layout::elements::TableCells {
+                    cells: vec![TableCell {
+                        layout: CellBox {
+                            box_model: CellBoxModel {
+                                minimum_block_size: height,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                fragmentation: crate::layout::elements::TableFragmentation {
+                    repeats_as_header,
+                    avoid_inside: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+            .boxed()
+        };
+        let pages = paginate(
+            vec![
+                row(30.0, true),
+                row(30.0, false),
+                row(44.0, false),
+                row(44.0, false),
+                row(44.0, false),
+            ],
+            160.0,
+            0.0,
+        );
+        let row_heights = |page: &Page| {
+            page.elements
+                .iter()
+                .filter_map(|(_, element)| {
+                    element.inspect_table(|row| table_cell_content_height(&row.content.cells[0]))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(row_heights(&pages[0]), [30.0, 30.0, 44.0, 44.0]);
+        assert_eq!(row_heights(&pages[1]), [30.0, 44.0]);
+    }
+
+    #[test]
+    fn table_cell_nested_flow_fragments_without_losing_descendants() {
+        let row = TableRow {
+            content: crate::layout::elements::TableCells {
+                cells: vec![TableCell {
+                    layout: CellBox {
+                        content: CellContent {
+                            children: vec![block(220.0)],
+                            ..Default::default()
+                        },
+                        box_model: CellBoxModel {
+                            minimum_block_size: 220.0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (first, rest) = split_table_row_node(&row, 100.0, FragmentBreakRule::Normal)
+            .expect("nested table-cell flow must fragment through the shared cell path");
+        let fragment_heights = |fragment: &LayoutNode| {
+            fragment
+                .inspect_table(|row| {
+                    row.content.cells[0]
+                        .layout
+                        .content
+                        .children
+                        .iter()
+                        .map(|child| estimate_element_height(child.as_ref()))
+                        .collect::<Vec<_>>()
+                })
+                .expect("expected a table row fragment")
+        };
+        assert_eq!(fragment_heights(&first), [100.0]);
+        assert_eq!(fragment_heights(&rest), [120.0]);
+    }
+
+    #[test]
+    fn text_line_constraints_relax_only_under_the_emergency_rule() {
+        let block = TextBlock::plain(
+            (0..4)
+                .map(|_| TextLine {
+                    height: 10.0,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+
+        assert!(
+            split_text_block_node(&block, 10.0, FragmentBreakRule::Normal).is_none(),
+            "a normal break must not leave one orphan"
+        );
+        let (first, rest) = split_text_block_node(&block, 10.0, FragmentBreakRule::Emergency)
+            .expect("an over-tall text flow must still make progress");
+        assert_eq!(first.inspect_text(|text| text.lines.len()), Some(1));
+        assert_eq!(rest.inspect_text(|text| text.lines.len()), Some(3));
+    }
+
+    #[test]
     fn ordinary_sibling_is_not_backtracked_without_break_avoidance() {
         let pages = paginate(vec![block(20.0), block(10.0), block(80.0)], 100.0, 0.0);
 
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].elements.len(), 2);
         assert_eq!(pages[1].elements.len(), 1);
+    }
+
+    #[test]
+    fn root_gutter_does_not_create_a_blank_page_before_first_fragmentable_box() {
+        let root = flow_container(vec![block(45.0), block(45.0)], EdgeSizes::ZERO);
+        let pages = paginate(vec![root], 100.0, 20.0);
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].elements.len(), 1);
+        assert_eq!(pages[0].elements[0].0, 20.0);
+        assert_eq!(pages[1].elements.len(), 1);
+        assert_eq!(pages[1].elements[0].0, 0.0);
     }
 
     #[test]

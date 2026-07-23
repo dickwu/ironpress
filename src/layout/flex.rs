@@ -16,11 +16,11 @@ use crate::types::{CornerRadii, EdgeSizes, Rect, Size};
 use super::box_model::ResolvedBoxDimensions;
 use super::context::{ContainingBlock, LayoutContext, LayoutEnv};
 use super::engine::{
-    ElementSiblingContext, FilterApplication, FlexCell, FlexItemFragmentation, FlexLineId,
+    ElementSiblingPosition, FilterApplication, FlexCell, FlexItemFragmentation, FlexLineId,
     FlexNestedOrigin, ForcedFlexLineBreak, LayoutBorder, LayoutTreeContext, PageBreakSide,
-    TextLine, aspect_ratio_height, collects_as_inline_text, emit_page_break_after,
-    emit_page_break_before, flatten_element, has_background_paint, measure_runs_width,
-    pseudo_is_block_like, push_block_pseudo, resolve_padding_box_height,
+    PseudoBoxContext, TextLine, aspect_ratio_height, collects_as_inline_text,
+    emit_page_break_after, emit_page_break_before, flatten_element, has_background_paint,
+    measure_runs_width, pseudo_is_block_like, push_block_pseudo, resolve_padding_box_height,
 };
 use super::paginate::estimate_element_height;
 use super::roundoff::{equal_with_roundoff, exceeds_with_roundoff, is_positive_with_roundoff};
@@ -456,6 +456,11 @@ fn flex_row_node(
         positioning: crate::layout::elements::Positioning::from_style(style)
             .with_containing_block_depth(containing_block_depth),
         inline_offset: crate::layout::elements::InlineOffset::new(inline_offset),
+        overflow: crate::layout::elements::OverflowBehavior {
+            combined: style.overflow,
+            x: style.overflow_x,
+            y: style.overflow_y,
+        },
     }
     .boxed()
 }
@@ -881,14 +886,7 @@ fn authored_align_items_last_baseline(
     rules: &[CssRule],
 ) -> bool {
     let classes = el.class_list();
-    let selector_ctx = SelectorContext {
-        ancestors: ancestors.to_vec(),
-        child_index: ancestors.last().map_or(0, |a| a.child_index),
-        sibling_count: ancestors.last().map_or(1, |a| a.sibling_count),
-        preceding_siblings: Vec::new(),
-        following_siblings: Vec::new(),
-        is_empty: false,
-    };
+    let selector_ctx = crate::layout::helpers::selector_context_from_ancestors(ancestors, el);
     let mut best: Option<(bool, u32, usize, bool)> = None;
     for (source_idx, rule) in rules.iter().enumerate() {
         if rule.pseudo_element.is_some()
@@ -948,11 +946,17 @@ fn flex_intrinsic_container_width(
 
     let mut contributions = Vec::new();
     let mut element_idx = 0usize;
-    let element_count = el
+    let element_siblings: Vec<&ElementNode> = el
         .children
         .iter()
-        .filter(|n| matches!(n, DomNode::Element(_)))
-        .count();
+        .filter_map(|node| match node {
+            DomNode::Element(element) => Some(element),
+            DomNode::Text(_) => None,
+        })
+        .collect();
+    let sibling_positions: Vec<ElementSiblingPosition> = (0..element_siblings.len())
+        .map(|index| ElementSiblingPosition::from_element_siblings(&element_siblings, index))
+        .collect();
 
     for child in &el.children {
         match child {
@@ -963,14 +967,9 @@ fn flex_intrinsic_container_width(
             }
             DomNode::Element(child_el) => {
                 let classes = child_el.class_list();
-                let selector_ctx = SelectorContext {
-                    ancestors: ancestors.to_vec(),
-                    child_index: element_idx,
-                    sibling_count: element_count,
-                    preceding_siblings: Vec::new(),
-                    following_siblings: Vec::new(),
-                    is_empty: false,
-                };
+                let selector_ctx = sibling_positions[element_idx]
+                    .as_context()
+                    .selector_context(ancestors, child_el.children.is_empty());
                 element_idx += 1;
                 let child_style = compute_style_with_context_with_font_metrics(
                     child_el.tag,
@@ -1063,12 +1062,29 @@ fn apply_row_baseline_offsets(cells: &mut [FlexCell]) {
     }
 }
 
-fn flex_item_has_structured_children(
+#[derive(Debug, Clone, Copy, Default)]
+struct FlexItemContents {
+    structured: bool,
+    out_of_flow: bool,
+}
+
+impl FlexItemContents {
+    const fn requires_general_layout(self) -> bool {
+        self.structured || self.out_of_flow
+    }
+
+    const fn only_out_of_flow_structure(self) -> bool {
+        self.out_of_flow && !self.structured
+    }
+}
+
+fn classify_flex_item_contents(
     item: &ElementNode,
     item_style: &ComputedStyle,
     ancestors: &[AncestorInfo],
     env: &LayoutEnv,
-) -> bool {
+) -> FlexItemContents {
+    let mut contents = FlexItemContents::default();
     let sibling_count = item
         .children
         .iter()
@@ -1122,6 +1138,14 @@ fn flex_item_has_structured_children(
         if style.display == Display::None {
             continue;
         }
+        // Out-of-flow descendants still require the item's general block
+        // formatting context: it owns their containing-block resolution and
+        // emits them separately from the item's in-flow inline runs. The
+        // text-only flex shortcut intentionally cannot represent that split.
+        if style.position.is_absolute() {
+            contents.out_of_flow = true;
+            continue;
+        }
         if matches!(child.tag, HtmlTag::Img | HtmlTag::Svg | HtmlTag::Table)
             || matches!(
                 style.display,
@@ -1144,10 +1168,10 @@ fn flex_item_has_structured_children(
                     | Display::TableCaption
             )
         {
-            return true;
+            contents.structured = true;
         }
     }
-    false
+    contents
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1214,6 +1238,9 @@ pub(crate) fn layout_flex_container(
         })
         .collect();
     let total_child_count = all_child_elements.len();
+    let all_child_positions: Vec<ElementSiblingPosition> = (0..total_child_count)
+        .map(|index| ElementSiblingPosition::from_element_siblings(&all_child_elements, index))
+        .collect();
     // Identify which children are absolutely/fixed positioned (out of flow). We
     // compute each child's position against the container style here; full styles
     // for in-flow items are recomputed in the item loop below.
@@ -1222,14 +1249,9 @@ pub(crate) fn layout_flex_container(
         .enumerate()
         .map(|(idx, child_el)| {
             let classes = child_el.class_list();
-            let selector_ctx = SelectorContext {
-                ancestors: ancestors.to_vec(),
-                child_index: idx,
-                sibling_count: total_child_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            };
+            let selector_ctx = all_child_positions[idx]
+                .as_context()
+                .selector_context(ancestors, child_el.children.is_empty());
             let cs = compute_style_with_context_with_font_metrics(
                 child_el.tag,
                 child_el.style_attr(),
@@ -1249,12 +1271,14 @@ pub(crate) fn layout_flex_container(
     // In-flow flex items (abs children excluded). Text directly inside a flex
     // container is wrapped in an anonymous block flex item (css-flexbox-1 §4).
     let mut flex_child_storage: Vec<ElementNode> = Vec::new();
+    let mut flex_child_positions: Vec<ElementSiblingPosition> = Vec::new();
     let mut element_idx = 0usize;
     for child in &el.children {
         match child {
             DomNode::Element(child_el) => {
                 if !child_is_abs[element_idx] {
                     flex_child_storage.push((*child_el).clone());
+                    flex_child_positions.push(all_child_positions[element_idx].clone());
                 }
                 element_idx += 1;
             }
@@ -1263,6 +1287,10 @@ pub(crate) fn layout_flex_container(
                     let mut anon = ElementNode::new(HtmlTag::Div);
                     anon.children.push(DomNode::Text(text.clone()));
                     flex_child_storage.push(anon);
+                    // Anonymous flex items have no authored sibling identity and
+                    // therefore must not inherit the source position of a nearby
+                    // element merely because they share a box list.
+                    flex_child_positions.push(ElementSiblingPosition::default());
                 }
             }
         }
@@ -1277,56 +1305,42 @@ pub(crate) fn layout_flex_container(
     // an ancestor and we leave its CB unstamped (forwarded by the renderer).
     let establishes_cb = crate::layout::helpers::establishes_containing_block(style);
     let abs_cb_depth = if establishes_cb { positioned_depth } else { 0 };
+    let content_height = style
+        .height
+        .map(|height| match style.box_sizing {
+            BoxSizing::BorderBox => {
+                (height - style.border.vertical_width() - style.padding.vertical()).max(0.0)
+            }
+            BoxSizing::ContentBox => height,
+        })
+        .unwrap_or(0.0);
+    let local_containing_block = ContainingBlock {
+        x: h_offset + style.border.left.used_width(),
+        width: inner_width.max(0.0) + style.padding.horizontal(),
+        height: content_height + style.padding.vertical(),
+        depth: abs_cb_depth,
+    };
+    let descendant_containing_block = if establishes_cb {
+        Some(local_containing_block)
+    } else {
+        ctx.containing_block
+    };
     let mut abs_output: Vec<LayoutNode> = Vec::new();
     if has_abs_children {
         // Containing block = the flex container's PADDING box (CSS abs CB). Its
         // height (for `bottom` resolution) is the padding-box height: content
         // height + vertical padding. Unknown auto heights resolve to 0.
-        let content_h = style
-            .height
-            .map(|h| {
-                if style.box_sizing == BoxSizing::BorderBox {
-                    (h - style.border.vertical_width() - style.padding.vertical()).max(0.0)
-                } else {
-                    h
-                }
-            })
-            .unwrap_or(0.0);
-        let cb_padding_box_height = content_h + style.padding.vertical();
-        let cb_padding_box_width = inner_width.max(0.0) + style.padding.horizontal();
-        let cb = ContainingBlock {
-            // PADDING-box of the flex container (the CSS containing block for abs
-            // children): `top/left/right/bottom` and percentages resolve against
-            // it. x = padding-box left relative to the page content-left =
-            // container margin/centering + border (NOT padding); the renderer
-            // anchors abs children at this x and adds their resolved left offset.
-            x: h_offset + style.border.left.used_width(),
-            width: cb_padding_box_width,
-            height: cb_padding_box_height,
-            depth: abs_cb_depth,
-        };
         for (idx, child_el) in all_child_elements.iter().enumerate() {
             if !child_is_abs[idx] {
                 continue;
             }
             let mut child_ancestors = ancestors.to_vec();
-            child_ancestors.push(AncestorInfo {
-                element: child_el,
-                child_index: idx,
-                sibling_count: total_child_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            });
+            child_ancestors
+                .push(all_child_positions[idx].ancestor(child_el, child_el.children.is_empty()));
             let classes = child_el.class_list();
-            let selector_ctx = SelectorContext {
-                ancestors: ancestors.to_vec(),
-                child_index: idx,
-                sibling_count: total_child_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            };
+            let selector_ctx = all_child_positions[idx]
+                .as_context()
+                .selector_context(ancestors, child_el.children.is_empty());
             let child_style = compute_style_with_context_with_font_metrics(
                 child_el.tag,
                 child_el.style_attr(),
@@ -1375,7 +1389,7 @@ pub(crate) fn layout_flex_container(
                 AlignSelf::Baseline => AlignItems::Baseline,
                 AlignSelf::Stretch => AlignItems::Stretch,
             };
-            let static_cross_free = (content_h - child_outer_h).max(0.0);
+            let static_cross_free = (content_height - child_outer_h).max(0.0);
             let static_y = match effective_align {
                 AlignItems::FlexStart | AlignItems::Baseline | AlignItems::Stretch => 0.0,
                 AlignItems::FlexEnd => static_cross_free,
@@ -1385,20 +1399,25 @@ pub(crate) fn layout_flex_container(
                 .with_parent_and_basis(
                     inner_width.max(0.0),
                     inner_width.max(0.0),
-                    Some(content_h.max(0.0)),
+                    Some(content_height.max(0.0)),
                     style.font_size,
                 )
-                .with_containing_block(Some(cb));
+                .with_containing_block(descendant_containing_block);
             let mut buf: Vec<LayoutNode> = Vec::new();
             flatten_element(
                 child_el,
                 LayoutTreeContext::new(style, &child_ctx, ancestors)
                     .with_positioned_ancestor_depth(positioned_depth)
-                    .for_element(ElementSiblingContext::new(idx, total_child_count)),
+                    .for_element(all_child_positions[idx].as_context()),
                 &mut buf,
                 env,
             );
-            crate::layout::helpers::patch_absolute_children_containing_block(&mut buf, cb);
+            if let Some(containing_block) = descendant_containing_block {
+                crate::layout::helpers::patch_absolute_children_containing_block(
+                    &mut buf,
+                    containing_block,
+                );
+            }
             // Preserve the child's local inset and containing block. The renderer
             // resolves the latter to the flex container's padding-box origin;
             // folding `cb.x` into the local inset would add the border twice for
@@ -1476,10 +1495,9 @@ pub(crate) fn layout_flex_container(
                     output,
                     before_style,
                     el,
-                    inner_width.max(0.0),
-                    env.fonts,
-                    containing_block,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width.max(0.0), env.fonts, env.filter_defs)
+                        .with_containing_block(containing_block)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                 );
             }
@@ -1488,10 +1506,9 @@ pub(crate) fn layout_flex_container(
                     output,
                     after_style,
                     el,
-                    inner_width.max(0.0),
-                    env.fonts,
-                    containing_block,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width.max(0.0), env.fonts, env.filter_defs)
+                        .with_containing_block(containing_block)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                 );
             }
@@ -1654,14 +1671,9 @@ pub(crate) fn layout_flex_container(
 
     for (idx, child_el) in child_elements.iter().enumerate() {
         let classes = child_el.class_list();
-        let selector_ctx = SelectorContext {
-            ancestors: ancestors.to_vec(),
-            child_index: idx,
-            sibling_count: child_count,
-            preceding_siblings: Vec::new(),
-            following_siblings: Vec::new(),
-            is_empty: false,
-        };
+        let selector_ctx = flex_child_positions[idx]
+            .as_context()
+            .selector_context(ancestors, child_el.children.is_empty());
         let child_style = compute_style_with_context_with_font_metrics(
             child_el.tag,
             child_el.style_attr(),
@@ -1840,14 +1852,8 @@ pub(crate) fn layout_flex_container(
         // Include the child element itself in the ancestor chain so that
         // descendant selectors like `.card h3` can match.
         let mut child_ancestors = ancestors.to_vec();
-        child_ancestors.push(AncestorInfo {
-            element: child_el,
-            child_index: idx,
-            sibling_count: child_count,
-            preceding_siblings: Vec::new(),
-            following_siblings: Vec::new(),
-            is_empty: false,
-        });
+        child_ancestors
+            .push(flex_child_positions[idx].ancestor(child_el, child_el.children.is_empty()));
 
         // The current element's layout context receives its resolved outer
         // flex-item width. The element's own block/flex layout then derives its
@@ -1871,9 +1877,11 @@ pub(crate) fn layout_flex_container(
 
         // Check if this flex item or any of its descendants must use the normal
         // block/replaced layout path instead of the text-only collector.
+        let item_contents =
+            classify_flex_item_contents(child_el, &child_style, &child_ancestors, env);
         let item_has_block_children =
             matches!(child_el.tag, HtmlTag::Img | HtmlTag::Svg | HtmlTag::Table)
-                || flex_item_has_structured_children(child_el, &child_style, &child_ancestors, env);
+                || item_contents.requires_general_layout();
         let is_table = matches!(child_style.display, Display::Table | Display::InlineTable);
 
         // flex: 0 0 auto wrapping a nested layout-capable child (table, image,
@@ -1881,8 +1889,35 @@ pub(crate) fn layout_flex_container(
         // not the equal-share fallback. Probe the child's flattened border-box
         // width with a throwaway layout at the full container width, then hug it.
         // With grow:0 the base width is also the final width.
-        let mut hugged_item_width: Option<f32> = None;
-        let (child_w_for_flex, child_w_for_layout) = if item_has_block_children
+        let mut hugged_item_width = if item_contents.only_out_of_flow_structure()
+            && !has_explicit_width
+            && child_style.flex_grow == 0.0
+            && resolved_basis.is_none()
+        {
+            let mut in_flow_runs = Vec::new();
+            FlexTextRunCollector {
+                runs: &mut in_flow_runs,
+                rules: env.rules,
+                fonts: env.fonts,
+            }
+            .collect_box_content(
+                &child_el.children,
+                &child_style,
+                None,
+                &child_ancestors,
+            );
+            (!in_flow_runs.is_empty()).then(|| {
+                (measure_runs_width(&in_flow_runs, env.fonts)
+                    + child_style.padding.horizontal()
+                    + child_style.border.horizontal_width())
+                .min(width_for_percentages)
+            })
+        } else {
+            None
+        };
+        let (child_w_for_flex, child_w_for_layout) = if let Some(hugged) = hugged_item_width {
+            (hugged, hugged)
+        } else if item_has_block_children
             && !has_explicit_width
             && child_style.flex_grow == 0.0
             && resolved_basis.is_none()
@@ -1895,12 +1930,12 @@ pub(crate) fn layout_flex_container(
                     Some(10000.0),
                     style.font_size,
                 )
-                .with_containing_block(None);
+                .with_containing_block(descendant_containing_block);
             flatten_element(
                 child_el,
                 LayoutTreeContext::new(style, &probe_ctx, ancestors)
                     .with_positioned_ancestor_depth(positioned_depth)
-                    .for_element(ElementSiblingContext::new(idx, child_count))
+                    .for_element(flex_child_positions[idx].as_context())
                     .with_filter_application(FilterApplication::DeferToFormattingItem),
                 &mut probe_buf,
                 env,
@@ -1947,12 +1982,12 @@ pub(crate) fn layout_flex_container(
                     item_content_height_basis,
                     style.font_size,
                 )
-                .with_containing_block(None);
+                .with_containing_block(descendant_containing_block);
             flatten_element(
                 child_el,
                 LayoutTreeContext::new(style, &child_ctx, ancestors)
                     .with_positioned_ancestor_depth(positioned_depth)
-                    .for_element(ElementSiblingContext::new(idx, child_count))
+                    .for_element(flex_child_positions[idx].as_context())
                     .with_filter_application(FilterApplication::DeferToFormattingItem),
                 &mut child_elements_buf,
                 env,
@@ -2581,14 +2616,9 @@ pub(crate) fn layout_flex_container(
             // depends on the stretched height. Simple items are stretched purely
             // visually by the renderer (cell_render_h = line_cross).
             let classes = child_el.class_list();
-            let selector_ctx = SelectorContext {
-                ancestors: ancestors.to_vec(),
-                child_index: item.child_idx,
-                sibling_count: child_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            };
+            let selector_ctx = flex_child_positions[item.child_idx]
+                .as_context()
+                .selector_context(ancestors, child_el.children.is_empty());
             let mut child_style = compute_style_with_context_with_font_metrics(
                 child_el.tag,
                 child_el.style_attr(),
@@ -2614,14 +2644,10 @@ pub(crate) fn layout_flex_container(
             child_style.height = Some(forced_h);
 
             let mut child_ancestors = ancestors.to_vec();
-            child_ancestors.push(AncestorInfo {
-                element: child_el,
-                child_index: item.child_idx,
-                sibling_count: child_count,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            });
+            child_ancestors.push(
+                flex_child_positions[item.child_idx]
+                    .ancestor(child_el, child_el.children.is_empty()),
+            );
             // The item's own content-box dimensions once stretched: percentage
             // children resolve their heights against this definite cross size.
             let item_content_w = (item.width
@@ -2639,7 +2665,7 @@ pub(crate) fn layout_flex_container(
                         Some(inner_cross_size),
                         style.font_size,
                     )
-                    .with_containing_block(None);
+                    .with_containing_block(descendant_containing_block);
                 layout_flex_container(
                     child_el,
                     &child_style,
@@ -2690,12 +2716,12 @@ pub(crate) fn layout_flex_container(
                         Some(forced_h),
                         style.font_size,
                     )
-                    .with_containing_block(None);
+                    .with_containing_block(descendant_containing_block);
                 flatten_element(
                     &forced_el,
                     LayoutTreeContext::new(style, &child_ctx, ancestors)
                         .with_positioned_ancestor_depth(positioned_depth)
-                        .for_element(ElementSiblingContext::new(item.child_idx, child_count))
+                        .for_element(flex_child_positions[item.child_idx].as_context())
                         .with_filter_application(FilterApplication::DeferToFormattingItem),
                     &mut buf,
                     env,
@@ -3049,14 +3075,9 @@ pub(crate) fn layout_flex_container(
                             // the flex item. Subtract the child's own horizontal
                             // border so its border-box lands exactly on `final_w`.
                             let relayout_classes = child_el.class_list();
-                            let relayout_selector_ctx = SelectorContext {
-                                ancestors: ancestors.to_vec(),
-                                child_index: child_idx,
-                                sibling_count: child_count,
-                                preceding_siblings: Vec::new(),
-                                following_siblings: Vec::new(),
-                                is_empty: false,
-                            };
+                            let relayout_selector_ctx = flex_child_positions[child_idx]
+                                .as_context()
+                                .selector_context(ancestors, child_el.children.is_empty());
                             let relayout_child_style = compute_style_with_context_with_font_metrics(
                                 child_el.tag,
                                 child_el.style_attr(),
@@ -3107,14 +3128,10 @@ pub(crate) fn layout_flex_container(
                                 }
                                 let mut fbuf = Vec::new();
                                 let mut fancestors = ancestors.to_vec();
-                                fancestors.push(AncestorInfo {
-                                    element: child_el,
-                                    child_index: child_idx,
-                                    sibling_count: child_count,
-                                    preceding_siblings: Vec::new(),
-                                    following_siblings: Vec::new(),
-                                    is_empty: false,
-                                });
+                                fancestors.push(
+                                    flex_child_positions[child_idx]
+                                        .ancestor(child_el, child_el.children.is_empty()),
+                                );
                                 let fctx = ctx
                                     .with_parent_and_basis(
                                         final_w,
@@ -3122,7 +3139,7 @@ pub(crate) fn layout_flex_container(
                                         Some(inner_cross_size),
                                         style.font_size,
                                     )
-                                    .with_containing_block(None);
+                                    .with_containing_block(descendant_containing_block);
                                 layout_flex_container(
                                     child_el,
                                     &fstyle,
@@ -3158,15 +3175,14 @@ pub(crate) fn layout_flex_container(
                                     Some(10000.0),
                                     style.font_size,
                                 )
-                                .with_containing_block(None);
+                                .with_containing_block(descendant_containing_block);
                             flatten_element(
                                 child_el,
                                 LayoutTreeContext::new(style, &relayout_ctx, ancestors)
                                     .with_positioned_ancestor_depth(positioned_depth)
-                                    .for_element(ElementSiblingContext::new(
-                                        items[i].child_idx,
-                                        child_count,
-                                    ))
+                                    .for_element(
+                                        flex_child_positions[items[i].child_idx].as_context(),
+                                    )
                                     .with_filter_application(
                                         FilterApplication::DeferToFormattingItem,
                                     ),
@@ -3183,14 +3199,9 @@ pub(crate) fn layout_flex_container(
                             }
                         } else {
                             let relayout_classes = child_el.class_list();
-                            let relayout_selector_ctx = SelectorContext {
-                                ancestors: ancestors.to_vec(),
-                                child_index: child_idx,
-                                sibling_count: child_count,
-                                preceding_siblings: Vec::new(),
-                                following_siblings: Vec::new(),
-                                is_empty: false,
-                            };
+                            let relayout_selector_ctx = flex_child_positions[child_idx]
+                                .as_context()
+                                .selector_context(ancestors, child_el.children.is_empty());
                             let relayout_child_style = compute_style_with_context_with_font_metrics(
                                 child_el.tag,
                                 child_el.style_attr(),
@@ -3205,14 +3216,10 @@ pub(crate) fn layout_flex_container(
                             );
                             let mut runs = Vec::new();
                             let mut relayout_ancestors = ancestors.to_vec();
-                            relayout_ancestors.push(AncestorInfo {
-                                element: child_el,
-                                child_index: child_idx,
-                                sibling_count: child_count,
-                                preceding_siblings: Vec::new(),
-                                following_siblings: Vec::new(),
-                                is_empty: false,
-                            });
+                            relayout_ancestors.push(
+                                flex_child_positions[child_idx]
+                                    .ancestor(child_el, child_el.children.is_empty()),
+                            );
                             FlexTextRunCollector {
                                 runs: &mut runs,
                                 rules: env.rules,

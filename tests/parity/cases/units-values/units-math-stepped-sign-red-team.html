@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-math-stepped-sign-red-team</title>
+<style>
+  /* Adapted from WPT css/css-values round/mod/rem/abs/sign/hypot coverage. */
+  @page { size: 480px 640px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane { position: relative; width: 400px; height: 48px; margin-bottom: 9px; background: #f1f1f1; border: 3px solid #111; }
+  .bar { height: 100%; background: #2a9d8f; border-right: 6px solid #e76f51; }
+  .down .bar { width: round(down, 137px, 20px); }
+  .up .bar { width: round(up, 121px, 20px); }
+  .nearest .bar { width: round(nearest, 129px, 20px); }
+  .zero .bar { width: calc(200px + round(to-zero, -137px, 20px)); }
+  .mod-pos .bar { width: calc(100px + mod(50px, 30px)); }
+  .mod-neg .bar { width: calc(100px + mod(-50px, 30px)); }
+  .rem-neg .bar { width: calc(100px + rem(-50px, 30px)); }
+  .absolute .bar { width: abs(-120px); }
+  .sign .bar { width: calc(140px + 20px * sign(-42)); }
+  .hypot .bar { width: hypot(72px, 96px); }
+</style></head><body>
+  <div class="lane down"><div class="bar"></div></div>
+  <div class="lane up"><div class="bar"></div></div>
+  <div class="lane nearest"><div class="bar"></div></div>
+  <div class="lane zero"><div class="bar"></div></div>
+  <div class="lane mod-pos"><div class="bar"></div></div>
+  <div class="lane mod-neg"><div class="bar"></div></div>
+  <div class="lane rem-neg"><div class="bar"></div></div>
+  <div class="lane absolute"><div class="bar"></div></div>
+  <div class="lane sign"><div class="bar"></div></div>
+  <div class="lane hypot"><div class="bar"></div></div>
+</body></html>

@@ -3,6 +3,9 @@ use crate::parser::ttf::{FontVerticalMetricSet, FontVerticalMetrics, TtfFont};
 use crate::style::computed::FontFamily;
 use std::collections::{HashMap, HashSet};
 
+mod run_coalescing;
+pub(crate) use run_coalescing::{coalesce_text_runs, text_runs_share_shaping_buffer};
+
 #[derive(Debug, Clone)]
 pub(crate) struct ShapedGlyph {
     pub glyph_id: u16,
@@ -630,7 +633,15 @@ fn shape_text_with_font(
         shaping,
         TextShapingDirection::Horizontal,
     )?;
-    let width = glyphs.iter().map(|glyph| glyph.x_advance).sum();
+    let width = glyphs
+        .iter()
+        .fold(
+            crate::layout::units::InlineLayoutUnit::default(),
+            |width, glyph| {
+                width + crate::layout::units::InlineLayoutUnit::from_points(glyph.x_advance)
+            },
+        )
+        .to_points();
     Some(ShapedRun { glyphs, width })
 }
 
@@ -710,8 +721,9 @@ fn shape_text_glyphs(
         .map(|info| usize::try_from(info.cluster).ok())
         .collect::<Option<Vec<_>>>()?;
     let cluster_unicode = glyph_cluster_unicode(text, &clusters)?;
-    let resolve_position =
-        |position: i32| crate::layout::units::CssAppUnit::round_points(position as f32 * scale);
+    let resolve_position = |position: i32| {
+        crate::layout::units::TextRunLayoutUnit::from_points(position as f32 * scale).to_points()
+    };
 
     infos
         .iter()
@@ -814,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_font_advances_resolve_to_css_app_units_before_measurement() {
+    fn custom_font_advances_retain_text_run_fixed_point_precision() {
         let fonts = parity_sans_fonts();
         let (_, font) = resolve_custom_font(
             &FontFamily::Custom("ParitySans".to_string()),
@@ -827,10 +839,14 @@ mod tests {
             .expect("ParitySans text shapes");
 
         for glyph in &shaped.glyphs {
-            let app_units = glyph.x_advance / crate::layout::units::CssAppUnit::POINTS;
-            assert_eq!(app_units, app_units.round());
+            let text_unit = crate::layout::units::TextRunLayoutUnit::from_points(glyph.x_advance);
+            assert_eq!(text_unit.to_points(), glyph.x_advance);
         }
-        assert_eq!(shaped.width, 31.6875);
+        assert!(
+            (shaped.width - 31.675_781).abs() < 0.001,
+            "shaped width was {}",
+            shaped.width
+        );
     }
 
     // --- resolve_custom_font ---

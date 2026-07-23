@@ -219,7 +219,7 @@ pub(crate) fn load_image_from_element(
                     BlockMargins::new(style.margin.top, style.margin.bottom),
                     border,
                 ),
-                positioning: Positioning::for_replaced(style),
+                positioning: Positioning::from_style(style),
                 paint: SvgPaint {
                     background_color: style.background_color,
                     border_image: style.border_image.paint(),
@@ -285,7 +285,7 @@ pub(crate) fn load_image_from_element(
                 BlockMargins::new(style.margin.top, style.margin.bottom),
                 LayoutBorder::from_computed(&style.border, style.color),
             ),
-            positioning: Positioning::for_replaced(style),
+            positioning: Positioning::from_style(style),
             sampling: ImageSampling {
                 object_fit: style.object_fit,
                 object_position: style.object_position,

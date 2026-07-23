@@ -363,10 +363,25 @@ fn ext_gstate_objects_rendered() {
         pdf_str.contains("/ExtGState"),
         "Should have ExtGState in resources"
     );
-    // Should have default GS reset
+    // Opacity groups are isolated by the PDF graphics-state stack. `Q`
+    // restores the complete prior state, so emitting `/GSDefault gs` after
+    // every form would be redundant and could accidentally reset unrelated
+    // state owned by an outer scope.
+    let isolated_groups = pdf_str
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(4)
+        .filter(|lines| {
+            lines[0] == "q"
+                && lines[1].starts_with("/GSgrp")
+                && lines[1].ends_with(" gs")
+                && lines[2].ends_with(" Do")
+                && lines[3] == "Q"
+        })
+        .count();
     assert!(
-        pdf_str.contains("/GSDefault gs"),
-        "Should reset to default graphics state"
+        isolated_groups >= 2,
+        "each opacity form must be isolated by a balanced q/Q scope"
     );
 }
 

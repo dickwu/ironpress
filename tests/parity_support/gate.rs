@@ -799,6 +799,7 @@ mod gate_tests {
             base_ids: Vec::new(),
             status,
             diff_pct: if status == Status::Pass { 0.0 } else { 1.0 },
+            semantic_diff_pct: if status == Status::Pass { 0.0 } else { 1.0 },
             description: String::new(),
             note: "test fixture".to_string(),
             kind: "feature".to_string(),

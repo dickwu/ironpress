@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-math-comparison-red-team</title>
+<style>
+  /* Adapted from WPT css/css-values min/max/clamp computation coverage. */
+  @page { size: 480px 520px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane { position: relative; width: 400px; height: 54px; margin-bottom: 10px; background: #f1f1f1; border: 3px solid #111; }
+  .bar { height: 100%; background: #8338ec; border-right: 6px solid #3a86ff; }
+  .a .bar { width: min(180px, 50%); }
+  .b .bar { width: max(120px, 35%); }
+  .c .bar { width: clamp(100px, 50%, 160px); }
+  .d .bar { width: clamp(100px, 25%, 160px); }
+  .e .bar { width: min(calc(50% - 20px), 220px); }
+  .f .bar { width: max(min(50%, 180px), 120px); }
+  .g .bar { width: calc(max(30%, 100px) + 20px); }
+</style></head><body>
+  <div class="lane a"><div class="bar"></div></div>
+  <div class="lane b"><div class="bar"></div></div>
+  <div class="lane c"><div class="bar"></div></div>
+  <div class="lane d"><div class="bar"></div></div>
+  <div class="lane e"><div class="bar"></div></div>
+  <div class="lane f"><div class="bar"></div></div>
+  <div class="lane g"><div class="bar"></div></div>
+</body></html>

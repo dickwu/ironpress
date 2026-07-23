@@ -979,6 +979,7 @@ mod tests {
             base_ids: Vec::new(),
             status: Status::Fail,
             diff_pct: 50.0,
+            semantic_diff_pct: 50.0,
             description: String::new(),
             note: String::new(),
             kind: "feature".into(),
@@ -1004,6 +1005,7 @@ mod tests {
             base_ids: Vec::new(),
             status: Status::Fail, // the substrate is itself broken
             diff_pct: 90.0,
+            semantic_diff_pct: 90.0,
             description: String::new(),
             note: String::new(),
             kind: "probe".into(),

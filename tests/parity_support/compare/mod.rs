@@ -47,6 +47,11 @@ use super::geom::{content_bbox, content_mask, crop_rect, difference_bbox, union_
 pub(crate) struct V2Outcome {
     pub(crate) status: Status,
     pub(crate) diff_pct: f64,
+    /// Complete-page mismatch after only the configured per-pixel RGB channel
+    /// tolerance is applied. Unlike `diff_pct`, this excludes semantically
+    /// correct one-code-value rounding while retaining same-coordinate shape,
+    /// paint-order, and substantive colour errors.
+    pub(crate) semantic_diff_pct: f64,
     pub(crate) tally: ClassTally,
     /// Complete region aggregates plus bounded worst-first examples. Consumed by
     /// `diagnose` and the report without allocating one object per checker pixel.
@@ -79,6 +84,7 @@ impl V2Outcome {
         Self {
             status: Status::Pass,
             diff_pct: 0.0,
+            semantic_diff_pct: 0.0,
             tally: ClassTally {
                 total_px,
                 ..Default::default()
@@ -207,6 +213,11 @@ pub(crate) fn compare_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
         &cand_u,
         &ref_u,
     );
+    let semantic_diff_pct = if page_pixels == 0 {
+        0.0
+    } else {
+        100.0 * visibility_tally.different_px as f64 / page_pixels as f64
+    };
     let mut verdict = verdict(
         (&tally, &regions),
         (&visibility_tally, &visibility_regions),
@@ -216,12 +227,14 @@ pub(crate) fn compare_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
     // Exact full-page scalar: percentage of pixels with any unequal RGBA byte.
     verdict.diff_pct = diff_pct;
     // The classed-diff overlay (spec §3.3 item 2): a blank full-page canvas
-    // with same-coordinate class paint and region frames. Classification works
-    // on the compact union, but the artifact is deliberately never cropped.
+    // with same-coordinate semantic class paint. Only above-floor pixels appear:
+    // region frames and the global per-pixel RGB tolerance are absent from this
+    // visual artifact; exact RGBA inequality remains in `diff_pct` and region
+    // diagnostics remain tabular. Classification works on the compact union, but
+    // the artifact is deliberately never cropped.
     let overlay = super::overlay::render_classed_overlay(
-        &class_map,
-        &regions.examples,
-        reference.dimensions(),
+        &visibility_class_map,
+        shared_dimensions,
         (union.0, union.1),
     );
 
@@ -293,6 +306,7 @@ pub(crate) fn compare_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
     V2Outcome {
         status: verdict.status,
         diff_pct,
+        semantic_diff_pct,
         tally,
         regions,
         visibility: VisibilityEvidence {
@@ -303,6 +317,28 @@ pub(crate) fn compare_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
         overlay,
         diagnosis,
     }
+}
+
+/// Compare complete PDF page rasters and enforce the report-wide mismatch-area
+/// ceiling after the ordinary authored-scale verdict. Comparator golden tests
+/// intentionally exercise small diagnostic crops through `compare_v2`; the
+/// production parity path always uses this full-page entry point.
+pub(crate) fn compare_page_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
+    let mut outcome = compare_v2(cand, reference);
+    if outcome.status == Status::Pass
+        && outcome.semantic_diff_pct > super::config::VISUAL_PASS_MAX_SEMANTIC_DIFF_PCT
+    {
+        outcome.status = Status::Fail;
+        outcome.verdict.status = Status::Fail;
+        outcome.diagnosis.visual_pass_basis.clear();
+        outcome.diagnosis.headline = format!(
+            "above-floor complete-page mismatch {:.6}% exceeds {:.1}% PASS ceiling; {}",
+            outcome.semantic_diff_pct,
+            super::config::VISUAL_PASS_MAX_SEMANTIC_DIFF_PCT,
+            outcome.diagnosis.headline
+        );
+    }
+    outcome
 }
 
 #[cfg(test)]

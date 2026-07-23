@@ -8,8 +8,8 @@ use crate::parser::css::{AncestorInfo, CssRule, PseudoElement, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
-    BoxSizing, ComputedStyle, Display, Float, FontFamily, Overflow, TextAlign, TextOverflow,
-    WhiteSpace, compute_style_with_context_with_font_metrics,
+    BoxSizing, ComputedStyle, Display, Float, FontFamily, Overflow, Position, TextAlign,
+    TextOverflow, WhiteSpace, compute_style_with_context_with_font_metrics,
 };
 use crate::types::EdgeSizes;
 use std::collections::HashMap;
@@ -20,11 +20,11 @@ use super::engine::{
     element_sibling_list, emit_page_break_after, flatten_element, flatten_nodes, forward_siblings,
 };
 use super::helpers::{
-    BackgroundFields, LayoutOverflowKeyword, aspect_ratio_height, authored_intrinsic_width_keyword,
-    authored_keyword_property, authored_line_clamp, authored_overflow_axes,
-    authored_overflow_clip_margin, authored_pseudo_keyword_property, authored_scrollbar_gutter,
-    build_pseudo_block, collects_as_inline_text, establishes_bfc_with_overflow,
-    has_background_paint, heading_level, measure_lines_width,
+    BackgroundFields, LayoutOverflowKeyword, PseudoBoxContext, aspect_ratio_height,
+    authored_intrinsic_width_keyword, authored_keyword_property, authored_line_clamp,
+    authored_overflow_axes, authored_overflow_clip_margin, authored_pseudo_keyword_property,
+    authored_scrollbar_gutter, build_pseudo_block, collects_as_inline_text,
+    establishes_bfc_with_overflow, has_background_paint, heading_level, measure_lines_width,
     patch_absolute_children_containing_block, pseudo_is_block_like, push_block_pseudo,
     recurses_as_layout_child, resolve_abs_containing_block, resolve_content_box_height,
     resolve_inset, resolve_padding_box_height, resolve_relative_offsets,
@@ -379,7 +379,11 @@ pub(crate) fn layout_block_element(
     // `available_width`; flex layout hands an item its own resolved width as
     // `available_width` but keeps the container content width as the basis.
     let percent_width_basis = ctx.parent.percent_width_basis;
-    let abs_containing_block = ctx.containing_block;
+    let abs_containing_block = if style.position == Position::Fixed {
+        Some(ctx.initial_fixed_containing_block())
+    } else {
+        ctx.containing_block
+    };
     // Percentage `height` resolves against the parent's content box (CSS 2.1
     // § 10.5), tracked separately from the absolute containing block so the two
     // are not conflated when a child sits inside a static element.
@@ -749,6 +753,8 @@ pub(crate) fn layout_block_element(
     let has_block_after = after_style
         .as_ref()
         .is_some_and(|s| pseudo_is_block_like(s) && !s.position.is_absolute());
+    let has_any_block_pseudo = before_style.as_ref().is_some_and(pseudo_is_block_like)
+        || after_style.as_ref().is_some_and(pseudo_is_block_like);
     let has_inflow_block_pseudo = has_block_before || has_block_after;
     let inline_sequence = InlineContentSequence::with_generated(
         &el.children,
@@ -792,24 +798,22 @@ pub(crate) fn layout_block_element(
         env.font_metrics(),
     );
     let has_block_kids_for_wrapper = nesting_depth < 40
-        && early_has_visual
         && (has_inflow_block_pseudo
-            || has_out_of_flow_children
-            || el.children.iter().any(|c| {
-                matches!(c, DomNode::Element(e)
-                if (e.tag.is_block() || e.tag == HtmlTag::Svg)
-                    && !collects_as_inline_text(e.tag))
-            }));
+            || early_has_visual
+                && (has_out_of_flow_children
+                    || el.children.iter().any(|c| {
+                        matches!(c, DomNode::Element(e)
+                        if (e.tag.is_block() || e.tag == HtmlTag::Svg)
+                            && !collects_as_inline_text(e.tag))
+                    })));
     let block_pseudo_via_wrapper = has_inflow_block_pseudo && has_block_kids_for_wrapper;
     if let Some(ref ps) = before_style {
         if pseudo_is_block_like(ps) && !before_is_abs && !block_pseudo_via_wrapper {
             output.push(build_pseudo_block(
                 ps,
                 el,
-                inner_width,
-                env.fonts,
-                None,
-                positioned_depth,
+                PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                    .with_positioned_ancestor_depth(positioned_depth),
                 env.counter_state,
                 before_is_list_item,
             ));
@@ -1249,10 +1253,9 @@ pub(crate) fn layout_block_element(
                         output,
                         before_style.as_ref(),
                         el,
-                        inner_width,
-                        env.fonts,
-                        pseudo_cb,
-                        positioned_depth,
+                        PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                            .with_containing_block(pseudo_cb)
+                            .with_positioned_ancestor_depth(positioned_depth),
                         env.counter_state,
                     );
                 }
@@ -1261,10 +1264,9 @@ pub(crate) fn layout_block_element(
                         output,
                         after_style.as_ref(),
                         el,
-                        inner_width,
-                        env.fonts,
-                        pseudo_cb,
-                        positioned_depth,
+                        PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                            .with_containing_block(pseudo_cb)
+                            .with_positioned_ancestor_depth(positioned_depth),
                         env.counter_state,
                     );
                 }
@@ -1693,11 +1695,13 @@ pub(crate) fn layout_block_element(
         || style.aspect_ratio.is_some()
         || style.height.is_some()
         || !layout_padding.is_zero()
+        || has_inflow_block_pseudo
         || (positioned_container && (before_is_abs || after_is_abs))
         || has_abs_children;
     let no_inline_content = !had_inline_runs;
 
     let has_abs_pseudo = positioned_container && (before_is_abs || after_is_abs);
+    let mut block_pseudos_nested = false;
     if (no_inline_content || has_block_kids_for_wrapper || has_abs_children || has_abs_pseudo)
         && needs_wrapper
         && nesting_depth < 40
@@ -1712,10 +1716,8 @@ pub(crate) fn layout_block_element(
                 child_elements.push(build_pseudo_block(
                     ps,
                     el,
-                    inner_width,
-                    env.fonts,
-                    None,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                     before_is_list_item,
                 ));
@@ -1886,10 +1888,8 @@ pub(crate) fn layout_block_element(
                 child_elements.push(build_pseudo_block(
                     ps,
                     el,
-                    inner_width,
-                    env.fonts,
-                    None,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                     after_is_list_item,
                 ));
@@ -2067,10 +2067,9 @@ pub(crate) fn layout_block_element(
                 let mut pseudo = build_pseudo_block(
                     ps,
                     el,
-                    inner_width,
-                    env.fonts,
-                    cb_info,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                        .with_containing_block(cb_info)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                     before_is_list_item,
                 );
@@ -2086,10 +2085,9 @@ pub(crate) fn layout_block_element(
                 let mut pseudo = build_pseudo_block(
                     ps,
                     el,
-                    inner_width,
-                    env.fonts,
-                    cb_info,
-                    positioned_depth,
+                    PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                        .with_containing_block(cb_info)
+                        .with_positioned_ancestor_depth(positioned_depth),
                     env.counter_state,
                     after_is_list_item,
                 );
@@ -2172,10 +2170,7 @@ pub(crate) fn layout_block_element(
                     ))
                     .with_containing_block(wrapper_cb)
                     .with_containing_block_depth(positioned_depth),
-                fragmentation: crate::layout::elements::BoxFragmentation {
-                    decoration: style.box_decoration_break,
-                    ..Default::default()
-                },
+                fragmentation: crate::layout::elements::BoxFragmentation::from_style(style),
                 overflow: crate::layout::elements::OverflowBehavior {
                     combined: emitted_overflow,
                     x: emitted_overflow_x,
@@ -2184,6 +2179,7 @@ pub(crate) fn layout_block_element(
             }
             .boxed(),
         );
+        block_pseudos_nested = has_any_block_pseudo;
     } else {
         // Compute cb_info for positioned containers in the non-wrapper path
         // so that absolute children get a containing block.
@@ -2335,16 +2331,17 @@ pub(crate) fn layout_block_element(
     }
 
     // Emit block-level ::after pseudo-element (inside block path)
-    push_block_pseudo(
-        output,
-        after_style.as_ref(),
-        el,
-        inner_width,
-        env.fonts,
-        cb_info,
-        positioned_depth,
-        env.counter_state,
-    );
+    if !block_pseudos_nested {
+        push_block_pseudo(
+            output,
+            after_style.as_ref(),
+            el,
+            PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
+                .with_containing_block(cb_info)
+                .with_positioned_ancestor_depth(positioned_depth),
+            env.counter_state,
+        );
+    }
     false
 }
 

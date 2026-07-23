@@ -1,10 +1,12 @@
 use super::*;
 use crate::layout::elements::TextBlock;
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(in crate::render::pdf) fn render_text_block(
     content: &mut String,
     element: &TextBlock,
     frame: PageElementFrame<'_>,
+    phase: ElementPaintPhase,
     bookmarks: &mut Vec<BookmarkEntry>,
     ctx: &mut PageRenderContext<'_>,
 ) {
@@ -57,7 +59,9 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     // Collect heading bookmark for PDF outlines
-    if let Some(level) = heading_level {
+    if phase.paints_contents()
+        && let Some(level) = heading_level
+    {
         let title: String = lines
             .iter()
             .flat_map(|l| l.runs.iter().map(|r| r.text.as_str()))
@@ -130,7 +134,8 @@ pub(in crate::render::pdf) fn render_text_block(
     //   T(cx,cy) · M · T(-cx,-cy)
     // which in PDF `cm` notation is a single 6-value matrix.
     let projected_transform = transform.filter(is_projected_transform);
-    if projected_transform.is_some()
+    if phase == ElementPaintPhase::All
+        && projected_transform.is_some()
         && lines.is_empty()
         && background_gradient.is_none()
         && background_radial_gradient.is_none()
@@ -155,9 +160,10 @@ pub(in crate::render::pdf) fn render_text_block(
         return;
     }
 
-    if transform
-        .filter(|transform| !is_projected_transform(transform))
-        .is_some()
+    if phase == ElementPaintPhase::All
+        && transform
+            .filter(|transform| !is_projected_transform(transform))
+            .is_some()
         && lines.is_empty()
         && background_gradient.is_none()
         && background_radial_gradient.is_none()
@@ -183,17 +189,14 @@ pub(in crate::render::pdf) fn render_text_block(
         return;
     }
 
-    let element_transform = transform.as_ref().map(|transform| {
-        let reference = tb_geometry.transform_reference(box_transform);
-        resolve_css_transform(transform, reference.pivot(), reference.size())
-    });
-    let needs_transform = element_transform.is_some();
     let tb_group = PaintGroupScope::begin(
         content,
         element,
         tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
         ctx,
     );
+    let transformed_paint_space = ctx.text.pdf_writer.transformed_paint_space(ctx.paint_box);
+    let needs_transform = transformed_paint_space.is_some();
 
     // CSS `overflow: hidden`/`clip`/`scroll`/`auto` clips at the
     // PADDING box (border box inset by the border widths) and the
@@ -203,19 +206,21 @@ pub(in crate::render::pdf) fn render_text_block(
     // clip is opened later (after the border/outline are stroked)
     // and scoped to the inline text content only; see `needs_clip`
     // below the outline-paint block.
-    let needs_clip = clip_rect.is_some();
+    let needs_clip = phase.paints_contents() && clip_rect.is_some();
 
     // Draw box-shadow with blur (references the border box).
-    render_box_shadows(
-        content,
-        box_shadow,
-        tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
-        *tb_radii,
-        ctx.page_ext_gstates,
-        ctx.bg_alpha_counter,
-        ctx.text.pdf_writer,
-        ctx.text.page_images,
-    );
+    if phase.paints_decoration() {
+        render_box_shadows(
+            content,
+            box_shadow,
+            tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
+            *tb_radii,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+            ctx.text.pdf_writer,
+            ctx.text.page_images,
+        );
+    }
 
     // CSS `filter: blur()` on a solid box (css-filter-effects-1
     // §4.1): the box's painted output (background fill + border)
@@ -224,7 +229,8 @@ pub(in crate::render::pdf) fn render_text_block(
     // solid box (no gradient/SVG bg, no text, no transform/opacity
     // wrapper, square corners) rasterize bg+border, blur it, and
     // embed it in place of the sharp vector paint.
-    if *background_blur_radius > 0.0
+    if phase == ElementPaintPhase::All
+        && *background_blur_radius > 0.0
         && !needs_transform
         && element.paint.group.effects.is_identity()
         && lines.is_empty()
@@ -269,7 +275,8 @@ pub(in crate::render::pdf) fn render_text_block(
         return;
     }
 
-    if *background_blur_radius > 0.0
+    if phase == ElementPaintPhase::All
+        && *background_blur_radius > 0.0
         && !needs_transform
         && element.paint.group.effects.is_identity()
         && !lines.is_empty()
@@ -328,17 +335,22 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     let tb_reference = tb_geometry.background_origin_box(*background_origin);
-    let tb_needs_clip = *background_clip != BackgroundClip::Border;
+    let tb_clip_box = tb_geometry.background_paint_box(
+        *background_clip,
+        *tb_radii,
+        BackgroundBorderPaint::new(border, element.paint.border_image.as_ref()),
+    );
+    let tb_needs_clip = *background_clip != BackgroundClip::Border || tb_clip_box != tb_border_box;
     let tb_text_clip_background = *background_clip == BackgroundClip::Text;
     let tb_gradient_clip = !tb_text_clip_background;
     let tb_layer_box =
         background_layer_box(*background_size, *background_position, *background_repeat);
     let tb_bg_blend_mode = background_blend_mode.background_layer(0);
     let tb_bg_blended = tb_bg_blend_mode != crate::style::computed::BlendMode::Normal;
-    let tb_clip_box = tb_geometry.background_clip_box(*background_clip, *tb_radii);
-
     // Draw background if specified
-    if let Some(background) = background_color {
+    if phase.paints_decoration()
+        && let Some(background) = background_color
+    {
         let (r, g, b, a) = background.to_f32_rgba();
         let needs_bg_alpha = a < 1.0;
         if needs_bg_alpha {
@@ -378,7 +390,9 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     // Draw linear gradient if specified
-    if let Some(gradient) = background_gradient {
+    if phase.paints_decoration()
+        && let Some(gradient) = background_gradient
+    {
         let gradient = linear_with_background_layer(gradient, tb_layer_box);
         if !tb_text_clip_background
             && gradient.layer_box.attachment != Some(BackgroundAttachment::Local)
@@ -431,7 +445,9 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     // Draw radial gradient if specified
-    if let Some(gradient) = background_radial_gradient {
+    if phase.paints_decoration()
+        && let Some(gradient) = background_radial_gradient
+    {
         let gradient = radial_with_background_layer(gradient, tb_layer_box);
         if !tb_text_clip_background
             && gradient.layer_box.attachment != Some(BackgroundAttachment::Local)
@@ -476,7 +492,9 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     // Draw conic gradient if specified
-    if let Some(gradient) = background_conic_gradient {
+    if phase.paints_decoration()
+        && let Some(gradient) = background_conic_gradient
+    {
         let gradient = conic_with_background_layer(gradient, tb_layer_box);
         if !tb_text_clip_background
             && gradient.layer_box.attachment != Some(BackgroundAttachment::Local)
@@ -519,23 +537,27 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     // Draw inset box-shadow (after backgrounds, before content).
-    render_box_shadows_inset(
-        content,
-        box_shadow,
-        tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
-        *tb_radii,
-        ctx.page_ext_gstates,
-        ctx.bg_alpha_counter,
-        ctx.text.pdf_writer,
-        ctx.text.page_images,
-    );
+    if phase.paints_decoration() {
+        render_box_shadows_inset(
+            content,
+            box_shadow,
+            tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
+            *tb_radii,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+            ctx.text.pdf_writer,
+            ctx.text.page_images,
+        );
+    }
 
     // Draw SVG background image if specified.
     // `block_x` / `block_y` are the border-box top-left and
     // `render_width` × `border_box_h` is the border box (border
     // paints inward).  Derive the padding/content boxes by
     // insetting with the per-side border / padding widths.
-    if let Some(svg_tree) = background_svg {
+    if phase.paints_decoration()
+        && let Some(svg_tree) = background_svg
+    {
         if tb_bg_blended {
             content.push_str("q\n");
             begin_blend_mode(content, ctx.page_ext_gstates, tb_bg_blend_mode);
@@ -549,18 +571,9 @@ pub(in crate::render::pdf) fn render_text_block(
             *background_position,
             *background_repeat,
         );
-        let paint = element_transform.map_or_else(
+        let paint = transformed_paint_space.map_or_else(
             || PdfBackgroundPaintContext::local(paint),
-            |transform| {
-                PdfBackgroundPaintContext::in_default_space(
-                    paint,
-                    PdfPaintSpace::new(
-                        transform.matrix(),
-                        ctx.text.pdf_writer.page_content_transform,
-                        ctx.paint_box,
-                    ),
-                )
-            },
+            |paint_space| PdfBackgroundPaintContext::in_default_space(paint, paint_space),
         );
         render_svg_background(
             content,
@@ -582,7 +595,7 @@ pub(in crate::render::pdf) fn render_text_block(
     // Draw every box border through the shared rounded-ring painter. Text,
     // containers, flex items, and table cells must not disagree about corner
     // ownership or style transitions.
-    if border.has_visible() || element.paint.border_image.is_some() {
+    if phase.paints_decoration() && (border.has_visible() || element.paint.border_image.is_some()) {
         paint_box_decoration(
             content,
             tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
@@ -597,7 +610,7 @@ pub(in crate::render::pdf) fn render_text_block(
     // `outline-offset` widens the gap between the border edge and
     // the outline; the centerline sits half the outline width
     // beyond the offset edge so the stroke stays fully outside.
-    if *outline_width > 0.0 {
+    if phase.paints_decoration() && *outline_width > 0.0 {
         let gap = *tb_outline_offset + *outline_width / 2.0;
         let outline_x = block_x - gap;
         let outline_y = block_bottom - gap;
@@ -640,15 +653,17 @@ pub(in crate::render::pdf) fn render_text_block(
     } else {
         PdfTextSpace::page_css(ctx.text.pdf_writer.page_content_transform)
     };
-    text_lines::render_text_block_lines(
-        content,
-        element,
-        tb_geometry,
-        frame,
-        false,
-        text_space,
-        ctx,
-    );
+    if phase.paints_contents() {
+        text_lines::render_text_block_lines(
+            content,
+            element,
+            tb_geometry,
+            frame,
+            false,
+            text_space,
+            ctx,
+        );
+    }
 
     // Restore the text box's local overflow clip.
     if needs_clip {

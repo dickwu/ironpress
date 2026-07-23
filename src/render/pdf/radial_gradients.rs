@@ -132,14 +132,15 @@ pub(super) fn render_radial_pattern_tile(
     let center = geometry.center;
     let radii = geometry.radii;
     let y_scale = scale * (radii.y / radii.x);
+    let pattern_matrix = pdf_writer.paint_matrix(PdfMatrix::new(
+        PdfVector::new(scale, 0.0),
+        PdfVector::new(0.0, -y_scale),
+        PdfPoint::new(tile.left, tile.top() - (scale - y_scale) * center.y),
+    ));
     let name = pdf_writer.add_shading_pattern(PdfShadingPattern::radial(
         center,
         radii.x,
-        PdfMatrix::new(
-            PdfVector::new(scale, 0.0),
-            PdfVector::new(0.0, -y_scale),
-            PdfPoint::new(tile.left, tile.top() - (scale - y_scale) * center.y),
-        ),
+        pattern_matrix,
         stops,
         if gradient.shape == RadialShape::Circle {
             PdfPatternGeometryFormat::SixDecimals

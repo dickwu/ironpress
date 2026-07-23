@@ -70,6 +70,13 @@ impl LayerTilePattern {
         self.paint_box
     }
 
+    pub(super) fn sample(self, point: PdfPoint) -> Option<PdfPoint> {
+        Some(PdfPoint::new(
+            self.x.sample(point.x)?,
+            self.y.sample(point.y)?,
+        ))
+    }
+
     fn tiles(self) -> Option<LayerTilePlacements> {
         Some(LayerTilePlacements {
             paint_box: self.paint_box,

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gradient pattern space through transformed ancestors</title>
+<style>
+  @page { size: 768px 256px; margin: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    display: block;
+    width: 768px;
+    height: 256px;
+    overflow: hidden;
+    background: #fff;
+  }
+  body { position: relative; }
+  .case {
+    position: absolute;
+    display: block;
+    width: 176px;
+    height: 80px;
+    border: 4px solid #111;
+    background-color: #fff;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+  }
+  .direct {
+    top: 20px;
+    transform: translate(3px, -2px) rotate(11deg) scale(.93, .84);
+    transform-origin: 18% 73%;
+  }
+  .ancestor {
+    top: 148px;
+    height: 88px;
+    border: 5px solid #111;
+    background: #d7dde5;
+    transform: translate(-2px, 1px) rotate(-8deg) skewX(4deg);
+    transform-origin: 77% 21%;
+  }
+  .ancestor > .case {
+    left: 8px;
+    top: 8px;
+    width: 150px;
+    height: 62px;
+  }
+  .column-1 { left: 40px; }
+  .column-2 { left: 296px; }
+  .column-3 { left: 552px; }
+  .linear {
+    background-image: linear-gradient(
+      127deg,
+      #ff003c 0 34%,
+      #ffea00 34% 67%,
+      #0048ff 67% 100%
+    );
+  }
+  .radial {
+    background-image: radial-gradient(
+      circle at 28% 72%,
+      #fff 0 14%,
+      #00e5ff 14% 42%,
+      #001252 42% 100%
+    );
+  }
+  .conic {
+    background-image: conic-gradient(
+      from 23deg at 64% 34%,
+      #ff00c8 0 25%,
+      #00ff67 25% 55%,
+      #ff6a00 55% 83%,
+      #402080 83% 100%
+    );
+  }
+</style>
+</head>
+<body>
+  <div class="case direct column-1 linear"></div>
+  <div class="case direct column-2 radial"></div>
+  <div class="case direct column-3 conic"></div>
+  <div class="case ancestor column-1"><div class="case linear"></div></div>
+  <div class="case ancestor column-2"><div class="case radial"></div></div>
+  <div class="case ancestor column-3"><div class="case conic"></div></div>
+</body>
+</html>

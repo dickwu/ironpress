@@ -2,7 +2,7 @@ use crate::layout::engine::{LayoutBorder, LayoutBorderSide};
 use crate::style::computed::BorderStyle;
 use crate::types::{Color, CornerRadii, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Rect};
 
-use crate::render::borders::{BorderRing, CssRoundedRect, bevel_edge_color, double_rule_width};
+use crate::render::borders::{BorderRing, CssRoundedRect, DoubleBorderMetrics, bevel_edge_color};
 
 /// Resolved CSS border paint for an offscreen CSS filter `SourceGraphic`.
 ///
@@ -22,7 +22,7 @@ pub(super) struct RasterBorder<'a> {
 impl<'a> RasterBorder<'a> {
     pub(super) fn new(border_box: Rect, border: &'a LayoutBorder, radii: CornerRadii) -> Self {
         let widths = border.widths();
-        let double_rules = widths.map(double_rule_width);
+        let double_rules = widths.map(|width| DoubleBorderMetrics::new(width).stripe_width());
         let half_widths = widths * 0.5;
         let ring = BorderRing::new(border_box, radii, widths);
         Self {
@@ -100,10 +100,9 @@ impl RasterColumnRule {
         let width = self.paint.width;
         match self.paint.style {
             BorderStyle::Solid => Some(self.paint.color),
-            BorderStyle::Double => {
-                let rule = double_rule_width(width);
-                (across < rule || across >= width - rule).then_some(self.paint.color)
-            }
+            BorderStyle::Double => DoubleBorderMetrics::new(width)
+                .paints(across)
+                .then_some(self.paint.color),
             BorderStyle::Groove | BorderStyle::Ridge => Some(bevel_color(
                 &self.paint,
                 PhysicalSide::Left,

@@ -1,5 +1,6 @@
 use crate::layout::elements::{
-    BoxPaint, BoxPaintOwner, LayoutNode, LayoutSize, Positioning, PositioningOwner,
+    BoxPaint, BoxPaintOwner, LayoutNode, LayoutSize, LineFragmentation, Positioning,
+    PositioningOwner,
 };
 use crate::layout::engine::{LayoutBorder, TextLine};
 use crate::layout::filter::FilterRasterOutput;
@@ -80,15 +81,24 @@ impl crate::layout::elements::FilterHolder for CellPaint {
 /// Resolved box-model geometry shared by table and grid cells.
 #[derive(Debug, Clone, Default)]
 pub struct CellBoxModel {
-    /// Insets from the cell edge to its content. These include authored padding
-    /// and the cell-owned share of its border.
+    /// Insets from the cell border-box edge to its content. This is the one
+    /// canonical sum of authored padding and the cell-owned border share.
     pub content_insets: EdgeSizes,
-    /// Cell-owned border share, kept separately for padding-box containing
-    /// blocks and collapsed-border geometry.
+    /// Cell-owned border share, retained as the semantic component needed by
+    /// padding-box containing blocks and collapsed-border conflict resolution.
     pub border_insets: EdgeSizes,
     pub border: LayoutBorder,
     /// Minimum grid-line distance in the block axis.
     pub minimum_block_size: f32,
+}
+
+impl CellBoxModel {
+    /// Authored padding recovered from the canonical content inset and the
+    /// independently resolved border share. Paint geometry needs this component
+    /// because [`crate::render::pdf`] supplies the border separately.
+    pub(crate) fn padding(&self) -> EdgeSizes {
+        self.content_insets - self.border_insets
+    }
 }
 
 /// Text alignment within one table or grid cell.
@@ -96,6 +106,20 @@ pub struct CellBoxModel {
 pub struct CellAlignment {
     pub inline: TextAlign,
     pub block: VerticalAlign,
+}
+
+/// Fragmentation policy of the independent formatting context inside a cell.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CellFragmentation {
+    pub(crate) lines: LineFragmentation,
+}
+
+impl CellFragmentation {
+    pub(crate) const fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
+        Self {
+            lines: LineFragmentation::from_style(style),
+        }
+    }
 }
 
 /// Layout and paint state common to table and grid cells.
@@ -106,12 +130,29 @@ pub struct CellBox {
     pub(crate) paint: CellPaint,
     pub(crate) positioning: Positioning,
     pub alignment: CellAlignment,
+    pub(crate) fragmentation: CellFragmentation,
 }
 
 impl CellBox {
     pub(crate) fn has_outset_graphical_effect(&self) -> bool {
         self.paint.has_outset_graphical_effect()
             || crate::layout::elements::text_lines_have_outset_shadows(&self.content.lines)
+    }
+
+    /// Depth at which this cell's padding box becomes the containing block for
+    /// positioned descendants.
+    ///
+    /// Cells are formatting-context principals rather than `LayoutNode`s, so
+    /// recursive renderers cannot discover this capability through the normal
+    /// container visitor. Exposing the same semantic query here prevents table
+    /// and grid child paths from silently dropping positioned ancestry.
+    pub(crate) fn established_containing_block_depth(&self) -> Option<usize> {
+        let establishes = self.positioning.scheme.is_positioned()
+            || self.paint.group.transform.value.is_some()
+            || self.paint.group.effects.stacking_context
+                == crate::layout::engine::StackingContext::Filter;
+        (establishes && self.positioning.containing_block_depth > 0)
+            .then_some(self.positioning.containing_block_depth)
     }
 }
 
@@ -228,6 +269,22 @@ pub struct GridInset {
 }
 
 /// Grid-only placement and fragmentation state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct GridPaintOrder {
+    order: i32,
+    source_index: usize,
+}
+
+impl GridPaintOrder {
+    pub(crate) const fn new(order: i32, source_index: usize) -> Self {
+        Self {
+            order,
+            source_index,
+        }
+    }
+}
+
+/// Grid-only placement, paint-order, and fragmentation state.
 #[derive(Debug, Clone)]
 pub struct GridCellPlacement {
     pub inset: Option<GridInset>,
@@ -236,6 +293,9 @@ pub struct GridCellPlacement {
     pub column_start: usize,
     pub column_span: usize,
     pub row_span: usize,
+    /// CSS Grid's order-modified document order. Geometry remains track-based,
+    /// so paint can be reordered without moving or reindexing the cell.
+    pub(crate) paint_order: GridPaintOrder,
 }
 
 impl Default for GridCellPlacement {
@@ -246,6 +306,7 @@ impl Default for GridCellPlacement {
             column_start: 0,
             column_span: 1,
             row_span: 1,
+            paint_order: GridPaintOrder::default(),
         }
     }
 }

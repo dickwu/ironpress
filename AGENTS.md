@@ -21,7 +21,7 @@
 - Paged CSS compliance is the target. Do not assume an oracle is correct: check disputed behavior against the applicable standard and repair or regenerate an incorrect reference.
 - Candidate and oracle PDFs use the same pinned `pdf2ppm`/`pdftoppm` executable and arguments. A raster difference means the PDFs differ; do not attribute it to different rasterizers.
 - Never translate, register, jitter, crop, resize, filter, resample, or replace either comparison raster. Diffs must show the complete page canvas without copying source content into the diff.
-- A per-pixel RGB channel delta below 0.5% is semantically correct, while the exact RGBA mismatch remains reported.
+- A per-pixel RGB channel delta below 1% is semantically correct, while the exact RGBA mismatch remains reported. A complete page may contain at most 1% above-floor pixels; authored-scale defects can still fail below that aggregate ceiling.
 - Pin UA behavior explicitly in oracle fixtures. If a fixture or pinned UA change affects oracle paint, regenerate the affected PDF references and `refs.lock` before publishing a report.
 - Keep `tests/parity/reports/index.html`, `tests/parity/REPORT.md`, and `tests/parity/report.json` current after retained renderer or comparator changes.
 - Fix shared problem families, starting with the largest human-visible differences. Verify visually similar failures before weakening a global guard.

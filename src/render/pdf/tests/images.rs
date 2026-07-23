@@ -37,6 +37,34 @@
     }
 
     #[test]
+    fn nested_filtered_replaced_output_paints_once_across_parent_phases() {
+        let pdf = crate::HtmlConverter::new()
+            .compress(false)
+            .sanitize(false)
+            .convert(
+                r#"<style>
+                    * { margin: 0; box-sizing: border-box }
+                    .outer { width: 200px; height: 140px; background: #b0bec5 }
+                    .filtered { width: 200px; height: 140px; background: #c62828;
+                                filter: opacity(0.5) }
+                </style>
+                <div><div class="outer"><div class="filtered"></div></div></div>"#,
+            )
+            .expect("filtered nested box should render");
+        let content = String::from_utf8_lossy(&pdf);
+
+        let image_draws = content
+            .lines()
+            .filter(|line| line.starts_with("/Im") && line.ends_with(" Do"))
+            .count();
+        assert_eq!(
+            image_draws,
+            1,
+            "the atomic filtered image must appear only in the parent's contents phase\n{content}",
+        );
+    }
+
+    #[test]
     fn stylesheet_image_rendering_controls_pdf_image_sampling() {
         const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
         let pixelated = format!(
@@ -464,7 +492,7 @@
     }
 
     #[test]
-    fn render_color_filtered_png_auto_resize_uses_target_dpi() {
+    fn render_color_filtered_png_retains_configured_filter_dpi() {
         let src = rgb_png_data_uri(96, 96);
         let html =
             format!(r#"<img src="{src}" style="width:24pt;height:24pt;filter:brightness(90%)">"#);
@@ -476,12 +504,16 @@
         let content = String::from_utf8_lossy(&pdf);
 
         assert!(
-            content.contains("/Width 24 /Height 24"),
-            "generated color-filter PNG should be resized to target image DPI before embedding"
+            content.contains("/Width 100 /Height 100"),
+            "a 24pt color-filter surface should retain the default 300-DPI filter resolution"
         );
         assert!(
             !content.contains("/Width 96 /Height 96"),
-            "generated color-filter PNG should not bypass downscaling"
+            "the renderer-owned filter surface must not fall back to source-image resolution"
+        );
+        assert!(
+            !content.contains("/Width 24 /Height 24"),
+            "image DPI must not downsample a renderer-owned filter surface"
         );
     }
 

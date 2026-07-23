@@ -834,7 +834,7 @@ fn is_background_size_continuation(
 fn is_background_position_length(token: &str) -> bool {
     matches!(
         parse_length(token),
-        Some(CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Calc(_))
+        Some(CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Math(_))
     )
 }
 
@@ -1034,7 +1034,7 @@ mod tests {
     fn inline_relative_length_preserves_em_units() {
         assert!(matches!(
             parse_inline_style("width: 10em").get("width"),
-            Some(CssValue::Number(value)) if (*value - 10.0).abs() < 0.01
+            Some(CssValue::Em(value)) if (*value - 10.0).abs() < 0.01
         ));
     }
 
@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn parse_calc_and_var_values() {
         let style = parse_inline_style("width: calc(100% - 20pt); color: var(--text-color, red)");
-        assert!(matches!(style.get("width"), Some(CssValue::Calc(tokens)) if tokens.len() == 3));
+        assert!(matches!(style.get("width"), Some(CssValue::Math(_))));
         assert!(matches!(
             style.get("color"),
             Some(CssValue::Var(name, Some(fallback))) if name == "--text-color" && fallback == "red"

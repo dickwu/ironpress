@@ -357,11 +357,11 @@ pub(super) fn render_linear_function_gradient(
         .unwrap_or(tile);
     let page_anchor = PdfPoint::new(page.left, page.top());
     let perpendicular_offset = (page_anchor - span_start).dot(perpendicular);
-    let transform = PdfMatrix::new(
+    let transform = pdf_writer.paint_matrix(PdfMatrix::new(
         direction * span_length,
         perpendicular * span_length,
         span_start + perpendicular * perpendicular_offset,
-    );
+    ));
     let Some(inverse) = transform.inverse() else {
         return false;
     };
@@ -400,11 +400,11 @@ pub(super) fn render_radial_function_gradient(
     if !period_radii.is_positive() {
         return false;
     }
-    let transform = PdfMatrix::new(
+    let transform = pdf_writer.paint_matrix(PdfMatrix::new(
         PdfVector::new(period_radii.x, 0.0),
         PdfVector::new(0.0, -period_radii.y),
         geometry.page_center(tile),
-    );
+    ));
     let page = pdf_writer
         .page_content_transform
         .page_bounds()

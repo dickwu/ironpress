@@ -13,7 +13,7 @@ use crate::layout::paginate::ResolvedFootnoteAreaStyle;
 use crate::layout::text::{OverflowWrap, TextWrapOptions, wrap_text_runs};
 use crate::parser::ttf::TtfFont;
 use crate::render::background::BackgroundPaintContext;
-use crate::render::borders::{BorderRing, bevel_edge_color, double_rule_width, is_bevel_style};
+use crate::render::borders::{BorderRing, DoubleBorderMetrics, bevel_edge_color, is_bevel_style};
 use crate::render::pdf_fonts::{
     PreparedCustomFont, PreparedCustomFonts, Type3GlyphStyle,
     prepare_custom_fonts_with_additional_runs, prepared_font_name_for_run,
@@ -219,7 +219,14 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
     }
 
     fn visit_text_block(&mut self, element: &TextBlock) {
-        render_text_block(self.content, element, self.frame, self.bookmarks, self.ctx);
+        render_text_block(
+            self.content,
+            element,
+            self.frame,
+            self.paint_phase,
+            self.bookmarks,
+            self.ctx,
+        );
     }
 
     fn visit_table_row(&mut self, element: &TableRow) {
@@ -440,7 +447,8 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 &mut annotations,
                 page_paint_box,
                 page_size.height,
-            );
+            )
+            .with_initial_fixed_origin(PdfPoint::new(margin.left, page_size.height - margin.top));
             let mut stacking_plan = StackingPaintPlan::default();
             for planned in plan_page_elements(&page.elements) {
                 let elem_idx = planned.index;
@@ -484,7 +492,10 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     StackingScope::Local,
                     &mut content,
                     &mut stacking_plan,
-                    layout_element_paint_order(element.as_ref()),
+                    layout_element_paint_order(element.as_ref()).with_in_flow_phase(
+                        planned.phase.paints_decoration(),
+                        planned.phase.paints_contents(),
+                    ),
                     element_content,
                     descendants,
                 );
@@ -686,7 +697,9 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     || y - (line_box.baseline_from_top - line_box.height / 2.0),
                     |band| page_margin_text_baseline(band, page_size, margin, line_box),
                 );
-                let text_x = crate::layout::units::CssAppUnit::floor_points(margin_layout.text_x);
+                let text_x =
+                    crate::layout::units::LayoutUnit::from_points_floor(margin_layout.text_x)
+                        .to_points();
                 if let Some(bg) = mb.background_color {
                     let (r, g, b, a) = bg.to_f32_rgba();
                     if a > 0.0 {
@@ -721,9 +734,10 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                         &mut pdf_writer,
                         &mut page_images,
                     );
-                    cursor_x = crate::layout::units::CssAppUnit::ceil_points(
+                    cursor_x = crate::layout::units::LayoutUnit::from_points_ceil(
                         cursor_x + estimate_run_width_with_fonts(margin_run, custom_fonts),
-                    );
+                    )
+                    .to_points();
                 }
             }
         }

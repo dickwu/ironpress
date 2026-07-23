@@ -1,4 +1,49 @@
+use super::patterns::LayerTilePattern;
 use super::*;
+
+pub(super) fn render_distributed_linear_gradient_raster(
+    content: &mut String,
+    gradient: &LinearGradient,
+    pattern: LayerTilePattern,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+) -> bool {
+    let paint_box = pattern.paint_box();
+    let Some(page) = pdf_writer.page_content_transform.page_bounds() else {
+        return false;
+    };
+    let Some(dimensions) = RasterDimensions::from_point_scales(page.width, page.height, 1.0, 1.0)
+    else {
+        return false;
+    };
+    if dimensions.width > MAX_RASTER_TILE_EDGE || dimensions.height > MAX_RASTER_TILE_EDGE {
+        return false;
+    }
+    let tile = pattern.tile_size();
+    let Some(sampler) = crate::render::gradient_sampling::LinearGradientSampler::resolve(
+        gradient,
+        crate::types::Size::new(tile.x, tile.y),
+    ) else {
+        return false;
+    };
+    let image = image::RgbaImage::from_fn(dimensions.width, dimensions.height, |px, py| {
+        let local = PdfPoint::new(
+            page.left + px as f32 - paint_box.left,
+            paint_box.top() - (page.top() - py as f32),
+        );
+        pattern
+            .sample(local)
+            .map_or(image::Rgba([0, 0, 0, 0]), |sample| {
+                image::Rgba(
+                    sampler
+                        .sample(crate::types::Point::new(sample.x, sample.y))
+                        .to_rgba8(),
+                )
+            })
+    });
+    draw_gradient_raster_tile(content, pdf_writer, page_images, &image, page);
+    true
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_linear_gradient_tile_raster(

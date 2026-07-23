@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>grid-fit-content-percentage-range</title>
+<style>
+  @page { size: 624px 504px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; color: #111; font: 16px/1 ParitySans; }
+  body { padding: 18px; }
+  .probe {
+    display: grid;
+    grid-template-columns: fit-content(var(--limit)) minmax(0, 1fr);
+    width: 560px;
+    height: 64px;
+    margin-bottom: 10px;
+    border: 4px solid #111;
+  }
+  .label {
+    min-width: 56px;
+    padding: 8px;
+    overflow: hidden;
+    color: #fff;
+    background: #d7263d;
+    white-space: nowrap;
+  }
+  .remainder { padding: 8px; color: #fff; background: #087e8b; }
+  .p0 { --limit: 0%; }
+  .p10 { --limit: 10%; }
+  .p30 { --limit: 30%; }
+  .p50 { --limit: 50%; }
+  .p100 { --limit: 100%; }
+  .p150 { --limit: 150%; }
+</style>
+</head>
+<body>
+  <div class="probe p0"><div class="label">0% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+  <div class="probe p10"><div class="label">10% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+  <div class="probe p30"><div class="label">30% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+  <div class="probe p50"><div class="label">50% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+  <div class="probe p100"><div class="label">100% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+  <div class="probe p150"><div class="label">150% — LABEL TRACK MUST CLAMP</div><div class="remainder">REMAINDER</div></div>
+</body>
+</html>

@@ -178,7 +178,7 @@ fn render_conic_gradient_pattern(
     );
     let shader = PdfMatrix::rotate_around(css_center, sin, cos);
     let mapper = PdfMatrix::translate(css_center);
-    let transform = canvas * shader * mapper;
+    let transform = pdf_writer.paint_matrix(canvas * shader * mapper);
     let Some(inverse) = transform.inverse() else {
         return false;
     };

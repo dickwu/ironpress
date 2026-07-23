@@ -88,6 +88,7 @@ fn nonnegative_number(value: &str) -> bool {
 fn length_may_resolve_nonnegative(value: CssValue) -> bool {
     match value {
         CssValue::Length(value)
+        | CssValue::Em(value)
         | CssValue::Percentage(value)
         | CssValue::Ex(value)
         | CssValue::Ch(value)
@@ -96,7 +97,7 @@ fn length_may_resolve_nonnegative(value: CssValue) -> bool {
         | CssValue::Vh(value)
         | CssValue::Vmin(value)
         | CssValue::Vmax(value) => value.is_finite() && value >= 0.0,
-        CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _) => true,
+        CssValue::Math(_) | CssValue::Var(_, _) => true,
         CssValue::Keyword(value) => !value.trim_start().starts_with('-'),
         CssValue::Number(value) => value.is_finite() && value >= 0.0,
         CssValue::Color(_) | CssValue::BackgroundLayers(_) => false,

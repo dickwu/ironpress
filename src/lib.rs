@@ -564,6 +564,11 @@ impl HtmlConverter {
                 effective_margin.left = v;
             }
         }
+        // Viewport-percentage units in paged media resolve against the page
+        // area (the initial containing block), not against the narrower body
+        // content box. Preserve page-owned margins before body margin, padding,
+        // and centering gutters are projected into `effective_margin` below.
+        let default_page_area_margin = effective_margin;
 
         // Step 3c: Parse stylesheets with page-aware media query context
         let media_ctx = parser::css::MediaContext {
@@ -661,6 +666,30 @@ impl HtmlConverter {
             any.then_some(m)
         };
         let first_page_margin: Option<Margin> = resolve_page_margin(PageSelector::First);
+        let mut initial_page_area_margin = default_page_area_margin;
+        for pr in &page_rules {
+            if pr.selector != PageSelector::First {
+                continue;
+            }
+            if let Some(value) = pr.margin_top {
+                initial_page_area_margin.top = value;
+            }
+            if let Some(value) = pr.margin_right {
+                initial_page_area_margin.right = value;
+            }
+            if let Some(value) = pr.margin_bottom {
+                initial_page_area_margin.bottom = value;
+            }
+            if let Some(value) = pr.margin_left {
+                initial_page_area_margin.left = value;
+            }
+        }
+        let initial_containing_block = types::Size::new(
+            effective_page_size.width - initial_page_area_margin.horizontal(),
+            effective_page_size.height
+                - initial_page_area_margin.top
+                - initial_page_area_margin.bottom,
+        );
 
         // Step 3e-bis: Resolve the `@page :left` / `@page :right` spread margins
         // (CSS Paged Media 3 §3.2). In LTR the first page is a `:right` page; the
@@ -808,8 +837,8 @@ impl HtmlConverter {
         // Step 5: Layout
         let mut pages = layout::engine::layout_with_rules_and_fonts_raster_quality(
             &result.nodes,
-            effective_page_size,
-            effective_margin,
+            layout::engine::DocumentGeometry::new(effective_page_size, effective_margin)
+                .with_initial_containing_block(initial_containing_block),
             &rules,
             &parsed_fonts,
             page_bg,
@@ -2357,7 +2386,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
-            .convert(r#"<p style="font-family: testfont">Hello A</p>"#)
+            .convert(r#"<p style="font-family: testfont">A</p>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(
@@ -2747,7 +2776,7 @@ fn main() {
     }
 
     #[test]
-    fn wrapped_text_baselines_preserve_fractional_top_down_page_coordinates() {
+    fn wrapped_text_baselines_snap_to_the_top_down_css_pixel_grid() {
         let font = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/parity/fonts/ParitySans.ttf"),
@@ -2773,10 +2802,10 @@ fn main() {
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
 
-        // Subsequent line placement retains the resolved fractional metrics in
-        // the top-down CSS child of the page's staged print-device transform.
-        assert!(content.contains("1 0 0 -1 32 70.6 Tm"), "{content}");
-        assert!(content.contains("1 0 0 -1 32 92.200005 Tm"), "{content}");
+        // The flow cursor retains fractional line metrics, but print painting
+        // snaps each baseline independently to the page's CSS-pixel grid.
+        assert!(content.contains("1 0 0 -1 32 71 Tm"), "{content}");
+        assert!(content.contains("1 0 0 -1 32 92 Tm"), "{content}");
     }
 
     #[test]

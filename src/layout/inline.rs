@@ -32,7 +32,7 @@ use super::inline_formatting::{
 };
 use super::paginate::estimate_element_height;
 use super::roundoff::exceeds_with_roundoff;
-use super::table::flatten_table;
+use super::table::{TableLayoutContext, flatten_table};
 use super::text::{
     FlexTextRunCollector, LineStrut, TextWrapOptions, collect_text_runs, estimate_word_width,
     parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
@@ -666,20 +666,30 @@ fn inline_atomic_cell(
                     env.font_metrics(),
                 );
                 let mut nested = Vec::new();
+                let ancestor_depth = ctx
+                    .containing_block
+                    .map_or(0, |containing_block| containing_block.depth);
+                let positioned_depth = ancestor_depth
+                    + usize::from(crate::layout::helpers::establishes_containing_block(
+                        &table_style,
+                    ));
                 flatten_table(
                     child_el,
                     &table_style,
-                    ctx.available_width(),
                     &mut nested,
-                    ancestors,
-                    child_index,
-                    sibling_count,
                     GeneratedInlineContent::new(
                         child_el,
                         before_style.as_ref(),
                         after_style.as_ref(),
                     ),
                     env,
+                    TableLayoutContext::new(
+                        ctx,
+                        ancestors,
+                        child_index,
+                        sibling_count,
+                        positioned_depth,
+                    ),
                 );
                 let width = inline_block_nested_outer_width(&nested);
                 let height = nested

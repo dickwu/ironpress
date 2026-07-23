@@ -10,7 +10,7 @@ pub(super) fn render_flex_child(
     abs_origins: &mut HashMap<usize, PdfPoint>,
     ctx: &mut PageRenderContext<'_>,
 ) -> FlowPosition {
-    let x = flow.frame.content_origin.x + child.inline_offset.value();
+    let phase = flow.paint_phase;
     let flow_top_by_index = flow.flow_top_by_index;
     let FlowPosition {
         y: _,
@@ -52,9 +52,16 @@ pub(super) fn render_flex_child(
     // layout-time available width), not the full available width.
     // Mirrors the top-level FlexRow arm; without this a `width:Npx`
     // flex box painted its background across the whole content width.
-    let flex_w = child.box_model.size.resolve_width(flow.frame.width);
+    let flex_w = child.box_model.size.resolve_width(flow.frame.width());
+    let used_origin = child.positioning.resolve_in_flow_origin(
+        crate::types::Point::new(child.inline_offset.value(), flow.container_top_y - y),
+        crate::types::Size::new(flex_w, row_h),
+        flow.frame.size,
+    );
+    let x = flow.frame.content_origin.x + used_origin.x;
+    let paint_y = flow.container_top_y - used_origin.y;
     let flex_geometry = BoxGeometry::from_layout(
-        PdfRect::from_top(x, y, flex_w, row_h),
+        PdfRect::from_top(x, paint_y, flex_w, row_h),
         border,
         *flex_padding,
     );
@@ -76,155 +83,157 @@ pub(super) fn render_flex_child(
         );
     }
 
-    render_box_shadows(
-        content,
-        box_shadow,
-        flex_geometry.for_fragment(Default::default()),
-        *flex_border_radii,
-        ctx.page_ext_gstates,
-        ctx.bg_alpha_counter,
-        ctx.text.pdf_writer,
-        ctx.text.page_images,
-    );
-
-    // Draw flex row background
-    if let Some(color) = background_color {
-        let (r, g, b, a) = color.to_f32_rgba();
-        let needs_alpha = a < 1.0;
-        if needs_alpha {
-            let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
-            *ctx.bg_alpha_counter += 1;
-            ctx.page_ext_gstates.push((gs_name.clone(), a));
-            content.push_str(&format!("/{gs_name} gs\n"));
-        }
-        content.push_str(&format!("{r} {g} {b} rg\n"));
-        content.push_str(&flex_border_box.path_or_rect());
-        content.push_str("f\n");
-        if needs_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
-    }
-
-    if let Some(gradient) = background_gradient {
-        let gradient = linear_with_background_layer(
-            gradient,
-            background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
-        );
-        flex_border_box.push_clip(content);
-        render_linear_gradient(
+    if phase.paints_decoration() {
+        render_box_shadows(
             content,
-            &gradient,
-            GradientBackdrop::isolated_linear_layer(
-                *background_color,
-                background_radial_gradient.is_some()
-                    || background_conic_gradient.is_some()
-                    || background_svg.is_some(),
-                child.paint.background.blend_mode.background_layer(0),
-            ),
-            flex_geometry.border_box.left,
-            flex_geometry.border_box.bottom,
-            flex_geometry.border_box.width,
-            flex_geometry.border_box.height,
-            ctx.shadings,
-            ctx.shading_counter,
+            box_shadow,
+            flex_geometry.for_fragment(Default::default()),
+            *flex_border_radii,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
             ctx.text.page_images,
         );
-        content.push_str("Q\n");
-    }
 
-    if let Some(gradient) = background_radial_gradient {
-        let gradient = radial_with_background_layer(
-            gradient,
-            background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
-        );
-        let rounded_clip = flex_border_box.push_rounded_clip(content);
-        render_radial_gradient(
-            content,
-            &gradient,
-            flex_geometry.border_box.left,
-            flex_geometry.border_box.bottom,
-            flex_geometry.border_box.width,
-            flex_geometry.border_box.height,
-            ctx.shadings,
-            ctx.shading_counter,
-            ctx.text.pdf_writer,
-            ctx.text.page_images,
-        );
-        if rounded_clip {
-            content.push_str("Q\n");
+        // Draw flex row background
+        if let Some(color) = background_color {
+            let (r, g, b, a) = color.to_f32_rgba();
+            let needs_alpha = a < 1.0;
+            if needs_alpha {
+                let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
+                *ctx.bg_alpha_counter += 1;
+                ctx.page_ext_gstates.push((gs_name.clone(), a));
+                content.push_str(&format!("/{gs_name} gs\n"));
+            }
+            content.push_str(&format!("{r} {g} {b} rg\n"));
+            content.push_str(&flex_border_box.path_or_rect());
+            content.push_str("f\n");
+            if needs_alpha {
+                content.push_str("/GSDefault gs\n");
+            }
         }
-    }
 
-    if let Some(gradient) = background_conic_gradient {
-        let gradient = conic_with_background_layer(
-            gradient,
-            background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
-        );
-        let rounded_clip = flex_border_box.push_rounded_clip(content);
-        render_conic_gradient(
-            content,
-            &gradient,
-            flex_geometry.border_box.left,
-            flex_geometry.border_box.bottom,
-            flex_geometry.border_box.width,
-            flex_geometry.border_box.height,
-            ctx.text.pdf_writer,
-            ctx.text.page_images,
-        );
-        if rounded_clip {
-            content.push_str("Q\n");
-        }
-    }
-
-    render_box_shadows_inset(
-        content,
-        box_shadow,
-        flex_geometry.for_fragment(Default::default()),
-        *flex_border_radii,
-        ctx.page_ext_gstates,
-        ctx.bg_alpha_counter,
-        ctx.text.pdf_writer,
-        ctx.text.page_images,
-    );
-
-    if let Some(svg_tree) = background_svg {
-        let origin_box = flex_geometry.background_origin_box(*flex_bg_origin);
-        render_svg_background(
-            content,
-            svg_tree,
-            PdfBackgroundResources::new(
-                ctx.text.pdf_writer,
-                ctx.text.page_images,
+        if let Some(gradient) = background_gradient {
+            let gradient = linear_with_background_layer(
+                gradient,
+                background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
+            );
+            flex_border_box.push_clip(content);
+            render_linear_gradient(
+                content,
+                &gradient,
+                GradientBackdrop::isolated_linear_layer(
+                    *background_color,
+                    background_radial_gradient.is_some()
+                        || background_conic_gradient.is_some()
+                        || background_svg.is_some(),
+                    child.paint.background.blend_mode.background_layer(0),
+                ),
+                flex_geometry.border_box.left,
+                flex_geometry.border_box.bottom,
+                flex_geometry.border_box.width,
+                flex_geometry.border_box.height,
                 ctx.shadings,
                 ctx.shading_counter,
-                Some(&mut *ctx.page_ext_gstates),
-            ),
-            PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                origin_box.into(),
-                flex_geometry.border_box.into(),
-                *flex_border_radii,
-                *background_blur_radius,
-                *flex_bg_size,
-                *flex_bg_pos,
-                *flex_bg_repeat,
-            )),
-        );
-    }
+                ctx.text.pdf_writer,
+                ctx.text.page_images,
+            );
+            content.push_str("Q\n");
+        }
 
-    // Draw the flex container's own border. Mirrors the top-level
-    // FlexRow arm; the nested arm previously painted the background
-    // but never the container border, so a bordered flex box nested
-    // inside a block lost its frame entirely.
-    if border.has_any() || child.paint.border_image.is_some() {
-        paint_box_decoration(
+        if let Some(gradient) = background_radial_gradient {
+            let gradient = radial_with_background_layer(
+                gradient,
+                background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
+            );
+            let rounded_clip = flex_border_box.push_rounded_clip(content);
+            render_radial_gradient(
+                content,
+                &gradient,
+                flex_geometry.border_box.left,
+                flex_geometry.border_box.bottom,
+                flex_geometry.border_box.width,
+                flex_geometry.border_box.height,
+                ctx.shadings,
+                ctx.shading_counter,
+                ctx.text.pdf_writer,
+                ctx.text.page_images,
+            );
+            if rounded_clip {
+                content.push_str("Q\n");
+            }
+        }
+
+        if let Some(gradient) = background_conic_gradient {
+            let gradient = conic_with_background_layer(
+                gradient,
+                background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
+            );
+            let rounded_clip = flex_border_box.push_rounded_clip(content);
+            render_conic_gradient(
+                content,
+                &gradient,
+                flex_geometry.border_box.left,
+                flex_geometry.border_box.bottom,
+                flex_geometry.border_box.width,
+                flex_geometry.border_box.height,
+                ctx.text.pdf_writer,
+                ctx.text.page_images,
+            );
+            if rounded_clip {
+                content.push_str("Q\n");
+            }
+        }
+
+        render_box_shadows_inset(
             content,
+            box_shadow,
             flex_geometry.for_fragment(Default::default()),
-            border,
             *flex_border_radii,
-            child.paint.border_image.as_ref(),
-            BorderPaintResources::from_page(ctx),
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+            ctx.text.pdf_writer,
+            ctx.text.page_images,
         );
+
+        if let Some(svg_tree) = background_svg {
+            let origin_box = flex_geometry.background_origin_box(*flex_bg_origin);
+            render_svg_background(
+                content,
+                svg_tree,
+                PdfBackgroundResources::new(
+                    ctx.text.pdf_writer,
+                    ctx.text.page_images,
+                    ctx.shadings,
+                    ctx.shading_counter,
+                    Some(&mut *ctx.page_ext_gstates),
+                ),
+                PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
+                    origin_box.into(),
+                    flex_geometry.border_box.into(),
+                    *flex_border_radii,
+                    *background_blur_radius,
+                    *flex_bg_size,
+                    *flex_bg_pos,
+                    *flex_bg_repeat,
+                )),
+            );
+        }
+
+        // Draw the flex container's own border. Mirrors the top-level
+        // FlexRow arm; the nested arm previously painted the background
+        // but never the container border, so a bordered flex box nested
+        // inside a block lost its frame entirely.
+        if border.has_any() || child.paint.border_image.is_some() {
+            paint_box_decoration(
+                content,
+                flex_geometry.for_fragment(Default::default()),
+                border,
+                *flex_border_radii,
+                child.paint.border_image.as_ref(),
+                BorderPaintResources::from_page(ctx),
+            );
+        }
     }
 
     // Render flex cells. Anchor each cell to its layout-computed
@@ -242,6 +251,15 @@ pub(super) fn render_flex_child(
         let mut cell_content = String::new();
         'paint_cell: {
             let content = &mut cell_content;
+            let cell_supports_phases =
+                crate::layout::elements::BoxPaintOwner::supports_phased_paint(cell);
+            let cell_phase = if phase == ElementPaintPhase::All || cell_supports_phases {
+                phase
+            } else if phase == ElementPaintPhase::Contents {
+                ElementPaintPhase::All
+            } else {
+                break 'paint_cell;
+            };
             let cell_w = cell.width;
             let cell_x = cell_base_x + cell.x_offset;
             // Cross-axis (vertical) placement per align-items/align-self,
@@ -286,39 +304,50 @@ pub(super) fn render_flex_child(
                 cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
                 ctx,
             );
-            if paint_cell_filter_output(content, &cell.paint, cell_geometry, ctx) {
+            if cell_phase == ElementPaintPhase::All
+                && paint_cell_filter_output(content, &cell.paint, cell_geometry, ctx)
+            {
                 cell_group.finish(content, ctx);
                 break 'paint_cell;
             }
-            cell_shadows.paint_outset(content, ctx);
-            // Draw cell background
-            if let Some(color) = cell.paint.background.color {
-                let (cr, cg, cb, ca) = color.to_f32_rgba();
-                let needs_alpha = ca < 1.0;
-                if needs_alpha {
-                    let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
-                    *ctx.bg_alpha_counter += 1;
-                    ctx.page_ext_gstates.push((gs_name.clone(), ca));
-                    content.push_str(&format!("/{gs_name} gs\n"));
+            if cell_phase.paints_decoration() {
+                cell_shadows.paint_outset(content, ctx);
+                // Draw cell background
+                if let Some(color) = cell.paint.background.color {
+                    let (cr, cg, cb, ca) = color.to_f32_rgba();
+                    let needs_alpha = ca < 1.0;
+                    if needs_alpha {
+                        let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
+                        *ctx.bg_alpha_counter += 1;
+                        ctx.page_ext_gstates.push((gs_name.clone(), ca));
+                        content.push_str(&format!("/{gs_name} gs\n"));
+                    }
+                    content.push_str(&format!("{cr} {cg} {cb} rg\n"));
+                    content.push_str(&cell_border_box.path_or_rect());
+                    content.push_str("f\n");
+                    if needs_alpha {
+                        content.push_str("/GSDefault gs\n");
+                    }
                 }
-                content.push_str(&format!("{cr} {cg} {cb} rg\n"));
-                content.push_str(&cell_border_box.path_or_rect());
-                content.push_str("f\n");
-                if needs_alpha {
-                    content.push_str("/GSDefault gs\n");
-                }
-            }
-            cell_shadows.paint_inset(content, ctx);
-            // Draw cell border through the shared rounded-ring painter.
-            if cell.border.has_any() || cell.paint.border_image.is_some() {
-                paint_box_decoration(
+                paint_box_gradient_backgrounds(
                     content,
-                    cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
+                    &cell.paint,
                     &cell.border,
-                    cell.paint.border_radii,
-                    cell.paint.border_image.as_ref(),
-                    BorderPaintResources::from_page(ctx),
+                    cell_geometry,
+                    ctx,
                 );
+                cell_shadows.paint_inset(content, ctx);
+                // Draw cell border through the shared rounded-ring painter.
+                if cell.border.has_any() || cell.paint.border_image.is_some() {
+                    paint_box_decoration(
+                        content,
+                        cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
+                        &cell.border,
+                        cell.paint.border_radii,
+                        cell.paint.border_image.as_ref(),
+                        BorderPaintResources::from_page(ctx),
+                    );
+                }
             }
             // Draw cell text. Seat it relative to the cell's *content
             // box*, not its border box: the content origin is the
@@ -331,11 +360,14 @@ pub(super) fn render_flex_child(
             let content_box = cell_geometry.content_box();
             let content_left = content_box.left;
             let content_w = content_box.width;
-            let mut baseline_cursor = TextBaselineCursor::new(content_box.top());
-            for line in &cell.lines {
+            let mut baseline_cursor = TextBaselineCursor::new(
+                content_box.top(),
+                ctx.text.pdf_writer.page_content_transform,
+            );
+            for line in cell.lines.iter().filter(|_| cell_phase.paints_contents()) {
                 let metrics = line_box_metrics(line, ctx.text.custom_fonts);
                 let text_y = baseline_cursor.next_horizontal(metrics);
-                let merged = merge_runs(&line.runs);
+                let merged = crate::text::coalesce_text_runs(&line.runs);
                 let line_width: f32 = merged
                     .iter()
                     .map(|r| estimate_run_width_with_fonts(r, ctx.text.custom_fonts))
@@ -374,21 +406,24 @@ pub(super) fn render_flex_child(
             if !cell.nested_elements.is_empty() {
                 let text_h: f32 = cell.lines.iter().map(|l| l.height).sum();
                 let nested_y = content_box.top() - text_h;
-                let mut abs_origins: HashMap<usize, PdfPoint> = HashMap::new();
                 render_container_children(
                     content,
                     &cell.nested_elements,
                     ContainerFrame::new(
                         PdfPoint::new(content_box.left, nested_y),
-                        content_box.width,
+                        crate::types::Size::new(
+                            content_box.width,
+                            (content_box.height - text_h).max(0.0),
+                        ),
                         PdfPoint::new(
                             content_box.left - cell.padding.left,
                             nested_y + cell.padding.top,
                         ),
                     ),
-                    &mut abs_origins,
+                    abs_origins,
                     ctx,
                     ContainerRenderOptions {
+                        paint_phase: cell_phase,
                         stacking_scope: if cell.establishes_stacking_context() {
                             StackingScope::Local
                         } else {

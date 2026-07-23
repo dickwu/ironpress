@@ -249,6 +249,7 @@ mod tests {
             base_ids: Vec::new(),
             status: super::super::report::Status::Pass,
             diff_pct: 0.0,
+            semantic_diff_pct: 0.0,
             description: String::new(),
             note: String::new(),
             kind: kind.to_string(),

@@ -1,5 +1,5 @@
 use crate::layout::cells::{
-    CellAlignment, CellBox, CellBoxModel, CellContent, CellPaint, TableCell,
+    CellAlignment, CellBox, CellBoxModel, CellContent, CellFragmentation, CellPaint, TableCell,
     TableCellHeightConstraint, TableCellSpan, TableCellState,
 };
 use crate::layout::elements::{
@@ -25,15 +25,15 @@ use crate::types::EdgeSizes;
 use crate::types::PhysicalSide;
 use std::collections::HashMap;
 
-use super::context::{LayoutContext, LayoutEnv, ParentBox, Viewport};
+use super::context::{ContainingBlock, LayoutContext, LayoutEnv};
 #[cfg(test)]
 use super::engine::LayoutBorderSide;
 use super::engine::{
     CounterState, ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, TextLine,
-    TextRun, collects_as_inline_text, flatten_element, has_background_paint,
-    recurses_as_layout_child,
+    TextRun, collects_as_inline_text, element_is_empty, element_sibling_list, flatten_element,
+    forward_siblings, has_background_paint, recurses_as_layout_child,
 };
-use super::helpers::{build_pseudo_block, pseudo_is_block_like};
+use super::helpers::{PseudoBoxContext, build_pseudo_block, pseudo_is_block_like};
 use super::inline_formatting::{
     AnonymousInlineFormattingContext, GeneratedBox, GeneratedInlineContent,
 };
@@ -57,6 +57,67 @@ use collapsed_borders::{
 
 const MAX_COLSPAN: usize = 1000;
 const MAX_ROWSPAN: usize = 65_534;
+
+/// Traversal state owned by one table formatting context.
+///
+/// Table fixup replaces the ordinary DOM walk with anonymous row/cell boxes,
+/// but it must not replace the layout viewport, containing-block ancestry, or
+/// positioned depth. Keeping those values together prevents table content from
+/// falling into a synthetic root context.
+#[derive(Clone, Copy)]
+pub(crate) struct TableLayoutContext<'context, 'dom> {
+    layout: &'context LayoutContext,
+    ancestors: &'context [AncestorInfo<'dom>],
+    source_index: usize,
+    sibling_count: usize,
+    positioned_depth: usize,
+}
+
+impl<'context, 'dom> TableLayoutContext<'context, 'dom> {
+    pub(crate) const fn new(
+        layout: &'context LayoutContext,
+        ancestors: &'context [AncestorInfo<'dom>],
+        source_index: usize,
+        sibling_count: usize,
+        positioned_depth: usize,
+    ) -> Self {
+        Self {
+            layout,
+            ancestors,
+            source_index,
+            sibling_count,
+            positioned_depth,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TableDescendantLayout {
+    layout: LayoutContext,
+    positioned_depth: usize,
+}
+
+impl TableDescendantLayout {
+    fn for_table(context: TableLayoutContext<'_, '_>, style: &ComputedStyle) -> Self {
+        let layout = if crate::layout::helpers::establishes_containing_block(style) {
+            // The exact table-wrapper extent is known only after track sizing.
+            // Descendants remain unresolved until the completed principal box
+            // supplies that one authoritative containing block below.
+            context.layout.with_containing_block(None)
+        } else {
+            *context.layout
+        };
+        Self {
+            layout,
+            positioned_depth: context.positioned_depth,
+        }
+    }
+
+    fn child_context(self, width: f32, parent: &ComputedStyle) -> LayoutContext {
+        self.layout
+            .with_parent(width, parent.height, parent.font_size)
+    }
+}
 
 struct TableRowQuery<F, R> {
     query: Option<F>,
@@ -529,6 +590,7 @@ impl GeneratedTableCellContent<'_> {
         parent_style: &ComputedStyle,
         available_width: f32,
         fonts: &HashMap<String, TtfFont>,
+        filter_defs: &HashMap<String, ElementNode>,
         counter_state: &mut CounterState,
     ) {
         append_generated_cell_layout(
@@ -538,6 +600,7 @@ impl GeneratedTableCellContent<'_> {
             parent_style,
             available_width,
             fonts,
+            filter_defs,
             counter_state,
         );
     }
@@ -549,6 +612,7 @@ impl GeneratedTableCellContent<'_> {
         parent_style: &ComputedStyle,
         available_width: f32,
         fonts: &HashMap<String, TtfFont>,
+        filter_defs: &HashMap<String, ElementNode>,
         counter_state: &mut CounterState,
     ) {
         append_generated_cell_layout(
@@ -558,6 +622,7 @@ impl GeneratedTableCellContent<'_> {
             parent_style,
             available_width,
             fonts,
+            filter_defs,
             counter_state,
         );
     }
@@ -570,6 +635,7 @@ fn append_generated_cell_layout(
     parent_style: &ComputedStyle,
     available_width: f32,
     fonts: &HashMap<String, TtfFont>,
+    filter_defs: &HashMap<String, ElementNode>,
     counter_state: &mut CounterState,
 ) {
     let Some(generated) = generated else {
@@ -581,6 +647,7 @@ fn append_generated_cell_layout(
             parent_style,
             available_width,
             fonts,
+            filter_defs,
             counter_state,
         ) {
             blocks.push(block);
@@ -771,16 +838,14 @@ fn generated_table_cell_boundary(
     parent_style: &ComputedStyle,
     available_width: f32,
     fonts: &HashMap<String, TtfFont>,
+    filter_defs: &HashMap<String, ElementNode>,
     counter_state: &mut CounterState,
 ) -> Option<LayoutNode> {
     if pseudo_is_block_like(generated.style()) {
         return Some(build_pseudo_block(
             generated.style(),
             generated.originating_element(),
-            available_width,
-            fonts,
-            None,
-            0,
+            PseudoBoxContext::new(available_width, fonts, filter_defs),
             counter_state,
             generated.style().display == Display::ListItem,
         ));
@@ -807,18 +872,10 @@ fn is_anonymous_table_box(element: &ElementNode) -> bool {
 fn push_table_dom_ancestor<'a>(
     ancestors: &mut Vec<AncestorInfo<'a>>,
     element: &'a ElementNode,
-    child_index: usize,
-    sibling_count: usize,
+    siblings: ElementSiblingContext<'_>,
 ) {
     if !is_anonymous_table_box(element) {
-        ancestors.push(AncestorInfo {
-            element,
-            child_index,
-            sibling_count,
-            preceding_siblings: Vec::new(),
-            following_siblings: Vec::new(),
-            is_empty: false,
-        });
+        ancestors.push(siblings.ancestor(element, element_is_empty(element)));
     }
 }
 
@@ -932,14 +989,38 @@ fn row_child_is_table_cell(
     role.is_none_or(|role| role == TableBoxRole::Cell)
 }
 
+#[derive(Clone, Copy)]
+struct TableCellSource<'a> {
+    element: &'a ElementNode,
+    authored_child_index: usize,
+}
+
+impl TableCellSource<'_> {
+    fn siblings<'a>(
+        self,
+        authored_siblings: &'a [(String, Vec<String>)],
+    ) -> ElementSiblingContext<'a> {
+        ElementSiblingContext::new(self.authored_child_index, authored_siblings.len())
+            .with_neighbors(
+                authored_siblings
+                    .get(..self.authored_child_index)
+                    .unwrap_or(&[]),
+                forward_siblings(authored_siblings, self.authored_child_index),
+            )
+    }
+}
+
 fn table_row_cell_elements<'a>(
     row: &'a ElementNode,
     row_style: &ComputedStyle,
     rules: &[CssRule],
     row_ancestors: &[AncestorInfo],
-) -> Vec<&'a ElementNode> {
+) -> Vec<TableCellSource<'a>> {
     if table_box_role(row, row_style) != Some(TableBoxRole::Row) {
-        return vec![row];
+        return vec![TableCellSource {
+            element: row,
+            authored_child_index: 0,
+        }];
     }
 
     let row_child_count = row
@@ -963,7 +1044,10 @@ fn table_row_cell_elements<'a>(
                 row_child_idx,
                 row_child_count,
             )
-            .then_some(cell_el)
+            .then_some(TableCellSource {
+                element: cell_el,
+                authored_child_index: row_child_idx,
+            })
         })
         .collect()
 }
@@ -1455,6 +1539,7 @@ fn measure_caption_min_width(
     filter_dpi: f32,
     counter_state: &mut CounterState,
     available_width: f32,
+    descendant_layout: TableDescendantLayout,
 ) -> f32 {
     let mut caption_ancestors = table_ancestors.to_vec();
     caption_ancestors.push(AncestorInfo {
@@ -1483,6 +1568,7 @@ fn measure_caption_min_width(
         &caption_ancestors,
         available_width.max(0.0),
         counter_state,
+        descendant_layout,
     );
     let text_width: f32 = runs
         .iter()
@@ -1630,10 +1716,19 @@ fn resolve_fixed_table_columns(
         row_style.width = Some(table_width);
 
         let mut col_pos = 0usize;
+        let authored_siblings = element_sibling_list(&first_row.children);
+        let mut authored_child_index = 0usize;
         for child in &first_row.children {
             let DomNode::Element(cell_el) = child else {
                 continue;
             };
+            let cell_siblings =
+                ElementSiblingContext::new(authored_child_index, authored_siblings.len())
+                    .with_neighbors(
+                        authored_siblings.get(..authored_child_index).unwrap_or(&[]),
+                        forward_siblings(&authored_siblings, authored_child_index),
+                    );
+            authored_child_index += 1;
             if table_box_role(cell_el, &ComputedStyle::default()) != Some(TableBoxRole::Cell)
                 && !matches!(cell_el.tag, HtmlTag::Div | HtmlTag::Span)
             {
@@ -1646,17 +1741,13 @@ fn resolve_fixed_table_columns(
             push_table_dom_ancestor(
                 &mut cell_ancestors,
                 first_row,
-                row_selector_ctx.child_index,
-                row_selector_ctx.sibling_count,
+                ElementSiblingContext::new(
+                    row_selector_ctx.child_index,
+                    row_selector_ctx.sibling_count,
+                ),
             );
-            let cell_selector_ctx = SelectorContext {
-                ancestors: cell_ancestors,
-                child_index: col_pos,
-                sibling_count: num_cols,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            };
+            let cell_selector_ctx =
+                cell_siblings.selector_context(&cell_ancestors, element_is_empty(cell_el));
             let cell_style = anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
                 compute_style_with_context(
                     cell_el.tag,
@@ -1686,10 +1777,25 @@ fn resolve_fixed_table_columns(
     let unresolved_count = col_widths.iter().filter(|width| width.is_none()).count();
     if unresolved_count > 0 {
         let remaining_width = (table_width - assigned_width).max(0.0);
-        let default_width = remaining_width / unresolved_count as f32;
+        let mut distributed = (unresolved_count > 1)
+            .then(|| {
+                crate::layout::units::LayoutUnitDiffuser::new(
+                    crate::layout::units::LayoutUnit::from_points(remaining_width),
+                    unresolved_count,
+                )
+            })
+            .flatten();
         for width in &mut col_widths {
             if width.is_none() {
-                *width = Some(default_width);
+                *width = Some(if unresolved_count == 1 {
+                    remaining_width
+                } else {
+                    distributed
+                        .as_mut()
+                        .and_then(Iterator::next)
+                        .unwrap_or_default()
+                        .to_points()
+                });
             }
         }
     }
@@ -1743,7 +1849,6 @@ fn collapse_outer_horizontal_borders(
     row_section_elements: &[Option<&ElementNode>],
     row_section_child_indices: &[usize],
     row_section_sibling_counts: &[usize],
-    num_cols: usize,
     table_style: &ComputedStyle,
     rules: &[CssRule],
     table_ancestors: &[AncestorInfo],
@@ -1816,20 +1921,15 @@ fn collapse_outer_horizontal_borders(
         return (0.0, 0.0);
     }
     let cell_count = cells.len();
-    let mut cell_positions = Vec::with_capacity(cell_count);
-    let mut col_pos = 0usize;
-    for cell in &cells {
-        cell_positions.push(col_pos);
-        col_pos = col_pos.saturating_add(parse_cell_colspan(cell));
-    }
+    let authored_siblings = element_sibling_list(&first_row.children);
     let mut cell_ancestors = row_selector_ctx.ancestors.clone();
     push_table_dom_ancestor(
         &mut cell_ancestors,
         first_row,
-        row_selector_ctx.child_index,
-        row_selector_ctx.sibling_count,
+        ElementSiblingContext::new(row_selector_ctx.child_index, row_selector_ctx.sibling_count),
     );
-    let cell_border = |idx: usize, cell: &ElementNode| -> ComputedStyle {
+    let cell_border = |source: TableCellSource<'_>| -> ComputedStyle {
+        let cell = source.element;
         let classes = cell.class_list();
         anonymous_table_box_style(cell, &row_style).unwrap_or_else(|| {
             compute_style_with_context(
@@ -1841,19 +1941,14 @@ fn collapse_outer_horizontal_borders(
                 &classes,
                 cell.id(),
                 &cell.attributes,
-                &SelectorContext {
-                    ancestors: cell_ancestors.clone(),
-                    child_index: cell_positions.get(idx).copied().unwrap_or(idx),
-                    sibling_count: num_cols,
-                    preceding_siblings: Vec::new(),
-                    following_siblings: Vec::new(),
-                    is_empty: false,
-                },
+                &source
+                    .siblings(&authored_siblings)
+                    .selector_context(&cell_ancestors, element_is_empty(cell)),
             )
         })
     };
-    let first = cell_border(0, cells[0]);
-    let last = cell_border(cell_count - 1, cells[cell_count - 1]);
+    let first = cell_border(cells[0]);
+    let last = cell_border(cells[cell_count - 1]);
     (
         first
             .border
@@ -1871,14 +1966,16 @@ fn collapse_outer_horizontal_borders(
 pub(crate) fn flatten_table(
     el: &ElementNode,
     style: &ComputedStyle,
-    available_width: f32,
     output: &mut Vec<LayoutNode>,
-    ancestors: &[AncestorInfo],
-    table_child_index: usize,
-    table_sibling_count: usize,
     generated_content: GeneratedInlineContent<'_>,
     env: &mut LayoutEnv,
+    context: TableLayoutContext<'_, '_>,
 ) {
+    let available_width = context.layout.available_width();
+    let ancestors = context.ancestors;
+    let table_child_index = context.source_index;
+    let table_sibling_count = context.sibling_count;
+    let descendant_layout = TableDescendantLayout::for_table(context, style);
     let rules = env.rules;
     let fonts = env.fonts;
     let filter_defs = env.filter_defs;
@@ -1910,8 +2007,7 @@ pub(crate) fn flatten_table(
     push_table_dom_ancestor(
         &mut table_ancestors,
         el,
-        table_child_index,
-        table_sibling_count,
+        ElementSiblingContext::new(table_child_index, table_sibling_count),
     );
 
     // Collect all <tr> elements (from direct children, thead, tbody, tfoot).
@@ -2122,6 +2218,7 @@ pub(crate) fn flatten_table(
                 filter_dpi,
                 &mut measurement_counter_state,
                 inner_width,
+                descendant_layout,
             )
         })
         .fold(0.0f32, f32::max);
@@ -2333,7 +2430,6 @@ pub(crate) fn flatten_table(
         &row_section_elements,
         &row_section_child_indices,
         &row_section_sibling_counts,
-        num_cols,
         style,
         rules,
         &table_ancestors,
@@ -2457,9 +2553,15 @@ pub(crate) fn flatten_table(
                 .iter()
                 .filter(|child| matches!(child, DomNode::Element(_)))
                 .count();
+            let authored_siblings = element_sibling_list(&row.children);
             let mut row_child_idx = 0usize;
             for child in &row.children {
                 if let DomNode::Element(cell_el) = child {
+                    let cell_siblings = ElementSiblingContext::new(row_child_idx, row_child_count)
+                        .with_neighbors(
+                            authored_siblings.get(..row_child_idx).unwrap_or(&[]),
+                            forward_siblings(&authored_siblings, row_child_idx),
+                        );
                     let is_cell = row_child_is_table_cell(
                         cell_el,
                         &row_style,
@@ -2486,17 +2588,13 @@ pub(crate) fn flatten_table(
                         push_table_dom_ancestor(
                             &mut cell_sizing_ancestors,
                             row,
-                            row_section_indices[sizing_row_idx],
-                            row_section_sizes[sizing_row_idx],
+                            ElementSiblingContext::new(
+                                row_section_indices[sizing_row_idx],
+                                row_section_sizes[sizing_row_idx],
+                            ),
                         );
-                        let cell_sizing_ctx = SelectorContext {
-                            ancestors: cell_sizing_ancestors,
-                            child_index: col_pos,
-                            sibling_count: num_cols,
-                            preceding_siblings: Vec::new(),
-                            following_siblings: Vec::new(),
-                            is_empty: false,
-                        };
+                        let cell_sizing_ctx = cell_siblings
+                            .selector_context(&cell_sizing_ancestors, element_is_empty(cell_el));
                         let cell_style = anonymous_table_box_style(cell_el, &row_style)
                             .unwrap_or_else(|| {
                                 compute_style_with_context_with_font_metrics(
@@ -2528,7 +2626,7 @@ pub(crate) fn flatten_table(
                             |node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)),
                         );
                         let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
-                        push_table_dom_ancestor(&mut text_ancestors, cell_el, col_pos, num_cols);
+                        push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
                         generated_cell_content.append_before_measurement(
                             &mut runs,
                             fonts,
@@ -2555,6 +2653,7 @@ pub(crate) fn flatten_table(
                             &text_ancestors,
                             inner_width,
                             &mut measurement_counter_state,
+                            descendant_layout,
                         );
                         generated_cell_content.append_after_measurement(
                             &mut runs,
@@ -2892,11 +2991,17 @@ pub(crate) fn flatten_table(
                     .iter()
                     .filter(|child| matches!(child, DomNode::Element(_)))
                     .count();
+                let authored_siblings = element_sibling_list(&row.children);
                 let mut row_child_idx = 0usize;
                 for child in &row.children {
                     let DomNode::Element(cell_el) = child else {
                         continue;
                     };
+                    let cell_siblings = ElementSiblingContext::new(row_child_idx, row_child_count)
+                        .with_neighbors(
+                            authored_siblings.get(..row_child_idx).unwrap_or(&[]),
+                            forward_siblings(&authored_siblings, row_child_idx),
+                        );
                     let is_cell = row_child_is_table_cell(
                         cell_el,
                         &row_style,
@@ -2917,15 +3022,13 @@ pub(crate) fn flatten_table(
 
                     let cell_classes = cell_el.class_list();
                     let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-                    push_table_dom_ancestor(&mut cell_ancestors, row, section_idx, section_size);
-                    let cell_selector_ctx = SelectorContext {
-                        ancestors: cell_ancestors,
-                        child_index: col_pos,
-                        sibling_count: num_cols,
-                        preceding_siblings: Vec::new(),
-                        following_siblings: Vec::new(),
-                        is_empty: false,
-                    };
+                    push_table_dom_ancestor(
+                        &mut cell_ancestors,
+                        row,
+                        ElementSiblingContext::new(section_idx, section_size),
+                    );
+                    let cell_selector_ctx =
+                        cell_siblings.selector_context(&cell_ancestors, element_is_empty(cell_el));
                     let cell_style =
                         anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
                             compute_style_with_context_with_font_metrics(
@@ -2954,6 +3057,7 @@ pub(crate) fn flatten_table(
                                 inline: cell_style.text_align,
                                 block: VerticalAlign::Top,
                             },
+                            fragmentation: CellFragmentation::from_style(&cell_style),
                             ..Default::default()
                         },
                         span: TableCellSpan {
@@ -3046,6 +3150,7 @@ pub(crate) fn flatten_table(
 
         // Current logical column position in the grid
         let mut col_pos: usize = 0;
+        let authored_siblings = element_sibling_list(&row.children);
         let row_cell_elements =
             table_row_cell_elements(row, &row_style, rules, &row_selector_ctx.ancestors);
         let mut child_iter = row_cell_elements.into_iter().enumerate();
@@ -3083,10 +3188,12 @@ pub(crate) fn flatten_table(
             }
 
             // Place the next real cell at this position
-            let Some((cell_source_index, cell_el)) = next_cell else {
+            let Some((cell_source_index, cell_source)) = next_cell else {
                 break;
             };
             next_cell = child_iter.next();
+            let cell_el = cell_source.element;
+            let cell_siblings = cell_source.siblings(&authored_siblings);
             let generated_cell_content =
                 row_sources[row_idx].generated_cell_content(cell_source_index);
 
@@ -3098,15 +3205,13 @@ pub(crate) fn flatten_table(
 
             let cell_classes = cell_el.class_list();
             let mut cell_ancestors = row_selector_ctx.ancestors.clone();
-            push_table_dom_ancestor(&mut cell_ancestors, row, section_idx, section_size);
-            let cell_selector_ctx = SelectorContext {
-                ancestors: cell_ancestors,
-                child_index: col_pos,
-                sibling_count: num_cols,
-                preceding_siblings: Vec::new(),
-                following_siblings: Vec::new(),
-                is_empty: false,
-            };
+            push_table_dom_ancestor(
+                &mut cell_ancestors,
+                row,
+                ElementSiblingContext::new(section_idx, section_size),
+            );
+            let cell_selector_ctx =
+                cell_siblings.selector_context(&cell_ancestors, element_is_empty(cell_el));
             let cell_style = anonymous_table_box_style(cell_el, &row_style).unwrap_or_else(|| {
                 compute_style_with_context_with_font_metrics(
                     cell_el.tag,
@@ -3171,7 +3276,7 @@ pub(crate) fn flatten_table(
                 .iter()
                 .any(|node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)));
             let mut text_ancestors = cell_selector_ctx.ancestors.clone();
-            push_table_dom_ancestor(&mut text_ancestors, cell_el, col_pos, num_cols);
+            push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
             let (block_margin_top, block_margin_bottom) = table_cell_edge_block_margins(
                 &cell_el.children,
                 &cell_content_style,
@@ -3185,6 +3290,7 @@ pub(crate) fn flatten_table(
                     &cell_content_style,
                     cell_inner,
                     fonts,
+                    filter_defs,
                     counter_state,
                 )
             {
@@ -3196,6 +3302,7 @@ pub(crate) fn flatten_table(
                 &cell_content_style,
                 cell_inner,
                 fonts,
+                filter_defs,
                 counter_state,
             );
             collect_table_cell_content_inner(
@@ -3214,6 +3321,7 @@ pub(crate) fn flatten_table(
                 &text_ancestors,
                 cell_inner,
                 counter_state,
+                descendant_layout,
             );
             if let Some(after) = generated_cell_content.after
                 && let Some(boundary) = generated_table_cell_boundary(
@@ -3221,6 +3329,7 @@ pub(crate) fn flatten_table(
                     &cell_content_style,
                     cell_inner,
                     fonts,
+                    filter_defs,
                     counter_state,
                 )
             {
@@ -3232,6 +3341,7 @@ pub(crate) fn flatten_table(
                 &cell_content_style,
                 cell_inner,
                 fonts,
+                filter_defs,
                 counter_state,
             );
             counter_state.leave_element(cell_counter_scope);
@@ -3307,6 +3417,7 @@ pub(crate) fn flatten_table(
                         inline: cell_style.text_align,
                         block: table_cell_vertical_align(cell_style.vertical_align),
                     },
+                    fragmentation: CellFragmentation::from_style(&cell_style),
                 },
                 span: TableCellSpan {
                     columns: colspan,
@@ -3623,6 +3734,7 @@ pub(crate) fn flatten_table(
             &caption_ancestors,
             caption_inner,
             counter_state,
+            descendant_layout,
         );
         let caption_lines = wrap_text_runs(
             caption_runs,
@@ -3709,11 +3821,33 @@ pub(crate) fn flatten_table(
         last.margins_mut().end = 0.0;
     }
 
+    let principal_height = style.height.map_or(
+        box_height + table_level_border.vertical_width(),
+        |height| match style.box_sizing {
+            BoxSizing::BorderBox => height,
+            BoxSizing::ContentBox => {
+                height + style.padding.vertical() + table_level_border.vertical_width()
+            }
+        },
+    );
+    let establishes_containing_block = crate::layout::helpers::establishes_containing_block(style);
+    if establishes_containing_block {
+        crate::layout::helpers::patch_absolute_descendants_containing_block(
+            &mut parts,
+            ContainingBlock {
+                x: 0.0,
+                width: box_width,
+                height: principal_height,
+                depth: context.positioned_depth,
+            },
+        );
+    }
+
     let mut principal = Container::from_style(
         parts,
         style,
         BoxModel {
-            size: LayoutSize::fixed(box_width, None),
+            size: LayoutSize::fixed(box_width, style.height.map(|_| principal_height)),
             margins: BlockMargins::new(style.margin.top, style.margin.bottom),
             ..Default::default()
         },
@@ -3724,6 +3858,9 @@ pub(crate) fn flatten_table(
         ..Default::default()
     };
     principal.positioning.insets.left += table_offset.value();
+    principal.positioning.containing_block_depth = establishes_containing_block
+        .then_some(context.positioned_depth)
+        .unwrap_or(0);
     output.push(Table::new(principal).boxed());
 }
 
@@ -3831,6 +3968,7 @@ fn collect_table_cell_content_inner(
     ancestors: &[AncestorInfo],
     available_width: f32,
     counter_state: &mut CounterState,
+    descendant_layout: TableDescendantLayout,
 ) {
     let preserve_ws = matches!(
         parent_style.white_space,
@@ -3942,21 +4080,7 @@ fn collect_table_cell_content_inner(
                     is_empty: false,
                 });
                 if table_cell_child_should_flatten(el, &style) && el.tag != HtmlTag::Br {
-                    let cell_ctx = LayoutContext {
-                        viewport: Viewport {
-                            width: available_width,
-                            height: f32::INFINITY,
-                        },
-                        parent: ParentBox {
-                            content_width: available_width,
-                            content_height: None,
-                            font_size: parent_style.font_size,
-                            percent_width_basis: available_width,
-                        },
-                        containing_block: None,
-                        percent_height_cb: None,
-                        root_font_size: parent_style.root_font_size,
-                    };
+                    let cell_ctx = descendant_layout.child_context(available_width, parent_style);
                     let mut inner_env = LayoutEnv {
                         rules,
                         fonts,
@@ -3966,10 +4090,12 @@ fn collect_table_cell_content_inner(
                     };
                     flatten_element(
                         el,
-                        LayoutTreeContext::new(parent_style, &cell_ctx, ancestors).for_element(
-                            ElementSiblingContext::new(child_index, element_sibling_count)
-                                .with_neighbors(&selector_ctx.preceding_siblings, &[]),
-                        ),
+                        LayoutTreeContext::new(parent_style, &cell_ctx, ancestors)
+                            .with_positioned_ancestor_depth(descendant_layout.positioned_depth)
+                            .for_element(
+                                ElementSiblingContext::new(child_index, element_sibling_count)
+                                    .with_neighbors(&selector_ctx.preceding_siblings, &[]),
+                            ),
                         nested_rows,
                         &mut inner_env,
                     );
@@ -3994,6 +4120,7 @@ fn collect_table_cell_content_inner(
                             &child_ancestors,
                             available_width,
                             counter_state,
+                            descendant_layout,
                         );
                         if recurse_blocks && style.display != Display::Inline && !runs.is_empty() {
                             push_line_break_run(runs, &style, fonts);
@@ -4054,6 +4181,66 @@ mod subpoint_width_tests {
             visit_layout_tree(element.as_ref(), &mut rows);
         }
         rows.0
+    }
+
+    #[test]
+    fn positioned_table_root_owns_blockified_absolute_descendants() {
+        #[derive(Default)]
+        struct AbsoluteText(Option<(String, Positioning)>);
+
+        impl LayoutVisitor for AbsoluteText {
+            fn visit_text_block(&mut self, block: &TextBlock) {
+                if block.positioning.scheme == crate::style::computed::Position::Absolute {
+                    let text = block
+                        .lines
+                        .iter()
+                        .flat_map(|line| &line.runs)
+                        .map(|run| run.text.as_str())
+                        .collect::<String>();
+                    if text == "Bb" {
+                        self.0 = Some((text, block.positioning.clone()));
+                    }
+                }
+            }
+        }
+
+        let document = parse_html_with_styles(
+            r#"<style>
+                * { box-sizing:border-box; margin:0 }
+                .table { display:table; position:relative; width:120px; height:60px;
+                         padding:7px; border:2px solid black; border-spacing:3px }
+                .cell { display:table-cell }
+                .cell:last-child { position:absolute; right:4px; bottom:5px;
+                                   width:10px; height:8px }
+            </style>
+            <div class="table"><div><span class="cell">Ag</span><span class="cell">Bb</span></div></div>"#,
+        )
+        .expect("valid positioned table fixture");
+        let rules = document
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &document.nodes,
+            PageSize::new(300.0, 180.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let mut absolute = AbsoluteText::default();
+        for (_, element) in &pages[0].elements {
+            visit_layout_tree(element.as_ref(), &mut absolute);
+        }
+        let (_, positioning) = absolute.0.expect("blockified absolute table child");
+        let containing_block = positioning
+            .containing_block
+            .expect("table wrapper containing block");
+
+        assert_eq!(containing_block.depth, 1);
+        assert!((containing_block.width - 90.0).abs() < 0.01);
+        assert!((containing_block.height - 45.0).abs() < 0.01);
+        assert!(positioning.insets.left > 70.0);
+        assert!(positioning.insets.top > 25.0);
     }
 
     fn first_cell(width: f32) -> (f32, usize) {

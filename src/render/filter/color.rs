@@ -118,7 +118,7 @@ pub(crate) fn apply_operations_to_color(
                 );
             }
             FilterOperation::Blur(_)
-            | FilterOperation::Flood { .. }
+            | FilterOperation::BlendWithFlood { .. }
             | FilterOperation::Offset { .. }
             | FilterOperation::DropShadow(_)
             | FilterOperation::MorphologyDilate(_) => {}

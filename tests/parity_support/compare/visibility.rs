@@ -7,7 +7,7 @@ use super::super::config::{
     VISUAL_COLOR_JND, VISUAL_EDGE_PRESENCE_PCT, VISUAL_INTERIOR_COLOR_PCT,
     VISUAL_MIXED_COVERAGE_MAX_BALANCE_BIAS, VISUAL_MIXED_COVERAGE_MAX_INTERIOR_COLOR_PCT,
     VISUAL_MIXED_COVERAGE_MAX_PRESENCE_PCT, VISUAL_MIXED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO,
-    VISUAL_ONE_SIDED_COVERAGE_MAX_COLOR_DE, VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT,
+    VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT,
     VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO,
     VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO, VISUAL_PREDOMINANT_RAMP_MAX_BIAS,
     VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2, VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX,
@@ -98,7 +98,6 @@ pub(crate) fn is_one_sided_sub_css_coverage_phase(tally: &ClassTally, regions: &
         && tally.shared_content_ratio >= VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO
         && tally.missing_pct <= VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT
         && tally.extra_pct <= VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT
-        && tally.color_de <= VISUAL_ONE_SIDED_COVERAGE_MAX_COLOR_DE
         && tally.color_px as f64
             >= VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO * presence as f64
         && tally.presence_outside_edge_band_px == 0
@@ -131,6 +130,28 @@ pub(crate) fn is_predominantly_shared_coverage_phase(
 pub(crate) fn has_visible_interior_recolor(tally: &ClassTally) -> bool {
     tally.interior_color_de > VISUAL_COLOR_JND
         && tally.interior_color_pct > VISUAL_INTERIOR_COLOR_PCT
+}
+
+/// Whether endpoint-less colour evidence forms a readable authored-scale mark.
+///
+/// A boundary mask is not proof of antialias coverage: glyphs, borders, and
+/// overlap frontiers are themselves boundaries. Once the explicit shared-ramp
+/// paths have declined a colour field, the same component, span, and aggregate
+/// area floors used for paint-presence changes decide whether its shape is
+/// visible. This rejects mangled text, chromatic glyph swaps, and wrong paint
+/// order without turning isolated device-pixel noise into failures.
+pub(crate) fn has_visible_unproven_color_change(tally: &ClassTally, regions: &RegionSet) -> bool {
+    if tally.color_de <= VISUAL_COLOR_JND {
+        return false;
+    }
+
+    let component_pixels = VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2 * CSS_PX * CSS_PX;
+    let component_span_pixels = VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX * CSS_PX;
+    let total_pixels = VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2 * CSS_PX * CSS_PX;
+
+    f64::from(regions.largest_area(PixelClass::ColorErr)) >= component_pixels
+        || f64::from(regions.largest_span(PixelClass::ColorErr)) >= component_span_pixels
+        || tally.color_px as f64 >= total_pixels
 }
 
 /// Apply the fixed authored-space policy to direct 300-DPI evidence.
@@ -183,6 +204,14 @@ pub(crate) fn is_stable_shared_outline_phase(tally: &ClassTally, regions: &Regio
     let complete_sub_css_outline = regions.only_sub_css_coverage_presence_residues();
     let low_contrast_fragmented_outline =
         tally.color_px >= presence.saturating_mul(2) && tally.color_de <= VISUAL_COLOR_JND;
+    // A curved PDF path can fragment the threshold-crossing presence class at
+    // a dash endpoint even though the overlapping samples still directly prove
+    // one shared-endpoint coverage ramp. Keep that case topology-bound: the
+    // proven ramp must dominate both presence signs, preserve the paint colour,
+    // and leave no visible interior recolour. Missing paint, an interior cut,
+    // and a one-CSS-pixel displacement cannot borrow this branch.
+    let shared_ramp_dominated_outline = tally.color_px >= presence.saturating_mul(2)
+        && is_predominantly_shared_coverage_phase(tally, regions);
 
     tally.missing_px > 0
         && tally.extra_px > 0
@@ -190,7 +219,9 @@ pub(crate) fn is_stable_shared_outline_phase(tally: &ClassTally, regions: &Regio
         && tally.presence_outside_edge_band_px == 0
         && tally.interior_color_pct <= VISUAL_INTERIOR_COLOR_PCT
         && (tally.color_px == 0 || tally.color_errors_have_css_anchors)
-        && (complete_sub_css_outline || low_contrast_fragmented_outline)
+        && (complete_sub_css_outline
+            || low_contrast_fragmented_outline
+            || shared_ramp_dominated_outline)
 }
 
 fn visible_class(

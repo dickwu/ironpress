@@ -1,6 +1,7 @@
 use super::*;
 use crate::layout::elements::Container;
 use crate::layout::engine::StackingContext;
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 fn push_nested_background_clip(
     content: &mut String,
@@ -25,7 +26,7 @@ pub(super) fn render_nested_container(
     ctx: &mut PageRenderContext<'_>,
 ) -> FlowPosition {
     let x = flow.frame.content_origin.x;
-    let width = flow.frame.width;
+    let width = flow.frame.width();
     let self_pad_origin = flow.frame.padding_origin;
     let container_top_y = flow.container_top_y;
     let flow_top_by_index = flow.flow_top_by_index;
@@ -114,27 +115,26 @@ pub(super) fn render_nested_container(
         y = cursor_y;
     }
     let nk_w = block_width.resolve(width);
+    let nk_children_h: f32 = collapsed_children_height(nested_kids);
+    let nk_content_h = padding.vertical() + nk_children_h + border.vertical_width();
+    let nk_total_h = nk_block_height.resolve(nk_content_h);
     // Absolute Containers anchor to their containing block's padding
     // box (resolved by depth, skipping static intermediates).
     let nk_anchor = abs_child_anchor(nk_containing_block, abs_origins, self_pad_origin);
-    let nk_x = if nk_is_abs {
-        nk_anchor.x + nk_offset_left
-    } else {
-        match nk_float {
-            Float::Right => x + width - nk_w,
-            // Apply margin-left / margin:auto centering / relative
-            // left shift (all folded into offset_left; 0 for a plain
-            // static block). Previously dropped on nested containers.
-            _ => x + nk_offset_left,
-        }
+    let normal_inline_offset = match nk_float {
+        Float::Right => width - nk_w,
+        _ => 0.0,
     };
-    let nk_top_y = if nk_is_abs {
-        nk_anchor.y - nk_offset_top
+    let flow_origin = child.positioning.resolve_in_flow_origin(
+        crate::types::Point::new(normal_inline_offset, container_top_y - y),
+        crate::types::Size::new(nk_w, nk_total_h),
+        flow.frame.size,
+    );
+    let (nk_x, nk_top_y) = if nk_is_abs {
+        (nk_anchor.x + nk_offset_left, nk_anchor.y - nk_offset_top)
     } else {
-        y - nk_offset_top
+        (x + flow_origin.x, container_top_y - flow_origin.y)
     };
-    let nk_children_h: f32 = collapsed_children_height(nested_kids);
-    let nk_content_h = padding.vertical() + nk_children_h + border.vertical_width();
     // A definite `block_height` (set only for an explicit `height`)
     // is a hard border-box size: per CSS, oversized content overflows
     // the box (clipped or visible per `overflow`) rather than growing
@@ -143,7 +143,6 @@ pub(super) fn render_nested_container(
     // `content_h.max(h)` for non-hidden overflow wrongly inflated the
     // box to the child height, e.g. an `overflow:visible` box grew to
     // its oversized child instead of letting the child spill out.)
-    let nk_total_h = nk_block_height.resolve(nk_content_h);
     let nk_geometry = BoxGeometry::from_layout(
         PdfRect::from_top(nk_x, nk_top_y, nk_w, nk_total_h),
         border,
@@ -151,12 +150,17 @@ pub(super) fn render_nested_container(
     );
     let nk_fragment_geometry = nk_geometry.for_fragment(child.fragmentation);
     let nk_border_box = nk_geometry.border_box.rounded(*cont_radii);
-    let background_geometry =
-        nk_fragment_geometry.background(*nk_bg_origin, *nk_bg_clip, *cont_radii);
+    let background_geometry = nk_fragment_geometry.background(
+        *nk_bg_origin,
+        *nk_bg_clip,
+        *cont_radii,
+        BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
+    );
     let nk_background_reference = background_geometry.positioning_box;
     let nk_background_clip = background_geometry.painting_box;
-    let force_background_clip =
-        child.fragmentation.reference_slice.is_some() || *nk_bg_clip != BackgroundClip::Border;
+    let force_background_clip = child.fragmentation.reference_slice.is_some()
+        || *nk_bg_clip != BackgroundClip::Border
+        || nk_background_clip != nk_border_box;
 
     // CSS `filter: blur()` on a solid box (css-filter-effects-1 §4.1):
     // rasterize this empty container's bg fill + border, gaussian-blur
@@ -665,7 +669,7 @@ pub(super) fn render_nested_container(
             nested_kids,
             ContainerFrame::new(
                 PdfPoint::new(inner_x, inner_y),
-                inner_w,
+                crate::types::Size::new(inner_w, content_box.height),
                 PdfPoint::new(padding_box.left, padding_box.top()),
             ),
             abs_origins,

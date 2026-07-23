@@ -227,9 +227,10 @@ mod tests {
         );
         let spans = stroke.spans;
         let total = spans.top.length + spans.right.length + spans.bottom.length + spans.left.length;
-        let expected = stroke.centerline.perimeter();
+        let expected = stroke.path_length();
 
         assert!((total - expected).abs() < 0.001);
+        assert!((expected - (240.0 + 30.0 * std::f32::consts::PI)).abs() < 0.001);
         for length in [
             spans.top.length,
             spans.right.length,

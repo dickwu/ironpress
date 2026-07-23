@@ -1,12 +1,12 @@
 use super::*;
 use crate::layout::elements::Container;
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(super) fn paint_container_decoration(
     content: &mut String,
     element: &Container,
     frame: PageElementFrame<'_>,
     geometry: FragmentPaintGeometry,
-    element_transform: Option<PdfMatrix>,
     ctx: &mut PageRenderContext<'_>,
 ) {
     let background_color = &element.paint.background.color;
@@ -37,7 +37,7 @@ pub(super) fn paint_container_decoration(
     let total_h = c_geometry.border_box.height;
     let container_box = c_geometry.border_box.rounded(*c_border_radii);
     let c_visible_self = *c_visible;
-    let c_element_transform = element_transform;
+    let transformed_paint_space = ctx.text.pdf_writer.transformed_paint_space(ctx.paint_box);
 
     // Self-decoration (background / border / outline / shadow) is
     // suppressed when this box is `visibility: hidden`; children
@@ -56,10 +56,15 @@ pub(super) fn paint_container_decoration(
         );
 
         // The box `background-clip` confines the painted fill to.
-        let background_geometry = geometry.background(*c_bg_origin, *c_bg_clip, *c_border_radii);
+        let background_geometry = geometry.background(
+            *c_bg_origin,
+            *c_bg_clip,
+            *c_border_radii,
+            BackgroundBorderPaint::new(border, element.paint.border_image.as_ref()),
+        );
         let c_clip_box = background_geometry.painting_box;
         let c_reference = background_geometry.positioning_box;
-        let c_needs_clip = *c_bg_clip != BackgroundClip::Border;
+        let c_needs_clip = *c_bg_clip != BackgroundClip::Border || c_clip_box != container_box;
 
         // Draw background
         if let Some(background) = background_color {
@@ -71,7 +76,7 @@ pub(super) fn paint_container_decoration(
                 content.push_str(&format!("/{gs_name} gs\n"));
             }
             let color = PdfRgb::from((r, g, b));
-            let uses_device_css_clip = element_transform.is_none()
+            let uses_device_css_clip = transformed_paint_space.is_none()
                 && is_device_clippable_box_background(
                     *c_bg_clip,
                     c_clip_box.radii,
@@ -240,18 +245,9 @@ pub(super) fn paint_container_decoration(
                 *c_bg_position,
                 *c_bg_repeat,
             );
-            let paint = c_element_transform.map_or_else(
+            let paint = transformed_paint_space.map_or_else(
                 || PdfBackgroundPaintContext::local(paint),
-                |transform| {
-                    PdfBackgroundPaintContext::in_default_space(
-                        paint,
-                        PdfPaintSpace::new(
-                            transform,
-                            ctx.text.pdf_writer.page_content_transform,
-                            ctx.paint_box,
-                        ),
-                    )
-                },
+                |paint_space| PdfBackgroundPaintContext::in_default_space(paint, paint_space),
             );
             render_svg_background(
                 content,

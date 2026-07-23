@@ -34,6 +34,36 @@ macro_rules! inspector {
     };
 }
 
+macro_rules! tree_inspector {
+    ($method:ident, $visitor:ident, $node:ty, $visit:ident) => {
+        fn $method<R>(&self, inspect: impl FnOnce(&$node) -> R) -> Option<R> {
+            struct $visitor<F, R> {
+                inspect: Option<F>,
+                result: Option<R>,
+            }
+
+            impl<F, R> LayoutVisitor for $visitor<F, R>
+            where
+                F: FnOnce(&$node) -> R,
+            {
+                fn $visit(&mut self, element: &$node) {
+                    if let Some(inspect) = self.inspect.take() {
+                        self.result = Some(inspect(element));
+                    }
+                }
+            }
+
+            let mut visitor = $visitor {
+                inspect: Some(inspect),
+                result: None,
+            };
+            self.accept(&mut visitor);
+            self.visit_children(&mut |child| visit_layout_tree(child, &mut visitor));
+            visitor.result
+        }
+    };
+}
+
 #[allow(dead_code)]
 pub(crate) trait LayoutElementTestExt: LayoutElement {
     inspector!(inspect_text, TextInspector, TextBlock, visit_text_block);
@@ -80,6 +110,8 @@ pub(crate) trait LayoutElementTestExt: LayoutElement {
     }
     inspector!(inspect_image, ImageInspector, Image, visit_image);
     inspector!(inspect_svg, SvgInspector, Svg, visit_svg);
+    tree_inspector!(find_image, ImageTreeInspector, Image, visit_image);
+    tree_inspector!(find_svg, SvgTreeInspector, Svg, visit_svg);
     inspector!(inspect_math, MathInspector, MathBlock, visit_math_block);
     inspector!(
         inspect_rule,

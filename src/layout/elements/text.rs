@@ -2,8 +2,8 @@ use super::LayoutNode;
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource,
     BoxFragmentationOwner, BoxModel, BoxPaint, BoxPaintOwner, ContainingBlockConsumer,
-    DescendantClip, FilterHolder, FragmentBreakQuery, FragmentBreakScope, InlineFlowExtent,
-    LayoutElement, LayoutVisitor, LayoutVisitorMut, PaintGroupOwner, Positioning, PositioningOwner,
+    DescendantClip, FilterHolder, FragmentBreakQuery, InlineFlowExtent, LayoutElement,
+    LayoutVisitor, LayoutVisitorMut, PaintGroupOwner, Positioning, PositioningOwner,
     TextBlockStyle, TextFragmentation, TextSemantics,
 };
 use crate::layout::engine::TextLine;
@@ -63,12 +63,8 @@ impl TextBlock {
             },
             positioning: super::Positioning::from_style(style),
             fragmentation: super::TextFragmentation {
-                box_fragmentation: super::BoxFragmentation {
-                    decoration: style.box_decoration_break,
-                    ..Default::default()
-                },
-                orphans: style.orphans,
-                widows: style.widows,
+                box_fragmentation: super::BoxFragmentation::from_style(style),
+                lines: super::LineFragmentation::from_style(style),
             },
             text: super::TextBlockStyle {
                 alignment: style.text_align,
@@ -230,39 +226,10 @@ impl BlockFragmentationSource for TextBlock {
     }
 
     fn find_block_break(&self, query: FragmentBreakQuery) -> Option<f32> {
-        use crate::layout::roundoff::exceeds_with_roundoff;
-
-        if self.lines.len() < 2 || query.scope == FragmentBreakScope::BlockBoundaries {
-            return None;
-        }
-
         let content_start = self.box_model.border.top.width + self.box_model.padding.top;
-        let mut offset = content_start;
-        let mut consumed_lines = 0usize;
-        for line in &self.lines {
-            offset += line.height;
-            if !exceeds_with_roundoff(offset, query.consumed) {
-                consumed_lines += 1;
-            } else {
-                break;
-            }
-        }
-
-        let orphans = self.fragmentation.orphans.max(1) as usize;
-        let widows = self.fragmentation.widows.max(1) as usize;
-        let mut latest = None;
-        offset = content_start;
-        for (index, line) in self.lines.iter().enumerate() {
-            offset += line.height;
-            let lines_before_break = index + 1;
-            let lines_in_fragment = lines_before_break.saturating_sub(consumed_lines);
-            let lines_after_break = self.lines.len() - lines_before_break;
-            let honors_constraints = lines_in_fragment >= orphans && lines_after_break >= widows;
-            if lines_after_break > 0 && query.permits(honors_constraints) {
-                latest = query.select(latest, offset);
-            }
-        }
-        latest
+        self.fragmentation
+            .lines
+            .find_break(&self.lines, content_start, query)
     }
 }
 
@@ -338,6 +305,10 @@ impl LayoutElement for TextBlock {
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }
 

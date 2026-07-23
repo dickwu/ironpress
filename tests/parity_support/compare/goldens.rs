@@ -13,7 +13,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 
 use super::super::config::VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS;
 use super::super::report::Status;
-use super::{PixelClass, V2Outcome, compare_v2, visibility};
+use super::{PixelClass, V2Outcome, compare_page_v2, compare_v2, visibility};
 
 // ----------------------------------------------------------------------------
 // Synthetic image builders
@@ -82,6 +82,71 @@ fn dump(name: &str, o: &V2Outcome) {
         o.visibility.tally.color_errors_have_css_anchors,
         o.visibility.regions.predominantly_shared_coverage_color(),
     );
+}
+
+#[test]
+fn golden_authored_scale_boundary_color_component_is_visible() {
+    let surface = Rgba([230, 242, 252, 255]);
+    let ink = Rgba([20, 48, 78, 255]);
+    let mut reference = ImageBuffer::from_pixel(400, 400, surface);
+    let mut candidate = reference.clone();
+    // Two non-overlapping glyph-like stems occupy only 0.2% of the page. Their
+    // interiors are narrow enough to live entirely in the structural edge band,
+    // so the authored component floor—not an edge-percentage waiver—must reject
+    // the obvious relocation.
+    fill(&mut reference, 30, 40, 37, 59, ink);
+    fill(&mut candidate, 70, 40, 77, 59, ink);
+
+    let outcome = run(&candidate, &reference);
+
+    assert!(outcome.semantic_diff_pct < 0.5);
+    assert!(
+        outcome
+            .visibility
+            .regions
+            .largest_area(PixelClass::ColorErr)
+            >= 8 * 20
+    );
+    assert_eq!(outcome.status, Status::Fail);
+}
+
+#[test]
+fn golden_complete_page_above_floor_mismatch_has_a_one_percent_ceiling() {
+    let surface = Rgba([230, 242, 252, 255]);
+    let ink = Rgba([20, 48, 78, 255]);
+    let reference = ImageBuffer::from_pixel(100, 100, surface);
+    let mut at_ceiling = reference.clone();
+    let mut above_ceiling = reference.clone();
+    for index in 0..101 {
+        let x = 2 + (index % 10) * 9;
+        let y = 2 + (index / 10) * 9;
+        above_ceiling.put_pixel(x, y, ink);
+        if index < 100 {
+            at_ceiling.put_pixel(x, y, ink);
+        }
+    }
+
+    let accepted = compare_page_v2(&at_ceiling, &reference);
+    let rejected = compare_page_v2(&above_ceiling, &reference);
+
+    assert_eq!(accepted.semantic_diff_pct, 1.0);
+    assert_eq!(accepted.status, Status::Pass);
+    assert!(rejected.semantic_diff_pct > 1.0);
+    assert_eq!(rejected.status, Status::Fail);
+    assert!(rejected.diagnosis.headline.contains("1.0% PASS ceiling"));
+}
+
+#[test]
+fn golden_per_channel_floor_is_absent_from_diff_and_page_ceiling() {
+    let reference = ImageBuffer::from_pixel(100, 100, Rgba([80, 120, 160, 255]));
+    let candidate = ImageBuffer::from_pixel(100, 100, Rgba([81, 121, 161, 255]));
+
+    let outcome = compare_page_v2(&candidate, &reference);
+
+    assert_eq!(outcome.diff_pct, 100.0);
+    assert_eq!(outcome.semantic_diff_pct, 0.0);
+    assert_eq!(outcome.status, Status::Pass);
+    assert!(outcome.overlay.pixels().all(|pixel| *pixel == WHITE));
 }
 
 // ----------------------------------------------------------------------------
@@ -157,10 +222,22 @@ fn golden_one_rgb_code_per_pixel_is_raw_but_semantically_correct() {
 }
 
 #[test]
-fn golden_two_rgb_codes_per_pixel_remain_active_color_evidence() {
+fn golden_two_rgb_codes_per_pixel_are_raw_but_semantically_correct() {
     let reference = box_frame();
     let mut candidate = reference.clone();
     fill(&mut candidate, 40, 40, 159, 159, Rgba([2, 2, 2, 255]));
+
+    let outcome = run(&candidate, &reference);
+    assert_eq!(outcome.tally.color_px, 120 * 120);
+    assert_eq!(outcome.status, Status::Pass);
+    assert_eq!(outcome.tally.color_above_channel_tolerance_px, 0);
+}
+
+#[test]
+fn golden_three_rgb_codes_per_pixel_remain_active_color_evidence() {
+    let reference = box_frame();
+    let mut candidate = reference.clone();
+    fill(&mut candidate, 40, 40, 159, 159, Rgba([3, 3, 3, 255]));
 
     let outcome = run(&candidate, &reference);
     assert_eq!(outcome.tally.color_px, 120 * 120);
@@ -937,9 +1014,11 @@ fn golden_one_sided_sub_css_coverage_ramp_is_not_visible() {
     let mut reference = canvas(500, 500);
     let mut candidate = canvas(500, 500);
     let reference_edge = Rgba([140, 140, 140, 255]);
+    // Deliberately high-contrast samples prove that direct unchanged-endpoint
+    // topology, not an arbitrary Delta-E cap, identifies the coverage phase.
     let candidate_outer_edge = Rgba([200, 200, 200, 255]);
     let candidate_middle_edge = Rgba([145, 145, 145, 255]);
-    let candidate_inner_edge = Rgba([135, 135, 135, 255]);
+    let candidate_inner_edge = Rgba([40, 40, 40, 255]);
 
     // Both rasters share the complete solid interior. The candidate merely
     // distributes the same authored outline over one additional device sample
@@ -956,6 +1035,7 @@ fn golden_one_sided_sub_css_coverage_ramp_is_not_visible() {
     assert_eq!(outcome.status, Status::Pass);
     assert_eq!(outcome.tally.missing_px, 0);
     assert!(outcome.tally.extra_px > 0 && outcome.tally.color_px > 0);
+    assert!(outcome.tally.color_de > 7.0);
     assert!(outcome.tally.shared_content_ratio > 0.9);
     assert!(visibility::is_one_sided_sub_css_coverage_phase(
         &outcome.visibility.tally,

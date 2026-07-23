@@ -1194,10 +1194,7 @@ pub fn filter_element_color_ops(
                 dx: attr_f32(el, "dx") * 0.75,
                 dy: attr_f32(el, "dy") * 0.75,
                 keep_source,
-                region_x: filter_region_attr(filter_el, "x", -0.10),
-                region_y: filter_region_attr(filter_el, "y", -0.10),
-                region_width: filter_region_attr(filter_el, "width", 1.20),
-                region_height: filter_region_attr(filter_el, "height", 1.20),
+                region: filter_region(filter_el),
             });
             continue;
         }
@@ -1225,19 +1222,11 @@ pub fn filter_element_color_ops(
                 .is_some_and(|v| v.eq_ignore_ascii_case("multiply"))
             && let Some(color) = flood_color
         {
-            ops.push(FilterOperation::Flood {
+            ops.push(FilterOperation::BlendWithFlood {
                 color,
-                region_x: filter_region_attr(filter_el, "x", -0.10),
-                region_y: filter_region_attr(filter_el, "y", -0.10),
-                region_width: filter_region_attr(filter_el, "width", 1.20),
-                region_height: filter_region_attr(filter_el, "height", 1.20),
+                mode: crate::style::computed::BlendMode::Multiply,
+                region: filter_region(filter_el),
             });
-            let (r, g, b, _) = color.to_f32_rgba();
-            let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
-            ops.push(FilterOperation::Matrix([
-                r, 0.0, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 0.0,
-                1.0, 0.0,
-            ]));
             continue;
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feComposite")
@@ -1630,6 +1619,15 @@ fn filter_region_attr(el: &ElementNode, name: &str, default: f32) -> f32 {
             value.parse::<f32>().unwrap_or(default)
         }
     })
+}
+
+fn filter_region(el: &ElementNode) -> crate::types::Rect {
+    crate::types::Rect::from_xywh(
+        filter_region_attr(el, "x", -0.10),
+        filter_region_attr(el, "y", -0.10),
+        filter_region_attr(el, "width", 1.20),
+        filter_region_attr(el, "height", 1.20),
+    )
 }
 
 fn resolve_text_position(el: &ElementNode, viewport: Option<(f32, f32)>) -> (f32, f32) {
@@ -2991,6 +2989,46 @@ mod tests {
         assert!((g - 0.2).abs() < 0.000_001);
         assert!((b - 0.1).abs() < 0.000_001);
         assert_eq!(a, 1.0);
+    }
+
+    #[test]
+    fn feblend_retains_its_flood_input_and_filter_region() {
+        use crate::style::computed::{BlendMode, FilterOperation};
+        use crate::types::{Color, Rect};
+
+        let mut filter = make_el(
+            "filter",
+            vec![
+                ("id", "f"),
+                ("x", "-20%"),
+                ("y", "-30%"),
+                ("width", "140%"),
+                ("height", "160%"),
+            ],
+        );
+        filter.children = vec![
+            DomNode::Element(make_el("feFlood", vec![("flood-color", "#1565c0")])),
+            DomNode::Element(make_el(
+                "feBlend",
+                vec![
+                    ("in", "SourceGraphic"),
+                    ("in2", "blue"),
+                    ("mode", "multiply"),
+                ],
+            )),
+        ];
+
+        let (operations, linear_rgb) = filter_element_color_ops(&filter);
+
+        assert!(linear_rgb);
+        assert_eq!(
+            operations,
+            vec![FilterOperation::BlendWithFlood {
+                color: Color::rgb(21, 101, 192),
+                mode: BlendMode::Multiply,
+                region: Rect::from_xywh(-0.2, -0.3, 1.4, 1.6),
+            }]
+        );
     }
 
     #[test]

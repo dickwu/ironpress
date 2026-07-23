@@ -8,49 +8,49 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
 
     match tag {
         // Chrome UA stylesheet uses em-relative values for both font-size and
-        // margins. CssValue::Number represents an em multiplier, resolved in
+        // margins. CssValue::Em represents an em multiplier, resolved in
         // apply_style_map by multiplying with the current/inherited font-size.
         // This makes headings scale with body font-size (e.g. body { font-size:
         // 14px } yields H1 at 2em = 28px, not a fixed 32px).
         HtmlTag::H1 => {
-            style.set("font-size", CssValue::Number(2.0));
+            style.set("font-size", CssValue::Em(2.0));
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(0.67));
-            style.set("margin-bottom", CssValue::Number(0.67));
+            style.set("margin-top", CssValue::Em(0.67));
+            style.set("margin-bottom", CssValue::Em(0.67));
         }
         HtmlTag::H2 => {
-            style.set("font-size", CssValue::Number(1.5));
+            style.set("font-size", CssValue::Em(1.5));
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(0.83));
-            style.set("margin-bottom", CssValue::Number(0.83));
+            style.set("margin-top", CssValue::Em(0.83));
+            style.set("margin-bottom", CssValue::Em(0.83));
         }
         HtmlTag::H3 => {
-            style.set("font-size", CssValue::Number(1.17));
+            style.set("font-size", CssValue::Em(1.17));
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(1.0));
-            style.set("margin-bottom", CssValue::Number(1.0));
+            style.set("margin-top", CssValue::Em(1.0));
+            style.set("margin-bottom", CssValue::Em(1.0));
         }
         HtmlTag::H4 => {
             // Chrome UA does not set font-size on H4 (inherits parent, 1em).
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(1.33));
-            style.set("margin-bottom", CssValue::Number(1.33));
+            style.set("margin-top", CssValue::Em(1.33));
+            style.set("margin-bottom", CssValue::Em(1.33));
         }
         HtmlTag::H5 => {
-            style.set("font-size", CssValue::Number(0.83));
+            style.set("font-size", CssValue::Em(0.83));
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(1.67));
-            style.set("margin-bottom", CssValue::Number(1.67));
+            style.set("margin-top", CssValue::Em(1.67));
+            style.set("margin-bottom", CssValue::Em(1.67));
         }
         HtmlTag::H6 => {
-            style.set("font-size", CssValue::Number(0.67));
+            style.set("font-size", CssValue::Em(0.67));
             style.set("font-weight", CssValue::Keyword("bold".into()));
-            style.set("margin-top", CssValue::Number(2.33));
-            style.set("margin-bottom", CssValue::Number(2.33));
+            style.set("margin-top", CssValue::Em(2.33));
+            style.set("margin-bottom", CssValue::Em(2.33));
         }
         HtmlTag::P => {
-            style.set("margin-top", CssValue::Number(1.0));
-            style.set("margin-bottom", CssValue::Number(1.0));
+            style.set("margin-top", CssValue::Em(1.0));
+            style.set("margin-bottom", CssValue::Em(1.0));
         }
         HtmlTag::Strong | HtmlTag::B => {
             style.set("font-weight", CssValue::Keyword("bold".into()));
@@ -82,8 +82,8 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
             // Chrome UA: margin 1em top/bottom, padding-left 40px (≈30pt).
             // Use padding-left (not margin-left) so user CSS `padding-left:0`
             // correctly resets list indentation.
-            style.set("margin-top", CssValue::Number(1.0));
-            style.set("margin-bottom", CssValue::Number(1.0));
+            style.set("margin-top", CssValue::Em(1.0));
+            style.set("margin-bottom", CssValue::Em(1.0));
             style.set("padding-left", CssValue::Length(30.0));
             // Chrome UA stylesheet: `ul { list-style-type: disc }`, `ol {
             // list-style-type: decimal }`. `list-style-type` is inherited, so the
@@ -182,15 +182,15 @@ pub fn default_style(tag: HtmlTag) -> StyleMap {
         }
         // Chrome UA stylesheet: `sub`/`sup` shift the baseline and shrink the
         // font. `font-size: smaller` resolves to ~0.83em within the medium
-        // range; expressed here as a `Number` em-multiplier (resolved against
+        // range; expressed here as an `Em` multiplier (resolved against
         // the inherited size, like the heading defaults above).
         HtmlTag::Sub => {
             style.set("vertical-align", CssValue::Keyword("sub".into()));
-            style.set("font-size", CssValue::Number(0.83));
+            style.set("font-size", CssValue::Em(0.83));
         }
         HtmlTag::Sup => {
             style.set("vertical-align", CssValue::Keyword("super".into()));
-            style.set("font-size", CssValue::Number(0.83));
+            style.set("font-size", CssValue::Em(0.83));
         }
         HtmlTag::Mark => {
             style.set(

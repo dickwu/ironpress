@@ -723,7 +723,7 @@ fn render_cell_text_vertical_centering() {
 }
 
 #[test]
-fn merge_runs_border_radii_comparison() {
+fn coalesce_text_runs_border_radii_comparison() {
     // Runs merge only when their full corner geometry matches.
     let run_a = TextRun {
         text: "Hello ".to_string(),
@@ -739,7 +739,7 @@ fn merge_runs_border_radii_comparison() {
         border_radii: CornerRadii::circular(8.0),
         ..Default::default()
     };
-    let merged = merge_runs(&[run_a.clone(), run_b.clone()]);
+    let merged = crate::text::coalesce_text_runs(&[run_a.clone(), run_b.clone()]);
     // Different corner radii should prevent merging.
     assert_eq!(
         merged.len(),
@@ -749,7 +749,7 @@ fn merge_runs_border_radii_comparison() {
     // Identical corner radii should merge.
     let mut run_b_same = run_b;
     run_b_same.border_radii = CornerRadii::circular(4.0);
-    let merged2 = merge_runs(&[run_a, run_b_same]);
+    let merged2 = crate::text::coalesce_text_runs(&[run_a, run_b_same]);
     assert_eq!(
         merged2.len(),
         1,

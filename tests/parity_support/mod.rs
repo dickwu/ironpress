@@ -10,7 +10,7 @@
 //!   render in-process (Letter + 28.8pt margins) -> validity check -> temp PDF
 //!   -> rasterize candidate and committed oracle PDFs through the SAME runtime
 //!      `pdftoppm` executable -> decode both (image crate) -> run the V2
-//!      pipeline (`compare::compare_v2`): same-coordinate pixel classes, complete
+//!      pipeline (`compare::compare_page_v2`): same-coordinate pixel classes, complete
 //!      region aggregates, direct per-class tallies, raw exact evidence, and a
 //!      same-coordinate human-visibility PASS/FAIL verdict
 //!      verdict
@@ -52,7 +52,6 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use compare::compare_v2;
 use diagnose::compute_dependency_context;
 use gate::{
     BaselineState, baseline_is_compatible, build_report, check_refs_freshness,
@@ -668,8 +667,9 @@ fn execute_run(
                     fixture_fail(entry, 100.0, "panic during processing".to_string())
                 });
                 eprintln!(
-                    "parity: {:8} {:>11.8}%  {}/{}  {}",
+                    "parity: {:8} above-floor {:>11.8}% · raw {:>11.8}%  {}/{}  {}",
                     result.status.as_str(),
+                    result.semantic_diff_pct,
                     result.diff_pct,
                     result.category,
                     result.id,
@@ -1195,8 +1195,9 @@ fn process_entry(
 
     // V2 PATH (the only verdict path): compare raw rasters in shared page space.
     // `status` is the fixed human-visibility verdict; `diff_pct` remains the raw
-    // exact evidence and the classed overlay is the committed diagnostic.
-    let outcome = compare_v2(cand, reference);
+    // exact evidence, while `semantic_diff_pct` and the classed overlay apply
+    // only the global per-pixel RGB tolerance.
+    let outcome = compare::compare_page_v2(cand, reference);
     // Keep the raw exact scalar. Presentation code is responsible for compact
     // formatting and must not make a nonzero signal look like zero.
     let diff_pct = outcome.diff_pct;
@@ -1229,6 +1230,7 @@ fn process_entry(
     // through the same comparator. Page identity comes from the two runtime
     // rasterization vectors, never from committed PNG filename runs.
     let mut diff_pct = diff_pct;
+    let mut semantic_diff_pct = outcome.semantic_diff_pct;
     let mut diagnosis = outcome.diagnosis.clone();
     let mut diagnosis_status = outcome.status;
     let mut diagnosis_diff_pct = diff_pct;
@@ -1237,6 +1239,7 @@ fn process_entry(
     if page_count_mismatch {
         fixture_status = report::Status::Fail;
         diff_pct = 100.0;
+        semantic_diff_pct = 100.0;
         page_note = format!(
             "page-count mismatch: ironpress {} vs oracle {}",
             candidate_pages.len(),
@@ -1252,11 +1255,13 @@ fn process_entry(
     // The count mismatch remains the terminal 100% PageCount failure, while the
     // overlapping page overlays stay available for inspection.
     for page in 2..=candidate_pages.len().min(reference_pages.len()) {
-        let page_outcome = compare_v2(&candidate_pages[page - 1], &reference_pages[page - 1]);
+        let page_outcome =
+            compare::compare_page_v2(&candidate_pages[page - 1], &reference_pages[page - 1]);
         log_debug_tally(entry, page, &page_outcome);
         let page_diff_pct = page_outcome.diff_pct;
         if !page_count_mismatch {
             diff_pct = diff_pct.max(page_diff_pct);
+            semantic_diff_pct = semantic_diff_pct.max(page_outcome.semantic_diff_pct);
         }
         let pdiff = reports_dir
             .join(&entry.category)
@@ -1295,6 +1300,7 @@ fn process_entry(
     // later without rewriting this headline or claiming an unproven cause.
     let fixture_status = classify_reference_dispute(entry, fixture_status);
     let mut result = report::fixture_base(entry, fixture_status, diff_pct, page_note);
+    result.semantic_diff_pct = semantic_diff_pct;
     result.raster.candidate = candidate_fingerprints;
     result.raster.oracle = oracle_fingerprints;
     result.diagnosis = Some(diagnosis);

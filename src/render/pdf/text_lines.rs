@@ -214,11 +214,12 @@ pub(super) fn render_inline_box(
 
     // Inner text lines, laid out from the content-box top downward.
     let content_box = geometry.content_box();
-    let mut baseline_cursor = TextBaselineCursor::new(content_box.top());
+    let mut baseline_cursor =
+        TextBaselineCursor::new(content_box.top(), pdf_writer.page_content_transform);
     for line in &inline.lines {
         let metrics = line_box_metrics(line, custom_fonts);
         let inner_y = baseline_cursor.next_horizontal(metrics);
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let parent_font_size = crate::layout::text::line_primary_font_size(&merged);
         let line_ascender = line_text_top(line, custom_fonts);
         let mut x = content_box.left;

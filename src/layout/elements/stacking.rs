@@ -106,8 +106,10 @@ impl<T> StackingParticipant for T where T: PaintGroupOwner + PositioningOwner {}
 pub(crate) enum StackingLayer {
     PageBackdrop,
     Negative,
+    InFlowDecoration,
     InFlow,
     Float,
+    InFlowContents,
     PositionedZero,
     Positive,
 }
@@ -136,6 +138,14 @@ impl StackingLevel {
         Self::new(StackingLayer::InFlow, 0)
     }
 
+    pub(crate) const fn in_flow_decoration() -> Self {
+        Self::new(StackingLayer::InFlowDecoration, 0)
+    }
+
+    pub(crate) const fn in_flow_contents() -> Self {
+        Self::new(StackingLayer::InFlowContents, 0)
+    }
+
     pub(crate) const fn float() -> Self {
         Self::new(StackingLayer::Float, 0)
     }
@@ -149,7 +159,23 @@ impl StackingLevel {
     }
 
     pub(crate) const fn is_in_flow(self) -> bool {
-        matches!(self.layer, StackingLayer::InFlow)
+        matches!(
+            self.layer,
+            StackingLayer::InFlowDecoration | StackingLayer::InFlow | StackingLayer::InFlowContents
+        )
+    }
+
+    pub(crate) const fn with_in_flow_phase(self, decoration: bool, contents: bool) -> Self {
+        if !matches!(self.layer, StackingLayer::InFlow) {
+            return self;
+        }
+        if decoration && !contents {
+            return Self::in_flow_decoration();
+        }
+        if contents && !decoration {
+            return Self::in_flow_contents();
+        }
+        self
     }
 }
 

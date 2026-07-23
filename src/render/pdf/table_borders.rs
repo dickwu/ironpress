@@ -276,7 +276,9 @@ fn paint_double_border_areas(
     y2: f32,
     width: f32,
 ) {
-    let rule = double_rule_width(width);
+    let metrics = DoubleBorderMetrics::new(width);
+    let rule = metrics.stripe_width();
+    let inner = metrics.inner_inset();
     match edge {
         PhysicalSide::Top | PhysicalSide::Bottom => {
             let left = x1.min(x2);
@@ -284,7 +286,7 @@ fn paint_double_border_areas(
             let bottom = y1 - width / 2.0;
             content.push_str(&format!(
                 "{left} {bottom} {length} {rule} re\n{left} {} {length} {rule} re\nf\n",
-                bottom + width - rule,
+                bottom + inner,
             ));
         }
         PhysicalSide::Right | PhysicalSide::Left => {
@@ -293,7 +295,7 @@ fn paint_double_border_areas(
             let left = x1 - width / 2.0;
             content.push_str(&format!(
                 "{left} {bottom} {rule} {length} re\n{} {bottom} {rule} {length} re\nf\n",
-                left + width - rule,
+                left + inner,
             ));
         }
     }
@@ -574,7 +576,8 @@ mod tests {
 
     #[test]
     fn double_border_divides_integral_css_widths_in_css_pixels() {
-        assert_eq!(double_rule_width(6.0), 2.25);
+        assert_eq!(DoubleBorderMetrics::new(6.0).stripe_width(), 2.25);
+        assert_eq!(DoubleBorderMetrics::new(7.5).inner_inset(), 5.25);
     }
 
     #[test]

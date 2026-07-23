@@ -40,14 +40,20 @@ pub(super) fn paint_uniform_border(
             }
         }
         BorderStyle::Double => {
-            paint_double_strokes(content, border_box, side.width, color);
+            paint_double_border(content, border_box, side.width, color);
         }
         BorderStyle::Dashed | BorderStyle::Dotted => {
             if border_box.radii.is_zero() {
                 content.push_str(&color.fill_operator());
                 paint_square_pattern(content, border_box.rect, side);
             } else {
-                paint_rounded_pattern(content, border_box, side, color);
+                let widths = EdgeSizes::uniform(side.width);
+                paint_closed_rounded_pattern(
+                    content,
+                    BorderRingGeometry::new(border_box.rect, border_box.radii, widths),
+                    BorderStrokeGeometry::new(border_box.rect, border_box.radii, widths),
+                    &side,
+                );
             }
         }
         BorderStyle::None | BorderStyle::Hidden => {}
@@ -88,14 +94,41 @@ fn paint_square_stroke(content: &mut String, border_box: PdfRect, width: f32, co
     content.push_str("S\n");
 }
 
-fn paint_double_strokes(content: &mut String, border_box: RoundedRect, width: f32, color: PdfRgb) {
-    let rule = width / 3.0;
-    content.push_str(&color.stroke_operator());
-    content.push_str("0 J\n0 j\n");
-    content.push_str(&format!("{rule} w\n"));
-    for inset in [rule * 0.5, width - rule * 0.5] {
-        content.push_str(&border_box.inset(EdgeSizes::uniform(inset)).path_or_rect());
-        content.push_str("S\n");
+fn paint_double_border(content: &mut String, border_box: RoundedRect, width: f32, color: PdfRgb) {
+    let metrics = DoubleBorderMetrics::new(width);
+    let rule = metrics.stripe_width();
+    if border_box.radii.is_zero() {
+        content.push_str(&color.stroke_operator());
+        content.push_str("0 J\n0 j\n");
+        content.push_str(&format!("{rule} w\n"));
+        for inset in [
+            metrics.outer_centerline_inset(),
+            metrics.inner_centerline_inset(),
+        ] {
+            content.push_str(&border_box.rect.inset(EdgeSizes::uniform(inset)).rect_path());
+            content.push_str("S\n");
+        }
+        return;
+    }
+
+    let rule_edges = EdgeSizes::uniform(rule);
+    let width_edges = EdgeSizes::uniform(width);
+    content.push_str(&color.fill_operator());
+    for ring in [
+        BorderRingGeometry::between(
+            border_box.rect,
+            border_box.radii,
+            EdgeSizes::ZERO,
+            rule_edges,
+        ),
+        BorderRingGeometry::between(
+            border_box.rect,
+            border_box.radii,
+            EdgeSizes::uniform(metrics.inner_inset()),
+            width_edges,
+        ),
+    ] {
+        paint_ring(content, ring);
     }
 }
 
@@ -186,49 +219,4 @@ fn paint_square_dots(content: &mut String, rect: PdfRect, width: f32) {
         }
     }
     content.push_str("f\n");
-}
-
-fn paint_rounded_pattern(
-    content: &mut String,
-    border_box: RoundedRect,
-    side: crate::layout::engine::LayoutBorderSide,
-    color: PdfRgb,
-) {
-    let ring = BorderRingGeometry::new(
-        border_box.rect,
-        border_box.radii,
-        EdgeSizes::uniform(side.width),
-    );
-    let centerline = border_box.inset(EdgeSizes::uniform(side.width * 0.5));
-    content.push_str("q\n");
-    ring.push_clip(content);
-    content.push_str(&color.stroke_operator());
-    content.push_str(&closed_pattern(
-        side.style,
-        side.width,
-        centerline.perimeter(),
-    ));
-    content.push_str(&format!("{} w\n", side.width));
-    content.push_str(&centerline.path_or_rect());
-    content.push_str("S\n");
-    content.push_str(reset_dash_pattern(side.style));
-    content.push_str("Q\n");
-}
-
-fn closed_pattern(style: BorderStyle, width: f32, perimeter: f32) -> String {
-    let width = width.max(0.1);
-    match style {
-        BorderStyle::Dotted => {
-            let count = (perimeter / (2.0 * width)).round().max(1.0);
-            format!("1 J\n[0 {}] 0 d\n", perimeter / count)
-        }
-        BorderStyle::Dashed => {
-            let dash = (2.0 * width).min(perimeter);
-            let nominal_gap = (width * (2.0 / 3.0)).max(1.0);
-            let count = (perimeter / (dash + nominal_gap)).round().max(1.0);
-            let gap = ((perimeter - count * dash) / count).max(0.1);
-            format!("[{dash} {gap}] 0 d\n")
-        }
-        _ => String::new(),
-    }
 }

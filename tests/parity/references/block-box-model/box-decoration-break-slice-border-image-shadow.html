@@ -10,7 +10,10 @@
 
   /* CSS Break 3 §5.4.1 joins the two fragment border boxes into one
      240px + 88px composite decoration box. Each page below is a literal
-     full-canvas slice of that independently constructed box. */
+     full-canvas slice of that independently constructed box. CSS Backgrounds
+     3 §2.8 keeps the fixture's default background-origin:padding-box, so the
+     background gradient uses the inset 216px by 304px positioning area while
+     border-image and box-shadow use the full 240px by 328px composite. */
   .page {
     position: relative;
     width: 320px;
@@ -31,14 +34,21 @@
     box-shadow: 12px 10px 0 rgba(16, 24, 40, 0.55);
   }
   .background {
+    left: 28px;
+    top: calc(var(--composite-top) + 12px);
+    width: 216px;
+    height: 304px;
     background: linear-gradient(to bottom, #fff0a8, #83e8e1);
   }
   .edge { position: absolute; }
   .edge.left,
   .edge.right {
-    top: 0;
+    /* border-image-slice:1 takes the generated image's one-unit top and
+       bottom strips for the horizontal edges. The remaining source gradient
+       is stretched only through the 304px lane between those 12px bands. */
+    top: 12px;
     width: 12px;
-    height: 328px;
+    height: 304px;
     background: linear-gradient(to bottom, #d90429, #3a0ca3);
   }
   .edge.left { left: 0; }

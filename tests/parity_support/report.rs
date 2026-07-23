@@ -17,10 +17,11 @@ use super::config::{
     VISUAL_EDGE_COLOR_PCT, VISUAL_EDGE_PRESENCE_PCT, VISUAL_INTERIOR_COLOR_PCT,
     VISUAL_MIXED_COVERAGE_MAX_BALANCE_BIAS, VISUAL_MIXED_COVERAGE_MAX_INTERIOR_COLOR_PCT,
     VISUAL_MIXED_COVERAGE_MAX_PRESENCE_PCT, VISUAL_MIXED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO,
-    VISUAL_ONE_SIDED_COVERAGE_MAX_COLOR_DE, VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT,
+    VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT,
     VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO,
-    VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO, VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2,
-    VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX, VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2,
+    VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO, VISUAL_PASS_MAX_SEMANTIC_DIFF_PCT,
+    VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2, VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX,
+    VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2,
 };
 use super::diagnose::Diagnosis;
 use super::manifest::{ManifestEntry, ReferenceAssessment};
@@ -79,7 +80,12 @@ pub(crate) struct FixtureResult {
     #[serde(default)]
     pub(crate) base_ids: Vec<String>,
     pub(crate) status: Status,
+    /// Exact complete-page RGBA mismatch rate.
     pub(crate) diff_pct: f64,
+    /// Complete-page mismatch rate after the global per-pixel RGB tolerance.
+    /// This is the population painted into the classed diff artifact.
+    #[serde(default)]
+    pub(crate) semantic_diff_pct: f64,
     #[serde(default)]
     pub(crate) description: String,
     #[serde(default)]
@@ -386,6 +392,7 @@ pub(crate) fn fixture_base(
         base_ids: entry.base_ids.clone(),
         status,
         diff_pct,
+        semantic_diff_pct: diff_pct,
         description: entry.description.clone(),
         note,
         kind: entry.kind.clone(),
@@ -1103,10 +1110,11 @@ fn write_report_md_identified(
                 .map(|fx| ("REFERENCE-DISPUTED", fx)),
         ) {
             let mut detail = format!(
-                "{} · {} · {} · max-page pixel diff {}",
+                "{} · {} · {} · above-floor diff {} · raw RGBA diff {}",
                 fx.feature,
                 failure_triage(fx).label(),
                 diag_class(fx),
+                display_diff_pct(fx.semantic_diff_pct),
                 display_diff_pct(fx.diff_pct)
             );
             if let Some(diagnosis) = fx
@@ -1216,7 +1224,7 @@ fn write_report_md_identified(
 
     o.push_str("## Run details\n\n");
     o.push_str(&format!(
-        "- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤{PAPER_CONTENT_JND:.1}; a ColorErr pixel with every RGB channel delta ≤{VISUAL_COLOR_CHANNEL_TOLERANCE_PCT:.1}% is semantically correct (its raw RGBA evidence remains reported); color ΔE2000 ≤{VISUAL_COLOR_JND:.1}; edge color above that per-pixel allowance ≤{VISUAL_EDGE_COLOR_PCT:.2}% of paint; interior color ≤{VISUAL_INTERIOR_COLOR_PCT:.3}%; Missing/Extra component ≥{VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2:.0} CSS px²; unpaired component ≥{VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX:.0} CSS px span; disconnected total ≥{VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2:.0} CSS px². Balanced colour coverage requires page bias ≤{VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS:.2}, every independently visible component (≥{VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2:.0} CSS px² or ≥{VISUAL_BALANCED_EDGE_COMPONENT_MAX_SPAN_CSS_PX:.0} CSS px span) bias ≤{VISUAL_BALANCED_EDGE_COMPONENT_MAX_BIAS:.2}, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least {:.0}% of its pixels directly prove the shared ramp and the remainder is below {VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2:.0} CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤{VISUAL_MIXED_COVERAGE_MAX_PRESENCE_PCT:.1}% each, balance bias ≤{VISUAL_MIXED_COVERAGE_MAX_BALANCE_BIAS:.2}, ColorErr coverage ≥{VISUAL_MIXED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO:.0}× direct presence, component bounds below the normal glyph limits, interior colour ≤{VISUAL_MIXED_COVERAGE_MAX_INTERIOR_COLOR_PCT:.2}%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥{:.0}% byte-identical shared paint, ≤{VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT:.1}% direct presence, ColorErr ≥{VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO:.0}× presence, and contour ΔE ≤{VISUAL_ONE_SIDED_COVERAGE_MAX_COLOR_DE:.1}. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤{VISUAL_EDGE_PRESENCE_PCT:.1}% of paint; a coherent outline may exceed that only with at most {VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS} direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Every raw difference stays visible in the report. {} DPI · source `{}` · executed snapshot `{}` · argv `{}` · {} · binary SHA-256 `{}`.\n",
+        "- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤{PAPER_CONTENT_JND:.1}; a ColorErr pixel with every RGB channel delta ≤{VISUAL_COLOR_CHANNEL_TOLERANCE_PCT:.1}% is semantically correct (its exact RGBA evidence remains reported); complete-page above-floor mismatch must be ≤{VISUAL_PASS_MAX_SEMANTIC_DIFF_PCT:.1}%; color ΔE2000 ≤{VISUAL_COLOR_JND:.1}; edge color above that per-pixel allowance ≤{VISUAL_EDGE_COLOR_PCT:.2}% of paint only when no component, span, or aggregate crosses the authored visibility floors; interior color ≤{VISUAL_INTERIOR_COLOR_PCT:.3}%; Missing/Extra or unproven ColorErr component ≥{VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2:.0} CSS px²; component ≥{VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX:.0} CSS px span; disconnected total ≥{VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2:.0} CSS px². Balanced colour coverage requires page bias ≤{VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS:.2}, every independently visible component (≥{VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2:.0} CSS px² or ≥{VISUAL_BALANCED_EDGE_COMPONENT_MAX_SPAN_CSS_PX:.0} CSS px span) bias ≤{VISUAL_BALANCED_EDGE_COMPONENT_MAX_BIAS:.2}, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least {:.0}% of its pixels directly prove the shared ramp and the remainder is below {VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2:.0} CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤{VISUAL_MIXED_COVERAGE_MAX_PRESENCE_PCT:.1}% each, balance bias ≤{VISUAL_MIXED_COVERAGE_MAX_BALANCE_BIAS:.2}, ColorErr coverage ≥{VISUAL_MIXED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO:.0}× direct presence, component bounds below the normal glyph limits, interior colour ≤{VISUAL_MIXED_COVERAGE_MAX_INTERIOR_COLOR_PCT:.2}%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥{:.0}% byte-identical shared paint, ≤{VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT:.1}% direct presence, ColorErr ≥{VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO:.0}× presence, zero interior recolour, and a directly proven unchanged-endpoint ramp; edge-sample Delta-E is not an independent rejection when that topology is proven. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤{VISUAL_EDGE_PRESENCE_PCT:.1}% of paint; a coherent outline may exceed that only with at most {VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS} direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Exact RGBA mismatch remains in the numeric report; the full-page diff paints only pixels above the per-channel floor. {} DPI · source `{}` · executed snapshot `{}` · argv `{}` · {} · binary SHA-256 `{}`.\n",
         100.0 * VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO,
         100.0 * VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO,
         report.env.dpi,
@@ -1403,7 +1411,9 @@ pub(crate) fn render_legend() -> String {
             html_escape(class_label(c))
         ));
     }
-    o.push_str("<span class=\"note\">Full-page diff: matching pixels are blank; coloured classes are raw same-coordinate evidence. The fixed visibility policy decides PASS/FAIL.</span>");
+    o.push_str(&format!(
+        "<span class=\"note\">Full-page diff: matching and per-channel ≤{VISUAL_COLOR_CHANNEL_TOLERANCE_PCT:.1}% pixels are blank; coloured classes are same-coordinate above-floor evidence. Exact RGBA mismatch remains numeric.</span>"
+    ));
     o.push_str("</div>");
     o
 }
@@ -1939,7 +1949,9 @@ value=\"0\" style=\"width:6ch\" oninput=\"filterCards()\"></label>\
                         ),
                         preview_figure(
                             &diff_src,
-                            "full-page classed diff",
+                            &format!(
+                                "full-page >{VISUAL_COLOR_CHANNEL_TOLERANCE_PCT:.1}%/channel diff"
+                            ),
                             diff_pages.contains(&page)
                         ),
                     )
@@ -1978,20 +1990,22 @@ value=\"0\" style=\"width:6ch\" oninput=\"filterCards()\"></label>\
                     fx.diagnosis.as_ref().filter(|diagnosis| diagnosis.different_pixels > 0).map_or_else(
                         || "<span class=\"meta\">exact match</span>".to_string(),
                         |diagnosis| format!(
-                            "<span class=\"meta\">visually equivalent · {} raw differing RGBA pixels · {}</span>",
+                            "<span class=\"meta\">visually equivalent · {} raw differing RGBA pixels · above-floor {} · raw {}</span>",
                             diagnosis.different_pixels,
+                            display_diff_pct(fx.semantic_diff_pct),
                             display_diff_pct(fx.diff_pct)
                         ),
                     )
                 } else {
                     format!(
-                        "<span class=\"num\">{}{} max-page pixel diff</span>",
+                        "<span class=\"num\">{}above-floor {} · raw {} max-page diff</span>",
                         fx.diagnosis
                             .as_ref()
                             .filter(|diagnosis| diagnosis.different_pixels > 0)
                             .map_or_else(String::new, |diagnosis| {
                                 format!("{} px · ", diagnosis.different_pixels)
                             }),
+                        display_diff_pct(fx.semantic_diff_pct),
                         display_diff_pct(fx.diff_pct)
                     )
                 };
@@ -2200,7 +2214,7 @@ value=\"0\" style=\"width:6ch\" oninput=\"filterCards()\"></label>\
             o.push_str(&format!(
                 "<tr><td><span class=\"badge\" style=\"background:{color}\">{status}</span></td>\
 <td>{cat}</td><td><a href=\"{cat}.html#{anchor}\">{id}</a></td>\
-<td>{feature} · {triage} · {class} · max-page pixel diff {diff}{differing_pixels}{reference_note}{dependency}{reason}</td></tr>",
+<td>{feature} · {triage} · {class} · above-floor diff {semantic_diff} · raw RGBA diff {diff}{differing_pixels}{reference_note}{dependency}{reason}</td></tr>",
                 color = status_color(fx.status),
                 status = issue,
                 cat = html_escape(&fx.category),
@@ -2209,6 +2223,7 @@ value=\"0\" style=\"width:6ch\" oninput=\"filterCards()\"></label>\
                 feature = html_escape(&fx.feature),
                 triage = html_escape(failure_triage(fx).label()),
                 class = html_escape(diag_class(fx)),
+                semantic_diff = display_diff_pct(fx.semantic_diff_pct),
                 diff = display_diff_pct(fx.diff_pct),
                 differing_pixels = differing_pixels,
                 reference_note = reference_note,
@@ -2389,6 +2404,7 @@ mod tests {
             base_ids: Vec::new(),
             status,
             diff_pct: if status == Status::Pass { 0.0 } else { 40.0 },
+            semantic_diff_pct: if status == Status::Pass { 0.0 } else { 40.0 },
             description: format!("{id} description"),
             note: if status == Status::Pass {
                 String::new()
@@ -2521,6 +2537,7 @@ mod tests {
     fn visual_pass_keeps_raw_variance_in_its_category_card() {
         let mut fixture = fixture("subpixel-coverage", "healthy", Status::Pass);
         fixture.diff_pct = 0.25;
+        fixture.semantic_diff_pct = 0.20;
         fixture.diagnosis = Some(Diagnosis {
             primary_class: "ColorValue".to_string(),
             headline: "edge coverage differs below the visibility policy".to_string(),
@@ -2538,7 +2555,9 @@ mod tests {
         let category = std::fs::read_to_string(reports.join("healthy.html")).unwrap();
         let _ = std::fs::remove_dir_all(root);
 
-        assert!(category.contains("visually equivalent · 12 raw differing RGBA pixels · 0.25%"));
+        assert!(category.contains(
+            "visually equivalent · 12 raw differing RGBA pixels · above-floor 0.20% · raw 0.25%"
+        ));
         assert!(category.contains("edge coverage differs below the visibility policy"));
     }
 
@@ -2847,14 +2866,15 @@ mod tests {
     fn tiny_exact_diff_remains_visibly_nonzero() {
         let mut report = sample_report();
         report.categories[1].features[0].fixtures[0].diff_pct = 0.000_001;
+        report.categories[1].features[0].fixtures[0].semantic_diff_pct = 0.000_001;
         let path = temp_path("tiny-diff.md");
         let _ = std::fs::remove_file(&path);
         write_report_md(&path, &report).unwrap();
         let markdown = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(path);
 
-        assert!(markdown.contains("max-page pixel diff 0.000001%"));
-        assert!(!markdown.contains("max-page pixel diff 0%"));
+        assert!(markdown.contains("above-floor diff 0.000001% · raw RGBA diff 0.000001%"));
+        assert!(!markdown.contains("above-floor diff 0%"));
     }
 
     #[test]

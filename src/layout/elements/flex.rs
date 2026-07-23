@@ -1,8 +1,8 @@
 use super::LayoutNode;
 use super::{
     BlockFlowParticipant, BoxPaint, BoxPaintOwner, ChildContainer, FilterHolder, InlineFlowExtent,
-    LayoutElement, LayoutVisitor, LayoutVisitorMut, PageContentRole, PaintGroupOwner, Positioning,
-    PositioningOwner,
+    LayoutElement, LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole,
+    PaintGroupOwner, Positioning, PositioningOwner,
 };
 use crate::layout::engine::{FlexCell, FlexFragmentRole, ForcedFlexLineBreak};
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -27,6 +27,7 @@ pub(crate) struct FlexRow {
     pub(crate) paint: super::BoxPaint,
     pub(crate) positioning: super::Positioning,
     pub(crate) inline_offset: super::InlineOffset,
+    pub(crate) overflow: OverflowBehavior,
 }
 
 impl MarginHolder for FlexRow {
@@ -176,6 +177,10 @@ impl LayoutElement for FlexRow {
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }
 

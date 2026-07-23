@@ -63,7 +63,7 @@ use super::context::{LayoutContext, LayoutEnv};
 use super::engine::{
     ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, flatten_element,
 };
-use super::helpers::build_pseudo_block;
+use super::helpers::{PseudoBoxContext, build_pseudo_block};
 use super::paginate::estimate_element_height;
 use super::roundoff::is_positive_with_roundoff;
 
@@ -387,10 +387,8 @@ pub(crate) fn layout_multicol_container(
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,
-            col_width,
-            env.fonts,
-            None,
-            positioned_depth,
+            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs)
+                .with_positioned_ancestor_depth(positioned_depth),
             env.counter_state,
             false,
         );
@@ -460,10 +458,8 @@ pub(crate) fn layout_multicol_container(
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,
-            col_width,
-            env.fonts,
-            None,
-            positioned_depth,
+            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs)
+                .with_positioned_ancestor_depth(positioned_depth),
             env.counter_state,
             false,
         );
@@ -908,10 +904,8 @@ fn emit_multicol_wrapper(
             left: geometry.inline_offset.value(),
             ..Default::default()
         }),
-        fragmentation: BoxFragmentation {
-            decoration: crate::style::computed::BoxDecorationBreak::Slice,
-            ..Default::default()
-        },
+        fragmentation: BoxFragmentation::from_style(style)
+            .with_decoration(crate::style::computed::BoxDecorationBreak::Slice),
         overflow: OverflowBehavior {
             combined: style.overflow,
             x: style.overflow_x,

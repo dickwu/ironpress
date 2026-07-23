@@ -1,6 +1,7 @@
 mod imports;
 mod inline;
 mod lightning;
+mod math;
 mod media;
 mod model;
 mod page;
@@ -16,12 +17,13 @@ pub(crate) use imports::{extract_svg_data_uri, extract_url_path};
 #[allow(unused_imports)]
 pub use imports::{is_path_within, parse_import_rules, resolve_imports};
 pub use inline::parse_inline_style;
+pub(crate) use math::{CssMathExpression, LengthPercent, MathUnitContext};
 pub(crate) use media::{preprocess_media_queries, preprocess_media_queries_with_context};
 pub use model::{
-    AncestorInfo, BackgroundLayerSource, CalcOp, CalcToken, CssRule, CssValue, FontFaceRule,
-    FontStretch, ImportRule, MarginBox, MarginBoxAlign, MarginBoxBand, MarginBoxPosition,
-    MarginContentToken, MediaContext, PageRule, PageSelector, PageSelectorContext, PageTextStyle,
-    PseudoElement, SelectorContext, SpecifiedColor, StyleMap,
+    AncestorInfo, BackgroundLayerSource, CssRule, CssValue, FontFaceRule, FontStretch, ImportRule,
+    MarginBox, MarginBoxAlign, MarginBoxBand, MarginBoxPosition, MarginContentToken, MediaContext,
+    PageRule, PageSelector, PageSelectorContext, PageTextStyle, PseudoElement, SelectorContext,
+    SpecifiedColor, StyleMap,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -39,6 +41,5 @@ pub(crate) use values::{
 };
 #[cfg(test)]
 pub(crate) use values::{
-    parse_border_spacing_component, parse_calc_expression, parse_clamp_expression,
-    parse_var_function, tokenize_calc,
+    parse_border_spacing_component, parse_math_expression, parse_var_function,
 };

@@ -1,9 +1,10 @@
 use std::{borrow::Cow, collections::HashMap};
 
+pub(crate) use crate::parser::css::LengthPercent;
 use crate::parser::css::{
-    BackgroundLayerSource, CalcOp, CalcToken, CssRule, CssValue, FontStretch, SelectorContext,
-    SpecifiedColor, StyleMap, parse_length, parse_property_value, selector_matches_with_context,
-    specificity, split_radius_components,
+    BackgroundLayerSource, CssMathExpression, CssRule, CssValue, FontStretch, MathUnitContext,
+    SelectorContext, SpecifiedColor, StyleMap, parse_length, parse_property_value,
+    selector_matches_with_context, specificity, split_radius_components,
 };
 use crate::parser::dom::HtmlTag;
 use crate::style::defaults::default_style;
@@ -11,7 +12,7 @@ use crate::style::font_metrics::FontMetrics;
 use crate::style::html_cascade::html_cascade_layers;
 use crate::style::raster_quality::{RasterQuality, background_raster_dimensions};
 use crate::types::{
-    Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Size,
+    Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Rect, Size,
 };
 use crate::util::{MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};
 
@@ -59,7 +60,16 @@ impl Display {
     /// with its block-level counterpart.
     pub(crate) const fn blockified(self) -> Self {
         match self {
-            Self::Inline | Self::InlineBlock => Self::Block,
+            Self::Inline
+            | Self::InlineBlock
+            | Self::TableRowGroup
+            | Self::TableHeaderGroup
+            | Self::TableFooterGroup
+            | Self::TableRow
+            | Self::TableCell
+            | Self::TableColumnGroup
+            | Self::TableColumn
+            | Self::TableCaption => Self::Block,
             Self::InlineFlex => Self::Flex,
             Self::InlineGrid => Self::Grid,
             Self::InlineTable => Self::Table,
@@ -224,79 +234,6 @@ pub enum ShapeBox {
     Border,
     Padding,
     Content,
-}
-
-/// A CSS `<length-percentage>` as an affine value over its eventual percentage
-/// basis. Keeping both terms avoids resolving `calc(25% - 10px)` against the
-/// wrong box before layout knows the correct basis.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LengthPercent {
-    length: f32,
-    percent: f32,
-}
-
-impl LengthPercent {
-    pub const ZERO: Self = Self::length(0.0);
-
-    pub const fn length(length: f32) -> Self {
-        Self {
-            length,
-            percent: 0.0,
-        }
-    }
-
-    pub const fn percent(percent: f32) -> Self {
-        Self {
-            length: 0.0,
-            percent,
-        }
-    }
-
-    pub const fn from_terms(length: f32, percent: f32) -> Self {
-        Self { length, percent }
-    }
-
-    pub fn resolve(self, basis: f32) -> f32 {
-        self.length + basis * self.percent / 100.0
-    }
-
-    pub const fn is_absolute(self) -> bool {
-        self.percent == 0.0
-    }
-
-    pub const fn absolute_length(self) -> Option<f32> {
-        if self.is_absolute() {
-            Some(self.length)
-        } else {
-            None
-        }
-    }
-}
-
-impl std::ops::Add for LengthPercent {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self {
-        Self::from_terms(self.length + rhs.length, self.percent + rhs.percent)
-    }
-}
-
-impl std::ops::Sub for LengthPercent {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self {
-        Self::from_terms(self.length - rhs.length, self.percent - rhs.percent)
-    }
-}
-
-impl From<(f32, bool)> for LengthPercent {
-    fn from((value, is_percent): (f32, bool)) -> Self {
-        if is_percent {
-            Self::percent(value)
-        } else {
-            Self::length(value)
-        }
-    }
 }
 
 /// One unresolved border-radius axis.
@@ -567,16 +504,7 @@ pub enum TextAlign {
 pub enum TextIndent {
     Length(f32),
     Percentage(f32),
-    /// A `calc()` expression whose non-percentage terms were normalized while
-    /// computing style. Its percentage terms remain deferred until layout.
-    Calc(Vec<CalcToken>),
-    /// `clamp()` compares used values, so each arm retains its own deferred
-    /// percentage terms until the block's inner inline size is known.
-    Clamp {
-        min: Box<Self>,
-        preferred: Box<Self>,
-        max: Box<Self>,
-    },
+    Math(DeferredLength),
 }
 
 impl Default for TextIndent {
@@ -590,19 +518,25 @@ impl TextIndent {
         match self {
             Self::Length(length) => *length,
             Self::Percentage(percentage) => inner_inline_size * percentage / 100.0,
-            Self::Calc(tokens) => {
-                crate::style::resolve::resolve_calc(tokens, inner_inline_size, 0.0, 0.0, 0.0, 0.0)
-            }
-            Self::Clamp {
-                min,
-                preferred,
-                max,
-            } => min.resolve(inner_inline_size).max(
-                preferred
-                    .resolve(inner_inline_size)
-                    .min(max.resolve(inner_inline_size)),
-            ),
+            Self::Math(value) => value.resolve(inner_inline_size).unwrap_or(0.0),
         }
+    }
+}
+
+/// A typed CSS length expression whose percentage basis is supplied by layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredLength {
+    expression: CssMathExpression,
+    units: MathUnitContext,
+}
+
+impl DeferredLength {
+    fn new(expression: CssMathExpression, units: MathUnitContext) -> Self {
+        Self { expression, units }
+    }
+
+    fn resolve(&self, percentage_basis: f32) -> Option<f32> {
+        self.expression.resolve(self.units, percentage_basis)
     }
 }
 
@@ -1637,11 +1571,6 @@ pub enum FlexBasis {
     #[default]
     Auto,
     Definite(LengthPercent),
-    Clamp {
-        min: LengthPercent,
-        preferred: LengthPercent,
-        max: LengthPercent,
-    },
     Content(IntrinsicWidthKeyword),
 }
 
@@ -1649,18 +1578,6 @@ impl FlexBasis {
     pub fn resolve(self, basis: f32) -> Option<f32> {
         match self {
             Self::Definite(value) => Some(value.resolve(basis).max(0.0)),
-            Self::Clamp {
-                min,
-                preferred,
-                max,
-            } => {
-                // CSS `clamp()` gives the minimum precedence when it exceeds
-                // the maximum. `f32::clamp` panics for that valid CSS shape.
-                let min = min.resolve(basis);
-                let preferred = preferred.resolve(basis);
-                let max = max.resolve(basis);
-                Some(preferred.min(max).max(min).max(0.0))
-            }
             Self::Auto | Self::Content(_) => None,
         }
     }
@@ -1668,21 +1585,14 @@ impl FlexBasis {
     pub fn definite_length(self) -> Option<f32> {
         match self {
             Self::Definite(value) => value.absolute_length(),
-            Self::Clamp {
-                min,
-                preferred,
-                max,
-            } if min.is_absolute() && preferred.is_absolute() && max.is_absolute() => {
-                self.resolve(0.0)
-            }
-            Self::Auto | Self::Clamp { .. } | Self::Content(_) => None,
+            Self::Auto | Self::Content(_) => None,
         }
     }
 
     pub const fn content_keyword(self) -> Option<IntrinsicWidthKeyword> {
         match self {
             Self::Content(keyword) => Some(keyword),
-            Self::Auto | Self::Definite(_) | Self::Clamp { .. } => None,
+            Self::Auto | Self::Definite(_) => None,
         }
     }
 
@@ -1901,8 +1811,6 @@ pub struct GradientPosition {
 }
 
 impl GradientPosition {
-    pub const ZERO: Self = Self::new(0.0, 0.0);
-
     pub const fn new(fraction: f32, length: f32) -> Self {
         Self { fraction, length }
     }
@@ -2635,13 +2543,6 @@ pub enum BorderImageWidth {
     /// A `<length-percentage>` resolved against the corresponding
     /// border-image-area dimension.
     LengthPercent(LengthPercent),
-    /// A `clamp()` of values resolved against the corresponding
-    /// border-image-area dimension.
-    Clamp {
-        min: LengthPercent,
-        preferred: LengthPercent,
-        max: LengthPercent,
-    },
     /// The source image's natural slice size, or the physical border width
     /// when the source has no natural dimension (as for CSS gradients).
     Auto,
@@ -2652,14 +2553,6 @@ impl BorderImageWidth {
         match self {
             Self::Number(value) => value * border_width,
             Self::LengthPercent(value) => value.resolve(area_extent),
-            Self::Clamp {
-                min,
-                preferred,
-                max,
-            } => preferred
-                .resolve(area_extent)
-                .min(max.resolve(area_extent))
-                .max(min.resolve(area_extent)),
             Self::Auto => natural_slice.unwrap_or(border_width),
         }
         .max(0.0)
@@ -3233,6 +3126,30 @@ pub struct PercentageInsets {
     pub left: Option<f32>,
 }
 
+/// Root-font used lengths needed by the root-relative CSS units whose basis is
+/// not merely `rem`. The root font size remains the single source for `rem`;
+/// this group owns the complementary font metrics and `rlh` basis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontUnitLengths {
+    pub ex: f32,
+    pub ch: f32,
+    pub cap: f32,
+    pub ic: f32,
+    pub line_height: f32,
+}
+
+impl Default for FontUnitLengths {
+    fn default() -> Self {
+        Self {
+            ex: 6.0,
+            ch: 6.0,
+            cap: 9.0,
+            ic: 12.0,
+            line_height: 14.4,
+        }
+    }
+}
+
 /// CSS Fragmentation 3 §3.1 forced/avoid break value for `break-before` /
 /// `break-after`. `Auto` is the initial value (a class-A break opportunity with
 /// no forced break and no avoidance). The forced values (`page`/`left`/`right`/
@@ -3290,6 +3207,7 @@ pub struct ComputedStyle {
     pub(crate) raster_quality: RasterQuality,
     pub font_size: f32,
     pub root_font_size: f32,
+    pub root_font_units: FontUnitLengths,
     pub viewport_width: f32,
     pub viewport_height: f32,
     pub font_weight: FontWeight,
@@ -3738,22 +3656,20 @@ pub enum FilterOperation {
     HueRotate(f32),
     Opacity(f32),
     Matrix([f32; 20]),
-    Flood {
+    /// SVG `feBlend` with an `feFlood` input. Keeping the two-input primitive
+    /// intact is essential: a colour matrix cannot represent the flood-only
+    /// part of the primitive subregion.
+    BlendWithFlood {
         color: Color,
-        region_x: f32,
-        region_y: f32,
-        region_width: f32,
-        region_height: f32,
+        mode: BlendMode,
+        region: Rect,
     },
     Blur(f32),
     Offset {
         dx: f32,
         dy: f32,
         keep_source: bool,
-        region_x: f32,
-        region_y: f32,
-        region_width: f32,
-        region_height: f32,
+        region: Rect,
     },
     DropShadow(DropShadow),
     MorphologyDilate(f32),
@@ -3788,7 +3704,7 @@ impl FilterOperation {
                     .zip(IDENTITY)
                     .all(|(value, identity)| (*value - identity).abs() <= EPSILON)
             }
-            Self::Flood { .. } | Self::Offset { .. } | Self::DropShadow(_) => false,
+            Self::BlendWithFlood { .. } | Self::Offset { .. } | Self::DropShadow(_) => false,
         }
     }
 
@@ -3825,6 +3741,7 @@ impl Default for ComputedStyle {
             raster_quality: RasterQuality::default(),
             font_size: 12.0,
             root_font_size: 12.0,
+            root_font_units: FontUnitLengths::default(),
             viewport_width: 595.28,
             viewport_height: 841.89,
             font_weight: FontWeight::Normal,
@@ -5152,6 +5069,7 @@ fn reset_all_to_initial(style: &mut ComputedStyle) {
     text_decorations.current = TextDecoration::default();
     let raster_quality = style.raster_quality;
     let root_font_size = style.root_font_size;
+    let root_font_units = style.root_font_units;
     let viewport_width = style.viewport_width;
     let viewport_height = style.viewport_height;
     let direction_rtl = style.direction_rtl;
@@ -5163,6 +5081,7 @@ fn reset_all_to_initial(style: &mut ComputedStyle) {
 
     style.raster_quality = raster_quality;
     style.root_font_size = root_font_size;
+    style.root_font_units = root_font_units;
     style.viewport_width = viewport_width;
     style.viewport_height = viewport_height;
     style.direction_rtl = direction_rtl;
@@ -5561,6 +5480,7 @@ fn color_in_text_emphasis_shorthand(value: &str) -> Option<SpecifiedColor> {
 fn apply_font_shorthand(
     style: &mut ComputedStyle,
     value: &str,
+    parent: &ComputedStyle,
     length_context: crate::style::resolve::LengthResolutionContext,
     font_metrics: FontMetrics<'_>,
 ) {
@@ -5619,15 +5539,20 @@ fn apply_font_shorthand(
         line_raw = tokens.get(family_start + 1).copied();
         family_start += 2;
     }
-    apply_font_size_token(style, size_raw, length_context, font_metrics);
-    if let Some(line) = line_raw {
-        apply_line_height_token(style, line, length_context, font_metrics);
-    }
-
     let family = tokens[family_start..].join(" ");
     if !family.trim().is_empty() {
         style.font_stack = parse_font_stack(&family);
         style.font_family = style.font_stack.primary();
+    }
+
+    apply_font_size_token(style, parent, size_raw, font_metrics);
+    if let Some(line) = line_raw {
+        apply_line_height_token(
+            style,
+            line,
+            line_height_length_context(style, parent, length_context, font_metrics),
+            font_metrics,
+        );
     }
 }
 
@@ -5648,24 +5573,64 @@ fn apply_font_weight(style: &mut ComputedStyle, value: &str) {
 
 fn apply_font_size_token(
     style: &mut ComputedStyle,
+    parent: &ComputedStyle,
     token: &str,
-    length_context: crate::style::resolve::LengthResolutionContext,
     font_metrics: FontMetrics<'_>,
 ) {
-    if let Some(value) = parse_length(token) {
-        match value {
-            CssValue::Length(v) => style.font_size = v,
-            CssValue::Number(v) => style.font_size *= v,
-            CssValue::Percentage(p) => style.font_size *= p / 100.0,
-            other => {
-                if let Some(v) =
-                    resolve_css_length_for_style(&other, style, length_context, font_metrics)
-                {
-                    style.font_size = v;
-                }
-            }
-        }
+    if let Some(value) = parse_length(token)
+        && let Some(size) =
+            resolve_font_size_value(&value, &style.custom_properties, parent, font_metrics)
+    {
+        style.font_size = size;
     }
+}
+
+/// Resolve one `font-size` value against the inherited font context.
+///
+/// Font-relative units on `font-size` use the parent's font metrics, while all
+/// other properties on the element use the newly computed size. Owning that
+/// boundary here keeps widths, heights, borders, and spacing on one `em` basis.
+fn resolve_font_size_value(
+    value: &CssValue,
+    custom_properties: &HashMap<String, String>,
+    parent: &ComputedStyle,
+    font_metrics: FontMetrics<'_>,
+) -> Option<f32> {
+    let size = match value {
+        CssValue::Length(value) => *value,
+        CssValue::Em(value) => *value * parent.font_size,
+        CssValue::Ex(value) => {
+            *value * parent.font_size * style_ex_length_ratio(parent, font_metrics)
+        }
+        CssValue::Ch(value) => {
+            *value * parent.font_size * font_metrics.style_ch_ratio(parent).unwrap_or(0.5)
+        }
+        CssValue::Rem(value) => *value * parent.root_font_size,
+        CssValue::Percentage(value) => *value * parent.font_size / 100.0,
+        CssValue::Vw(value) => *value * parent.viewport_width / 100.0,
+        CssValue::Vh(value) => *value * parent.viewport_height / 100.0,
+        CssValue::Vmin(value) => *value * parent.viewport_width.min(parent.viewport_height) / 100.0,
+        CssValue::Vmax(value) => *value * parent.viewport_width.max(parent.viewport_height) / 100.0,
+        CssValue::Math(expression) => {
+            expression.resolve(parent.math_unit_context(font_metrics), parent.font_size)?
+        }
+        CssValue::Var(name, fallback) => {
+            let raw = crate::style::resolve::resolve_var_to_string(
+                name,
+                fallback.as_deref(),
+                custom_properties,
+            )?;
+            let resolved = parse_property_value("font-size", &raw)?;
+            return resolve_font_size_value(&resolved, custom_properties, parent, font_metrics);
+        }
+        CssValue::Keyword(raw) => {
+            let parsed = parse_length(raw)?;
+            return resolve_font_size_value(&parsed, custom_properties, parent, font_metrics);
+        }
+        CssValue::Number(_) | CssValue::Color(_) | CssValue::BackgroundLayers(_) => return None,
+    };
+
+    (size.is_finite() && size >= 0.0).then_some(size)
 }
 
 fn apply_line_height_token(
@@ -5688,6 +5653,11 @@ fn apply_line_height_token(
             CssValue::Number(v) => {
                 style.line_height = v;
                 style.line_height_absolute = None;
+            }
+            CssValue::Em(v) => {
+                let absolute = v * style.font_size;
+                style.line_height = v;
+                style.line_height_absolute = Some(absolute);
             }
             CssValue::Percentage(p) => {
                 let absolute = style.font_size * p / 100.0;
@@ -5865,10 +5835,7 @@ fn apply_style_map_with_percentage_basis(
     let parent_width_known = parent_width.is_some();
     let length_context = crate::style::resolve::LengthResolutionContext::new(
         parent_width.unwrap_or(parent.viewport_width),
-        style.font_size,
-        parent.root_font_size,
-        parent.viewport_width,
-        parent.viewport_height,
+        style.math_unit_context(font_metrics),
     );
 
     // Handle inherit, initial, unset keywords before normal property application
@@ -5910,29 +5877,14 @@ fn apply_style_map_with_percentage_basis(
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font") {
-        apply_font_shorthand(style, k, length_context, font_metrics);
+        apply_font_shorthand(style, k, parent, length_context, font_metrics);
     }
 
-    if let Some(CssValue::Length(v)) = get_non_special(map, "font-size") {
-        style.font_size = *v;
-    }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "font-size") {
-        // em value — multiply by current font-size
-        style.font_size *= *v;
-    }
-    // ex/ch on `font-size` (css-values-4 §6.1.1): the unit refers to the
-    // *parent* element's font (the value is computed before the new font-size
-    // takes effect), so resolve the x-height / '0'-advance against the parent's
-    // resolved font. Falls back to the 0.5em approximation when no font context
-    // is active (e.g. the font is not loaded). `style.font_size` currently holds
-    // the inherited parent size, matching the `em`/`Number` branch above.
-    if let Some(CssValue::Ex(v)) = get_non_special(map, "font-size") {
-        let ratio = font_metrics.style_x_height_ratio(parent).unwrap_or(0.5);
-        style.font_size *= *v * ratio;
-    }
-    if let Some(CssValue::Ch(v)) = get_non_special(map, "font-size") {
-        let ratio = font_metrics.style_ch_ratio(parent).unwrap_or(0.5);
-        style.font_size *= *v * ratio;
+    if let Some(value) = get_non_special(map, "font-size")
+        && let Some(size) =
+            resolve_font_size_value(value, &style.custom_properties, parent, font_metrics)
+    {
+        style.font_size = size;
     }
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "font-weight") {
@@ -5967,6 +5919,64 @@ fn apply_style_map_with_percentage_basis(
             _ => {}
         }
     }
+
+    // CSS Values 4 §6.1.1: `lh` used by ordinary properties is the element's
+    // computed line height, regardless of declaration order. Resolve the
+    // line-height winner after the complete font tuple but before constructing
+    // the unit context consumed by margins, sizing, gaps, and every other
+    // length-valued property. Within line-height itself, `lh`/`rlh` use the
+    // parent's metrics to avoid a self-reference.
+    let line_height_context =
+        line_height_length_context(style, parent, length_context, font_metrics);
+    if let Some(CssValue::Keyword(k)) = get_non_special(map, "line-height") {
+        if k == "normal" {
+            style.line_height = f32::NAN;
+            style.line_height_absolute = None;
+        } else if let Some(v) =
+            resolve_raw_length_for_style(k, style, line_height_context, font_metrics)
+        {
+            style.line_height_absolute = Some(v);
+            style.line_height = v / style.font_size;
+        }
+    }
+    if let Some(CssValue::Number(v)) = get_non_special(map, "line-height") {
+        style.line_height = *v;
+        style.line_height_absolute = None;
+    }
+    if let Some(CssValue::Em(v)) = get_non_special(map, "line-height") {
+        let absolute = *v * style.font_size;
+        style.line_height_absolute = Some(absolute);
+        style.line_height = *v;
+    }
+    if let Some(CssValue::Length(v)) = get_non_special(map, "line-height") {
+        style.line_height_absolute = Some(*v);
+        style.line_height = *v / style.font_size;
+    }
+    if let Some(CssValue::Percentage(v)) = get_non_special(map, "line-height") {
+        let absolute = style.font_size * *v / 100.0;
+        style.line_height_absolute = Some(absolute);
+        style.line_height = absolute / style.font_size;
+    }
+    if let Some(
+        value @ (CssValue::Rem(_)
+        | CssValue::Vw(_)
+        | CssValue::Vh(_)
+        | CssValue::Vmin(_)
+        | CssValue::Vmax(_)
+        | CssValue::Math(_)
+        | CssValue::Var(_, _)),
+    ) = get_non_special(map, "line-height")
+        && let Some(v) =
+            resolve_css_length_for_style(value, style, line_height_context, font_metrics)
+    {
+        style.line_height_absolute = Some(v);
+        style.line_height = v / style.font_size;
+    }
+    sync_line_height_from_absolute(style);
+
+    // All remaining font-relative properties use the element's completed font
+    // metrics and line height, never reconstructed font-size-only defaults.
+    let length_context = style_length_context(style, length_context, font_metrics);
 
     if let Some(value) = get_non_special(map, "background-color")
         && let Some(color) = specified_color_from_value(value, &style.custom_properties)
@@ -6044,9 +6054,7 @@ fn apply_style_map_with_percentage_basis(
         }
     }
 
-    // Margins: resolve both Length (pt) and Number (em = multiplied by font_size).
-    // The CSS parser produces Number for em values (e.g. "2em" → Number(2.0))
-    // and our UA defaults use Number for em-based margins.
+    // Margins: resolve both absolute lengths and semantic em values.
     //
     // Em values must be resolved against the element's *final* font-size (per CSS
     // spec), but `style.font_size` at this point is whatever it was when the
@@ -6060,7 +6068,7 @@ fn apply_style_map_with_percentage_basis(
             style.margin.top = *v;
             style.margin_em_top = None;
         }
-        Some(CssValue::Number(v)) => {
+        Some(CssValue::Em(v)) => {
             style.margin.top = *v * style.font_size;
             style.margin_em_top = Some(*v);
         }
@@ -6071,7 +6079,7 @@ fn apply_style_map_with_percentage_basis(
             style.margin.right = *v;
             style.margin_em_right = None;
         }
-        Some(CssValue::Number(v)) => {
+        Some(CssValue::Em(v)) => {
             style.margin.right = *v * style.font_size;
             style.margin_em_right = Some(*v);
         }
@@ -6082,7 +6090,7 @@ fn apply_style_map_with_percentage_basis(
             style.margin.bottom = *v;
             style.margin_em_bottom = None;
         }
-        Some(CssValue::Number(v)) => {
+        Some(CssValue::Em(v)) => {
             style.margin.bottom = *v * style.font_size;
             style.margin_em_bottom = Some(*v);
         }
@@ -6093,7 +6101,7 @@ fn apply_style_map_with_percentage_basis(
             style.margin.left = *v;
             style.margin_em_left = None;
         }
-        Some(CssValue::Number(v)) => {
+        Some(CssValue::Em(v)) => {
             style.margin.left = *v * style.font_size;
             style.margin_em_left = Some(*v);
         }
@@ -6224,46 +6232,6 @@ fn apply_style_map_with_percentage_basis(
     {
         style.text_decorations.current.skip_ink = skip_ink;
     }
-
-    if let Some(CssValue::Keyword(k)) = get_non_special(map, "line-height") {
-        if k == "normal" {
-            style.line_height = f32::NAN;
-            style.line_height_absolute = None;
-        } else if let Some(v) = resolve_raw_length_for_style(k, style, length_context, font_metrics)
-        {
-            style.line_height_absolute = Some(v);
-            style.line_height = v / style.font_size;
-        }
-    }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "line-height") {
-        style.line_height = *v;
-        style.line_height_absolute = None;
-    }
-    if let Some(CssValue::Length(v)) = get_non_special(map, "line-height") {
-        style.line_height_absolute = Some(*v);
-        style.line_height = *v / style.font_size;
-    }
-    if let Some(CssValue::Percentage(v)) = get_non_special(map, "line-height") {
-        let absolute = style.font_size * *v / 100.0;
-        style.line_height_absolute = Some(absolute);
-        style.line_height = absolute / style.font_size;
-    }
-    if let Some(
-        value @ (CssValue::Rem(_)
-        | CssValue::Vw(_)
-        | CssValue::Vh(_)
-        | CssValue::Vmin(_)
-        | CssValue::Vmax(_)
-        | CssValue::Calc(_)
-        | CssValue::Clamp(_, _, _)
-        | CssValue::Var(_, _)),
-    ) = get_non_special(map, "line-height")
-        && let Some(v) = resolve_css_length_for_style(value, style, length_context, font_metrics)
-    {
-        style.line_height_absolute = Some(v);
-        style.line_height = v / style.font_size;
-    }
-    sync_line_height_from_absolute(style);
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "display") {
         if let Some(display) = parse_display_value(k) {
@@ -6683,7 +6651,7 @@ fn apply_style_map_with_percentage_basis(
         style.width_keyword = None;
         style.percentage_sizing.width = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "width") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "width") {
         // em value — multiply by current font-size
         style.width = Some(*v * style.font_size);
         style.width_keyword = None;
@@ -6754,7 +6722,7 @@ fn apply_style_map_with_percentage_basis(
         style.height = Some(*v);
         style.percentage_sizing.height = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "height") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "height") {
         style.height = Some(*v * style.font_size);
         style.percentage_sizing.height = None;
     }
@@ -6763,7 +6731,7 @@ fn apply_style_map_with_percentage_basis(
         style.max_width = Some(*v);
         style.percentage_sizing.max_width = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "max-width") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "max-width") {
         style.max_width = Some(*v * style.font_size);
         style.percentage_sizing.max_width = None;
     }
@@ -6772,7 +6740,7 @@ fn apply_style_map_with_percentage_basis(
         style.min_width = Some(*v);
         style.percentage_sizing.min_width = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "min-width") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "min-width") {
         style.min_width = Some(*v * style.font_size);
         style.percentage_sizing.min_width = None;
     }
@@ -6781,7 +6749,7 @@ fn apply_style_map_with_percentage_basis(
         style.min_height = Some(*v);
         style.percentage_sizing.min_height = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "min-height") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "min-height") {
         style.min_height = Some(*v * style.font_size);
         style.percentage_sizing.min_height = None;
     }
@@ -6790,7 +6758,7 @@ fn apply_style_map_with_percentage_basis(
         style.max_height = Some(*v);
         style.percentage_sizing.max_height = None;
     }
-    if let Some(CssValue::Number(v)) = get_non_special(map, "max-height") {
+    if let Some(CssValue::Em(v)) = get_non_special(map, "max-height") {
         style.max_height = Some(*v * style.font_size);
         style.percentage_sizing.max_height = None;
     }
@@ -7942,6 +7910,7 @@ fn apply_style_map_with_percentage_basis(
             }
             match val {
                 CssValue::Percentage(_)
+                | CssValue::Em(_)
                 | CssValue::Ex(_)
                 | CssValue::Ch(_)
                 | CssValue::Rem(_)
@@ -7949,9 +7918,9 @@ fn apply_style_map_with_percentage_basis(
                 | CssValue::Vh(_)
                 | CssValue::Vmin(_)
                 | CssValue::Vmax(_)
-                | CssValue::Calc(_)
-                | CssValue::Clamp(_, _, _)
-                | CssValue::Var(_, _) => {
+                | CssValue::Math(_)
+                | CssValue::Var(_, _)
+                | CssValue::Number(0.0) => {
                     if let Some(resolved) =
                         resolve_css_length_for_style(val, style, length_context, font_metrics)
                     {
@@ -8011,13 +7980,8 @@ fn apply_style_map_with_percentage_basis(
     // resolved parent height into the context's `parent_width` field (the field
     // the resolver uses as the percentage basis). Falls back to the viewport
     // height when the parent height is indefinite.
-    let height_length_context = crate::style::resolve::LengthResolutionContext::new(
-        resolved_parent_height.unwrap_or(parent.viewport_height),
-        style.font_size,
-        parent.root_font_size,
-        parent.viewport_width,
-        parent.viewport_height,
-    );
+    let height_length_context = length_context
+        .with_percentage_basis(resolved_parent_height.unwrap_or(parent.viewport_height));
 
     if let Some(val) = get_non_special(map, "height") {
         match val {
@@ -8025,7 +7989,7 @@ fn apply_style_map_with_percentage_basis(
                 style.percentage_sizing.height = Some(*v);
                 style.height = resolve_block_percentage(*v);
             }
-            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+            CssValue::Math(_) => {
                 // Percentages inside a calc()/clamp() on a block height resolve
                 // against the parent's content height, so use the height-axis
                 // context (parent height in the percentage-basis slot).
@@ -8036,12 +8000,16 @@ fn apply_style_map_with_percentage_basis(
                     height_length_context,
                 );
             }
-            CssValue::Rem(_)
+            CssValue::Em(_)
+            | CssValue::Ex(_)
+            | CssValue::Ch(_)
+            | CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
             | CssValue::Vmin(_)
             | CssValue::Vmax(_)
-            | CssValue::Var(_, _) => {
+            | CssValue::Var(_, _)
+            | CssValue::Number(0.0) => {
                 style.percentage_sizing.height = None;
                 style.height = crate::style::resolve::try_resolve_to_length_in_context(
                     val,
@@ -8058,7 +8026,7 @@ fn apply_style_map_with_percentage_basis(
                 style.percentage_sizing.max_height = Some(*v);
                 style.max_height = resolve_block_percentage(*v);
             }
-            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+            CssValue::Math(_) => {
                 style.percentage_sizing.max_height = None;
                 style.max_height = crate::style::resolve::try_resolve_to_length_in_context(
                     val,
@@ -8066,12 +8034,16 @@ fn apply_style_map_with_percentage_basis(
                     height_length_context,
                 );
             }
-            CssValue::Rem(_)
+            CssValue::Em(_)
+            | CssValue::Ex(_)
+            | CssValue::Ch(_)
+            | CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
             | CssValue::Vmin(_)
             | CssValue::Vmax(_)
-            | CssValue::Var(_, _) => {
+            | CssValue::Var(_, _)
+            | CssValue::Number(0.0) => {
                 style.percentage_sizing.max_height = None;
                 style.max_height = crate::style::resolve::try_resolve_to_length_in_context(
                     val,
@@ -8088,7 +8060,7 @@ fn apply_style_map_with_percentage_basis(
                 style.percentage_sizing.min_height = Some(*v);
                 style.min_height = resolve_block_percentage(*v);
             }
-            CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+            CssValue::Math(_) => {
                 style.percentage_sizing.min_height = None;
                 style.min_height = crate::style::resolve::try_resolve_to_length_in_context(
                     val,
@@ -8096,12 +8068,16 @@ fn apply_style_map_with_percentage_basis(
                     height_length_context,
                 );
             }
-            CssValue::Rem(_)
+            CssValue::Em(_)
+            | CssValue::Ex(_)
+            | CssValue::Ch(_)
+            | CssValue::Rem(_)
             | CssValue::Vw(_)
             | CssValue::Vh(_)
             | CssValue::Vmin(_)
             | CssValue::Vmax(_)
-            | CssValue::Var(_, _) => {
+            | CssValue::Var(_, _)
+            | CssValue::Number(0.0) => {
                 style.percentage_sizing.min_height = None;
                 style.min_height = crate::style::resolve::try_resolve_to_length_in_context(
                     val,
@@ -8141,7 +8117,7 @@ fn apply_style_map_with_percentage_basis(
                         }
                     }
                 }
-                CssValue::Calc(_) | CssValue::Clamp(_, _, _) => {
+                CssValue::Math(_) => {
                     // top/bottom percentages resolve against the containing
                     // block's height, so use the height-axis context.
                     match prop_name {
@@ -8157,12 +8133,16 @@ fn apply_style_map_with_percentage_basis(
                         setter(style, resolved);
                     }
                 }
-                CssValue::Rem(_)
+                CssValue::Em(_)
+                | CssValue::Ex(_)
+                | CssValue::Ch(_)
+                | CssValue::Rem(_)
                 | CssValue::Vw(_)
                 | CssValue::Vh(_)
                 | CssValue::Vmin(_)
                 | CssValue::Vmax(_)
-                | CssValue::Var(_, _) => {
+                | CssValue::Var(_, _)
+                | CssValue::Number(0.0) => {
                     match prop_name {
                         "top" => style.percentage_insets.top = None,
                         "bottom" => style.percentage_insets.bottom = None,
@@ -8178,28 +8158,6 @@ fn apply_style_map_with_percentage_basis(
                 }
                 _ => {}
             }
-        }
-    }
-
-    // Resolve font-size from new value types
-    if let Some(val) = get_non_special(map, "font-size") {
-        match val {
-            CssValue::Percentage(v) => {
-                style.font_size = parent.font_size * v / 100.0;
-            }
-            CssValue::Rem(v) => {
-                style.font_size = v * parent.root_font_size;
-            }
-            CssValue::Var(_, _) => {
-                if let Some(resolved) = crate::style::resolve::try_resolve_to_length_in_context(
-                    val,
-                    &style.custom_properties,
-                    length_context,
-                ) {
-                    style.font_size = resolved;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -8356,6 +8314,7 @@ fn counter_style_keyword(map: &StyleMap, property: &str) -> Option<String> {
     match map.get(property)? {
         CssValue::Keyword(value) => Some(value.trim().to_string()),
         CssValue::Number(value) => Some(value.to_string()),
+        CssValue::Em(value) => Some(format!("{value}em")),
         _ => None,
     }
 }
@@ -9306,7 +9265,7 @@ fn build_blended_linear_background_raster_svg(
         return None;
     }
     if sources.iter().enumerate().any(|(idx, _)| {
-        !raster_background_blend_supported(style.background_blend_mode.background_layer(idx))
+        !crate::render::blend::supports(style.background_blend_mode.background_layer(idx))
     }) {
         return None;
     }
@@ -9358,7 +9317,12 @@ fn build_blended_linear_background_raster_svg(
                     image.put_pixel(
                         px,
                         py,
-                        composite_blended_pixel(source_pixel, backdrop, *blend_mode)?,
+                        crate::render::blend::composite_pixel(
+                            source_pixel,
+                            backdrop,
+                            *blend_mode,
+                            false,
+                        )?,
                     );
                 }
             }
@@ -9468,158 +9432,6 @@ fn tiled_raster_background_svg(
     }
     svg.push_str("</svg>");
     crate::parser::svg::parse_svg_from_string(&svg)
-}
-
-fn raster_background_blend_supported(mode: BlendMode) -> bool {
-    matches!(
-        mode,
-        BlendMode::Normal
-            | BlendMode::Multiply
-            | BlendMode::Screen
-            | BlendMode::Overlay
-            | BlendMode::Darken
-            | BlendMode::Lighten
-            | BlendMode::ColorDodge
-            | BlendMode::ColorBurn
-            | BlendMode::HardLight
-            | BlendMode::SoftLight
-            | BlendMode::Difference
-            | BlendMode::Exclusion
-    )
-}
-
-fn composite_blended_pixel(
-    source: image::Rgba<u8>,
-    backdrop: image::Rgba<u8>,
-    mode: BlendMode,
-) -> Option<image::Rgba<u8>> {
-    if !raster_background_blend_supported(mode) {
-        return None;
-    }
-    // Chrome's PDF paint path composites opaque 8-bit background samples with
-    // integer channel arithmetic. Matching that representation matters here:
-    // a floating-point round-to-nearest changes a whole flat region by one RGB
-    // unit for `screen`/`multiply`, which is still a real PDF mismatch under
-    // the exact comparator. Semi-transparent pixels retain the general
-    // premultiplied-alpha path below.
-    if source[3] == u8::MAX && backdrop[3] == u8::MAX {
-        return Some(image::Rgba([
-            composite_opaque_background_channel(source[0], backdrop[0], mode),
-            composite_opaque_background_channel(source[1], backdrop[1], mode),
-            composite_opaque_background_channel(source[2], backdrop[2], mode),
-            u8::MAX,
-        ]));
-    }
-    let sa = f32::from(source[3]) / 255.0;
-    let ba = f32::from(backdrop[3]) / 255.0;
-    let out_a = sa + ba * (1.0 - sa);
-    if out_a <= 0.0 {
-        return Some(image::Rgba([0, 0, 0, 0]));
-    }
-
-    let mut out = [0u8; 4];
-    for channel in 0..3 {
-        let s = f32::from(source[channel]) / 255.0;
-        let b = f32::from(backdrop[channel]) / 255.0;
-        let blended = blend_channel(mode, s, b);
-        let premul = sa * (1.0 - ba) * s + sa * ba * blended + (1.0 - sa) * ba * b;
-        out[channel] = (premul / out_a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-    out[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
-    Some(image::Rgba(out))
-}
-
-/// Opaque source-over compositing for the integer blend modes emitted by the
-/// browser's PDF path. `screen` is deliberately expressed as the complement
-/// of an integer multiply: it preserves the browser's floor-at-the-product
-/// boundary rather than a floating-point nearest-integer approximation.
-fn composite_opaque_background_channel(source: u8, backdrop: u8, mode: BlendMode) -> u8 {
-    let source = u16::from(source);
-    let backdrop = u16::from(backdrop);
-    let result = match mode {
-        BlendMode::Normal => source,
-        BlendMode::Multiply => source * backdrop / 255,
-        BlendMode::Screen => 255 - (255 - source) * (255 - backdrop) / 255,
-        _ => {
-            return (blend_channel(mode, source as f32 / 255.0, backdrop as f32 / 255.0) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-        }
-    };
-    result as u8
-}
-
-#[cfg(test)]
-mod opaque_background_blend_tests {
-    use super::{BlendMode, composite_blended_pixel};
-
-    #[test]
-    fn opaque_screen_then_multiply_matches_browser_integer_channels() {
-        let base = image::Rgba([253, 216, 53, 255]);
-        let blue = image::Rgba([21, 101, 192, 255]);
-        let red = image::Rgba([211, 47, 47, 255]);
-
-        let screen = composite_blended_pixel(blue, base, BlendMode::Screen).unwrap();
-        assert_eq!(screen, image::Rgba([254, 232, 206, 255]));
-        assert_eq!(
-            composite_blended_pixel(red, screen, BlendMode::Multiply),
-            Some(image::Rgba([210, 42, 37, 255]))
-        );
-    }
-}
-
-fn blend_channel(mode: BlendMode, source: f32, backdrop: f32) -> f32 {
-    match mode {
-        BlendMode::Normal => source,
-        BlendMode::Multiply => source * backdrop,
-        BlendMode::Screen => source + backdrop - source * backdrop,
-        BlendMode::Overlay => {
-            if backdrop <= 0.5 {
-                2.0 * source * backdrop
-            } else {
-                1.0 - 2.0 * (1.0 - source) * (1.0 - backdrop)
-            }
-        }
-        BlendMode::Darken => source.min(backdrop),
-        BlendMode::Lighten => source.max(backdrop),
-        BlendMode::ColorDodge => {
-            if source >= 1.0 {
-                1.0
-            } else {
-                (backdrop / (1.0 - source)).min(1.0)
-            }
-        }
-        BlendMode::ColorBurn => {
-            if source <= 0.0 {
-                0.0
-            } else {
-                1.0 - ((1.0 - backdrop) / source).min(1.0)
-            }
-        }
-        BlendMode::HardLight => {
-            if source <= 0.5 {
-                2.0 * source * backdrop
-            } else {
-                1.0 - 2.0 * (1.0 - source) * (1.0 - backdrop)
-            }
-        }
-        BlendMode::SoftLight => {
-            if source <= 0.5 {
-                backdrop - (1.0 - 2.0 * source) * backdrop * (1.0 - backdrop)
-            } else {
-                let d = if backdrop <= 0.25 {
-                    ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop
-                } else {
-                    backdrop.sqrt()
-                };
-                backdrop + (2.0 * source - 1.0) * (d - backdrop)
-            }
-        }
-        BlendMode::Difference => (backdrop - source).abs(),
-        BlendMode::Exclusion => backdrop + source - 2.0 * backdrop * source,
-        _ => source,
-    }
-    .clamp(0.0, 1.0)
 }
 
 fn encode_base64_background_data(data: &[u8]) -> String {
@@ -10396,16 +10208,6 @@ fn parse_border_image_width(
         return (value.is_finite() && value >= 0.0).then_some(BorderImageWidth::Number(value));
     }
     match parse_length(token)? {
-        CssValue::Clamp(min, preferred, max) => Some(BorderImageWidth::Clamp {
-            min: parse_border_image_length_percent(&min, style, length_context, font_metrics)?,
-            preferred: parse_border_image_length_percent(
-                &preferred,
-                style,
-                length_context,
-                font_metrics,
-            )?,
-            max: parse_border_image_length_percent(&max, style, length_context, font_metrics)?,
-        }),
         CssValue::Var(name, fallback) => {
             let value = crate::style::resolve::resolve_var_to_string(
                 &name,
@@ -10428,7 +10230,7 @@ fn parse_border_image_length_percent(
     let value = match value {
         CssValue::Length(value) => LengthPercent::length(*value),
         CssValue::Percentage(value) => LengthPercent::percent(*value),
-        CssValue::Calc(tokens) => calc_length_percent(tokens, style)?,
+        CssValue::Math(expression) => expression.affine(style.math_unit_context(font_metrics))?,
         CssValue::Var(name, fallback) => {
             let raw = crate::style::resolve::resolve_var_to_string(
                 name,
@@ -10442,7 +10244,6 @@ fn parse_border_image_length_percent(
                 },
             );
         }
-        CssValue::Clamp(_, _, _) => return None,
         value => LengthPercent::length(resolve_css_length_for_style(
             value,
             style,
@@ -10450,7 +10251,8 @@ fn parse_border_image_length_percent(
             font_metrics,
         )?),
     };
-    (value.length.is_finite() && value.percent.is_finite()).then_some(value)
+    let (length, percent) = value.terms();
+    (length.is_finite() && percent.is_finite()).then_some(value)
 }
 
 fn parse_border_image_outset(
@@ -10481,14 +10283,7 @@ fn parse_border_image_outset(
 fn css_value_contains_percentage(value: &CssValue) -> bool {
     match value {
         CssValue::Percentage(_) => true,
-        CssValue::Calc(tokens) => tokens
-            .iter()
-            .any(|token| matches!(token, CalcToken::Percent(_))),
-        CssValue::Clamp(min, preferred, max) => {
-            css_value_contains_percentage(min)
-                || css_value_contains_percentage(preferred)
-                || css_value_contains_percentage(max)
-        }
+        CssValue::Math(expression) => expression.contains_percentage(),
         _ => false,
     }
 }
@@ -12408,42 +12203,9 @@ fn set_flex_basis_percentage(style: &mut ComputedStyle, percent: f32) {
     style.flex_basis = FlexBasis::Definite(LengthPercent::percent(percent));
 }
 
-fn calc_length_percent(tokens: &[CalcToken], style: &ComputedStyle) -> Option<LengthPercent> {
-    let value = |token: &CalcToken| match token {
-        CalcToken::Length(value) => Some(LengthPercent::length(*value)),
-        CalcToken::Percent(value) => Some(LengthPercent::percent(*value)),
-        CalcToken::Em(value) => Some(LengthPercent::length(*value * style.font_size)),
-        CalcToken::Rem(value) => Some(LengthPercent::length(*value * style.root_font_size)),
-        CalcToken::Vw(value) => Some(LengthPercent::length(style.viewport_width * *value / 100.0)),
-        CalcToken::Vh(value) => Some(LengthPercent::length(
-            style.viewport_height * *value / 100.0,
-        )),
-        CalcToken::Vmin(value) => Some(LengthPercent::length(
-            style.viewport_width.min(style.viewport_height) * *value / 100.0,
-        )),
-        CalcToken::Vmax(value) => Some(LengthPercent::length(
-            style.viewport_width.max(style.viewport_height) * *value / 100.0,
-        )),
-        CalcToken::Op(_) => None,
-    };
-
-    let mut tokens = tokens.iter();
-    let mut result = value(tokens.next()?)?;
-    while let Some(operator) = tokens.next() {
-        let rhs = value(tokens.next()?)?;
-        result = match operator {
-            CalcToken::Op(CalcOp::Add) => result + rhs,
-            CalcToken::Op(CalcOp::Sub) => result - rhs,
-            // CSS permits multiplication/division only with a number. The
-            // current typed token stream has no number variant, so accepting
-            // either form here would silently apply invalid dimensional math.
-            CalcToken::Op(CalcOp::Mul | CalcOp::Div) | _ => return None,
-        };
-    }
-    Some(result)
-}
-
-fn flex_length_percent(
+/// Parse one computed CSS `<length-percentage>` without prematurely resolving
+/// its percentage term. Layout consumers supply the correct eventual basis.
+pub(crate) fn computed_length_percent(
     value: &CssValue,
     style: &ComputedStyle,
     length_context: crate::style::resolve::LengthResolutionContext,
@@ -12452,14 +12214,14 @@ fn flex_length_percent(
     match value {
         CssValue::Length(value) => Some(LengthPercent::length(*value)),
         CssValue::Percentage(value) => Some(LengthPercent::percent(*value)),
-        CssValue::Calc(tokens) => calc_length_percent(tokens, style),
+        CssValue::Math(expression) => expression.affine(style.math_unit_context(font_metrics)),
         CssValue::Var(name, fallback) => {
             let raw = crate::style::resolve::resolve_var_to_string(
                 name,
                 fallback.as_deref(),
                 &style.custom_properties,
             )?;
-            flex_length_percent(
+            computed_length_percent(
                 &parse_property_value("flex-basis", &raw)?,
                 style,
                 length_context,
@@ -12478,38 +12240,24 @@ fn apply_flex_basis_value(
     font_metrics: FontMetrics<'_>,
 ) -> bool {
     match value {
-        CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Calc(_) | CssValue::Var(_, _) => {
-            let Some(value) = flex_length_percent(value, style, length_context, font_metrics)
+        CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Math(_) | CssValue::Var(_, _) => {
+            let Some(value) = computed_length_percent(value, style, length_context, font_metrics)
             else {
                 return false;
             };
             style.flex_basis = FlexBasis::Definite(value);
             true
         }
-        CssValue::Clamp(min, preferred, max) => {
-            let (Some(min), Some(preferred), Some(max)) = (
-                flex_length_percent(min, style, length_context, font_metrics),
-                flex_length_percent(preferred, style, length_context, font_metrics),
-                flex_length_percent(max, style, length_context, font_metrics),
-            ) else {
-                return false;
-            };
-            style.flex_basis = FlexBasis::Clamp {
-                min,
-                preferred,
-                max,
-            };
-            true
-        }
         CssValue::Keyword(k) => apply_flex_basis_token(style, k, length_context, font_metrics),
-        CssValue::Rem(_)
+        CssValue::Em(_)
+        | CssValue::Rem(_)
         | CssValue::Vw(_)
         | CssValue::Vh(_)
         | CssValue::Vmin(_)
         | CssValue::Vmax(_)
         | CssValue::Ex(_)
         | CssValue::Ch(_)
-        | CssValue::Number(_) => {
+        | CssValue::Number(0.0) => {
             if let Some(v) =
                 resolve_css_length_for_style(value, style, length_context, font_metrics)
             {
@@ -13293,6 +13041,7 @@ fn resolved_raw_css_value<'a>(
             Some(Cow::Owned(resolve_embedded_vars(raw, custom_properties)))
         }
         CssValue::Keyword(raw) => Some(Cow::Borrowed(raw)),
+        CssValue::Math(expression) => expression.to_css_string().map(Cow::Owned),
         CssValue::Var(name, fallback) => crate::style::resolve::resolve_var_to_string(
             name,
             fallback.as_deref(),
@@ -13515,8 +13264,7 @@ const MEDIUM_RULE_WIDTH_PT: f32 = 2.25;
 
 /// Resolve a `border-*-width` CssValue (uniform or per-side) to points using the
 /// element's `font_size` as the em basis. Absolute lengths (`CssValue::Length`,
-/// already in pt) apply directly; a font-relative width (`em`/`ex`/`ch`, which
-/// `parse_length` emits as `CssValue::Number` — an em factor) multiplies by the
+/// already in pt) apply directly; a font-relative `em` width multiplies by the
 /// font-size, mirroring the margin/width paths. `rem` resolves against the same
 /// font-size (the consumers run before the root-font-size context is built, and a
 /// `rem` border width is exceedingly rare). Returns `None` for anything that
@@ -13524,7 +13272,8 @@ const MEDIUM_RULE_WIDTH_PT: f32 = 2.25;
 fn resolve_border_width(val: Option<&CssValue>, font_size: f32) -> Option<f32> {
     match val? {
         CssValue::Length(v) => Some(*v),
-        CssValue::Number(v) => Some(*v * font_size),
+        CssValue::Em(v) => Some(*v * font_size),
+        CssValue::Number(v) if *v == 0.0 => Some(0.0),
         CssValue::Rem(v) => Some(*v * font_size),
         _ => None,
     }
@@ -13541,14 +13290,60 @@ fn sync_line_height_from_absolute(style: &mut ComputedStyle) {
 fn style_length_context(
     style: &ComputedStyle,
     base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
 ) -> crate::style::resolve::LengthResolutionContext {
     crate::style::resolve::LengthResolutionContext::new(
-        base.parent_width,
-        style.font_size,
-        style.root_font_size,
-        style.viewport_width,
-        style.viewport_height,
+        base.percentage_basis,
+        style.math_unit_context(font_metrics),
     )
+}
+
+fn line_height_length_context(
+    style: &ComputedStyle,
+    parent: &ComputedStyle,
+    base: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'_>,
+) -> crate::style::resolve::LengthResolutionContext {
+    let mut units = style.math_unit_context(font_metrics);
+    let parent_units = parent.math_unit_context(font_metrics);
+    units.font.lh = parent_units.font.lh;
+    units.font.rlh = parent_units.font.rlh;
+    crate::style::resolve::LengthResolutionContext::new(base.percentage_basis, units)
+}
+
+impl ComputedStyle {
+    pub(crate) fn font_unit_lengths(&self, font_metrics: FontMetrics<'_>) -> FontUnitLengths {
+        FontUnitLengths {
+            ex: self.font_size * style_ex_length_ratio(self, font_metrics),
+            ch: self.font_size * font_metrics.style_ch_ratio(self).unwrap_or(0.5),
+            cap: self.font_size * style_cap_height_ratio(self),
+            // CSS Values 4 requires a 1em fallback when the ideographic
+            // advance cannot be determined.
+            ic: self.font_size,
+            line_height: resolved_line_height_length(self),
+        }
+    }
+
+    pub(crate) fn math_unit_context(&self, font_metrics: FontMetrics<'_>) -> MathUnitContext {
+        let mut units = MathUnitContext::from_font_and_viewport(
+            self.font_size,
+            self.root_font_size,
+            self.viewport_width,
+            self.viewport_height,
+        );
+        let local = self.font_unit_lengths(font_metrics);
+        units.font.ex = local.ex;
+        units.font.ch = local.ch;
+        units.font.cap = local.cap;
+        units.font.ic = local.ic;
+        units.font.lh = local.line_height;
+        units.font.rex = self.root_font_units.ex;
+        units.font.rch = self.root_font_units.ch;
+        units.font.rcap = self.root_font_units.cap;
+        units.font.ric = self.root_font_units.ic;
+        units.font.rlh = self.root_font_units.line_height;
+        units
+    }
 }
 
 fn resolve_css_length_for_style(
@@ -13559,8 +13354,9 @@ fn resolve_css_length_for_style(
 ) -> Option<f32> {
     match val {
         CssValue::Length(v) => Some(*v),
-        CssValue::Number(v) => Some(*v * style.font_size),
-        CssValue::Percentage(v) => Some(base.parent_width * *v / 100.0),
+        CssValue::Em(v) => Some(*v * style.font_size),
+        CssValue::Number(v) if *v == 0.0 => Some(0.0),
+        CssValue::Percentage(v) => Some(base.percentage_basis * *v / 100.0),
         CssValue::Ex(v) => Some(*v * style.font_size * style_ex_length_ratio(style, font_metrics)),
         CssValue::Ch(v) => {
             Some(*v * style.font_size * font_metrics.style_ch_ratio(style).unwrap_or(0.5))
@@ -13570,11 +13366,11 @@ fn resolve_css_length_for_style(
         CssValue::Vh(v) => Some(style.viewport_height * *v / 100.0),
         CssValue::Vmin(v) => Some(style.viewport_width.min(style.viewport_height) * *v / 100.0),
         CssValue::Vmax(v) => Some(style.viewport_width.max(style.viewport_height) * *v / 100.0),
-        CssValue::Calc(_) | CssValue::Clamp(_, _, _) | CssValue::Var(_, _) => {
+        CssValue::Math(_) | CssValue::Var(_, _) => {
             crate::style::resolve::try_resolve_to_length_in_context(
                 val,
                 &style.custom_properties,
-                style_length_context(style, base),
+                style_length_context(style, base, font_metrics),
             )
         }
         CssValue::Keyword(k) => resolve_raw_length_for_style(k, style, base, font_metrics),
@@ -13596,40 +13392,10 @@ fn text_indent_from_css_value(
     match value {
         CssValue::Length(value) => Some(TextIndent::Length(*value)),
         CssValue::Percentage(value) => Some(TextIndent::Percentage(*value)),
-        CssValue::Calc(tokens) => Some(TextIndent::Calc(
-            tokens
-                .iter()
-                .map(|token| match token {
-                    CalcToken::Length(value) => CalcToken::Length(*value),
-                    CalcToken::Percent(value) => CalcToken::Percent(*value),
-                    CalcToken::Em(value) => CalcToken::Length(*value * style.font_size),
-                    CalcToken::Rem(value) => CalcToken::Length(*value * style.root_font_size),
-                    CalcToken::Vw(value) => {
-                        CalcToken::Length(style.viewport_width * *value / 100.0)
-                    }
-                    CalcToken::Vh(value) => {
-                        CalcToken::Length(style.viewport_height * *value / 100.0)
-                    }
-                    CalcToken::Vmin(value) => CalcToken::Length(
-                        style.viewport_width.min(style.viewport_height) * *value / 100.0,
-                    ),
-                    CalcToken::Vmax(value) => CalcToken::Length(
-                        style.viewport_width.max(style.viewport_height) * *value / 100.0,
-                    ),
-                    CalcToken::Op(operator) => CalcToken::Op(*operator),
-                })
-                .collect(),
-        )),
-        CssValue::Clamp(min, preferred, max) => Some(TextIndent::Clamp {
-            min: Box::new(text_indent_from_css_value(min, style, base, font_metrics)?),
-            preferred: Box::new(text_indent_from_css_value(
-                preferred,
-                style,
-                base,
-                font_metrics,
-            )?),
-            max: Box::new(text_indent_from_css_value(max, style, base, font_metrics)?),
-        }),
+        CssValue::Math(expression) => Some(TextIndent::Math(DeferredLength::new(
+            expression.clone(),
+            style.math_unit_context(font_metrics),
+        ))),
         CssValue::Var(name, fallback) => {
             let raw = crate::style::resolve::resolve_var_to_string(
                 name,
@@ -13655,22 +13421,11 @@ fn word_spacing_from_css_value(
 ) -> Option<f32> {
     match value {
         CssValue::Length(value) => Some(*value),
-        // `parse_length` retains `em` as a Number multiplier.
-        CssValue::Number(value) => Some(*value * style.font_size),
+        CssValue::Em(value) => Some(*value * style.font_size),
+        CssValue::Number(value) if *value == 0.0 => Some(0.0),
         CssValue::Percentage(value) => Some(style.font_size * *value / 100.0),
-        CssValue::Calc(tokens) => Some(crate::style::resolve::resolve_calc(
-            tokens,
-            style.font_size,
-            style.font_size,
-            style.root_font_size,
-            base.page_width,
-            base.page_height,
-        )),
-        CssValue::Clamp(min, preferred, max) => {
-            let min = word_spacing_from_css_value(min, style, base, font_metrics)?;
-            let preferred = word_spacing_from_css_value(preferred, style, base, font_metrics)?;
-            let max = word_spacing_from_css_value(max, style, base, font_metrics)?;
-            Some(preferred.min(max).max(min))
+        CssValue::Math(expression) => {
+            expression.resolve(style.math_unit_context(font_metrics), style.font_size)
         }
         CssValue::Var(name, fallback) => {
             let raw = crate::style::resolve::resolve_var_to_string(
@@ -13691,10 +13446,7 @@ fn word_spacing_from_css_value(
             style,
             crate::style::resolve::LengthResolutionContext::new(
                 style.font_size,
-                style.font_size,
-                style.root_font_size,
-                base.page_width,
-                base.page_height,
+                style.math_unit_context(font_metrics),
             ),
             font_metrics,
         ),
@@ -13758,10 +13510,7 @@ fn style_cap_height_ratio(_style: &ComputedStyle) -> f32 {
 }
 
 fn style_ex_length_ratio(style: &ComputedStyle, font_metrics: FontMetrics<'_>) -> f32 {
-    font_metrics
-        .style_x_height_ratio(style)
-        .unwrap_or(0.5)
-        .max(0.5625)
+    font_metrics.style_x_height_ratio(style).unwrap_or(0.5)
 }
 
 fn resolved_line_height_length(style: &ComputedStyle) -> f32 {
@@ -14479,28 +14228,10 @@ fn parse_gradient_stop_position(token: &str) -> Option<GradientPosition> {
     match parse_length(token)? {
         CssValue::Percentage(value) => Some(GradientPosition::fraction(value / 100.0)),
         CssValue::Length(value) => Some(GradientPosition::length(value)),
-        CssValue::Calc(tokens) => {
-            let mut total = GradientPosition::ZERO;
-            let mut op = CalcOp::Add;
-            for token in tokens {
-                let value = match token {
-                    crate::parser::css::CalcToken::Op(next) => {
-                        op = next;
-                        continue;
-                    }
-                    crate::parser::css::CalcToken::Percent(value) => {
-                        GradientPosition::fraction(value / 100.0)
-                    }
-                    crate::parser::css::CalcToken::Length(value) => GradientPosition::length(value),
-                    _ => return None,
-                };
-                match op {
-                    CalcOp::Add => total += value,
-                    CalcOp::Sub => total -= value,
-                    CalcOp::Mul | CalcOp::Div => return None,
-                };
-            }
-            Some(total)
+        CssValue::Math(expression) => {
+            let units = MathUnitContext::from_font_and_viewport(0.0, 0.0, 0.0, 0.0);
+            let (length, percent) = expression.affine(units)?.terms();
+            Some(GradientPosition::length(length) + GradientPosition::fraction(percent / 100.0))
         }
         _ => None,
     }
@@ -15250,8 +14981,37 @@ mod tests {
     fn em_font_size() {
         let parent = ComputedStyle::default(); // font_size = 12.0
         let style = compute_style(HtmlTag::Span, Some("font-size: 2em"), &parent);
-        // em gets parsed as Number, then multiplied by parent font_size
         assert!((style.font_size - 24.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn computed_font_size_is_the_shared_em_basis_for_dependent_dimensions() {
+        let mut parent = ComputedStyle::default();
+        parent.font_size = 15.0;
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 2em; width: 6em; height: 3em"),
+            &parent,
+        );
+
+        assert_eq!(style.font_size, 30.0);
+        assert_eq!(style.width, Some(180.0));
+        assert_eq!(style.height, Some(90.0));
+    }
+
+    #[test]
+    fn calc_font_size_uses_parent_units_before_dependent_dimensions() {
+        let mut parent = ComputedStyle::default();
+        parent.font_size = 15.0;
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("font-size: calc(1em + 8px); width: 2em; height: 3em"),
+            &parent,
+        );
+
+        assert_eq!(style.font_size, 21.0);
+        assert_eq!(style.width, Some(42.0));
+        assert_eq!(style.height, Some(63.0));
     }
 
     #[test]
@@ -15712,6 +15472,54 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("line-height: 18pt"), &parent);
         // 18pt / 12.0 font-size = 1.5
         assert!((style.line_height - 1.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn calc_lh_uses_the_completed_line_height_independent_of_declaration_order() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("font-size: 20px; line-height: 30px"),
+            &ComputedStyle::default(),
+        );
+
+        for declarations in [
+            "line-height: 36px; width: calc(3lh)",
+            "width: calc(3lh); line-height: 36px",
+        ] {
+            let style = compute_style(HtmlTag::Div, Some(declarations), &parent);
+            // 3 * 36 CSS px * 0.75pt/px.
+            assert_eq!(style.width, Some(81.0), "{declarations}");
+        }
+
+        let inherited = compute_style(HtmlTag::Div, Some("width: calc(4lh)"), &parent);
+        // 4 * inherited 30 CSS px * 0.75pt/px.
+        assert_eq!(inherited.width, Some(90.0));
+    }
+
+    #[test]
+    fn lh_inside_line_height_uses_the_parent_to_avoid_self_reference() {
+        let parent = compute_style(
+            HtmlTag::Div,
+            Some("line-height: 30px"),
+            &ComputedStyle::default(),
+        );
+        let child = compute_style(HtmlTag::Div, Some("line-height: calc(2lh)"), &parent);
+
+        assert_eq!(child.line_height_absolute, Some(45.0));
+    }
+
+    #[test]
+    fn calc_rlh_uses_the_propagated_root_line_height() {
+        let parent = ComputedStyle {
+            root_font_units: FontUnitLengths {
+                line_height: 18.0,
+                ..FontUnitLengths::default()
+            },
+            ..ComputedStyle::default()
+        };
+        let child = compute_style(HtmlTag::Div, Some("width: calc(2rlh)"), &parent);
+
+        assert_eq!(child.width, Some(36.0));
     }
 
     #[test]
@@ -17566,6 +17374,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_conic_gradient_percentage_range_stops() {
+        let gradient = parse_conic_gradient(
+            "conic-gradient(from 23deg at 64% 34%, #ff00c8 0 25%, #00ff67 25% 55%, #ff6a00 55% 83%, #402080 83% 100%)",
+        )
+        .unwrap();
+
+        assert_eq!(gradient.ramp.stops.len(), 8);
+        assert_eq!(
+            resolved_positions(&gradient.ramp),
+            [0.0, 0.25, 0.25, 0.55, 0.55, 0.83, 0.83, 1.0]
+        );
+    }
+
+    #[test]
     fn parse_conic_gradient_from_angle_and_position() {
         let cg = parse_conic_gradient("conic-gradient(from 45deg at 30% 30%, red, blue)").unwrap();
         assert!((cg.from_angle - 45.0).abs() < 0.01);
@@ -18879,13 +18701,12 @@ mod tests {
 
     #[test]
     fn flex_basis_clamp_gives_minimum_precedence_without_panicking() {
-        let basis = FlexBasis::Clamp {
-            min: LengthPercent::length(40.0),
-            preferred: LengthPercent::length(20.0),
-            max: LengthPercent::length(30.0),
-        };
-
-        assert_eq!(basis.resolve(0.0), Some(40.0));
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("flex-basis: clamp(40pt, 20pt, 30pt)"),
+            &ComputedStyle::default(),
+        );
+        assert_eq!(style.flex_basis.resolve(0.0), Some(40.0));
     }
 
     #[test]
@@ -20271,6 +20092,47 @@ mod tests {
         let style = compute_style(HtmlTag::Div, Some("font-size: 150%"), &parent);
         // 150% of 16pt = 24pt
         assert!((style.font_size - 24.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn ex_font_size_uses_the_parent_fonts_measured_x_height() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans TTF");
+        let fonts = HashMap::from([("paritysans".to_string(), font)]);
+        let mut parent = ComputedStyle::default();
+        parent.font_size = 20.0;
+        parent.font_stack = FontStack::from_family(FontFamily::Custom("ParitySans".to_string()));
+
+        let size = resolve_font_size_value(
+            &CssValue::Ex(4.0),
+            &HashMap::new(),
+            &parent,
+            FontMetrics::new(&fonts),
+        )
+        .expect("valid ex font size");
+
+        // ParitySans has an x-height of 1120 font units in a 2048-unit em.
+        assert!((size - 43.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ex_font_size_uses_half_an_em_only_when_font_metrics_are_unavailable() {
+        let mut parent = ComputedStyle::default();
+        parent.font_size = 20.0;
+
+        let size = resolve_font_size_value(
+            &CssValue::Ex(4.0),
+            &HashMap::new(),
+            &parent,
+            FontMetrics::default(),
+        )
+        .expect("valid fallback ex font size");
+
+        assert_eq!(size, 40.0);
     }
 
     #[test]
@@ -21768,6 +21630,27 @@ mod tests {
         );
         assert_eq!(s.position, Position::Absolute);
         assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn absolute_table_internal_displays_blockify_before_table_fixup() {
+        for display in [
+            "table-row-group",
+            "table-header-group",
+            "table-footer-group",
+            "table-row",
+            "table-cell",
+            "table-column-group",
+            "table-column",
+            "table-caption",
+        ] {
+            let style = compute_style(
+                HtmlTag::Div,
+                Some(&format!("display:{display};position:absolute")),
+                &ComputedStyle::default(),
+            );
+            assert_eq!(style.display, Display::Block, "{display}");
+        }
     }
 
     #[test]

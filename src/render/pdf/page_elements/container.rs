@@ -141,10 +141,6 @@ pub(in crate::render::pdf) fn render_container(
         return;
     }
 
-    let c_element_transform = c_transform.as_ref().map(|transform| {
-        let reference = c_geometry.transform_reference(c_box_transform);
-        resolve_css_transform(transform, reference.pivot(), reference.size())
-    });
     let c_group = PaintGroupScope::begin(content, element, c_fragment_geometry, ctx);
 
     if c_visible_self
@@ -243,7 +239,6 @@ pub(in crate::render::pdf) fn render_container(
             element,
             frame,
             c_fragment_geometry,
-            c_element_transform.map(|transform| transform.matrix()),
             ctx,
         );
     }
@@ -352,7 +347,7 @@ pub(in crate::render::pdf) fn render_container(
             children,
             ContainerFrame::new(
                 PdfPoint::new(inner_x, inner_y),
-                inner_w,
+                crate::types::Size::new(inner_w, c_content_box.height),
                 PdfPoint::new(c_padding_box.left, c_padding_box.top()),
             ),
             &mut abs_origins,

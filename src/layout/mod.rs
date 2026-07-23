@@ -17,6 +17,7 @@ pub mod math;
 pub(crate) mod multicol;
 pub(crate) mod paginate;
 pub(crate) mod print_scale;
+pub(crate) mod root_formatting;
 pub(crate) mod roundoff;
 pub(crate) mod table;
 pub(crate) mod text;

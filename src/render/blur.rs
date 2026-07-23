@@ -431,7 +431,7 @@ pub(crate) fn blur_shadow_rect(
         pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
 
-    let rgba = pixmap_to_rgba(&pixmap, buf_w, buf_h);
+    let rgba = crate::render::raster_pixels::pixmap_to_rgba(&pixmap);
     let rgba = if sigma > 0.0 {
         gaussian_blur_premultiplied(&rgba, sigma)?
     } else {
@@ -498,7 +498,7 @@ pub(crate) fn blur_inset_shadow_rect(
         );
     }
 
-    let rgba = pixmap_to_rgba(&pixmap, buf_w, buf_h);
+    let rgba = crate::render::raster_pixels::pixmap_to_rgba(&pixmap);
     let mut rgba = if sigma > 0.0 {
         gaussian_blur_premultiplied(&rgba, sigma)?
     } else {
@@ -916,7 +916,7 @@ pub(crate) fn blur_box(
         s,
     );
 
-    let premultiplied = pixmap_to_premultiplied_rgba(&pixmap, buf_w, buf_h);
+    let premultiplied = crate::render::raster_pixels::pixmap_to_premultiplied_rgba(&pixmap);
     let rgba = unpremultiply_rgba(&blur_css_filter_premultiplied(&premultiplied, kernel)?);
 
     let overflow_pt = pad as f32 / s * PT_PER_PX;
@@ -1672,38 +1672,6 @@ fn color8(r: f32, g: f32, b: f32, a: f32) -> resvg::tiny_skia::Color {
         a.clamp(0.0, 1.0),
     )
     .unwrap_or(resvg::tiny_skia::Color::TRANSPARENT)
-}
-
-/// Convert a tiny-skia premultiplied pixmap into a straight-alpha RGBA image.
-fn pixmap_to_rgba(pixmap: &resvg::tiny_skia::Pixmap, w: u32, h: u32) -> image::RgbaImage {
-    let mut out = image::RgbaImage::new(w, h);
-    for (i, px) in pixmap.pixels().iter().enumerate() {
-        // tiny-skia stores premultiplied; demultiply to straight alpha.
-        let c = px.demultiply();
-        let x = (i as u32) % w;
-        let y = (i as u32) / w;
-        out.put_pixel(x, y, image::Rgba([c.red(), c.green(), c.blue(), c.alpha()]));
-    }
-    out
-}
-
-/// Keep a tiny-skia pixmap's premultiplied channels intact for filter input.
-fn pixmap_to_premultiplied_rgba(
-    pixmap: &resvg::tiny_skia::Pixmap,
-    w: u32,
-    h: u32,
-) -> image::RgbaImage {
-    let mut out = image::RgbaImage::new(w, h);
-    for (i, pixel) in pixmap.pixels().iter().enumerate() {
-        let x = (i as u32) % w;
-        let y = (i as u32) / w;
-        out.put_pixel(
-            x,
-            y,
-            image::Rgba([pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]),
-        );
-    }
-    out
 }
 
 #[cfg(test)]

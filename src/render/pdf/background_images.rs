@@ -1,5 +1,5 @@
 use super::backgrounds::{PdfBackgroundPaintContext, PdfBackgroundResources};
-use super::geometry::{BoxGeometry, PdfRect};
+use super::geometry::{BackgroundBorderPaint, BoxGeometry, PdfRect};
 use super::patterns::{
     LayerTilePattern, RepeatModes, paint_page_tiling_pattern, paint_tiling_pattern,
 };
@@ -18,8 +18,9 @@ use crate::types::CornerRadii;
 use crate::util::AxisRepeatPattern;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct BlockBackground {
+pub(super) struct BlockBackground<'a> {
     pub(super) geometry: BoxGeometry,
+    pub(super) border: BackgroundBorderPaint<'a>,
     pub(super) border_radii: CornerRadii,
     pub(super) size: BackgroundSize,
     pub(super) position: BackgroundPosition,
@@ -34,11 +35,13 @@ pub(super) fn render_block_svg_background(
     content: &mut String,
     tree: &crate::parser::svg::SvgTree,
     mut resources: PdfBackgroundResources<'_>,
-    background: BlockBackground,
+    background: BlockBackground<'_>,
 ) {
-    let clip = background
-        .geometry
-        .background_clip_box(background.clip, background.border_radii);
+    let clip = background.geometry.background_paint_box(
+        background.clip,
+        background.border_radii,
+        background.border,
+    );
     let reference = background.geometry.background_origin_box(background.origin);
     let blended = background.blend_mode != BlendMode::Normal
         && resources.ext_gstates.as_deref_mut().is_some_and(|states| {
@@ -210,7 +213,7 @@ pub(super) fn render_svg_background(
     };
 
     let repeat = RepeatModes::from(paint.repeat);
-    let Some(x_pattern) = AxisRepeatPattern::new(
+    let Some(x_pattern) = AxisRepeatPattern::new_layout(
         repeat.horizontal,
         offset_x,
         scaled_w,
@@ -218,7 +221,7 @@ pub(super) fn render_svg_background(
     ) else {
         return;
     };
-    let Some(y_pattern) = AxisRepeatPattern::new(
+    let Some(y_pattern) = AxisRepeatPattern::new_layout(
         repeat.vertical,
         offset_y,
         scaled_h,

@@ -55,8 +55,8 @@ impl ResolvedBorderImageSource<'_> {
         }
     }
 
-    pub(super) const fn needs_vector_slice_edge_clamp(&self) -> bool {
-        matches!(self, Self::Svg(_))
+    pub(super) const fn needs_slice_edge_clamp(&self) -> bool {
+        matches!(self, Self::Raster(_) | Self::Svg(_))
     }
 }
 
@@ -195,10 +195,19 @@ pub(super) fn register_border_image_source(
 /// form gives the slice an independent bounding box, matching the specified
 /// image-slicing model and allowing every repeated tile to reuse it.
 pub(super) fn register_border_image_slice(
-    source: &ImageRef,
+    resolved_source: &ResolvedBorderImageSource<'_>,
+    registered_source: &ImageRef,
     source_region: PdfRect,
     pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
 ) -> ImageRef {
+    if let ResolvedBorderImageSource::Raster(asset) = resolved_source
+        && let Some(slice) =
+            register_raster_border_image_slice(asset, source_region, pdf_writer, page_images)
+    {
+        return slice;
+    }
+
     // PDF clipping is antialiased after painting. Move the sample boundary a
     // negligible distance into the selected image region, then expand that
     // sample back to the exact slice bounds. This implements edge clamping:
@@ -216,8 +225,74 @@ pub(super) fn register_border_image_slice(
     stream.push_str(&source_region.rect_path());
     stream.push_str("W n\n");
     stream.push_str(&sample_to_slice.cm_operator());
-    stream.push_str(&format!("/{} Do\nQ\n", source.name));
+    stream.push_str(&format!("/{} Do\nQ\n", registered_source.name));
     pdf_writer.add_plain_local_form(stream, source_region)
+}
+
+/// Register an integer-aligned raster slice as an independent image XObject.
+///
+/// A PDF clip limits coverage, but it does not limit the interpolation kernel
+/// of the image being sampled. Keeping a whole nine-patch source behind nine
+/// clips therefore lets neighbouring source pixels colour repeated seams.
+/// Browsers isolate raster source rectangles before repetition; for the common
+/// integer-pixel case, embedding the cropped pixels expresses that model
+/// directly and losslessly. Fractional slices retain the vector clamp fallback
+/// above because resampling them here would change the authored source.
+fn register_raster_border_image_slice(
+    asset: &crate::layout::engine::RasterImageAsset,
+    source_region: PdfRect,
+    pdf_writer: &mut PdfWriter,
+    page_images: &mut Vec<ImageRef>,
+) -> Option<ImageRef> {
+    let integral = |value: f32| (value - value.round()).abs() <= 1e-5;
+    if ![
+        source_region.left,
+        source_region.bottom,
+        source_region.width,
+        source_region.height,
+    ]
+    .into_iter()
+    .all(integral)
+    {
+        return None;
+    }
+
+    // Raster rows are top-down while border-image source coordinates are
+    // bottom-up PDF coordinates.
+    let crop_y = asset.source_height as f32 - source_region.top();
+    let cropped = crate::layout::images::crop_raster_asset(
+        asset,
+        [
+            source_region.left,
+            crop_y,
+            source_region.width,
+            source_region.height,
+        ],
+    )?;
+    let object_id = pdf_writer.add_layout_image_object(
+        &cropped,
+        source_region.width * crate::fonts::PT_PER_CSS_PX,
+        source_region.height * crate::fonts::PT_PER_CSS_PX,
+        crate::style::computed::ImageRendering::Auto,
+    );
+    let image = ImageRef {
+        name: format!("Im{object_id}"),
+        obj_id: object_id,
+    };
+    page_images.push(image.clone());
+
+    let mut stream = String::from("q\n");
+    stream.push_str(&source_region.rect_path());
+    stream.push_str("W n\n");
+    stream.push_str(
+        &PdfMatrix::translate(PdfPoint::new(source_region.left, source_region.bottom))
+            .cm_operator(),
+    );
+    stream.push_str(
+        &PdfMatrix::scale(PdfVector::new(source_region.width, source_region.height)).cm_operator(),
+    );
+    stream.push_str(&format!("/{} Do\nQ\n", image.name));
+    Some(pdf_writer.add_plain_local_form(stream, source_region))
 }
 
 #[allow(clippy::too_many_arguments)]

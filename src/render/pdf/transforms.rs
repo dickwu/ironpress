@@ -335,6 +335,36 @@ impl PageContentTransform {
         Some(PdfRect::new(0.0, 0.0, size.x, size.y))
     }
 
+    /// Snap the absolute edges of a laid-out CSS box to Chromium's print-paint
+    /// CSS-pixel grid.
+    ///
+    /// Chromium retains subpixel geometry during layout, then rounds each
+    /// absolute box edge in top-down page coordinates before applying CSS
+    /// transforms. Rounding a width or height instead would move the far edge
+    /// independently and create seams between adjacent boxes.
+    pub(super) fn snap_layout_box(self, rect: PdfRect) -> PdfRect {
+        let Some(page_size) = self.page_size else {
+            return rect;
+        };
+        let snap = crate::fonts::round_to_css_pixel;
+        let left = snap(rect.left);
+        let right = snap(rect.right());
+        let top_from_page = snap(page_size.y - rect.top());
+        let bottom_from_page = snap(page_size.y - rect.bottom);
+        let top = page_size.y - top_from_page;
+        let bottom = page_size.y - bottom_from_page;
+        PdfRect::new(left, bottom, right - left, top - bottom)
+    }
+
+    /// Snap a horizontal text baseline in top-down page coordinates while the
+    /// line-flow cursor itself remains fractional.
+    pub(super) fn snap_horizontal_baseline(self, baseline: f32) -> f32 {
+        let Some(page_size) = self.page_size else {
+            return baseline;
+        };
+        page_size.y - crate::fonts::round_to_css_pixel(page_size.y - baseline)
+    }
+
     /// Enclose a layout rectangle in the physical print-device grid.
     ///
     /// Chromium creates soft-mask surfaces in integer print-device pixels. A
@@ -640,5 +670,16 @@ mod tests {
         assert!((scaled.bottom - 29.25 * 84.0 / 85.0 - 72.0 / 85.0).abs() < 0.000_1);
         assert!((scaled.width - 24.0 * 84.0 / 85.0).abs() < 0.000_1);
         assert!((scaled.height - 12.0 * 84.0 / 85.0).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn print_paint_snaps_absolute_box_edges_before_transforms() {
+        let transform = PageContentTransform::print(PdfVector::new(150.0, 150.0));
+        let authored = PdfRect::from_top(7.875, 142.125, 15.375, 15.375);
+
+        assert_eq!(
+            transform.snap_layout_box(authored),
+            PdfRect::new(8.25, 126.75, 15.0, 15.0),
+        );
     }
 }

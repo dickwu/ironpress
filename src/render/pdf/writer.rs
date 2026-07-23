@@ -57,11 +57,42 @@ pub(crate) struct PdfWriter {
     pub(super) svg_defs: crate::parser::svg::SvgDefs,
     pub(super) opts: RenderOpts,
     pub(super) page_content_transform: PageContentTransform,
+    pub(super) graphics_state: PdfGraphicsState,
+}
+
+/// Renderer-owned subset of the PDF graphics state which cannot be recovered
+/// from a resource after that resource has been registered.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct PdfGraphicsState {
+    /// CSS paint-space transform from local layout coordinates into page layout
+    /// space. PDF shading-pattern matrices are defined in default user space,
+    /// so they must explicitly inherit this matrix from every ancestor.
+    local_to_layout: PdfMatrix,
 }
 
 impl PdfWriter {
     pub(super) fn new() -> Self {
         Self::default()
+    }
+
+    pub(super) fn paint_matrix(&self, local: PdfMatrix) -> PdfMatrix {
+        self.graphics_state.local_to_layout * local
+    }
+
+    pub(super) fn transformed_paint_space(&self, page_bounds: PdfRect) -> Option<PdfPaintSpace> {
+        let local_to_layout = self.graphics_state.local_to_layout;
+        (local_to_layout != PdfMatrix::IDENTITY)
+            .then(|| PdfPaintSpace::new(local_to_layout, self.page_content_transform, page_bounds))
+    }
+
+    pub(super) fn enter_paint_transform(&mut self, local: PdfMatrix) -> PdfMatrix {
+        let prior = self.graphics_state.local_to_layout;
+        self.graphics_state.local_to_layout = prior * local;
+        prior
+    }
+
+    pub(super) fn restore_paint_transform(&mut self, prior: PdfMatrix) {
+        self.graphics_state.local_to_layout = prior;
     }
 
     pub(super) fn next_id(&self) -> usize {
@@ -180,4 +211,27 @@ pub(super) struct PdfSoftMaskGState {
     pub(super) name: String,
     pub(super) form_id: usize,
     pub(super) mode: PdfSoftMaskMode,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_paint_scopes_compose_and_restore_resource_matrices() {
+        let mut writer = PdfWriter::new();
+        let parent = PdfMatrix::rotate_around(PdfPoint::new(40.0, 30.0), 0.5, 0.866_025_4);
+        let child = PdfMatrix::translate(PdfPoint::new(7.0, -3.0));
+        let resource = PdfMatrix::scale(PdfVector::new(0.75, -0.75));
+
+        let root = writer.enter_paint_transform(parent);
+        let parent_state = writer.enter_paint_transform(child);
+        assert_eq!(writer.paint_matrix(resource), parent * child * resource);
+
+        writer.restore_paint_transform(parent_state);
+        assert_eq!(writer.paint_matrix(resource), parent * resource);
+
+        writer.restore_paint_transform(root);
+        assert_eq!(writer.paint_matrix(resource), resource);
+    }
 }

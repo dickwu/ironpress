@@ -1,38 +1,49 @@
 use super::*;
+use crate::layout::engine::LayoutBorder;
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
-/// Paint a grid/table cell's gradient backgrounds over its painted box.
+/// Paint an ordinary box's gradient layers with independent positioning and
+/// painting areas.
 ///
-/// A grid item (and a table cell) is a block container, so a `background` with a
-/// `linear-gradient()`/`radial-gradient()`/`conic-gradient()` paints across the
-/// cell's border box exactly like a normal block (css-backgrounds-3 §3). The
-/// fill is clipped to the box so it never bleeds past the cell edges. Painted
-/// after the cell's solid `background-color` and before its border, matching the
-/// block paint order.
-pub(super) fn paint_cell_gradient_backgrounds(
+/// `background-origin` selects the positioning area (padding-box by default),
+/// while `background-clip` selects the painting area. Keeping those two boxes
+/// distinct is observable at every bordered grid, table, and flex item: using
+/// the border box for both shortens the visible gradient and shifts its stops.
+pub(super) fn paint_box_gradient_backgrounds(
     content: &mut String,
-    cell: &CellBox,
+    paint: &crate::layout::elements::BoxPaint,
+    border: &LayoutBorder,
     geometry: BoxGeometry,
     ctx: &mut PageRenderContext<'_>,
 ) {
-    let painted_box = geometry.border_box.rounded(cell.paint.border_radii);
+    let layers = &paint.background.layers;
+    let positioning_box = geometry.background_origin_box(layers.origin);
+    let painted_box = geometry.background_paint_box(
+        layers.clip,
+        paint.border_radii,
+        BackgroundBorderPaint::new(border, paint.border_image.as_ref()),
+    );
     let PdfRect {
         left: box_x,
         bottom: box_y,
         width: box_w,
         height: box_h,
-    } = painted_box.rect;
+    } = positioning_box;
     if painted_box.rect.is_empty() {
         return;
     }
-    if let Some(gradient) = &cell.paint.background.layers.gradient {
+    let layer_box = background_layer_box(layers.size, layers.position, layers.repeat);
+    if let Some(gradient) = &layers.gradient {
+        let gradient = linear_with_background_layer(gradient, layer_box);
         let clipped = painted_box.push_rounded_clip(content);
         render_linear_gradient(
             content,
-            gradient,
+            &gradient,
             GradientBackdrop::isolated_linear_layer(
-                cell.paint.background.color,
-                cell.paint.background.layers.radial_gradient.is_some()
-                    || cell.paint.background.layers.conic_gradient.is_some(),
+                paint.background.color,
+                layers.radial_gradient.is_some()
+                    || layers.conic_gradient.is_some()
+                    || layers.svg.is_some(),
                 crate::style::computed::BlendMode::Normal,
             ),
             box_x,
@@ -48,11 +59,12 @@ pub(super) fn paint_cell_gradient_backgrounds(
             content.push_str("Q\n");
         }
     }
-    if let Some(gradient) = &cell.paint.background.layers.radial_gradient {
+    if let Some(gradient) = &layers.radial_gradient {
+        let gradient = radial_with_background_layer(gradient, layer_box);
         let clipped = painted_box.push_rounded_clip(content);
         render_radial_gradient(
             content,
-            gradient,
+            &gradient,
             box_x,
             box_y,
             box_w,
@@ -66,11 +78,12 @@ pub(super) fn paint_cell_gradient_backgrounds(
             content.push_str("Q\n");
         }
     }
-    if let Some(gradient) = &cell.paint.background.layers.conic_gradient {
+    if let Some(gradient) = &layers.conic_gradient {
+        let gradient = conic_with_background_layer(gradient, layer_box);
         let clipped = painted_box.push_rounded_clip(content);
         render_conic_gradient(
             content,
-            gradient,
+            &gradient,
             box_x,
             box_y,
             box_w,
@@ -124,6 +137,10 @@ pub(super) fn render_linear_gradient(
     }
 
     let content_transform = pdf_writer.page_content_transform;
+    if render_distributed_linear_gradient_raster(content, source, pattern, pdf_writer, page_images)
+    {
+        return;
+    }
     if paint_distributed_tiles(content, pattern, |content, tile| {
         render_linear_gradient_layer_tile(
             content,
@@ -208,14 +225,15 @@ pub(super) fn render_linear_gradient_layer_tile(
         let nominal_start = PdfPoint::new(cx - dx, cy + dy);
         let nominal_end = PdfPoint::new(cx + dx, cy - dy);
         let axis = nominal_end - nominal_start;
+        let pattern_matrix = pdf_writer.paint_matrix(PdfMatrix::new(
+            PdfVector::new(crate::fonts::PT_PER_CSS_PX, 0.0),
+            PdfVector::new(0.0, -crate::fonts::PT_PER_CSS_PX),
+            PdfPoint::new(tile.left, tile.top()),
+        ));
         let name = pdf_writer.add_shading_pattern(PdfShadingPattern::axial(
             nominal_start + axis * native.span.start,
             nominal_start + axis * native.span.end,
-            PdfMatrix::new(
-                PdfVector::new(crate::fonts::PT_PER_CSS_PX, 0.0),
-                PdfVector::new(0.0, -crate::fonts::PT_PER_CSS_PX),
-                PdfPoint::new(tile.left, tile.top()),
-            ),
+            pattern_matrix,
             native.stops,
             PdfPatternGeometryFormat::SixDecimals,
         ));

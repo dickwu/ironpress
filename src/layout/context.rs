@@ -104,6 +104,17 @@ impl LayoutContext {
         self.parent.content_height.unwrap_or(self.viewport.height)
     }
 
+    /// Initial fixed containing block. In paged media this is the page area,
+    /// independent of ordinary positioned ancestors.
+    pub const fn initial_fixed_containing_block(&self) -> ContainingBlock {
+        ContainingBlock {
+            x: 0.0,
+            width: self.viewport.width,
+            height: self.viewport.height,
+            depth: 0,
+        }
+    }
+
     /// Return a child context with updated parent dimensions.
     pub fn with_parent(
         &self,

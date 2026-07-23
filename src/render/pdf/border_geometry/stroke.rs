@@ -7,6 +7,7 @@ use crate::types::PhysicalEdges;
 pub(in crate::render::pdf) struct BorderStrokeGeometry {
     pub(in crate::render::pdf) centerline: RoundedRect,
     pub(super) spans: PhysicalEdges<BorderPathSpan>,
+    path_length: f32,
 }
 
 impl BorderStrokeGeometry {
@@ -17,19 +18,16 @@ impl BorderStrokeGeometry {
     ) -> Self {
         let fitted_radii = radii.fit_to(border_box.width, border_box.height);
         let centerline = border_box.rounded(fitted_radii).inset(widths * 0.5);
+        let metrics = RoundedPathMetrics::new(widths, centerline);
         Self {
             centerline,
-            spans: RoundedPathMetrics::new(widths, centerline).spans(),
+            spans: metrics.spans(),
+            path_length: metrics.perimeter,
         }
     }
 
-    pub(in crate::render::pdf) fn span(self, edge: PhysicalSide) -> BorderPathSpan {
-        match edge {
-            PhysicalSide::Top => self.spans.top,
-            PhysicalSide::Right => self.spans.right,
-            PhysicalSide::Bottom => self.spans.bottom,
-            PhysicalSide::Left => self.spans.left,
-        }
+    pub(in crate::render::pdf) fn path_length(self) -> f32 {
+        self.path_length
     }
 }
 
@@ -38,12 +36,6 @@ impl BorderStrokeGeometry {
 pub(in crate::render::pdf) struct BorderPathSpan {
     pub(in crate::render::pdf) offset: f32,
     pub(in crate::render::pdf) length: f32,
-}
-
-impl BorderPathSpan {
-    pub(in crate::render::pdf) fn is_valid(self) -> bool {
-        self.offset.is_finite() && self.length.is_finite() && self.length > 0.0
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

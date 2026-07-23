@@ -62,36 +62,26 @@ impl PrimitiveFilterFallback {
             FilterOperation::Offset {
                 dx,
                 keep_source,
-                region_x,
-                region_width,
+                region,
                 ..
             } => {
                 for element in elements {
-                    apply_offset_to_element(
-                        element.as_mut(),
-                        dx,
-                        keep_source,
-                        region_x,
-                        region_width,
-                    );
+                    apply_offset_to_element(element.as_mut(), dx, keep_source, region);
                 }
             }
-            FilterOperation::Flood {
+            FilterOperation::BlendWithFlood {
                 color,
-                region_x,
-                region_y,
-                region_width,
-                region_height,
+                mode,
+                region,
             } => {
+                let transform = FloodBlendColorTransform {
+                    flood: color,
+                    mode,
+                    linear_rgb: self.linear_rgb,
+                };
                 for element in elements {
-                    apply_flood_to_element(
-                        element.as_mut(),
-                        color,
-                        region_x,
-                        region_y,
-                        region_width,
-                        region_height,
-                    );
+                    apply_flood_to_element(element.as_mut(), color, region);
+                    transform_element_colors(element.as_mut(), &transform);
                 }
             }
             _ => {}
@@ -123,21 +113,26 @@ impl PrimitiveFilterFallback {
                     cell.paint.shadows.push(dilation_shadow(radius, color));
                 }
             }
-            FilterOperation::Flood {
+            FilterOperation::BlendWithFlood {
                 color,
-                region_x,
-                region_y,
-                region_width,
-                region_height,
-            } => cell.paint.shadows.extend(flood_shadows(
-                cell.width,
-                cell.natural_height,
-                color,
-                region_x,
-                region_y,
-                region_width,
-                region_height,
-            )),
+                mode,
+                region,
+            } => {
+                cell.paint.shadows.extend(flood_shadows(
+                    cell.width,
+                    cell.natural_height,
+                    color,
+                    region,
+                ));
+                transform_flex_cell_colors(
+                    cell,
+                    &FloodBlendColorTransform {
+                        flood: color,
+                        mode,
+                        linear_rgb: self.linear_rgb,
+                    },
+                );
+            }
             _ => {}
         }
     }
@@ -148,7 +143,7 @@ fn changes_color(operation: &FilterOperation) -> bool {
         && !matches!(
             operation,
             FilterOperation::Blur(_)
-                | FilterOperation::Flood { .. }
+                | FilterOperation::BlendWithFlood { .. }
                 | FilterOperation::Offset { .. }
                 | FilterOperation::DropShadow(_)
                 | FilterOperation::MorphologyDilate(_)
@@ -217,14 +212,12 @@ fn apply_offset_to_element(
     element: &mut dyn LayoutElement,
     dx: f32,
     keep_source: bool,
-    region_x: f32,
-    region_width: f32,
+    region: crate::types::Rect,
 ) {
     struct OffsetFallback {
         dx: f32,
         keep_source: bool,
-        region_x: f32,
-        region_width: f32,
+        region: crate::types::Rect,
     }
 
     impl OffsetFallback {
@@ -232,13 +225,9 @@ fn apply_offset_to_element(
             let Some(width) = box_model.size.width.fixed_value() else {
                 return;
             };
-            let Some((left, right)) = clipped_offset_bounds(
-                width,
-                self.dx,
-                self.keep_source,
-                self.region_x,
-                self.region_width,
-            ) else {
+            let Some((left, right)) =
+                clipped_offset_bounds(width, self.dx, self.keep_source, self.region)
+            else {
                 return;
             };
             positioning.insets.left += left;
@@ -267,8 +256,7 @@ fn apply_offset_to_element(
     element.accept_mut(&mut OffsetFallback {
         dx,
         keep_source,
-        region_x,
-        region_width,
+        region,
     });
 }
 
@@ -276,14 +264,13 @@ fn clipped_offset_bounds(
     width: f32,
     dx: f32,
     keep_source: bool,
-    region_x: f32,
-    region_width: f32,
+    region: crate::types::Rect,
 ) -> Option<(f32, f32)> {
     if width <= 0.0 {
         return None;
     }
-    let region_left = region_x * width;
-    let region_right = (region_x + region_width) * width;
+    let region_left = region.origin.x * width;
+    let region_right = region.right() * width;
     let shifted_left = dx.max(region_left);
     let shifted_right = (dx + width).min(region_right);
     if keep_source {
@@ -299,17 +286,11 @@ fn clipped_offset_bounds(
 fn apply_flood_to_element(
     element: &mut dyn LayoutElement,
     color: crate::types::Color,
-    region_x: f32,
-    region_y: f32,
-    region_width: f32,
-    region_height: f32,
+    region: crate::types::Rect,
 ) {
     struct FloodFallback {
         color: crate::types::Color,
-        region_x: f32,
-        region_y: f32,
-        region_width: f32,
-        region_height: f32,
+        region: crate::types::Rect,
     }
 
     impl FloodFallback {
@@ -321,15 +302,9 @@ fn apply_flood_to_element(
                 .resolve(box_model.padding.vertical() + content_height)
                 + box_model.border.vertical_width();
             if width > 0.0 && height > 0.0 {
-                paint.shadows.extend(flood_shadows(
-                    width,
-                    height,
-                    self.color,
-                    self.region_x,
-                    self.region_y,
-                    self.region_width,
-                    self.region_height,
-                ));
+                paint
+                    .shadows
+                    .extend(flood_shadows(width, height, self.color, self.region));
             }
         }
     }
@@ -350,28 +325,19 @@ fn apply_flood_to_element(
         }
     }
 
-    element.accept_mut(&mut FloodFallback {
-        color,
-        region_x,
-        region_y,
-        region_width,
-        region_height,
-    });
+    element.accept_mut(&mut FloodFallback { color, region });
 }
 
 fn flood_shadows(
     width: f32,
     height: f32,
     color: crate::types::Color,
-    region_x: f32,
-    region_y: f32,
-    region_width: f32,
-    region_height: f32,
+    region: crate::types::Rect,
 ) -> Vec<BoxShadow> {
-    let left = (-region_x * width).max(0.0);
-    let right = ((region_x + region_width - 1.0) * width).max(0.0);
-    let top = (-region_y * height).max(0.0);
-    let bottom = ((region_y + region_height - 1.0) * height).max(0.0);
+    let left = (-region.origin.x * width).max(0.0);
+    let right = ((region.right() - 1.0) * width).max(0.0);
+    let top = (-region.origin.y * height).max(0.0);
+    let bottom = ((region.bottom() - 1.0) * height).max(0.0);
     let vertical_spread = top.max(bottom);
     let vertical_offset = (bottom - top) * 0.5;
     let make_shadow = |offset_x: f32, spread: f32| BoxShadow {
@@ -398,32 +364,74 @@ fn apply_color_to_element(
     operation: &FilterOperation,
     linear_rgb: bool,
 ) {
-    struct ColorFallback<'a> {
-        operation: &'a FilterOperation,
-        linear_rgb: bool,
-    }
+    transform_element_colors(
+        element,
+        &OperationColorTransform {
+            operation,
+            linear_rgb,
+        },
+    );
+}
 
-    impl ColorFallback<'_> {
+trait FilterColorTransform {
+    fn transform(&self, color: crate::types::Color) -> crate::types::Color;
+}
+
+struct OperationColorTransform<'a> {
+    operation: &'a FilterOperation,
+    linear_rgb: bool,
+}
+
+impl FilterColorTransform for OperationColorTransform<'_> {
+    fn transform(&self, color: crate::types::Color) -> crate::types::Color {
+        filtered_color(color, self.operation, self.linear_rgb)
+    }
+}
+
+struct FloodBlendColorTransform {
+    flood: crate::types::Color,
+    mode: crate::style::computed::BlendMode,
+    linear_rgb: bool,
+}
+
+impl FilterColorTransform for FloodBlendColorTransform {
+    fn transform(&self, color: crate::types::Color) -> crate::types::Color {
+        let source = image::Rgba(color.to_rgba8());
+        let backdrop = image::Rgba(self.flood.to_rgba8());
+        let output =
+            crate::render::blend::composite_pixel(source, backdrop, self.mode, self.linear_rgb)
+                .unwrap_or(source);
+        crate::types::Color::rgba8(output[0], output[1], output[2], output[3])
+    }
+}
+
+fn transform_element_colors(
+    element: &mut dyn LayoutElement,
+    transform: &impl FilterColorTransform,
+) {
+    struct ColorFallback<'a, T>(&'a T);
+
+    impl<T: FilterColorTransform> ColorFallback<'_, T> {
         fn apply_box(&self, box_model: &mut BoxModel, paint: &mut BoxPaint) {
             if let Some(color) = &mut paint.background.color {
-                *color = filtered_color(*color, self.operation, self.linear_rgb);
+                *color = self.0.transform(*color);
             }
-            apply_color_to_border(&mut box_model.border, self.operation, self.linear_rgb);
+            transform_border_colors(&mut box_model.border, self.0);
             for shadow in &mut paint.shadows {
-                shadow.color = filtered_color(shadow.color, self.operation, self.linear_rgb);
+                shadow.color = self.0.transform(shadow.color);
             }
             if let Some(color) = &mut paint.outline.color {
-                *color = filtered_color(*color, self.operation, self.linear_rgb);
+                *color = self.0.transform(*color);
             }
         }
     }
 
-    impl LayoutVisitorMut for ColorFallback<'_> {
+    impl<T: FilterColorTransform> LayoutVisitorMut for ColorFallback<'_, T> {
         fn visit_text_block(&mut self, element: &mut TextBlock) {
             self.apply_box(&mut element.box_model, &mut element.paint);
             for line in &mut element.lines {
                 for run in &mut line.runs {
-                    apply_color_to_run(run, self.operation, self.linear_rgb);
+                    transform_run_colors(run, self.0);
                 }
             }
         }
@@ -435,76 +443,79 @@ fn apply_color_to_element(
         fn visit_flex_row(&mut self, element: &mut FlexRow) {
             self.apply_box(&mut element.box_model, &mut element.paint);
             for cell in &mut element.content.cells {
-                apply_color_to_flex_cell(cell, self.operation, self.linear_rgb);
+                transform_flex_cell_colors(cell, self.0);
             }
         }
     }
 
-    visit_layout_tree_mut(
-        element,
-        &mut ColorFallback {
+    visit_layout_tree_mut(element, &mut ColorFallback(transform));
+}
+
+fn apply_color_to_flex_cell(cell: &mut FlexCell, operation: &FilterOperation, linear_rgb: bool) {
+    transform_flex_cell_colors(
+        cell,
+        &OperationColorTransform {
             operation,
             linear_rgb,
         },
     );
 }
 
-fn apply_color_to_flex_cell(cell: &mut FlexCell, operation: &FilterOperation, linear_rgb: bool) {
+fn transform_flex_cell_colors(cell: &mut FlexCell, transform: &impl FilterColorTransform) {
     if let Some(color) = &mut cell.paint.background.color {
-        *color = filtered_color(*color, operation, linear_rgb);
+        *color = transform.transform(*color);
     }
-    apply_color_to_border(&mut cell.border, operation, linear_rgb);
+    transform_border_colors(&mut cell.border, transform);
     for shadow in &mut cell.paint.shadows {
-        shadow.color = filtered_color(shadow.color, operation, linear_rgb);
+        shadow.color = transform.transform(shadow.color);
     }
     for line in &mut cell.lines {
         for run in &mut line.runs {
-            apply_color_to_run(run, operation, linear_rgb);
+            transform_run_colors(run, transform);
         }
     }
     for element in &mut cell.nested_elements {
-        apply_color_to_element(element.as_mut(), operation, linear_rgb);
+        transform_element_colors(element.as_mut(), transform);
     }
 }
 
-fn apply_color_to_run(run: &mut TextRun, operation: &FilterOperation, linear_rgb: bool) {
-    run.color = filtered_color(run.color, operation, linear_rgb);
+fn transform_run_colors(run: &mut TextRun, transform: &impl FilterColorTransform) {
+    run.color = transform.transform(run.color);
     for decoration in &mut run.decorations {
         if let Some(color) = decoration.color {
-            decoration.color = Some(filtered_color(color, operation, linear_rgb));
+            decoration.color = Some(transform.transform(color));
         }
     }
     if run.metadata.emphasis.mark {
-        run.metadata.emphasis.color =
-            filtered_color(run.metadata.emphasis.color, operation, linear_rgb);
+        run.metadata.emphasis.color = transform.transform(run.metadata.emphasis.color);
     }
     if let Some(color) = run.background_color {
-        run.background_color = Some(filtered_color(color, operation, linear_rgb));
+        run.background_color = Some(transform.transform(color));
     }
     for shadow in &mut run.text_shadow {
-        shadow.color = filtered_color(shadow.color, operation, linear_rgb);
+        shadow.color = transform.transform(shadow.color);
     }
     if let Some(inline_box) = &mut run.inline_box {
         if let Some(color) = inline_box.background_color {
-            inline_box.background_color = Some(filtered_color(color, operation, linear_rgb));
+            inline_box.background_color = Some(transform.transform(color));
         }
-        apply_color_to_border(&mut inline_box.border, operation, linear_rgb);
+        transform_border_colors(&mut inline_box.border, transform);
         for line in &mut inline_box.lines {
             for run in &mut line.runs {
-                apply_color_to_run(run, operation, linear_rgb);
+                transform_run_colors(run, transform);
             }
         }
     }
 }
 
-fn apply_color_to_border(border: &mut LayoutBorder, operation: &FilterOperation, linear_rgb: bool) {
+fn transform_border_colors(border: &mut LayoutBorder, transform: &impl FilterColorTransform) {
     for side in [
         &mut border.top,
         &mut border.right,
         &mut border.bottom,
         &mut border.left,
     ] {
-        side.color = filtered_color(side.color, operation, linear_rgb);
+        side.color = transform.transform(side.color);
     }
 }
 

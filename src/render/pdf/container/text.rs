@@ -1,5 +1,6 @@
 use super::*;
 use crate::layout::elements::TextBlock;
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(super) fn render_text_child(
     content: &mut String,
@@ -11,7 +12,7 @@ pub(super) fn render_text_child(
     ctx: &mut PageRenderContext<'_>,
 ) -> FlowPosition {
     let x = flow.frame.content_origin.x;
-    let width = flow.frame.width;
+    let width = flow.frame.width();
     let self_pad_origin = flow.frame.padding_origin;
     let container_top_y = flow.container_top_y;
     let flow_top_by_index = flow.flow_top_by_index;
@@ -87,7 +88,11 @@ pub(super) fn render_text_child(
             border,
             *padding,
         );
-        let tb_background_box = tb_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+        let tb_background_box = tb_geometry.background_paint_box(
+            *tb_bg_clip,
+            *tb_radii,
+            BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
+        );
         let tb_fragment_geometry = tb_geometry.for_fragment(child.fragmentation.box_fragmentation);
 
         if phase == ElementPaintPhase::All
@@ -165,6 +170,7 @@ pub(super) fn render_text_child(
                 ),
                 BlockBackground {
                     geometry: tb_geometry,
+                    border: BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
                     border_radii: *tb_radii,
                     size: *tb_bg_size,
                     position: *tb_bg_position,
@@ -197,11 +203,14 @@ pub(super) fn render_text_child(
             );
         }
         // Render text for absolute-positioned children
-        let mut baseline_cursor = TextBaselineCursor::new(abs_y - padding.top);
+        let mut baseline_cursor = TextBaselineCursor::new(
+            abs_y - padding.top,
+            ctx.text.pdf_writer.page_content_transform,
+        );
         for line in lines.iter().filter(|_| phase.paints_contents()) {
             let metrics = line_box_metrics(line, ctx.text.custom_fonts);
             let text_y_abs = baseline_cursor.next_horizontal(metrics);
-            let merged = merge_runs(&line.runs);
+            let merged = crate::text::coalesce_text_runs(&line.runs);
             let line_width: f32 = merged
                 .iter()
                 .map(|r| estimate_run_width_with_fonts(r, ctx.text.custom_fonts))
@@ -292,23 +301,30 @@ pub(super) fn render_text_child(
         child_h
     };
 
-    // Apply float/position offset. `offset_left`/`offset_top` combine
-    // the in-flow horizontal placement (margin-left / margin:auto
-    // centering) with any relative left/top shift, and are 0 for a
-    // plain static block — so apply them unconditionally rather than
-    // only for relative (which dropped margin-left/centering on
-    // nested blocks).
-    let render_x = match tb_float {
-        Float::Right => x + width - render_w,
-        _ => x + offset_left,
+    // Resolve ordinary flow, relative translation, and sticky scrollport
+    // constraints through the shared positioning contract. Sticky insets are
+    // constraints from the scrollport edges, not unconditional translations.
+    let normal_inline_offset = match tb_float {
+        Float::Right => width - render_w,
+        _ => 0.0,
     };
-    let render_y = y - offset_top;
+    let used_origin = child.positioning.resolve_in_flow_origin(
+        crate::types::Point::new(normal_inline_offset, container_top_y - y),
+        crate::types::Size::new(render_w, vertical_column_paint_h),
+        flow.frame.size,
+    );
+    let render_x = x + used_origin.x;
+    let render_y = container_top_y - used_origin.y;
     let tb_geometry = BoxGeometry::from_layout(
         PdfRect::from_top(render_x, render_y, render_w, vertical_column_paint_h),
         border,
         *padding,
     );
-    let tb_background_box = tb_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+    let tb_background_box = tb_geometry.background_paint_box(
+        *tb_bg_clip,
+        *tb_radii,
+        BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
+    );
     let tb_fragment_geometry = tb_geometry.for_fragment(child.fragmentation.box_fragmentation);
 
     // CSS `filter: blur()` on a nested solid box (css-filter-effects-1
@@ -527,6 +543,7 @@ pub(super) fn render_text_child(
                 ),
                 BlockBackground {
                     geometry: tb_geometry,
+                    border: BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
                     border_radii: *tb_radii,
                     size: *tb_bg_size,
                     position: *tb_bg_position,
@@ -577,7 +594,8 @@ pub(super) fn render_text_child(
     // at the top of this fn); omitting the border placed the first
     // baseline `border-top` px too high inside bordered clip boxes.
     let content_top = tb_geometry.content_box().top();
-    let mut baseline_cursor = TextBaselineCursor::new(content_top);
+    let mut baseline_cursor =
+        TextBaselineCursor::new(content_top, ctx.text.pdf_writer.page_content_transform);
     let line_metadata = lines
         .first()
         .map_or(Default::default(), |line| line.metadata);
@@ -608,7 +626,7 @@ pub(super) fn render_text_child(
         } else {
             baseline_cursor.next_horizontal(metrics)
         };
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let line_width: f32 = merged
             .iter()
             .map(|run| {

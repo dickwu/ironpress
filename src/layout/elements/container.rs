@@ -35,10 +35,7 @@ impl Container {
                 clear: style.clear,
             },
             positioning: Positioning::from_style(style),
-            fragmentation: BoxFragmentation {
-                decoration: style.box_decoration_break,
-                ..Default::default()
-            },
+            fragmentation: BoxFragmentation::from_style(style),
             overflow: OverflowBehavior {
                 combined: style.overflow,
                 x: style.overflow_x,
@@ -292,6 +289,10 @@ impl LayoutElement for Container {
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }
 

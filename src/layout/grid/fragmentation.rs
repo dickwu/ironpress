@@ -1,9 +1,8 @@
 //! Grid-specific propagation of forced item breaks to row boundaries.
 
-use super::Placed;
+use super::{GridItemStyle, Placed};
 use crate::layout::elements::{IntoLayoutNode, LayoutNode, PageBreak};
 use crate::layout::engine::PageBreakSide;
-use crate::style::computed::ComputedStyle;
 
 /// Forced page breaks propagated from grid items to their owning grid row.
 ///
@@ -33,7 +32,7 @@ impl GridRowBreaks {
 pub(super) fn forced_row_breaks(
     row: usize,
     placed: &[Placed],
-    child_styles: &[ComputedStyle],
+    child_styles: &[GridItemStyle],
 ) -> GridRowBreaks {
     let mut breaks = GridRowBreaks::default();
     for item in placed.iter().filter(|item| item.row == row) {

@@ -37,7 +37,10 @@ pub(in crate::render::pdf) fn render_flex_row(
     // Inline-axis origin of the flex container's border box: the
     // page content-left plus the container's own resolved
     // horizontal margin / auto-centering (see `FlexRow.offset_left`).
-    let flex_left = margin.left + flex_offset_left;
+    // Flex establishes a formatting context, not a separate positioning model:
+    // its authored inline inset must survive exactly like a block container's.
+    // Pagination already resolves the block-axis inset into `frame.y_pos`.
+    let flex_left = margin.left + flex_offset_left + element.positioning.insets.left;
     // Inline-axis origin of the flex *content* box: in-flow cells
     // begin inside the container's left border (CSS box model — a
     // cell's `x_offset` is measured from the content box, so the
@@ -217,6 +220,26 @@ pub(in crate::render::pdf) fn render_flex_row(
         return;
     }
 
+    // Overflow clips the descendants of a flex formatting context to its
+    // padding box, exactly as for an ordinary container. Register the clip with
+    // the stacking scheduler too so positioned descendants cannot escape when
+    // their paint is deferred to an ancestor context.
+    let needs_clip = element.overflow.combined.clips();
+    if needs_clip {
+        let mut command = String::from("q\n");
+        command.push_str(&overflow_clip_path(
+            flex_left,
+            row_y - full_height,
+            container_width,
+            full_height,
+            flex_geometry.border,
+            *flex_radii,
+        ));
+        command.push_str("W n\n");
+        content.push_str(&command);
+        ctx.stacking.push_clip(command);
+    }
+
     // Render each flex cell at its computed x-offset
     let text_area_top = row_y - border.top.width - padding.top;
 
@@ -348,6 +371,8 @@ pub(in crate::render::pdf) fn render_flex_row(
                 }
             }
 
+            paint_box_gradient_backgrounds(content, &cell.paint, &cell.border, cell_geometry, ctx);
+
             cell_shadows.paint_inset(content, ctx);
 
             // Draw cell borders through the same geometry used by every other box.
@@ -360,71 +385,6 @@ pub(in crate::render::pdf) fn render_flex_row(
                     cell.paint.border_image.as_ref(),
                     BorderPaintResources::from_page(ctx),
                 );
-            }
-
-            // Draw cell linear gradient
-            if let Some(gradient) = &cell.paint.background.layers.gradient {
-                let clipped = cell_box.push_rounded_clip(content);
-                render_linear_gradient(
-                    content,
-                    gradient,
-                    GradientBackdrop::isolated_linear_layer(
-                        cell.paint.background.color,
-                        cell.paint.background.layers.radial_gradient.is_some()
-                            || cell.paint.background.layers.conic_gradient.is_some()
-                            || cell.paint.background.layers.svg.is_some(),
-                        crate::style::computed::BlendMode::Normal,
-                    ),
-                    cell_box.rect.left,
-                    cell_box.rect.bottom,
-                    cell_box.rect.width,
-                    cell_box.rect.height,
-                    ctx.shadings,
-                    ctx.shading_counter,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                );
-                if clipped {
-                    content.push_str("Q\n");
-                }
-            }
-
-            // Draw cell radial gradient
-            if let Some(gradient) = &cell.paint.background.layers.radial_gradient {
-                let clipped = cell_box.push_rounded_clip(content);
-                render_radial_gradient(
-                    content,
-                    gradient,
-                    cell_box.rect.left,
-                    cell_box.rect.bottom,
-                    cell_box.rect.width,
-                    cell_box.rect.height,
-                    ctx.shadings,
-                    ctx.shading_counter,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                );
-                if clipped {
-                    content.push_str("Q\n");
-                }
-            }
-
-            // Draw cell conic gradient
-            if let Some(gradient) = &cell.paint.background.layers.conic_gradient {
-                let clipped = cell_box.push_rounded_clip(content);
-                render_conic_gradient(
-                    content,
-                    gradient,
-                    cell_box.rect.left,
-                    cell_box.rect.bottom,
-                    cell_box.rect.width,
-                    cell_box.rect.height,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                );
-                if clipped {
-                    content.push_str("Q\n");
-                }
             }
 
             if let Some(svg_tree) = &cell.paint.background.layers.svg {
@@ -455,6 +415,7 @@ pub(in crate::render::pdf) fn render_flex_row(
             // Render cell text
             let mut baseline_cursor = TextBaselineCursor::new(
                 text_area_top - cell_y_shift - cell.border.top.width - cell.padding.top,
+                ctx.text.pdf_writer.page_content_transform,
             );
             for line in &cell.lines {
                 let metrics = line_box_metrics(line, ctx.text.custom_fonts);
@@ -465,7 +426,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 if text_content.is_empty() {
                     continue;
                 }
-                let merged = merge_runs(&line.runs);
+                let merged = crate::text::coalesce_text_runs(&line.runs);
                 // Calculate line width for text-align
                 let line_width: f32 = merged
                     .iter()
@@ -604,12 +565,22 @@ pub(in crate::render::pdf) fn render_flex_row(
                     }
                 };
                 let mut nested_abs_origins: HashMap<usize, PdfPoint> = HashMap::new();
+                if element.positioning.containing_block_depth > 0 {
+                    let padding_box = flex_geometry.padding_box();
+                    nested_abs_origins.insert(
+                        element.positioning.containing_block_depth,
+                        PdfPoint::new(padding_box.left, padding_box.top()),
+                    );
+                }
                 render_container_children(
                     content,
                     &cell.nested_elements,
                     ContainerFrame::new(
                         PdfPoint::new(nested_x, nested_y),
-                        nested_w,
+                        crate::types::Size::new(
+                            nested_w,
+                            (cell_geometry.content_box().height - text_h).max(0.0),
+                        ),
                         padding_origin,
                     ),
                     &mut nested_abs_origins,
@@ -639,6 +610,10 @@ pub(in crate::render::pdf) fn render_flex_row(
     }
     if stacking_scope.is_local() {
         ctx.stacking.paint_plan(stacking_plan, content);
+    }
+    if needs_clip {
+        ctx.stacking.pop_clip();
+        content.push_str("Q\n");
     }
     flex_group.finish(content, ctx);
 }

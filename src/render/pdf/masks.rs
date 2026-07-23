@@ -254,10 +254,12 @@ pub(super) fn rasterize_mask_layer(
         return None;
     }
     let repeat = RepeatModes::from(layer.layer_box.repeat.unwrap_or(BackgroundRepeat::Repeat));
-    let x_pattern = AxisRepeatPattern::new(repeat.horizontal, offset_x, tile_w, origin.width)?
-        .translated(origin_x)?;
-    let y_pattern = AxisRepeatPattern::new(repeat.vertical, offset_y, tile_h, origin.height)?
-        .translated(origin_y)?;
+    let x_pattern =
+        AxisRepeatPattern::new_layout(repeat.horizontal, offset_x, tile_w, origin.width)?
+            .translated(origin_x)?;
+    let y_pattern =
+        AxisRepeatPattern::new_layout(repeat.vertical, offset_y, tile_h, origin.height)?
+            .translated(origin_y)?;
     let (tile_w, tile_h) = (x_pattern.tile_size(), y_pattern.tile_size());
     let source_grid = MaskRasterGrid::new(
         window.grid.dimensions_for_points(tile_w, tile_h)?,

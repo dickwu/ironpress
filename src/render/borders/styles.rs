@@ -1,20 +1,51 @@
 use crate::style::computed::BorderStyle;
 use crate::types::PhysicalSide;
 
-/// Used width of either rule in a CSS `double` border.
+/// Used stripe and gap allocation for a CSS `double` border.
 ///
-/// CSS leaves the individual line/gap allocation implementation-defined. This
-/// preserves the established browser-compatible integer-CSS-pixel allocation
-/// and retains exact thirds for fractional widths.
-pub(crate) fn double_rule_width(width: f32) -> f32 {
-    let css_width = width / 0.75;
-    let snapped_css_width = css_width.round();
-    if snapped_css_width >= 3.0 && (css_width - snapped_css_width).abs() < 0.001 {
-        ((snapped_css_width + 1.0) / 3.0).floor() * 0.75
-    } else {
-        width / 3.0
+/// CSS leaves the allocation implementation-defined. Blink rounds the outer
+/// third in integer CSS pixels; the inner stripe has the same width and the
+/// middle gap owns the remainder. Fractional authored widths retain exact
+/// thirds rather than being silently enlarged to a device-dependent integer.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct DoubleBorderMetrics {
+    width: f32,
+    stripe: f32,
+}
+
+impl DoubleBorderMetrics {
+    pub(crate) fn new(width: f32) -> Self {
+        let width = width.max(0.0);
+        let css_width = width / crate::fonts::PT_PER_CSS_PX;
+        let snapped_css_width = css_width.round();
+        let stripe = if snapped_css_width >= 3.0 && (css_width - snapped_css_width).abs() < 0.001 {
+            ((snapped_css_width + 1.0) / 3.0).floor() * crate::fonts::PT_PER_CSS_PX
+        } else {
+            width / 3.0
+        }
+        .min(width / 2.0);
+        Self { width, stripe }
     }
-    .min(width / 2.0)
+
+    pub(crate) const fn stripe_width(self) -> f32 {
+        self.stripe
+    }
+
+    pub(crate) fn inner_inset(self) -> f32 {
+        self.width - self.stripe
+    }
+
+    pub(crate) fn outer_centerline_inset(self) -> f32 {
+        self.stripe * 0.5
+    }
+
+    pub(crate) fn inner_centerline_inset(self) -> f32 {
+        self.inner_inset() + self.stripe * 0.5
+    }
+
+    pub(crate) fn paints(self, offset: f32) -> bool {
+        offset < self.stripe || offset >= self.inner_inset()
+    }
 }
 
 const LIGHTENED_BLACK: f32 = 84.0 / 255.0;

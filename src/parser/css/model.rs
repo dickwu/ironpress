@@ -2,6 +2,8 @@ use crate::parser::dom::ElementNode;
 use crate::types::{Color, EdgeSizes};
 use std::collections::HashMap;
 
+use super::math::CssMathExpression;
+
 /// Context for evaluating CSS media queries against the target page.
 #[derive(Debug, Clone, Copy)]
 pub struct MediaContext {
@@ -66,38 +68,6 @@ impl<'a> SelectorContext<'a> {
     }
 }
 
-/// An operator in a calc() expression.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CalcOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
-
-/// A token in a calc() expression.
-#[derive(Debug, Clone)]
-pub enum CalcToken {
-    /// Absolute length in points.
-    Length(f32),
-    /// Percentage value (0-100).
-    Percent(f32),
-    /// Value in em units.
-    Em(f32),
-    /// Value in rem units.
-    Rem(f32),
-    /// Value in vw units.
-    Vw(f32),
-    /// Value in vh units.
-    Vh(f32),
-    /// Value in vmin units (1% of the smaller viewport axis).
-    Vmin(f32),
-    /// Value in vmax units (1% of the larger viewport axis).
-    Vmax(f32),
-    /// An operator.
-    Op(CalcOp),
-}
-
 /// A specified CSS color before `currentColor` has been bound to a used
 /// foreground color.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,6 +98,8 @@ impl From<Color> for SpecifiedColor {
 #[derive(Debug, Clone)]
 pub enum CssValue {
     Length(f32),
+    /// Font-relative `<length>` in `em` units.
+    Em(f32),
     Color(SpecifiedColor),
     Keyword(String),
     Number(f32),
@@ -150,12 +122,8 @@ pub enum CssValue {
     Vmin(f32),
     /// Percentage of the larger viewport axis (css-values-4 §6.1.2.2).
     Vmax(f32),
-    /// A calc() expression as a list of tokens.
-    Calc(Vec<CalcToken>),
-    /// A clamp(min, preferred, max) expression. Each operand is itself a
-    /// length-like value (length, percentage, calc, …) resolved lazily so the
-    /// percentage basis is known. Resolves to `max(min, min(preferred, max))`.
-    Clamp(Box<CssValue>, Box<CssValue>, Box<CssValue>),
+    /// Grammar-checked CSS math with a `<length-percentage>` result type.
+    Math(CssMathExpression),
     /// A var() reference: (variable_name, optional_fallback).
     Var(String, Option<String>),
     /// Ordered, typed sources from a comma-separated `background-image` value.

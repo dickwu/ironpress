@@ -6,6 +6,7 @@
 
 mod container;
 mod flex;
+mod fragmentation;
 mod grid;
 mod media;
 mod metadata;
@@ -21,7 +22,8 @@ mod text;
 
 pub(crate) use container::Container;
 pub(crate) use flex::{FlexContent, FlexRow};
-pub(crate) use grid::{GridContent, GridRow};
+pub(crate) use fragmentation::*;
+pub(crate) use grid::{GridContent, GridRow, GridRowStartSpace};
 pub(crate) use media::{Image, ImagePaint, ImageSampling, ReplacedGeometry, Svg, SvgPaint};
 pub(crate) use metadata::{AvoidPageBreak, NamedString, PageBreak, RunningElement};
 pub(crate) use misc::{ColumnRule, HorizontalRule, MathBlock, ProgressBar, ProgressColors};
@@ -112,8 +114,38 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
+    /// A box whose recursive in-flow renderer can paint decoration and
+    /// contents in separate CSS stacking phases.
+    fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        None
+    }
+
     fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {
         None
+    }
+
+    fn fragment_start_spacing_mut(&mut self) -> Option<&mut dyn FragmentStartSpacing> {
+        None
+    }
+
+    /// Suppress formatting-context spacing at the start of this fragment.
+    ///
+    /// Wrapper boxes forward the transition through their first child only:
+    /// fragmentation preserves the nested formatting hierarchy, and a gutter
+    /// later in the child list is not at the fragment boundary. Concrete boxes
+    /// that own suppressible spacing expose [`FragmentStartSpacing`] above.
+    fn suppress_first_fragment_spacing(&mut self) {
+        if let Some(spacing) = self.fragment_start_spacing_mut() {
+            spacing.suppress_at_fragment_start();
+            return;
+        }
+        let mut is_first_child = true;
+        self.visit_child_nodes_mut(&mut |child| {
+            if is_first_child {
+                is_first_child = false;
+                child.suppress_first_fragment_spacing();
+            }
+        });
     }
 
     fn box_fragmentation_owner(&self) -> Option<&dyn BoxFragmentationOwner> {
@@ -300,8 +332,16 @@ impl LayoutElement for LayoutNode {
         self.as_ref().box_paint_owner()
     }
 
+    fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        self.as_ref().in_flow_paint_phase_owner()
+    }
+
     fn block_fragmentation_source(&self) -> Option<&dyn BlockFragmentationSource> {
         self.as_ref().block_fragmentation_source()
+    }
+
+    fn fragment_start_spacing_mut(&mut self) -> Option<&mut dyn FragmentStartSpacing> {
+        self.as_mut().fragment_start_spacing_mut()
     }
 
     fn box_fragmentation_owner(&self) -> Option<&dyn BoxFragmentationOwner> {
@@ -435,6 +475,21 @@ pub(crate) trait PaintGroupOwner {
 pub(crate) trait BoxPaintOwner {
     fn box_paint(&self) -> &BoxPaint;
     fn box_paint_mut(&mut self) -> &mut BoxPaint;
+
+    /// Whether this box can expose its decoration and descendant-content paint
+    /// as separate stacking fragments without changing group compositing.
+    ///
+    /// CSS paints in-flow block decorations below inline-level content. A
+    /// transform, opacity/mask group, flattened background, or retained filter
+    /// must remain atomic, while an ordinary box can participate in those two
+    /// phases at any depth in the layout tree.
+    fn supports_phased_paint(&self) -> bool {
+        let paint = self.box_paint();
+        paint.group.is_identity()
+            && paint.background.layers.blur_radius == 0.0
+            && paint.background.layers.clip != crate::style::computed::BackgroundClip::Text
+            && paint.filter.is_none()
+    }
 }
 
 impl<T: BoxPaintOwner + ?Sized> PaintGroupOwner for T {
@@ -468,6 +523,12 @@ pub(crate) trait BoxFragmentationOwner {
     fn fragmentation_box_model(&self) -> &BoxModel;
     fn box_fragmentation(&self) -> &BoxFragmentation;
     fn box_fragmentation_mut(&mut self) -> &mut BoxFragmentation;
+}
+
+/// Formatting-context spacing that is present between siblings but disappears
+/// when the later sibling begins a new fragmentainer.
+pub(crate) trait FragmentStartSpacing {
+    fn suppress_at_fragment_start(&mut self);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

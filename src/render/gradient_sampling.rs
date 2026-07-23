@@ -70,7 +70,7 @@ mod tests {
             angle: 90.0,
             ramp: GradientRamp {
                 stops: vec![
-                    GradientStop::new(color(Color::BLACK), Some(GradientPosition::ZERO)),
+                    GradientStop::new(color(Color::BLACK), Some(GradientPosition::default())),
                     GradientStop::new(color(Color::WHITE), Some(GradientPosition::fraction(1.0))),
                 ],
                 ..Default::default()

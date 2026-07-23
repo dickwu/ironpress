@@ -1,5 +1,6 @@
 use super::*;
 use crate::layout::elements::{LayoutElementTestExt, LayoutNode};
+use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 #[cfg(test)]
 pub(in crate::render::pdf) fn table_row_total_height(row: &dyn LayoutElement) -> f32 {
@@ -75,7 +76,11 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         return;
     }
 
-    let background_clip = geometry.background_clip_box(block.background_clip, block.border_radii);
+    let background_clip = geometry.background_paint_box(
+        block.background_clip,
+        block.border_radii,
+        BackgroundBorderPaint::fallback(&block.border),
+    );
 
     if let Some(color) = block.background_color {
         let (r, g, b) = color.to_f32_rgb();
@@ -254,7 +259,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                             BoxGeometry::from_layout(
                                 PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
                                 &cell.layout.box_model.border,
-                                cell.layout.box_model.content_insets,
+                                cell.layout.box_model.padding(),
                             )
                             .for_fragment(Default::default()),
                             &cell.layout.box_model.border,
@@ -264,6 +269,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                         );
                     }
 
+                    let abs_origins = HashMap::new();
                     render_cell_content(
                         content,
                         &cell.layout,
@@ -271,6 +277,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                             .with_baseline_shift(
                                 baseline_shifts.get(cell_idx).copied().unwrap_or(0.0),
                             ),
+                        &abs_origins,
                         ctx,
                     );
 

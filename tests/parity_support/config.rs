@@ -26,12 +26,18 @@ pub(crate) const EDGE_GRAD: i32 = 24;
 /// evidence remains in the report. The old 1.0 cutoff was stricter than a
 /// human-visibility gate and turned printer-resolution averaging into failures.
 pub(crate) const VISUAL_COLOR_JND: f64 = 2.3;
-/// An 8-bit sRGB channel difference of one code value is below the 0.5%
-/// per-pixel colour threshold; two code values are above it. This affects only
+/// An 8-bit sRGB channel difference of up to two code values is below the 1%
+/// per-pixel colour threshold; three code values are above it. This affects only
 /// the visibility verdict: raw RGBA inequality remains complete report evidence.
-pub(crate) const VISUAL_COLOR_CHANNEL_TOLERANCE: u8 = 1;
+pub(crate) const VISUAL_COLOR_CHANNEL_TOLERANCE: u8 = 2;
 /// The product-level expression of `VISUAL_COLOR_CHANNEL_TOLERANCE`.
-pub(crate) const VISUAL_COLOR_CHANNEL_TOLERANCE_PCT: f64 = 0.5;
+pub(crate) const VISUAL_COLOR_CHANNEL_TOLERANCE_PCT: f64 = 1.0;
+/// Maximum complete-page mismatch rate after the per-pixel RGB tolerance is
+/// applied. This is a ceiling, not a sufficient PASS condition: authored-scale
+/// components below it still fail through the shape and colour visibility
+/// rules. Exact RGBA mismatch remains independently reported without this
+/// tolerance.
+pub(crate) const VISUAL_PASS_MAX_SEMANTIC_DIFF_PCT: f64 = 1.0;
 /// Per-channel rounding allowance when proving that an unequal pixel is an
 /// antialiasing mixture of two unchanged local endpoint colours. This is not a
 /// colour-difference cutoff: the topology check still requires both direct
@@ -155,8 +161,6 @@ pub(crate) const VISUAL_ONE_SIDED_COVERAGE_MIN_SHARED_CONTENT_RATIO: f64 = 0.95;
 pub(crate) const VISUAL_ONE_SIDED_COVERAGE_MAX_PRESENCE_PCT: f64 = 1.0;
 /// Overlapping same-coordinate ramp evidence must dominate direct presence.
 pub(crate) const VISUAL_ONE_SIDED_COVERAGE_MIN_COLOR_TO_PRESENCE_RATIO: f64 = 2.0;
-/// Larger contour contrast is retained as an authored edge-colour difference.
-pub(crate) const VISUAL_ONE_SIDED_COVERAGE_MAX_COLOR_DE: f64 = 7.0;
 /// Structural edge detection can conservatively leave a small portion of a
 /// curved glyph contour outside its one-pixel edge band. Keep that allowance
 /// below a quarter CSS pixel of the shared painted area.

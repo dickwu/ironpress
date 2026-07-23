@@ -1,5 +1,25 @@
 [
   {
+    "id": "interactions-gradients-transforms-pattern-space-red-team",
+    "category": "interactions",
+    "feature": "background-gradients-and-transforms",
+    "subfeature": "pattern-space-through-transformed-ancestors",
+    "description": "Large hard-stop linear, radial, and conic gradients each paint directly on a transformed box and through a transformed ancestor. A page-axis-anchored PDF pattern produces unmistakably rotated color boundaries even when the box clip and border transform correctly.",
+    "file": "cases/interactions/interactions-gradients-transforms-pattern-space-red-team.html",
+    "interaction_of": [
+      "backgrounds-gradients",
+      "transforms"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-positioning-absolute-x-box-model-padding",
     "category": "interactions",
     "feature": "containing-block",
@@ -7000,5 +7020,89 @@
       "probe-fill-box",
       "probe-border-box"
     ]
+  },
+  {
+    "id": "interactions-z-index-core-layers",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "core-layers-and-descendant-escape",
+    "description": "Flagrant overlaps cover positive and negative layers, auto/zero tree order, and a positive positioned descendant escaping an ordinary ancestor.",
+    "file": "cases/interactions/interactions-z-index-core-layers.html",
+    "interaction_of": ["positioning", "backgrounds-borders"],
+    "base_ids": ["positioning-z-index-stacking", "positioning-z-index-negative-behind-flow"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "interactions-z-index-context-boundaries",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "atomic-stacking-context-triggers",
+    "description": "Large overlaps distinguish descendant escape from atomic contexts created by integer z-index, fixed, sticky, opacity, transforms, perspective, filters, isolation, blending, and masking.",
+    "file": "cases/interactions/interactions-z-index-context-boundaries.html",
+    "interaction_of": ["positioning", "effects", "filters", "transforms", "clip-mask"],
+    "base_ids": ["positioning-z-index-stacking"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "interactions-z-index-flex-grid-items",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "static-flex-grid-items-and-order",
+    "description": "Flagrant flex and grid overlaps cover static integer z-index, order-modified painting, and atomic item contexts containing high-z descendants.",
+    "file": "cases/interactions/interactions-z-index-flex-grid-items.html",
+    "interaction_of": ["positioning", "flexbox", "grid"],
+    "base_ids": ["flexbox-z-index-static", "grid-overlap-z-index"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "interactions-z-index-generated-replaced-svg",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "generated-pseudo-raster-vector-content",
+    "description": "Large overlaps cover before/after pseudo-elements, generated PNG and SVG content, PNG and JPEG replaced elements, SVG images, and inline SVG paint order.",
+    "file": "cases/interactions/interactions-z-index-generated-replaced-svg.html",
+    "interaction_of": ["positioning", "generated-content", "images-replaced"],
+    "base_ids": ["positioning-z-index-stacking"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "interactions-grid-fragmentation-raster-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-raster",
+    "description": "A certificate-like fragmented fit-content grid has one huge raster corner tile that must paint only in its correct fragment while every flattened row and final marker survives.",
+    "file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",
+    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
+    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
+  },
+  {
+    "id": "interactions-grid-fragmentation-svg-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-svg",
+    "description": "SVG counterpart to the certificate raster stress case: one huge vector emblem must not be repainted on continuation pages, and all flattened grid rows remain visible.",
+    "file": "cases/interactions/interactions-grid-fragmentation-svg-background-single-owner.html",
+    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
+    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid", "svg-as-img"],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-block-flow"]
   }
 ]

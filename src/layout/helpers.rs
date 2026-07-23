@@ -1817,31 +1817,75 @@ pub(crate) fn append_pseudo_inline_run(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Geometry and document resources shared by generated block boxes.
+///
+/// Pseudo-elements are boxes in the originating element's formatting context,
+/// not independent DOM nodes. Keeping their containing block and resource
+/// resolution together prevents formatting-context-specific paths from
+/// silently dropping properties such as SVG/CSS filters.
+#[derive(Clone, Copy)]
+pub(crate) struct PseudoBoxContext<'a> {
+    available_width: f32,
+    fonts: &'a HashMap<String, TtfFont>,
+    filter_defs: &'a HashMap<String, ElementNode>,
+    containing_block: Option<ContainingBlock>,
+    positioned_ancestor_depth: usize,
+}
+
+impl<'a> PseudoBoxContext<'a> {
+    pub(crate) const fn new(
+        available_width: f32,
+        fonts: &'a HashMap<String, TtfFont>,
+        filter_defs: &'a HashMap<String, ElementNode>,
+    ) -> Self {
+        Self {
+            available_width,
+            fonts,
+            filter_defs,
+            containing_block: None,
+            positioned_ancestor_depth: 0,
+        }
+    }
+
+    pub(crate) const fn with_containing_block(
+        self,
+        containing_block: Option<ContainingBlock>,
+    ) -> Self {
+        Self {
+            containing_block,
+            ..self
+        }
+    }
+
+    pub(crate) const fn with_positioned_ancestor_depth(
+        self,
+        positioned_ancestor_depth: usize,
+    ) -> Self {
+        Self {
+            positioned_ancestor_depth,
+            ..self
+        }
+    }
+}
+
 pub(crate) fn push_block_pseudo(
     output: &mut Vec<LayoutNode>,
     pseudo_style: Option<&ComputedStyle>,
     el: &ElementNode,
-    available_width: f32,
-    fonts: &HashMap<String, TtfFont>,
-    containing_block_info: Option<ContainingBlock>,
-    positioned_ancestor_depth: usize,
+    context: PseudoBoxContext<'_>,
     counter_state: &mut CounterState,
 ) {
     if let Some(pseudo_style) = pseudo_style {
         if pseudo_is_block_like(pseudo_style) {
-            let pseudo_cb = if pseudo_style.position.is_absolute() {
-                containing_block_info
+            let context = if pseudo_style.position.is_absolute() {
+                context
             } else {
-                None
+                context.with_containing_block(None)
             };
             output.push(build_pseudo_block(
                 pseudo_style,
                 el,
-                available_width,
-                fonts,
-                pseudo_cb,
-                positioned_ancestor_depth,
+                context,
                 counter_state,
                 false,
             ));
@@ -1851,17 +1895,27 @@ pub(crate) fn push_block_pseudo(
 
 /// Build a [`TextBlock`] for a `::before` or `::after` pseudo-element.
 /// that uses `display: block` (or `position: absolute`).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pseudo_block(
     pseudo_style: &ComputedStyle,
     el: &ElementNode,
-    available_width: f32,
-    fonts: &HashMap<String, TtfFont>,
-    containing_block_info: Option<ContainingBlock>,
-    positioned_ancestor_depth: usize,
+    context: PseudoBoxContext<'_>,
     counter_state: &mut CounterState,
     list_item_marker: bool,
 ) -> LayoutNode {
+    let PseudoBoxContext {
+        available_width,
+        fonts,
+        filter_defs,
+        containing_block: containing_block_info,
+        positioned_ancestor_depth,
+    } = context;
+    // Generated boxes do not pass through `flatten_element`, so resolve their
+    // filter list here before constructing paint state. The resolved filter is
+    // retained on the semantic box and materialized only after fragmentation,
+    // exactly like an ordinary element's filter.
+    let mut pseudo_style = pseudo_style.clone();
+    let filter = crate::layout::filter::ResolvedFilter::from_style(&mut pseudo_style, filter_defs);
+    let pseudo_style = &pseudo_style;
     let content_text = resolve_content_with_quotes(
         &pseudo_style.content,
         &el.attributes,
@@ -2093,6 +2147,27 @@ pub(crate) fn build_pseudo_block(
         )
     };
 
+    let mut paint = BoxPaint {
+        background: BackgroundPaint {
+            color: pseudo_style.background_color,
+            layers: background_layers,
+            blend_mode: pseudo_style.background_blend_mode,
+        },
+        border_radii: pseudo_style.resolve_corner_radii(border_box_width, border_box_height),
+        shadows: pseudo_style.box_shadow.clone(),
+        outline: OutlinePaint {
+            width: pseudo_style.outline_width,
+            color: pseudo_style.outline_color,
+            offset: pseudo_style.outline_offset,
+        },
+        group: crate::layout::elements::PaintGroup::from_style(pseudo_style),
+        visible: pseudo_style.visibility == Visibility::Visible,
+        ..BoxPaint::default()
+    };
+    if filter.has_composited_output() {
+        paint.filter = Some(filter);
+    }
+
     TextBlock {
         lines,
         box_model: BoxModel {
@@ -2104,23 +2179,7 @@ pub(crate) fn build_pseudo_block(
             padding: pseudo_style.padding,
             border,
         },
-        paint: BoxPaint {
-            background: BackgroundPaint {
-                color: pseudo_style.background_color,
-                layers: background_layers,
-                blend_mode: pseudo_style.background_blend_mode,
-            },
-            border_radii: pseudo_style.resolve_corner_radii(border_box_width, border_box_height),
-            shadows: pseudo_style.box_shadow.clone(),
-            outline: OutlinePaint {
-                width: pseudo_style.outline_width,
-                color: pseudo_style.outline_color,
-                offset: pseudo_style.outline_offset,
-            },
-            group: crate::layout::elements::PaintGroup::from_style(pseudo_style),
-            visible: pseudo_style.visibility == Visibility::Visible,
-            ..BoxPaint::default()
-        },
+        paint,
         flow: BlockFlow {
             float: pseudo_style.float,
             clear: pseudo_style.clear,
@@ -2661,6 +2720,30 @@ pub(crate) fn patch_absolute_children_containing_block(
         if let Some(consumer) = element.containing_block_consumer_mut() {
             consumer.attach_missing_containing_block(cb);
         }
+    }
+}
+
+/// Attach one finalized containing block throughout a formatting-context
+/// subtree.
+///
+/// Specialized box-tree builders such as tables can only know their principal
+/// extent after track layout. Their descendants are deliberately left
+/// unresolved during construction, then completed in one recursive pass here.
+/// Nodes that already resolved against a nearer containing block retain it via
+/// [`ContainingBlockConsumer::attach_missing_containing_block`].
+pub(crate) fn patch_absolute_descendants_containing_block(
+    elements: &mut [LayoutNode],
+    containing_block: ContainingBlock,
+) {
+    fn patch(element: &mut LayoutNode, containing_block: ContainingBlock) {
+        if let Some(consumer) = element.containing_block_consumer_mut() {
+            consumer.attach_missing_containing_block(containing_block);
+        }
+        element.visit_child_nodes_mut(&mut |child| patch(child, containing_block));
+    }
+
+    for element in elements {
+        patch(element, containing_block);
     }
 }
 

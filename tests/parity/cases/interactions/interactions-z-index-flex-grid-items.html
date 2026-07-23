@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>z-index flex and grid item painting</title>
+<style>
+@page { size: 1040px 184px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1040px; height: 184px; background: #fff; }
+.panel {
+  position: absolute;
+  z-index: 0;
+  top: 16px;
+  width: 160px;
+  height: 152px;
+  overflow: hidden;
+  padding: 18px;
+  border: 4px solid #111827;
+  background: #e5e7eb;
+}
+.p1 { left: 16px; }
+.p2 { left: 184px; }
+.p3 { left: 352px; }
+.p4 { left: 520px; }
+.p5 { left: 688px; }
+.p6 { left: 856px; }
+.flex { display: flex; align-items: flex-start; }
+.grid { display: grid; grid-template: 108px / 108px; }
+.item { flex: 0 0 96px; width: 96px; height: 96px; }
+.red { background: #ef233c; }
+.blue { background: #2563eb; }
+.flex .item + .item { margin-left: -64px; }
+.flex-z .red, .grid-z .red { z-index: 3; }
+.flex-z .blue, .grid-z .blue { z-index: 1; }
+.flex-order .red, .grid-order .red { order: 2; }
+.flex-order .blue, .grid-order .blue { order: 1; }
+.grid .item { grid-area: 1 / 1; }
+.grid .blue { margin-left: 32px; margin-top: 32px; }
+.grid-order .red { margin-left: 32px; margin-top: 32px; }
+.grid-order .blue { margin: 0; }
+.trap { position: relative; z-index: 0; }
+.trap > .red { position: absolute; z-index: 100; left: 12px; top: 12px; width: 88px; height: 88px; }
+.flex-trap > .blue, .grid-trap > .blue { z-index: 1; }
+</style>
+</head>
+<body>
+<section class="panel p1 flex flex-z"><div class="item red"></div><div class="item blue"></div></section>
+<section class="panel p2 flex flex-order"><div class="item red"></div><div class="item blue"></div></section>
+<section class="panel p3 flex flex-trap"><div class="item trap"><div class="red"></div></div><div class="item blue"></div></section>
+<section class="panel p4 grid grid-z"><div class="item red"></div><div class="item blue"></div></section>
+<section class="panel p5 grid grid-order"><div class="item red"></div><div class="item blue"></div></section>
+<section class="panel p6 grid grid-trap"><div class="item trap"><div class="red"></div></div><div class="item blue"></div></section>
+</body>
+</html>

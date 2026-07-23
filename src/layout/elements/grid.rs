@@ -1,7 +1,7 @@
 use super::LayoutNode;
 use super::{
-    BlockFlowParticipant, ChildContainer, InlineFlowExtent, LayoutElement, LayoutVisitor,
-    LayoutVisitorMut,
+    BlockFlowParticipant, ChildContainer, FragmentStartSpacing, InlineFlowExtent, LayoutElement,
+    LayoutVisitor, LayoutVisitorMut,
 };
 use crate::layout::cells::GridCell;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -18,6 +18,23 @@ pub(crate) struct GridContent {
 pub(crate) struct GridRow {
     pub(crate) content: GridContent,
     pub(crate) box_model: super::BoxModel,
+    pub(crate) start_space: GridRowStartSpace,
+}
+
+/// Provenance of a grid row's leading track-space contribution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum GridRowStartSpace {
+    #[default]
+    Alignment,
+    Gutter,
+}
+
+impl FragmentStartSpacing for GridRow {
+    fn suppress_at_fragment_start(&mut self) {
+        if self.start_space == GridRowStartSpace::Gutter {
+            self.box_model.margins.start = 0.0;
+        }
+    }
 }
 
 impl MarginHolder for GridRow {
@@ -116,6 +133,10 @@ impl LayoutElement for GridRow {
     }
 
     fn block_flow_participant_mut(&mut self) -> Option<&mut dyn BlockFlowParticipant> {
+        Some(self)
+    }
+
+    fn fragment_start_spacing_mut(&mut self) -> Option<&mut dyn FragmentStartSpacing> {
         Some(self)
     }
 

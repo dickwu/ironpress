@@ -9,8 +9,8 @@ use crate::style::computed::{
     CounterStyleSystem, Display, FontFamily, FontStyle, FontVariantPosition, FontWeight,
     FootnoteFormatting, ListStylePosition, ListStyleType, PercentageBasis, TARGET_PLACEHOLDER_END,
     TARGET_PLACEHOLDER_START, TextAlign, Transform, VerticalAlign, WritingMode,
-    apply_style_map_with_font_metrics, compute_pseudo_element_style_with_font_metrics,
-    compute_style_with_context, compute_style_with_context_and_percentage_basis_with_font_metrics,
+    compute_pseudo_element_style_with_font_metrics, compute_style_with_context,
+    compute_style_with_context_and_percentage_basis_with_font_metrics,
     compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
@@ -29,10 +29,10 @@ pub use super::cells::{GridCell, TableCell};
 pub(crate) use super::elements::{
     AvoidPageBreak, BackgroundBoxGeometry, BoxFragmentation, BoxModel, BoxPaint, Container,
     FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
-    LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, MathBlock, NamedString,
-    PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedGeometry, RunningElement, Svg,
-    SvgPaint, TableRow, TextBlock, TextBlockStyle, TextFragmentation, TextSemantics, TextSpacing,
-    visit_layout_tree, visit_layout_tree_mut,
+    LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, LineFragmentation,
+    MathBlock, NamedString, PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedGeometry,
+    RunningElement, Svg, SvgPaint, TableRow, TextBlock, TextBlockStyle, TextFragmentation,
+    TextSemantics, TextSpacing, visit_layout_tree, visit_layout_tree_mut,
 };
 use super::flex::layout_flex_container;
 pub(crate) use super::flow_metrics::BlockMargins;
@@ -46,10 +46,14 @@ use super::inline_formatting::{
     AtomicInlineKind, InlineContentSequence, InlineFormattingContext, InlineFormattingRole,
 };
 use super::print_scale::{PrintContentScale, assign_page_print_scales};
+use super::root_formatting::{DocumentRootStyles, RootFormattingContext};
 pub(crate) use super::table::cell_box_intrinsic_content_height;
-use super::table::{anonymous_table_box_style, anonymous_table_from_cells, flatten_table};
+use super::table::{
+    TableLayoutContext, anonymous_table_box_style, anonymous_table_from_cells, flatten_table,
+};
 pub(crate) use super::traversal::{
-    ElementLayoutContext, ElementSiblingContext, FilterApplication, LayoutTreeContext,
+    ElementLayoutContext, ElementSiblingContext, ElementSiblingPosition, FilterApplication,
+    LayoutTreeContext,
 };
 
 #[cfg(test)]
@@ -90,6 +94,22 @@ impl LayoutBorderSide {
     /// PDF border operation.
     pub fn same_paint(&self, other: &Self) -> bool {
         self.width == other.width && self.color == other.color && self.style == other.style
+    }
+
+    /// Inset that an opaque, continuous side safely covers from its outer
+    /// edge toward the padding box.
+    ///
+    /// A border-box background remains conceptually painted below the border,
+    /// but independently antialiasing both paints at the same outer contour
+    /// lets the background leak through the border's fractional coverage.
+    /// Keeping the background through the border centerline preserves its
+    /// complete CSS-visible area while giving that contour one paint owner.
+    pub fn opaque_solid_centerline_inset(&self) -> f32 {
+        (self.paints()
+            && self.style == crate::style::computed::BorderStyle::Solid
+            && self.color.alpha() == 1.0)
+            .then_some(self.width * 0.5)
+            .unwrap_or_default()
     }
 }
 
@@ -189,6 +209,13 @@ impl PhysicalEdges<LayoutBorderSide> {
             self.bottom.width,
             self.left.width,
         )
+    }
+
+    /// Per-edge background guard supplied by continuous opaque border paint.
+    /// Missing fragment edges and patterned/translucent sides stay at zero so
+    /// their background remains visible all the way to the authored edge.
+    pub fn opaque_solid_centerline_insets(&self) -> EdgeSizes {
+        self.map(|side| side.opaque_solid_centerline_inset())
     }
     /// Largest used width among the four sides.
     pub fn max_width(&self) -> f32 {
@@ -541,6 +568,7 @@ impl FlexItemFragmentation {
             block_size: FlexItemBlockSize::Definite,
             box_fragmentation: BoxFragmentation {
                 decoration: crate::style::computed::BoxDecorationBreak::Slice,
+                inside: crate::layout::elements::FragmentBreakAvoidance::Auto,
                 content_role: super::elements::PageContentRole::MainFlow,
                 reference_slice: None,
             },
@@ -556,10 +584,7 @@ impl FlexItemFragmentation {
         };
         Self {
             block_size,
-            box_fragmentation: BoxFragmentation {
-                decoration: style.box_decoration_break,
-                ..Default::default()
-            },
+            box_fragmentation: BoxFragmentation::from_style(style),
             fragment_block_extent: None,
         }
     }
@@ -1499,6 +1524,42 @@ pub struct Page {
     pub is_blank: bool,
 }
 
+/// Page geometry at the document-layout boundary.
+///
+/// `content_margin` includes projected body margin/padding used to position
+/// normal flow. `initial_containing_block` is the CSS page area before those
+/// body-owned gutters are applied; viewport units must resolve against this
+/// stable page-area size rather than against an element's content box.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DocumentGeometry {
+    page_size: PageSize,
+    content_margin: Margin,
+    initial_containing_block: Size,
+}
+
+impl DocumentGeometry {
+    pub(crate) fn new(page_size: PageSize, content_margin: Margin) -> Self {
+        Self {
+            page_size,
+            content_margin,
+            initial_containing_block: Size::new(
+                page_size.width - content_margin.horizontal(),
+                page_size.height - content_margin.top - content_margin.bottom,
+            ),
+        }
+    }
+
+    pub(crate) const fn with_initial_containing_block(
+        self,
+        initial_containing_block: Size,
+    ) -> Self {
+        Self {
+            initial_containing_block,
+            ..self
+        }
+    }
+}
+
 /// Lay out the DOM nodes into pages.
 #[allow(dead_code)]
 pub fn layout(nodes: &[DomNode], page_size: PageSize, margin: Margin) -> Vec<Page> {
@@ -1818,8 +1879,7 @@ pub fn layout_with_rules_and_fonts(
 ) -> Vec<Page> {
     layout_with_rules_and_fonts_raster_quality(
         nodes,
-        page_size,
-        margin,
+        DocumentGeometry::new(page_size, margin),
         rules,
         custom_fonts,
         page_background,
@@ -1834,8 +1894,7 @@ pub fn layout_with_rules_and_fonts(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     nodes: &[DomNode],
-    page_size: PageSize,
-    margin: Margin,
+    geometry: DocumentGeometry,
     rules: &[CssRule],
     custom_fonts: &HashMap<String, TtfFont>,
     page_background: Option<&ComputedStyle>,
@@ -1843,52 +1902,28 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     page_margin_overrides: super::paginate::PageMarginOverrides,
     raster_quality: crate::style::raster_quality::RasterQuality,
 ) -> Vec<Page> {
+    let DocumentGeometry {
+        page_size,
+        content_margin: margin,
+        initial_containing_block,
+    } = geometry;
     let raster_quality = raster_quality.normalized();
     let font_metrics = FontMetrics::new(custom_fonts);
     let document_svg_defs = crate::parser::svg::collect_document_svg_defs(nodes);
-    // Apply body/html/:root rules to the root style so that inherited root
-    // properties still take effect even though the HTML parser unwraps the
-    // <html>/<body> elements before layout.
-    let mut parent_style = ComputedStyle::with_raster_quality(raster_quality);
-    let mut html_style = ComputedStyle::with_raster_quality(raster_quality);
-    let mut body_style = ComputedStyle::with_raster_quality(raster_quality);
-    let default_parent = ComputedStyle::with_raster_quality(raster_quality);
-    for rule in rules {
-        let sel = rule.selector.trim();
-        if sel == "body" || sel == "html" || sel == ":root" {
-            apply_style_map_with_font_metrics(
-                &mut parent_style,
-                &rule.declarations,
-                &default_parent,
-                font_metrics,
-            );
-        }
-        if sel == "html" || sel == ":root" {
-            apply_style_map_with_font_metrics(
-                &mut html_style,
-                &rule.declarations,
-                &default_parent,
-                font_metrics,
-            );
-        }
-        if sel == "body" {
-            apply_style_map_with_font_metrics(
-                &mut body_style,
-                &rule.declarations,
-                &default_parent,
-                font_metrics,
-            );
-        }
-    }
     let available_width = page_size.width - margin.horizontal();
     let content_height = page_size.height - margin.top - margin.bottom;
+    let root_styles = DocumentRootStyles::resolve(
+        nodes,
+        rules,
+        raster_quality,
+        initial_containing_block.width,
+        initial_containing_block.height,
+        font_metrics,
+    );
+    let html_style = root_styles.html;
+    let body_style = root_styles.body;
+    let mut parent_style = body_style.clone();
     parent_style.width = Some(available_width);
-    parent_style.root_font_size = parent_style.font_size;
-    // Chrome resolves vw/vh against the printable CONTENT area (page minus
-    // margins), not the full page size. Use the available content
-    // width/height already computed above so 1vw == 1% of content width.
-    parent_style.viewport_width = available_width;
-    parent_style.viewport_height = content_height;
 
     // First, flatten DOM into layout elements
     let mut elements = Vec::new();
@@ -1992,8 +2027,8 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     counter_state.apply_increments(&parent_style.counter_increment);
     let root_ctx = LayoutContext {
         viewport: Viewport {
-            width: available_width,
-            height: content_height,
+            width: initial_containing_block.width,
+            height: initial_containing_block.height,
         },
         parent: ParentBox {
             content_width: available_width,
@@ -2017,12 +2052,41 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         filter_defs: &filter_defs,
         filter_dpi: raster_quality.filter_dpi,
     };
-    flatten_nodes(
-        nodes,
-        LayoutTreeContext::new(&parent_style, &root_ctx, &ancestors),
-        &mut elements,
-        &mut env,
-    );
+    if let Some(root) =
+        RootFormattingContext::from_projected_body(nodes, &body_style, available_width)
+    {
+        let root_ancestors = root.descendant_ancestors();
+        if root.style().display == Display::Flex {
+            layout_flex_container(
+                root.element(),
+                root.style(),
+                &root_ctx,
+                &mut elements,
+                &root_ancestors,
+                None,
+                None,
+                0,
+                &mut env,
+            );
+        } else {
+            layout_grid_container(
+                root.element(),
+                root.style(),
+                &root_ctx,
+                &mut elements,
+                &root_ancestors,
+                0,
+                &mut env,
+            );
+        }
+    } else {
+        flatten_nodes(
+            nodes,
+            LayoutTreeContext::new(&parent_style, &root_ctx, &ancestors),
+            &mut elements,
+            &mut env,
+        );
+    }
 
     // Then paginate. Pass the body/html margin-top (plus padding-top, which
     // acts as an additional inner gutter on page 1 when the body has padding)
@@ -2457,8 +2521,7 @@ fn build_running_element(
         paint,
         positioning: Positioning::default(),
         fragmentation: TextFragmentation {
-            orphans: style.orphans,
-            widows: style.widows,
+            lines: LineFragmentation::from_style(style),
             ..Default::default()
         },
         text: TextBlockStyle {
@@ -2956,6 +3019,7 @@ pub(crate) fn flatten_nodes(
         ancestors: &[AncestorInfo],
         child_index: usize,
         sibling_count: usize,
+        positioned_depth: usize,
         env: &mut LayoutEnv,
     ) {
         if group.is_empty() {
@@ -2969,13 +3033,10 @@ pub(crate) fn flatten_nodes(
         flatten_table(
             &table,
             &table_style,
-            ctx.available_width(),
             output,
-            ancestors,
-            child_index,
-            sibling_count,
             super::inline_formatting::GeneratedInlineContent::new(&table, None, None),
             env,
+            TableLayoutContext::new(ctx, ancestors, child_index, sibling_count, positioned_depth),
         );
     }
 
@@ -2992,6 +3053,7 @@ pub(crate) fn flatten_nodes(
                 ancestors,
                 element_index,
                 element_count,
+                positioned_ancestor_depth,
                 env,
             );
             flush_ib(&mut ib_group, parent_style, &ib_ctx, output, ancestors, env);
@@ -3047,6 +3109,7 @@ pub(crate) fn flatten_nodes(
                         ancestors,
                         element_index,
                         element_count,
+                        positioned_ancestor_depth,
                         env,
                     );
                     let mut text_runs = Vec::new();
@@ -3139,6 +3202,7 @@ pub(crate) fn flatten_nodes(
                         ancestors,
                         element_index,
                         element_count,
+                        positioned_ancestor_depth,
                         env,
                     );
                     flush_ib(&mut ib_group, parent_style, &ib_ctx, output, ancestors, env);
@@ -3168,6 +3232,7 @@ pub(crate) fn flatten_nodes(
                         ancestors,
                         element_index,
                         element_count,
+                        positioned_ancestor_depth,
                         env,
                     );
                     ib_group.push((el, pending_inline_space));
@@ -3181,6 +3246,7 @@ pub(crate) fn flatten_nodes(
                         ancestors,
                         element_index,
                         element_count,
+                        positioned_ancestor_depth,
                         env,
                     );
                     // Flush any pending inline-block group
@@ -3221,6 +3287,7 @@ pub(crate) fn flatten_nodes(
         ancestors,
         element_index,
         element_count,
+        positioned_ancestor_depth,
         env,
     );
     flush_ib(&mut ib_group, parent_style, &ib_ctx, output, ancestors, env);
@@ -3492,7 +3559,7 @@ pub(crate) fn flatten_element(
                             BlockMargins::new(style.margin.top, style.margin.bottom),
                             LayoutBorder::from_computed(&style.border, style.color),
                         ),
-                        positioning: Positioning::for_replaced(&style),
+                        positioning: Positioning::from_style(&style),
                         paint: SvgPaint {
                             background_color: style.background_color,
                             border_image: style.border_image.paint(),
@@ -4533,17 +4600,20 @@ pub(crate) fn flatten_element(
             flatten_table(
                 el,
                 &style,
-                available_width,
                 output,
-                ancestors,
-                child_index,
-                sibling_count,
                 super::inline_formatting::GeneratedInlineContent::new(
                     el,
                     before_style.as_ref(),
                     after_style.as_ref(),
                 ),
                 env,
+                TableLayoutContext::new(
+                    &layout_ctx,
+                    ancestors,
+                    child_index,
+                    sibling_count,
+                    positioned_depth,
+                ),
             );
             return;
         }
@@ -4803,8 +4873,7 @@ fn route_element(
                     TextBlock {
                         lines,
                         fragmentation: TextFragmentation {
-                            orphans: style.orphans,
-                            widows: style.widows,
+                            lines: LineFragmentation::from_style(style),
                             ..Default::default()
                         },
                         text: TextBlockStyle {
@@ -5049,7 +5118,7 @@ mod tests {
                         .iter()
                         .flat_map(|line| &line.runs)
                         .any(|run| run.text == "Body")
-                        .then(|| (*y, text.lines.clone()))
+                        .then(|| (*y, text.lines.clone(), text.box_model.margins))
                 })?
             })
             .expect("body text block");
@@ -5062,11 +5131,12 @@ mod tests {
                         .iter()
                         .flat_map(|line| &line.runs)
                         .any(|run| run.text == "following")
-                        .then_some(*y)
+                        .then_some((*y, text.box_model.margins))
                 })?
             })
             .expect("following text block");
-        let (body_y, lines) = body_block;
+        let (body_y, lines, body_margins) = body_block;
+        let (following_y, following_margins) = following_y;
         let text_height = lines.iter().map(|line| line.height).sum::<f32>();
         let call = lines[0]
             .runs
@@ -5074,7 +5144,10 @@ mod tests {
             .find(|run| run.link_url.is_some())
             .expect("footnote call run");
 
-        assert!((following_y - (body_y + text_height)).abs() < f32::EPSILON);
+        assert!(
+            (following_y - (body_y + text_height)).abs() < f32::EPSILON,
+            "following block starts at {following_y} with {following_margins:?}, body starts at {body_y}, has {text_height}pt of line boxes, and {body_margins:?}",
+        );
         assert!(
             (call.font_size - 7.2).abs() < 0.000_01,
             "explicit normal footnote call font size was {}",
@@ -5180,9 +5253,28 @@ mod tests {
             .flat_map(|line| line.runs)
             .map(|run| run.text)
             .collect::<String>();
+        let page_text = pages
+            .iter()
+            .map(|page| {
+                page.elements
+                    .iter()
+                    .filter_map(|(y, element)| {
+                        element.inspect_text(|text| {
+                            let value = text
+                                .lines
+                                .iter()
+                                .flat_map(|line| &line.runs)
+                                .map(|run| run.text.as_str())
+                                .collect::<String>();
+                            (!value.is_empty()).then_some((*y, value))
+                        })?
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         assert!(
             first_page_text.contains("p.2"),
-            "target page number was not resolved: {first_page_text:?}"
+            "target page number was not resolved: {first_page_text:?}; pages={page_text:?}"
         );
         assert!(
             !first_page_text.contains(TARGET_PLACEHOLDER_START),
@@ -5814,13 +5906,16 @@ mod tests {
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
         assert!(!pages[0].elements.is_empty());
-        pages[0].elements[0]
-            .1
-            .inspect_image(|image| {
-                assert_eq!(image.source.format, ImageFormat::Jpeg);
-                assert!((image.geometry.size.width - 75.0).abs() < 0.1); // 100px * 0.75
-                assert!((image.geometry.size.height - 60.0).abs() < 0.1); // 80px * 0.75
-                assert!(image.source.png_metadata.is_none());
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_image(|image| {
+                    assert_eq!(image.source.format, ImageFormat::Jpeg);
+                    assert!((image.geometry.size.width - 75.0).abs() < 0.1); // 100px * 0.75
+                    assert!((image.geometry.size.height - 60.0).abs() < 0.1); // 80px * 0.75
+                    assert!(image.source.png_metadata.is_none());
+                })
             })
             .expect("expected image layout element");
     }
@@ -5831,11 +5926,14 @@ mod tests {
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
-        pages[0].elements[0]
-            .1
-            .inspect_svg(|svg| {
-                assert!((svg.geometry.size.width - 300.0).abs() < 0.1);
-                assert!((svg.geometry.size.height - 150.0).abs() < 0.1);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_svg(|svg| {
+                    assert!((svg.geometry.size.width - 300.0).abs() < 0.1);
+                    assert!((svg.geometry.size.height - 150.0).abs() < 0.1);
+                })
             })
             .expect("expected SVG layout element");
     }
@@ -5846,11 +5944,14 @@ mod tests {
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
-        pages[0].elements[0]
-            .1
-            .inspect_svg(|svg| {
-                assert!((svg.geometry.size.width - 75.0).abs() < 0.1);
-                assert!((svg.geometry.size.height - 37.5).abs() < 0.1);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_svg(|svg| {
+                    assert!((svg.geometry.size.width - 75.0).abs() < 0.1);
+                    assert!((svg.geometry.size.height - 37.5).abs() < 0.1);
+                })
             })
             .expect("expected SVG layout element");
     }
@@ -5861,11 +5962,14 @@ mod tests {
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
-        pages[0].elements[0]
-            .1
-            .inspect_svg(|svg| {
-                assert!((svg.geometry.size.width - 40.0).abs() < 0.1);
-                assert!((svg.geometry.size.height - 20.0).abs() < 0.1);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_svg(|svg| {
+                    assert!((svg.geometry.size.width - 40.0).abs() < 0.1);
+                    assert!((svg.geometry.size.height - 20.0).abs() < 0.1);
+                })
             })
             .expect("expected SVG layout element");
     }
@@ -5876,11 +5980,14 @@ mod tests {
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
-        pages[0].elements[0]
-            .1
-            .inspect_svg(|svg| {
-                assert!((svg.geometry.size.width - 300.0).abs() < 0.1);
-                assert!((svg.geometry.size.height - 60.0).abs() < 0.1);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_svg(|svg| {
+                    assert!((svg.geometry.size.width - 300.0).abs() < 0.1);
+                    assert!((svg.geometry.size.height - 60.0).abs() < 0.1);
+                })
             })
             .expect("expected SVG layout element");
     }
@@ -5891,11 +5998,14 @@ mod tests {
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
-        pages[0].elements[0]
-            .1
-            .inspect_svg(|svg| {
-                assert!((svg.geometry.size.width - 250.0).abs() < 0.1);
-                assert!((svg.geometry.size.height - 50.0).abs() < 0.1);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_svg(|svg| {
+                    assert!((svg.geometry.size.width - 250.0).abs() < 0.1);
+                    assert!((svg.geometry.size.height - 50.0).abs() < 0.1);
+                })
             })
             .expect("expected SVG layout element");
     }
@@ -5909,7 +6019,7 @@ mod tests {
             .elements
             .iter()
             .find_map(|(_, element)| {
-                element.inspect_svg(|svg| {
+                element.find_svg(|svg| {
                     (
                         svg.tree.width,
                         svg.tree.height,
@@ -5934,13 +6044,16 @@ mod tests {
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert_eq!(pages.len(), 1);
         assert!(!pages[0].elements.is_empty());
-        pages[0].elements[0]
-            .1
-            .inspect_image(|image| {
-                assert_eq!(image.source.format, ImageFormat::Png);
-                let meta = image.source.png_metadata.as_ref().unwrap();
-                assert_eq!(meta.channels, 3); // RGB
-                assert_eq!(meta.bit_depth, 8);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_image(|image| {
+                    assert_eq!(image.source.format, ImageFormat::Png);
+                    let meta = image.source.png_metadata.as_ref().unwrap();
+                    assert_eq!(meta.channels, 3); // RGB
+                    assert_eq!(meta.bit_depth, 8);
+                })
             })
             .expect("expected image layout element");
     }
@@ -5953,11 +6066,14 @@ mod tests {
         let nodes = parse_html(&html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         assert!(!pages[0].elements.is_empty());
-        pages[0].elements[0]
-            .1
-            .inspect_image(|image| {
-                assert!(image.geometry.size.width > 0.0);
-                assert!(image.geometry.size.height > 0.0);
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_image(|image| {
+                    assert!(image.geometry.size.width > 0.0);
+                    assert!(image.geometry.size.height > 0.0);
+                })
             })
             .expect("expected image layout element");
     }
@@ -5970,7 +6086,10 @@ mod tests {
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         // No image element should be produced
         assert!(
-            pages[0].elements.is_empty() || pages[0].elements[0].1.inspect_image(|_| ()).is_none()
+            pages[0]
+                .elements
+                .iter()
+                .all(|(_, element)| element.find_image(|_| ()).is_none())
         );
     }
 
@@ -5983,14 +6102,17 @@ mod tests {
         let margin_val = Margin::default();
         let available_width = page_size.width - margin_val.horizontal();
         let pages = layout(&nodes, page_size, margin_val);
-        pages[0].elements[0]
-            .1
-            .inspect_image(|image| {
-                let width = image.geometry.size.width;
-                assert!(
-                    width <= available_width + 0.01,
-                    "Image width {width} should fit within available width {available_width}"
-                );
+        pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| {
+                element.find_image(|image| {
+                    let width = image.geometry.size.width;
+                    assert!(
+                        width <= available_width + 0.01,
+                        "Image width {width} should fit within available width {available_width}"
+                    );
+                })
             })
             .expect("expected image element");
     }
@@ -6003,7 +6125,7 @@ mod tests {
         let has_image = pages[0]
             .elements
             .iter()
-            .any(|(_, element)| element.inspect_image(|_| ()).is_some());
+            .any(|(_, element)| element.find_image(|_| ()).is_some());
         assert!(
             !has_image,
             "img without src should not produce Image element"
@@ -8472,6 +8594,15 @@ mod tests {
         None
     }
 
+    fn find_page_text_block_containing(
+        elements: &[(f32, LayoutNode)],
+        needle: &str,
+    ) -> Option<TextBlock> {
+        elements.iter().find_map(|(_, element)| {
+            find_text_block_containing(std::slice::from_ref(element), needle)
+        })
+    }
+
     #[test]
     fn unordered_list_uses_bullet_marker() {
         let html = "<ul><li>Item</li></ul>";
@@ -9609,6 +9740,35 @@ mod tests {
     }
 
     #[test]
+    fn background_guard_stops_at_each_opaque_solid_centerline() {
+        let opaque_solid = LayoutBorderSide {
+            width: 8.0,
+            color: Color::from_srgb(0.1, 0.2, 0.3, 1.0),
+            style: crate::style::computed::BorderStyle::Solid,
+        };
+        let border = LayoutBorder {
+            top: opaque_solid,
+            right: LayoutBorderSide {
+                color: Color::from_srgb(0.1, 0.2, 0.3, 0.5),
+                ..opaque_solid
+            },
+            bottom: LayoutBorderSide {
+                style: crate::style::computed::BorderStyle::Dashed,
+                ..opaque_solid
+            },
+            left: LayoutBorderSide {
+                width: 0.0,
+                ..opaque_solid
+            },
+        };
+
+        assert_eq!(
+            border.opaque_solid_centerline_insets(),
+            EdgeSizes::new(4.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn none_and_hidden_borders_have_zero_used_layout_width() {
         use crate::style::computed::{BorderSide, BorderStyle};
 
@@ -9793,7 +9953,7 @@ mod tests {
         let has_image = pages[0]
             .elements
             .iter()
-            .any(|(_, element)| element.inspect_image(|_| ()).is_some());
+            .any(|(_, element)| element.find_image(|_| ()).is_some());
         assert!(has_image, "Expected an Image layout element from img tag");
     }
 
@@ -12803,19 +12963,14 @@ line 3</pre>
             rules.extend(parse_stylesheet(css));
         }
         let pages = layout_with_rules(&result.nodes, PageSize::A4, Margin::default(), &rules);
-        let mut texts: Vec<String> = Vec::new();
+        let mut runs = Vec::new();
         for (_, element) in &pages[0].elements {
-            element.inspect_text(|block| {
-                for line in &block.lines {
-                    let t: String = line.runs.iter().map(|run| run.text.as_str()).collect();
-                    texts.push(t);
-                }
-            });
+            collect_text_runs_from_element(element.as_ref(), &mut runs);
         }
+        let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
         assert!(
-            texts.iter().any(|t| t.contains("PREFIX")),
-            "expected block ::before with 'PREFIX', got: {:?}",
-            texts
+            text.contains("PREFIX"),
+            "expected block ::before with 'PREFIX', got: {text:?}",
         );
     }
 
@@ -12841,13 +12996,9 @@ line 3</pre>
             rules.extend(parse_stylesheet(css));
         }
         let pages = layout_with_rules(&result.nodes, PageSize::A4, Margin::default(), &rules);
-        let abs_el = pages[0].elements.iter().find_map(|(_, element)| {
-            element
-                .inspect_text(|block| {
-                    (block.positioning.scheme == Position::Absolute)
-                        .then_some((block.positioning.insets.top, block.positioning.insets.left))
-                })
-                .flatten()
+        let abs_el = find_page_text_block_containing(&pages[0].elements, "ABS").and_then(|block| {
+            (block.positioning.scheme == Position::Absolute)
+                .then_some((block.positioning.insets.top, block.positioning.insets.left))
         });
         assert!(
             abs_el.is_some(),
@@ -13060,14 +13211,8 @@ line 3</pre>
         }
         let pages = layout_with_rules(&result.nodes, PageSize::A4, Margin::default(), &rules);
 
-        let pseudo = pages[0].elements.iter().find_map(|(_, element)| {
-            element
-                .inspect_text(|block| {
-                    text_lines_contain(&block.lines, "X")
-                        .then_some(block.box_model.size.height.used())
-                })
-                .flatten()
-        });
+        let pseudo = find_page_text_block_containing(&pages[0].elements, "X")
+            .map(|block| block.box_model.size.height.used());
         assert!(pseudo.is_some(), "expected pseudo-block with min-height");
         if let Some(Some(h)) = pseudo {
             assert!(

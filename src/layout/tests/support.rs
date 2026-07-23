@@ -1,4 +1,4 @@
-use crate::layout::elements::{LayoutVisitor, TextBlock};
+use crate::layout::elements::{GridRow, LayoutVisitor, TableRow, TextBlock};
 use crate::layout::engine::{
     FlexRow, Page, TextRun, layout_with_rules, layout_with_rules_and_fonts, visit_layout_tree,
 };
@@ -29,6 +29,26 @@ impl LayoutVisitor for RunCollector {
                 .flat_map(|line| line.runs.iter().cloned()),
         );
     }
+
+    fn visit_grid_row(&mut self, row: &GridRow) {
+        self.0.extend(
+            row.content
+                .cells
+                .iter()
+                .flat_map(|cell| &cell.layout.content.lines)
+                .flat_map(|line| line.runs.iter().cloned()),
+        );
+    }
+
+    fn visit_table_row(&mut self, row: &TableRow) {
+        self.0.extend(
+            row.content
+                .cells
+                .iter()
+                .flat_map(|cell| &cell.layout.content.lines)
+                .flat_map(|line| line.runs.iter().cloned()),
+        );
+    }
 }
 
 pub(super) fn layout_pages(markup: &str) -> Vec<Page> {
@@ -49,6 +69,20 @@ pub(super) fn layout_pages_with_fonts(
     markup: &str,
     fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
 ) -> Vec<Page> {
+    layout_pages_at_with_fonts(
+        markup,
+        PageSize::new(390.0, 150.0),
+        Margin::uniform(0.0),
+        fonts,
+    )
+}
+
+pub(super) fn layout_pages_at_with_fonts(
+    markup: &str,
+    page_size: PageSize,
+    margin: Margin,
+    fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
+) -> Vec<Page> {
     let document = parse_html_with_styles(markup).expect("valid layout fixture");
     let rules = document
         .stylesheets
@@ -57,8 +91,8 @@ pub(super) fn layout_pages_with_fonts(
         .collect::<Vec<_>>();
     layout_with_rules_and_fonts(
         &document.nodes,
-        PageSize::new(390.0, 150.0),
-        Margin::uniform(0.0),
+        page_size,
+        margin,
         &rules,
         fonts,
         None,

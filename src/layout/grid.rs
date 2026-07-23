@@ -1,10 +1,10 @@
 use crate::layout::cells::{
-    CellAlignment, CellBox, CellBoxModel, CellContent, CellPaint, GridCell, GridCellPlacement,
-    GridInset,
+    CellAlignment, CellBox, CellBoxModel, CellContent, CellFragmentation, CellPaint, GridCell,
+    GridCellPlacement, GridInset, GridPaintOrder,
 };
 use crate::layout::elements::{
-    BlockSize, BoxModel, BoxPaint, Container, GridContent, GridRow, IntoLayoutNode, LayoutElement,
-    LayoutNode, LayoutSize, Positioning,
+    BlockSize, BoxModel, BoxPaint, Container, GridContent, GridRow, GridRowStartSpace,
+    IntoLayoutNode, LayoutElement, LayoutNode, LayoutSize, Positioning,
 };
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{
@@ -14,20 +14,26 @@ use crate::parser::css::{
 use crate::parser::dom::{DomNode, ElementNode};
 use crate::style::computed::{
     AlignContent, AlignItems, BoxSizing, ComputedStyle, ContentItem, Display, GridAlign, GridLine,
-    GridTrack, JustifyContent, Position, WhiteSpace,
+    GridTrack, JustifyContent, LengthPercent, Overflow, Position, WhiteSpace,
     compute_pseudo_element_style_with_font_metrics, compute_style_with_context_with_font_metrics,
+    computed_length_percent,
 };
+use crate::style::font_metrics::FontMetrics;
 use crate::types::{EdgeSizes, Point, Size};
 
 use super::box_model::ResolvedBoxDimensions;
 use super::context::{ContainingBlock, LayoutContext, LayoutEnv};
-use super::engine::{ElementSiblingContext, LayoutBorder, LayoutTreeContext, flatten_element};
+use super::engine::{
+    ElementSiblingContext, ElementSiblingPosition, LayoutBorder, LayoutTreeContext,
+    element_is_empty, flatten_element,
+};
 use super::inline::layout_inline_mixed_sequence_with_env;
 use super::inline_formatting::{
-    InlineContentSequence, InlineFormattingContext, InlineFormattingRole,
+    AnonymousInlineFormattingContext, InlineContentSequence, InlineFormattingContext,
+    InlineFormattingRole,
 };
 use super::text::{
-    FlexTextRunCollector, TextWrapOptions, estimate_word_width, parent_line_strut,
+    FlexTextRunCollector, TextWrapOptions, measure_text_intrinsic_widths, parent_line_strut,
     resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
@@ -51,7 +57,7 @@ enum RuntimeTrack {
     Auto,
     MinContent,
     MaxContent,
-    FitContent(f32),
+    FitContent(LengthPercent),
     Minmax(TrackBreadth, TrackBreadth),
 }
 
@@ -91,29 +97,44 @@ impl IntrinsicContribution {
 #[derive(Debug, Clone, Copy, Default)]
 struct TrackIntrinsicContributions {
     minimum: IntrinsicContribution,
-    maximum: IntrinsicContribution,
+    min_content: IntrinsicContribution,
+    max_content: IntrinsicContribution,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum IntrinsicAxis {
     Minimum,
-    Maximum,
+    MinContent,
+    MaxContent,
 }
 
 impl TrackIntrinsicContributions {
     const fn get(self, axis: IntrinsicAxis) -> IntrinsicContribution {
         match axis {
             IntrinsicAxis::Minimum => self.minimum,
-            IntrinsicAxis::Maximum => self.maximum,
+            IntrinsicAxis::MinContent => self.min_content,
+            IntrinsicAxis::MaxContent => self.max_content,
         }
     }
 
     fn get_mut(&mut self, axis: IntrinsicAxis) -> &mut IntrinsicContribution {
         match axis {
             IntrinsicAxis::Minimum => &mut self.minimum,
-            IntrinsicAxis::Maximum => &mut self.maximum,
+            IntrinsicAxis::MinContent => &mut self.min_content,
+            IntrinsicAxis::MaxContent => &mut self.max_content,
         }
     }
+}
+
+/// The three distinct inline-axis contributions a grid item supplies to track
+/// sizing. CSS Grid's `auto` minimum is not interchangeable with min-content;
+/// in particular, an explicit `min-width` can be much smaller than a no-wrap
+/// item's min-content size.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct GridItemInlineContributions {
+    minimum: f32,
+    min_content: f32,
+    max_content: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +155,204 @@ struct SubgridAxis {
 struct SubgridContext {
     columns: Option<SubgridAxis>,
     rows: Option<SubgridAxis>,
+}
+
+/// Complete computed style state for one grid item.
+///
+/// Generated boxes are children of the originating item's principal box. They
+/// must therefore travel with the principal style through intrinsic sizing and
+/// cell-content layout; retaining only the principal style makes a grid-specific
+/// child path silently discard `::before` and `::after`.
+#[derive(Debug, Clone)]
+struct GridItemStyle {
+    principal: ComputedStyle,
+    before: Option<ComputedStyle>,
+    after: Option<ComputedStyle>,
+    source_position: ElementSiblingPosition,
+}
+
+impl GridItemStyle {
+    fn principal_only(principal: ComputedStyle) -> Self {
+        Self {
+            principal,
+            before: None,
+            after: None,
+            source_position: ElementSiblingPosition::default(),
+        }
+    }
+
+    fn from_element(
+        principal: ComputedStyle,
+        element: &ElementNode,
+        selector_context: &SelectorContext<'_>,
+        env: &LayoutEnv,
+    ) -> Self {
+        let classes = element.class_list();
+        let resolve = |pseudo| {
+            compute_pseudo_element_style_with_font_metrics(
+                &principal,
+                env.rules,
+                element.tag_name(),
+                &classes,
+                element.id(),
+                &element.attributes,
+                selector_context,
+                pseudo,
+                env.font_metrics(),
+            )
+        };
+        Self {
+            before: resolve(PseudoElement::Before),
+            after: resolve(PseudoElement::After),
+            principal,
+            source_position: ElementSiblingPosition::from_selector_context(selector_context),
+        }
+    }
+
+    fn descendant_ancestors<'dom>(
+        &self,
+        element: &'dom ElementNode,
+        ancestors: &[AncestorInfo<'dom>],
+    ) -> Vec<AncestorInfo<'dom>> {
+        let mut descendants = ancestors.to_vec();
+        descendants.push(
+            self.source_position
+                .ancestor(element, element_is_empty(element)),
+        );
+        descendants
+    }
+
+    fn generated_content<'a>(
+        &'a self,
+        element: &'a ElementNode,
+    ) -> super::inline_formatting::GeneratedInlineContent<'a> {
+        super::inline_formatting::GeneratedInlineContent::new(
+            element,
+            self.before.as_ref(),
+            self.after.as_ref(),
+        )
+    }
+}
+
+impl std::ops::Deref for GridItemStyle {
+    type Target = ComputedStyle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.principal
+    }
+}
+
+/// Absolute-positioning state inherited by descendants while grid replaces
+/// the ordinary DOM traversal with track and cell layout.
+///
+/// Grid containers and grid items are still principal CSS boxes. Their
+/// padding boxes therefore participate in the same positioned-ancestor chain
+/// as ordinary blocks, even though neither box is flattened through the block
+/// layout path.
+#[derive(Debug, Clone, Copy)]
+struct GridDescendantPositioning {
+    containing_block: Option<ContainingBlock>,
+    positioned_depth: usize,
+}
+
+impl GridDescendantPositioning {
+    fn inherited(ctx: &LayoutContext, positioned_depth: usize) -> Self {
+        Self {
+            containing_block: ctx.containing_block,
+            positioned_depth,
+        }
+    }
+
+    fn for_container(
+        style: &ComputedStyle,
+        ctx: &LayoutContext,
+        positioned_depth: usize,
+        padding_box: Size,
+    ) -> Self {
+        let inherited = Self::inherited(ctx, positioned_depth);
+        if !crate::layout::helpers::establishes_containing_block(style) {
+            return inherited;
+        }
+
+        Self {
+            containing_block: Some(ContainingBlock {
+                // Descendants are rendered through a depth-keyed padding-box
+                // origin. The local x coordinate is deliberately zero: it is
+                // not a second copy of the eventual page-space origin.
+                x: 0.0,
+                width: padding_box.width,
+                height: padding_box.height,
+                depth: positioned_depth,
+            }),
+            positioned_depth,
+        }
+    }
+
+    fn for_item(self, style: &ComputedStyle, padding_box: Size) -> GridItemPositioning {
+        if !crate::layout::helpers::establishes_containing_block(style) {
+            return GridItemPositioning {
+                descendants: self,
+                established_depth: 0,
+            };
+        }
+
+        let established_depth = self.positioned_depth + 1;
+        GridItemPositioning {
+            descendants: Self {
+                containing_block: Some(ContainingBlock {
+                    x: 0.0,
+                    width: padding_box.width,
+                    height: padding_box.height,
+                    depth: established_depth,
+                }),
+                positioned_depth: established_depth,
+            },
+            established_depth,
+        }
+    }
+}
+
+/// Positioning state for one concrete grid-item principal box.
+#[derive(Debug, Clone, Copy)]
+struct GridItemPositioning {
+    descendants: GridDescendantPositioning,
+    /// Zero means that the item forwards an ancestor's containing block and
+    /// must not register its own padding-box origin in the renderer.
+    established_depth: usize,
+}
+
+/// Geometry and ancestor state offered to a grid item's formatting context.
+#[derive(Debug, Clone, Copy)]
+struct GridItemContentFrame {
+    width: f32,
+    height: Option<f32>,
+    descendants: GridDescendantPositioning,
+}
+
+impl GridItemContentFrame {
+    fn inherited(width: f32, height: Option<f32>, ctx: &LayoutContext) -> Self {
+        let positioned_depth = ctx
+            .containing_block
+            .map_or(0, |containing_block| containing_block.depth);
+        Self {
+            width,
+            height,
+            descendants: GridDescendantPositioning::inherited(ctx, positioned_depth),
+        }
+    }
+
+    const fn positioned(content_box: Size, descendants: GridDescendantPositioning) -> Self {
+        Self {
+            width: content_box.width,
+            height: Some(content_box.height),
+            descendants,
+        }
+    }
+
+    fn child_context(self, ctx: &LayoutContext, font_size: f32) -> LayoutContext {
+        ctx.with_parent(self.width, self.height, font_size)
+            .with_containing_block(self.descendants.containing_block)
+    }
 }
 
 /// Block-axis constraints that affect grid track sizing.
@@ -272,17 +491,25 @@ fn resolve_grid_columns(
     };
     let space = (available_width - num_gaps).max(0.0);
 
-    let min_intrinsic =
-        |i: usize| -> f32 { intrinsic.get(i).map_or(0.0, |track| track.minimum.size()) };
-    let max_intrinsic =
-        |i: usize| -> f32 { intrinsic.get(i).map_or(0.0, |track| track.maximum.size()) };
+    let minimum = |i: usize| -> f32 { intrinsic.get(i).map_or(0.0, |track| track.minimum.size()) };
+    let min_content = |i: usize| -> f32 {
+        intrinsic
+            .get(i)
+            .map_or(0.0, |track| track.min_content.size())
+    };
+    let max_content = |i: usize| -> f32 {
+        intrinsic
+            .get(i)
+            .map_or(0.0, |track| track.max_content.size())
+    };
     let breadth = |b: TrackBreadth, i: usize, percent_basis: f32| -> f32 {
         match b {
             TrackBreadth::Fixed(v) => v,
             TrackBreadth::Percent(p) => p * percent_basis,
             TrackBreadth::Fr(_) => 0.0,
-            TrackBreadth::Auto | TrackBreadth::MinContent => min_intrinsic(i),
-            TrackBreadth::MaxContent => max_intrinsic(i),
+            TrackBreadth::Auto => minimum(i),
+            TrackBreadth::MinContent => min_content(i),
+            TrackBreadth::MaxContent => max_content(i),
         }
     };
     let max_breadth = |b: TrackBreadth, i: usize, percent_basis: f32| -> f32 {
@@ -290,8 +517,8 @@ fn resolve_grid_columns(
             TrackBreadth::Fixed(v) => v,
             TrackBreadth::Percent(p) => p * percent_basis,
             TrackBreadth::Fr(_) => f32::MAX,
-            TrackBreadth::Auto | TrackBreadth::MaxContent => max_intrinsic(i),
-            TrackBreadth::MinContent => min_intrinsic(i),
+            TrackBreadth::Auto | TrackBreadth::MaxContent => max_content(i),
+            TrackBreadth::MinContent => min_content(i),
         }
     };
 
@@ -308,13 +535,15 @@ fn resolve_grid_columns(
             RuntimeTrack::Percent(p) => fixed_total += *p * space,
             RuntimeTrack::Fr(v) => fr_total += *v,
             RuntimeTrack::Auto => {
-                auto_total += max_intrinsic(i);
+                auto_total += max_content(i);
                 auto_count += 1;
             }
-            RuntimeTrack::MinContent => fixed_total += min_intrinsic(i),
-            RuntimeTrack::MaxContent => fixed_total += max_intrinsic(i),
+            RuntimeTrack::MinContent => fixed_total += min_content(i),
+            RuntimeTrack::MaxContent => fixed_total += max_content(i),
             RuntimeTrack::FitContent(limit) => {
-                fixed_total += max_intrinsic(i).min(*limit).max(min_intrinsic(i));
+                fixed_total += max_content(i)
+                    .min(limit.resolve(available_width))
+                    .max(minimum(i));
             }
             RuntimeTrack::Minmax(min, max) => {
                 if matches!(max, TrackBreadth::Fr(_)) {
@@ -364,7 +593,7 @@ fn resolve_grid_columns(
                     // `minmax(auto, <flex>)`, not `minmax(0, <flex>)`.
                     // Its automatic minimum is the track's min-content
                     // contribution (css-grid-1 §7.2.4).
-                    base: min_intrinsic(i),
+                    base: minimum(i),
                     cap: f32::MAX,
                 }),
                 RuntimeTrack::Minmax(min, max)
@@ -457,12 +686,12 @@ fn resolve_grid_columns(
                 RuntimeTrack::Minmax(min, max) => {
                     max_breadth(*max, i, space).max(breadth(*min, i, space))
                 }
-                RuntimeTrack::Auto => max_intrinsic(i) * auto_shrink_scale,
-                RuntimeTrack::MinContent => min_intrinsic(i),
-                RuntimeTrack::MaxContent => max_intrinsic(i),
-                RuntimeTrack::FitContent(limit) => {
-                    max_intrinsic(i).min(*limit).max(min_intrinsic(i))
-                }
+                RuntimeTrack::Auto => max_content(i) * auto_shrink_scale,
+                RuntimeTrack::MinContent => min_content(i),
+                RuntimeTrack::MaxContent => max_content(i),
+                RuntimeTrack::FitContent(limit) => max_content(i)
+                    .min(limit.resolve(available_width))
+                    .max(minimum(i)),
             })
             .collect();
     }
@@ -494,10 +723,12 @@ fn resolve_grid_columns(
             RuntimeTrack::Fixed(v) => *v,
             RuntimeTrack::Percent(p) => *p * space,
             RuntimeTrack::Fr(_) => 0.0,
-            RuntimeTrack::Auto => max_intrinsic(i) * auto_shrink_scale + auto_extra,
-            RuntimeTrack::MinContent => min_intrinsic(i),
-            RuntimeTrack::MaxContent => max_intrinsic(i),
-            RuntimeTrack::FitContent(limit) => max_intrinsic(i).min(*limit).max(min_intrinsic(i)),
+            RuntimeTrack::Auto => max_content(i) * auto_shrink_scale + auto_extra,
+            RuntimeTrack::MinContent => min_content(i),
+            RuntimeTrack::MaxContent => max_content(i),
+            RuntimeTrack::FitContent(limit) => max_content(i)
+                .min(limit.resolve(available_width))
+                .max(minimum(i)),
             RuntimeTrack::Minmax(min, max) => {
                 max_breadth(*max, i, space).max(breadth(*min, i, space))
             }
@@ -641,7 +872,7 @@ fn consume_track_token(input: &str) -> (&str, &str) {
 fn parse_track_length(token: &str) -> Option<f32> {
     match parse_length(token.trim()) {
         Some(CssValue::Length(v)) => Some(v),
-        Some(CssValue::Number(v)) => Some(v),
+        Some(CssValue::Number(0.0)) => Some(0.0),
         _ => token.trim().parse::<f32>().ok(),
     }
 }
@@ -666,7 +897,33 @@ fn parse_track_breadth(token: &str) -> Option<TrackBreadth> {
     }
 }
 
-fn parse_runtime_track(token: &str) -> Option<RuntimeTrack> {
+struct RuntimeTrackParser<'a> {
+    style: &'a ComputedStyle,
+    length_context: crate::style::resolve::LengthResolutionContext,
+    font_metrics: FontMetrics<'a>,
+}
+
+impl<'a> RuntimeTrackParser<'a> {
+    fn new(style: &'a ComputedStyle, available_width: f32, font_metrics: FontMetrics<'a>) -> Self {
+        Self {
+            style,
+            length_context: crate::style::resolve::LengthResolutionContext::new(
+                available_width,
+                style.math_unit_context(font_metrics),
+            ),
+            font_metrics,
+        }
+    }
+
+    fn length_percent(&self, token: &str) -> Option<LengthPercent> {
+        let value = parse_length(token.trim())?;
+        let length =
+            computed_length_percent(&value, self.style, self.length_context, self.font_metrics)?;
+        (length.resolve(self.length_context.percentage_basis) >= 0.0).then_some(length)
+    }
+}
+
+fn parse_runtime_track(token: &str, parser: &RuntimeTrackParser<'_>) -> Option<RuntimeTrack> {
     let token = token.trim();
     if token.eq_ignore_ascii_case("auto") {
         Some(RuntimeTrack::Auto)
@@ -685,7 +942,7 @@ fn parse_runtime_track(token: &str) -> Option<RuntimeTrack> {
         .strip_prefix("fit-content(")
         .and_then(|s| s.strip_suffix(')'))
     {
-        parse_track_length(inner).map(RuntimeTrack::FitContent)
+        parser.length_percent(inner).map(RuntimeTrack::FitContent)
     } else if let Some(inner) = token
         .strip_prefix("minmax(")
         .and_then(|s| s.strip_suffix(')'))
@@ -703,13 +960,13 @@ fn parse_runtime_track(token: &str) -> Option<RuntimeTrack> {
     }
 }
 
-fn track_min_for_auto_repeat(track: RuntimeTrack) -> f32 {
+fn track_min_for_auto_repeat(track: RuntimeTrack, available_width: f32) -> f32 {
     match track {
         RuntimeTrack::Fixed(v) => v,
         RuntimeTrack::Percent(_) => 0.0,
         RuntimeTrack::Fr(_) | RuntimeTrack::Auto => 0.0,
         RuntimeTrack::MinContent | RuntimeTrack::MaxContent => 0.0,
-        RuntimeTrack::FitContent(limit) => limit,
+        RuntimeTrack::FitContent(limit) => limit.resolve(available_width),
         RuntimeTrack::Minmax(min, _) => match min {
             TrackBreadth::Fixed(v) => v,
             TrackBreadth::Percent(_) => 0.0,
@@ -725,7 +982,7 @@ fn auto_repeat_count(pattern: &[RuntimeTrack], available_width: f32, gap: f32) -
     }
     let pattern_width = pattern
         .iter()
-        .map(|t| track_min_for_auto_repeat(*t))
+        .map(|t| track_min_for_auto_repeat(*t, available_width))
         .sum::<f32>()
         + gap * pattern.len().saturating_sub(1) as f32;
     let repeat_stride = pattern_width + gap;
@@ -736,7 +993,12 @@ fn auto_repeat_count(pattern: &[RuntimeTrack], available_width: f32, gap: f32) -
     }
 }
 
-fn parse_runtime_track_list(value: &str, available_width: f32, gap: f32) -> RuntimeTrackList {
+fn parse_runtime_track_list(
+    value: &str,
+    available_width: f32,
+    gap: f32,
+    parser: &RuntimeTrackParser<'_>,
+) -> RuntimeTrackList {
     let mut tracks = Vec::new();
     let mut auto_fit = Vec::new();
     let mut line_names = vec![Vec::new()];
@@ -769,7 +1031,7 @@ fn parse_runtime_track_list(value: &str, available_width: f32, gap: f32) -> Runt
             let parts = split_top_level(inner, ',');
             if parts.len() == 2 {
                 let count_token = parts[0].trim();
-                let pattern = parse_runtime_track_list(&parts[1], available_width, gap);
+                let pattern = parse_runtime_track_list(&parts[1], available_width, gap, parser);
                 let count = if count_token.eq_ignore_ascii_case("auto-fill")
                     || count_token.eq_ignore_ascii_case("auto-fit")
                 {
@@ -786,7 +1048,7 @@ fn parse_runtime_track_list(value: &str, available_width: f32, gap: f32) -> Runt
                     }
                 }
             }
-        } else if let Some(track) = parse_runtime_track(token) {
+        } else if let Some(track) = parse_runtime_track(token, parser) {
             tracks.push(track);
             auto_fit.push(false);
             line_names.push(Vec::new());
@@ -877,14 +1139,17 @@ fn runtime_tracks_for_property(
     el: &ElementNode,
     style_attr: Option<&str>,
     style: &ComputedStyle,
-    rules: &[CssRule],
     ancestors: &[AncestorInfo],
     property: &str,
     available_width: f32,
     gap: f32,
+    env: &LayoutEnv,
 ) -> RuntimeTrackList {
-    if let Some(raw) = winning_grid_track_declaration(el, style_attr, rules, ancestors, property) {
-        let parsed = parse_runtime_track_list(&raw, available_width, gap);
+    if let Some(raw) =
+        winning_grid_track_declaration(el, style_attr, env.rules, ancestors, property)
+    {
+        let parser = RuntimeTrackParser::new(style, available_width, env.font_metrics());
+        let parsed = parse_runtime_track_list(&raw, available_width, gap, &parser);
         let computed_count = if property == "grid-template-rows" {
             style.grid_template_rows.len()
         } else {
@@ -1181,18 +1446,27 @@ fn distribute_rows(
 }
 
 fn collect_grid_item_runs(
-    cs: &ComputedStyle,
+    cs: &GridItemStyle,
     env: &mut LayoutEnv,
     child_el: &ElementNode,
     ancestors: &[AncestorInfo],
 ) -> Vec<super::engine::TextRun> {
     let mut runs = Vec::new();
+    let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
+    let generated = cs.generated_content(child_el);
+    generated.append_before(&mut runs, env.fonts, env.counter_state);
     FlexTextRunCollector {
         runs: &mut runs,
         rules: env.rules,
         fonts: env.fonts,
     }
-    .collect_box_content(&child_el.children, cs, None, ancestors);
+    .collect_box_content(
+        &child_el.children,
+        &cs.principal,
+        None,
+        &descendant_ancestors,
+    );
+    generated.append_after(&mut runs, env.fonts, env.counter_state);
     runs
 }
 
@@ -1204,7 +1478,7 @@ fn grid_item_has_block_child(child_el: &ElementNode) -> bool {
 }
 
 fn collect_grid_item_leading_runs(
-    cs: &ComputedStyle,
+    cs: &GridItemStyle,
     env: &mut LayoutEnv,
     child_el: &ElementNode,
     ancestors: &[AncestorInfo],
@@ -1217,55 +1491,92 @@ fn collect_grid_item_leading_runs(
             _ => leading.children.push(child.clone()),
         }
     }
-    collect_grid_item_runs(cs, env, &leading, ancestors)
-}
-
-fn measure_run_text(run: &super::engine::TextRun, text: &str, env: &LayoutEnv) -> f32 {
-    if let Some(inline) = run.inline_box.as_deref() {
-        return inline.outer_width();
+    let mut runs = Vec::new();
+    let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
+    cs.generated_content(child_el)
+        .append_before(&mut runs, env.fonts, env.counter_state);
+    FlexTextRunCollector {
+        runs: &mut runs,
+        rules: env.rules,
+        fonts: env.fonts,
     }
-    estimate_word_width(
-        text,
-        run.font_size,
-        &run.font_family,
-        run.bold,
-        run.font_style.is_slanted(),
-        env.fonts,
-    )
+    .collect_box_content(
+        &leading.children,
+        &cs.principal,
+        None,
+        &descendant_ancestors,
+    );
+    runs
 }
 
 fn grid_item_intrinsic_widths(
-    cs: &ComputedStyle,
+    cs: &GridItemStyle,
     env: &mut LayoutEnv,
     child_el: &ElementNode,
     ancestors: &[AncestorInfo],
-) -> (f32, f32) {
+) -> GridItemInlineContributions {
     if let Some(width) = grid_item_definite_outer_width(cs) {
-        return (width, width);
+        return GridItemInlineContributions {
+            minimum: width,
+            min_content: width,
+            max_content: width,
+        };
     }
+    let counter_checkpoint = env.counter_state.clone();
+    let counter_scope = env.counter_state.enter_element(&cs.principal);
     let runs = if grid_item_has_block_child(child_el) {
         collect_grid_item_leading_runs(cs, env, child_el, ancestors)
     } else {
         collect_grid_item_runs(cs, env, child_el, ancestors)
     };
-    let max_content = super::helpers::measure_runs_width(&runs, env.fonts);
-    let min_content = if matches!(cs.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre) {
-        max_content
-    } else {
-        runs.iter()
-            .map(|run| {
-                if run.inline_box.is_some() {
-                    return measure_run_text(run, "", env);
-                }
-                run.text
-                    .split_whitespace()
-                    .map(|word| measure_run_text(run, word, env))
-                    .fold(0.0_f32, f32::max)
-            })
-            .fold(0.0_f32, f32::max)
-    };
+    env.counter_state.leave_element(counter_scope);
+    *env.counter_state = counter_checkpoint;
+    let intrinsic = measure_text_intrinsic_widths(
+        runs,
+        TextWrapOptions::new(
+            f32::MAX,
+            used_font_size(cs, env.fonts),
+            text_run_line_height_factor(cs, env.fonts),
+            cs.overflow_wrap,
+        )
+        .with_white_space(cs.white_space)
+        .with_parent_strut(parent_line_strut(cs, env.fonts))
+        .with_rtl(cs.direction_rtl)
+        .with_bidi_override(cs.bidi_override)
+        .with_bidi_plaintext(cs.bidi_plaintext)
+        .with_word_break_keep_all(cs.word_break_keep_all)
+        .with_hyphens_manual(cs.hyphens_manual),
+        !matches!(cs.white_space, WhiteSpace::NoWrap | WhiteSpace::Pre),
+        env.fonts,
+    );
     let extras = cs.padding.horizontal() + cs.border.horizontal_width() + cs.margin.horizontal();
-    (min_content + extras, max_content + extras)
+    let min_content = intrinsic.min_content + extras;
+    let max_content = (intrinsic.max_content + extras).max(min_content);
+    let minimum = cs.min_width.map_or_else(
+        || {
+            if matches!(cs.overflow_x, Overflow::Scroll | Overflow::Auto) {
+                extras
+            } else {
+                min_content
+            }
+        },
+        |width| grid_item_outer_width_for_specified_size(cs, width),
+    );
+
+    GridItemInlineContributions {
+        minimum,
+        min_content: min_content.max(minimum),
+        max_content: max_content.max(minimum),
+    }
+}
+
+fn grid_item_outer_width_for_specified_size(style: &ComputedStyle, width: f32) -> f32 {
+    let decorations = style.padding.horizontal() + style.border.horizontal_width();
+    let border_box = match style.box_sizing {
+        BoxSizing::ContentBox => width + decorations,
+        BoxSizing::BorderBox => width.max(decorations),
+    };
+    border_box + used_grid_item_margins(style).horizontal()
 }
 
 fn grid_item_definite_outer_width(style: &ComputedStyle) -> Option<f32> {
@@ -1274,7 +1585,35 @@ fn grid_item_definite_outer_width(style: &ComputedStyle) -> Option<f32> {
         ResolvedBoxDimensions::from_style(style, Size::default())
             .border_box
             .width
-            + style.margin.horizontal(),
+            + used_grid_item_margins(style).horizontal(),
+    )
+}
+
+/// Physical margins that participate in a grid item's outer contribution.
+/// Auto margins absorb free alignment space and therefore contribute zero to
+/// intrinsic track sizing.
+fn used_grid_item_margins(style: &ComputedStyle) -> EdgeSizes {
+    EdgeSizes::new(
+        if style.margin_top_auto {
+            0.0
+        } else {
+            style.margin.top
+        },
+        if style.margin_right_auto {
+            0.0
+        } else {
+            style.margin.right
+        },
+        if style.margin_bottom_auto {
+            0.0
+        } else {
+            style.margin.bottom
+        },
+        if style.margin_left_auto {
+            0.0
+        } else {
+            style.margin.left
+        },
     )
 }
 
@@ -1341,22 +1680,21 @@ fn add_spanning_contribution(
     }
 }
 
-/// The outer height a grid item wants: an explicit `height` (border-box) or
-/// the measured text height plus vertical padding.
+/// The outer block-axis contribution of a grid item after preferred, minimum,
+/// and maximum sizing constraints have resolved against its natural border box.
 fn grid_item_outer_height(
-    cs: &ComputedStyle,
+    cs: &GridItemStyle,
     ctx: Option<&LayoutContext>,
     env: &mut LayoutEnv,
     child_el: &ElementNode,
     ancestors: &[AncestorInfo],
     content_width: Option<f32>,
 ) -> f32 {
-    if let Some(h) = cs.height {
-        return h;
-    }
-    let content_h = if let (Some(ctx), Some(width)) = (ctx, content_width) {
+    let content_h = if cs.height.is_some() {
+        0.0
+    } else if let (Some(ctx), Some(width)) = (ctx, content_width) {
         let content =
-            layout_grid_item_content(child_el, cs, ctx, ancestors, width, None, env, None);
+            measure_grid_item_content(child_el, cs, ctx, ancestors, width, None, env, None);
         content.lines.iter().map(|line| line.height).sum::<f32>()
             + content
                 .children
@@ -1364,7 +1702,11 @@ fn grid_item_outer_height(
                 .map(|element| super::paginate::estimate_element_height(element.as_ref()))
                 .sum::<f32>()
     } else {
+        let counter_checkpoint = env.counter_state.clone();
+        let counter_scope = env.counter_state.enter_element(&cs.principal);
         let runs = collect_grid_item_runs(cs, env, child_el, ancestors);
+        env.counter_state.leave_element(counter_scope);
+        *env.counter_state = counter_checkpoint;
         if runs.is_empty() {
             0.0
         } else {
@@ -1374,7 +1716,11 @@ fn grid_item_outer_height(
     // Border-box auto height includes the border: an empty bordered item still
     // reserves its border thickness. Without it, the implicit auto track sizes to
     // 0 and a later border stroke emits a negative-height rect.
-    content_h + cs.padding.vertical() + cs.border.vertical_width()
+    let natural_border_box = content_h + cs.padding.vertical() + cs.border.vertical_width();
+    ResolvedBoxDimensions::from_style(cs, Size::new(0.0, natural_border_box))
+        .border_box
+        .height
+        + used_grid_item_margins(cs).vertical()
 }
 
 fn grid_item_first_baseline(cs: &ComputedStyle, has_text: bool, env: &LayoutEnv) -> Option<f32> {
@@ -1398,7 +1744,33 @@ fn grid_item_first_baseline(cs: &ComputedStyle, has_text: bool, env: &LayoutEnv)
 #[allow(clippy::too_many_arguments)]
 fn layout_grid_item_content(
     item_el: &ElementNode,
-    item_style: &ComputedStyle,
+    item_style: &GridItemStyle,
+    ctx: &LayoutContext,
+    item_ancestors: &[AncestorInfo],
+    frame: GridItemContentFrame,
+    env: &mut LayoutEnv,
+    subgrid: Option<SubgridContext>,
+) -> CellContent {
+    let counter_scope = env.counter_state.enter_element(&item_style.principal);
+    let content = layout_grid_item_content_inner(
+        item_el,
+        item_style,
+        ctx,
+        item_ancestors,
+        frame,
+        env,
+        subgrid,
+    );
+    env.counter_state.leave_element(counter_scope);
+    content
+}
+
+/// Intrinsic measurement must observe generated counters without consuming
+/// them. The actual cell-content pass owns the source-order counter mutation.
+#[allow(clippy::too_many_arguments)]
+fn measure_grid_item_content(
+    item_el: &ElementNode,
+    item_style: &GridItemStyle,
     ctx: &LayoutContext,
     item_ancestors: &[AncestorInfo],
     content_width: f32,
@@ -1406,27 +1778,40 @@ fn layout_grid_item_content(
     env: &mut LayoutEnv,
     subgrid: Option<SubgridContext>,
 ) -> CellContent {
-    use crate::parser::css::AncestorInfo;
+    let counter_checkpoint = env.counter_state.clone();
+    let content = layout_grid_item_content(
+        item_el,
+        item_style,
+        ctx,
+        item_ancestors,
+        GridItemContentFrame::inherited(content_width, content_height, ctx),
+        env,
+        subgrid,
+    );
+    *env.counter_state = counter_checkpoint;
+    content
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_grid_item_content_inner(
+    item_el: &ElementNode,
+    item_style: &GridItemStyle,
+    ctx: &LayoutContext,
+    item_ancestors: &[AncestorInfo],
+    frame: GridItemContentFrame,
+    env: &mut LayoutEnv,
+    subgrid: Option<SubgridContext>,
+) -> CellContent {
     use crate::style::computed::Display;
 
     let mut out: Vec<LayoutNode> = Vec::new();
     // A grid item is a block container. This child context owns both its inline
     // formatting sequence and any nested block formatting contexts.
-    let child_ctx = ctx.with_parent(
-        content_width,
-        item_style.height.or(content_height),
-        item_style.font_size,
-    );
+    let content_width = frame.width;
+    let content_height = frame.height;
+    let child_ctx = frame.child_context(ctx, item_style.font_size);
 
-    let mut child_ancestors: Vec<AncestorInfo> = item_ancestors.to_vec();
-    child_ancestors.push(AncestorInfo {
-        element: item_el,
-        child_index: 0,
-        sibling_count: item_el.children.len(),
-        preceding_siblings: Vec::new(),
-        following_siblings: Vec::new(),
-        is_empty: false,
-    });
+    let child_ancestors = item_style.descendant_ancestors(item_el, item_ancestors);
 
     // A grid item that is itself a flex or grid container must arrange its OWN
     // children via that formatting context, not flow them as independent blocks.
@@ -1439,7 +1824,7 @@ fn layout_grid_item_content(
     ) {
         // Give the inner container exactly the item's content-box width so flex
         // main-axis distribution / grid track sizing resolve correctly.
-        let mut inner_style = item_style.clone();
+        let mut inner_style = item_style.principal.clone();
         // The padding/border/background of the grid item are painted by the cell
         // itself; the inner formatting context should not re-apply them or it
         // would double-inset. Use a zero-margin/border/padding clone sized to the
@@ -1471,9 +1856,9 @@ fn layout_grid_item_content(
                 &child_ctx,
                 &mut out,
                 &child_ancestors,
-                None,
-                None,
-                0,
+                item_style.before.as_ref(),
+                item_style.after.as_ref(),
+                frame.descendants.positioned_depth,
                 env,
             );
         } else {
@@ -1483,7 +1868,7 @@ fn layout_grid_item_content(
                 &child_ctx,
                 &mut out,
                 &child_ancestors,
-                0,
+                frame.descendants.positioned_depth,
                 env,
                 subgrid,
             );
@@ -1494,7 +1879,10 @@ fn layout_grid_item_content(
         };
     }
 
-    let inline_sequence = InlineContentSequence::new(&item_el.children);
+    let inline_sequence = InlineContentSequence::with_generated(
+        &item_el.children,
+        item_style.generated_content(item_el),
+    );
     if InlineFormattingContext::new(item_style, env.rules, &child_ancestors, env.font_metrics())
         .requires_atomic_layout(inline_sequence)
         && layout_inline_mixed_sequence_with_env(
@@ -1562,6 +1950,7 @@ fn layout_grid_item_content(
                         crate::layout::engine::flatten_element(
                             &text_block,
                             LayoutTreeContext::new(item_style, &child_ctx, &child_ancestors)
+                                .with_positioned_ancestor_depth(frame.descendants.positioned_depth)
                                 .for_element(
                                     ElementSiblingContext::new(element_idx, sibling_count)
                                         .with_neighbors(&preceding, &[]),
@@ -1606,9 +1995,12 @@ fn layout_grid_item_content(
             after_block |= role == InlineFormattingRole::Outside;
             crate::layout::engine::flatten_element(
                 child_el,
-                LayoutTreeContext::new(item_style, &child_ctx, &child_ancestors).for_element(
-                    ElementSiblingContext::new(idx, sibling_count).with_neighbors(&preceding, &[]),
-                ),
+                LayoutTreeContext::new(item_style, &child_ctx, &child_ancestors)
+                    .with_positioned_ancestor_depth(frame.descendants.positioned_depth)
+                    .for_element(
+                        ElementSiblingContext::new(idx, sibling_count)
+                            .with_neighbors(&preceding, &[]),
+                    ),
                 &mut out,
                 env,
             );
@@ -1621,6 +2013,20 @@ fn layout_grid_item_content(
                 .map(|s| s.to_string())
                 .collect(),
         ));
+    }
+    if grid_item_has_block_child(item_el) {
+        let mut after_runs = Vec::new();
+        item_style.generated_content(item_el).append_after(
+            &mut after_runs,
+            env.fonts,
+            env.counter_state,
+        );
+        if let Some(after) =
+            AnonymousInlineFormattingContext::new(&item_style.principal, content_width, env.fonts)
+                .layout_runs(after_runs)
+        {
+            out.push(after);
+        }
     }
     CellContent {
         lines,
@@ -1658,28 +2064,9 @@ fn compute_grid_item_geometry(
     let justify = cs.grid_justify_self.unwrap_or(container.justify_items);
     let align = cs.grid_align_self.unwrap_or(container.grid_align_items);
 
-    let margin_left = if cs.margin_left_auto {
-        0.0
-    } else {
-        cs.margin.left
-    };
-    let margin_right = if cs.margin_right_auto {
-        0.0
-    } else {
-        cs.margin.right
-    };
-    let margin_top = if cs.margin_top_auto {
-        0.0
-    } else {
-        cs.margin.top
-    };
-    let margin_bottom = if cs.margin_bottom_auto {
-        0.0
-    } else {
-        cs.margin.bottom
-    };
-    let margin_w = margin_left + margin_right;
-    let margin_h = margin_top + margin_bottom;
+    let margins = used_grid_item_margins(cs);
+    let margin_w = margins.horizontal();
+    let margin_h = margins.vertical();
     let align_w = (track_w - margin_w).max(0.0);
     let align_h = (track_h - margin_h).max(0.0);
     let dimensions = ResolvedBoxDimensions::from_style(cs, Size::new(align_w, align_h));
@@ -1706,7 +2093,7 @@ fn compute_grid_item_geometry(
         GridAlign::Center => free_y / 2.0,
     };
     let inset = GridInset {
-        offset: Point::new(margin_left + offset_x, margin_top + offset_y),
+        offset: Point::new(margins.left + offset_x, margins.top + offset_y),
         size: dimensions.border_box,
     };
     GridItemGeometry {
@@ -1917,7 +2304,7 @@ fn resolve_axis(
 /// placed first; the rest are auto-placed by a sparse (or dense) cursor.
 fn place_grid_items(
     container: &ComputedStyle,
-    child_styles: &[ComputedStyle],
+    child_styles: &[GridItemStyle],
     explicit_cols_hint: usize,
     explicit_cols_override: Option<usize>,
     explicit_rows_override: Option<usize>,
@@ -2337,7 +2724,7 @@ fn layout_grid_container_inner(
             )
         })
         .collect();
-    let all_child_styles: Vec<ComputedStyle> = all_element_children
+    let all_child_styles: Vec<GridItemStyle> = all_element_children
         .iter()
         .enumerate()
         .map(|(idx, child_el)| {
@@ -2350,7 +2737,7 @@ fn layout_grid_container_inner(
                 following_siblings: child_siblings[idx + 1..].to_vec(),
                 is_empty: false,
             };
-            compute_style_with_context_with_font_metrics(
+            let principal = compute_style_with_context_with_font_metrics(
                 child_el.tag,
                 child_el.style_attr(),
                 style,
@@ -2361,7 +2748,8 @@ fn layout_grid_container_inner(
                 &child_el.attributes,
                 &selector_ctx,
                 env.font_metrics(),
-            )
+            );
+            GridItemStyle::from_element(principal, child_el, &selector_ctx, env)
         })
         .collect();
 
@@ -2374,7 +2762,7 @@ fn layout_grid_container_inner(
         .filter(|&i| all_child_styles[i].position.is_absolute())
         .collect();
     let mut element_children: Vec<ElementNode> = Vec::new();
-    let mut child_styles: Vec<ComputedStyle> = Vec::new();
+    let mut child_styles: Vec<GridItemStyle> = Vec::new();
 
     let container_classes = el.class_list();
     let container_selector_ctx = SelectorContext {
@@ -2397,7 +2785,7 @@ fn layout_grid_container_inner(
         env.font_metrics(),
     ) {
         element_children.push(pseudo_element_node(&before_style));
-        child_styles.push(before_style);
+        child_styles.push(GridItemStyle::principal_only(before_style));
     }
 
     let mut element_idx = 0usize;
@@ -2408,7 +2796,9 @@ fn layout_grid_container_inner(
                     let mut node = ElementNode::new(crate::parser::dom::HtmlTag::Span);
                     node.children.push(DomNode::Text(text.clone()));
                     element_children.push(node);
-                    child_styles.push(anonymous_grid_item_style(style));
+                    child_styles.push(GridItemStyle::principal_only(anonymous_grid_item_style(
+                        style,
+                    )));
                 }
             }
             DomNode::Element(child_el) => {
@@ -2440,6 +2830,14 @@ fn layout_grid_container_inner(
                     let flattened_count = flattened.len();
                     for (flat_idx, flat_el) in flattened.into_iter().enumerate() {
                         let flat_classes = flat_el.class_list();
+                        let flat_selector_context = SelectorContext {
+                            ancestors: wrapper_ancestors.clone(),
+                            child_index: flat_idx,
+                            sibling_count: flattened_count,
+                            preceding_siblings: Vec::new(),
+                            following_siblings: Vec::new(),
+                            is_empty: false,
+                        };
                         let flat_style = compute_style_with_context_with_font_metrics(
                             flat_el.tag,
                             flat_el.style_attr(),
@@ -2449,19 +2847,17 @@ fn layout_grid_container_inner(
                             &flat_classes,
                             flat_el.id(),
                             &flat_el.attributes,
-                            &SelectorContext {
-                                ancestors: wrapper_ancestors.clone(),
-                                child_index: flat_idx,
-                                sibling_count: flattened_count,
-                                preceding_siblings: Vec::new(),
-                                following_siblings: Vec::new(),
-                                is_empty: false,
-                            },
+                            &flat_selector_context,
                             env.font_metrics(),
                         );
                         if !flat_style.position.is_absolute() {
                             element_children.push(flat_el.clone());
-                            child_styles.push(flat_style);
+                            child_styles.push(GridItemStyle::from_element(
+                                flat_style,
+                                flat_el,
+                                &flat_selector_context,
+                                env,
+                            ));
                         }
                     }
                 } else {
@@ -2484,7 +2880,7 @@ fn layout_grid_container_inner(
         env.font_metrics(),
     ) {
         element_children.push(pseudo_element_node(&after_style));
-        child_styles.push(after_style);
+        child_styles.push(GridItemStyle::principal_only(after_style));
     }
     let auto_column_pattern = matched_grid_track_pattern(
         el,
@@ -2510,11 +2906,11 @@ fn layout_grid_container_inner(
         el,
         el.style_attr(),
         style,
-        env.rules,
         ancestors,
         "grid-template-columns",
         inner_width,
         column_gap,
+        env,
     );
     let RuntimeTrackList {
         tracks: row_tracks,
@@ -2524,11 +2920,11 @@ fn layout_grid_container_inner(
         el,
         el.style_attr(),
         style,
-        env.rules,
         ancestors,
         "grid-template-rows",
         inner_width,
         row_gap,
+        env,
     );
     let subgrid_columns = subgrid.as_ref().and_then(|ctx| ctx.columns.as_ref());
     let subgrid_rows = subgrid.as_ref().and_then(|ctx| ctx.rows.as_ref());
@@ -2655,12 +3051,17 @@ fn layout_grid_container_inner(
     let mut intrinsic = vec![TrackIntrinsicContributions::default(); num_cols];
     for p in &placed {
         let cs = &child_styles[p.idx];
-        let (min_w, max_w) =
+        let contributions =
             grid_item_intrinsic_widths(cs, env, &element_children[p.idx], &child_ancestors);
         if p.col_span == 1 {
             if p.col < num_cols {
-                intrinsic[p.col].minimum.include(min_w);
-                intrinsic[p.col].maximum.include(max_w);
+                intrinsic[p.col].minimum.include(contributions.minimum);
+                intrinsic[p.col]
+                    .min_content
+                    .include(contributions.min_content);
+                intrinsic[p.col]
+                    .max_content
+                    .include(contributions.max_content);
             }
         } else {
             add_spanning_contribution(
@@ -2669,15 +3070,23 @@ fn layout_grid_container_inner(
                 p.col,
                 p.col_span,
                 IntrinsicAxis::Minimum,
-                min_w,
+                contributions.minimum,
             );
             add_spanning_contribution(
                 &mut intrinsic,
                 &column_tracks,
                 p.col,
                 p.col_span,
-                IntrinsicAxis::Maximum,
-                max_w,
+                IntrinsicAxis::MinContent,
+                contributions.min_content,
+            );
+            add_spanning_contribution(
+                &mut intrinsic,
+                &column_tracks,
+                p.col,
+                p.col_span,
+                IntrinsicAxis::MaxContent,
+                contributions.max_content,
             );
         }
     }
@@ -2812,6 +3221,15 @@ fn layout_grid_container_inner(
     let border = style.border.widths();
     let natural_border_box_height = content_height + style.padding.vertical() + border.vertical();
     let block_size = BlockSize::from_style(style, natural_border_box_height);
+    let grid_descendants = GridDescendantPositioning::for_container(
+        style,
+        ctx,
+        positioned_depth,
+        Size::new(
+            (border_box_w - border.horizontal()).max(0.0),
+            (block_size.resolve(natural_border_box_height) - border.vertical()).max(0.0),
+        ),
+    );
 
     // Helper to compute the x-offset of a column index.
     let col_x = |c: usize| -> f32 {
@@ -2930,6 +3348,13 @@ fn layout_grid_container_inner(
                     .max(0.0),
                 (painted_size.height - cs.padding.vertical() - cs.border.vertical_width()).max(0.0),
             );
+            let item_positioning = grid_descendants.for_item(
+                cs,
+                Size::new(
+                    (painted_size.width - cs.border.horizontal_width()).max(0.0),
+                    (painted_size.height - cs.border.vertical_width()).max(0.0),
+                ),
+            );
 
             // Lay out the grid item's block-level children (e.g. an inner
             // <div>) into nested layout elements so they paint inside the cell,
@@ -2981,8 +3406,7 @@ fn layout_grid_container_inner(
                 cs,
                 ctx,
                 &child_ancestors,
-                content_size.width,
-                Some(content_size.height),
+                GridItemContentFrame::positioned(content_size, item_positioning.descendants),
                 env,
                 Some(SubgridContext {
                     columns: child_column_subgrid,
@@ -3015,7 +3439,7 @@ fn layout_grid_container_inner(
                         children: nested_rows,
                     },
                     box_model: CellBoxModel {
-                        content_insets: cs.padding,
+                        content_insets: cs.padding + border.widths(),
                         border_insets: border.widths(),
                         border,
                         minimum_block_size: cell_min_h,
@@ -3024,11 +3448,13 @@ fn layout_grid_container_inner(
                         box_paint,
                         ..Default::default()
                     },
-                    positioning: Positioning::from_style(cs),
+                    positioning: Positioning::from_style(cs)
+                        .with_containing_block_depth(item_positioning.established_depth),
                     alignment: CellAlignment {
                         inline: cs.text_align,
                         block: cs.vertical_align,
                     },
+                    fragmentation: CellFragmentation::from_style(cs),
                 },
                 placement: GridCellPlacement {
                     inset,
@@ -3036,9 +3462,10 @@ fn layout_grid_container_inner(
                     column_start: p.col,
                     column_span: p.col_span.max(1),
                     row_span: p.row_span.max(1),
+                    paint_order: GridPaintOrder::new(cs.order, p.idx),
                 },
             };
-            let mut filter_style = cs.clone();
+            let mut filter_style = cs.principal.clone();
             let filter =
                 super::filter::ResolvedFilter::from_style(&mut filter_style, env.filter_defs);
             super::filter::cells::composite_grid_cell(
@@ -3078,6 +3505,11 @@ fn layout_grid_container_inner(
                         ..Default::default()
                     },
                     ..Default::default()
+                },
+                start_space: if row == 0 {
+                    GridRowStartSpace::Alignment
+                } else {
+                    GridRowStartSpace::Gutter
                 },
             }
             .boxed(),
@@ -3204,8 +3636,10 @@ fn layout_grid_container_inner(
         border: LayoutBorder::from_computed(&style.border, style.color),
     };
     let mut grid = Container::from_style(grid_children, style, box_model);
-    grid.positioning.insets.top = 0.0;
-    grid.positioning.insets.left = h_offset;
+    // The grid formatting path must retain the same authored positioning state
+    // as an ordinary block. `h_offset` is the box-model/static-position
+    // contribution; it augments, rather than replaces, `left`.
+    grid.positioning.insets.left += h_offset;
     grid.positioning.containing_block_depth = grid_positioned_depth;
     output.push(grid.boxed());
 }
@@ -3327,6 +3761,108 @@ mod tests {
 
         assert_eq!(intrinsic[0].minimum.size(), 1.005_f32 - 0.005);
         assert_eq!(intrinsic[1].minimum.size(), 0.005);
+    }
+
+    #[test]
+    fn fit_content_percentages_resolve_and_clamp_across_the_full_range() {
+        let style = ComputedStyle::default();
+        let fonts = std::collections::HashMap::new();
+        let parser = RuntimeTrackParser::new(&style, 300.0, FontMetrics::new(&fonts));
+        let intrinsic = [TrackIntrinsicContributions {
+            minimum: IntrinsicContribution::Sized(45.0),
+            max_content: IntrinsicContribution::Sized(135.0),
+            ..Default::default()
+        }];
+
+        for (argument, expected) in [
+            ("0%", 45.0),
+            ("10%", 45.0),
+            ("30%", 90.0),
+            ("50%", 135.0),
+            ("100%", 135.0),
+            ("150%", 135.0),
+        ] {
+            let track = parse_runtime_track(&format!("fit-content({argument})"), &parser)
+                .expect("valid fit-content percentage");
+            assert_eq!(
+                resolve_grid_columns(&[track], 300.0, 0.0, &intrinsic),
+                [expected],
+                "argument {argument}"
+            );
+        }
+    }
+
+    #[test]
+    fn fit_content_percentage_basis_is_the_content_box_before_gaps() {
+        let intrinsic = [
+            TrackIntrinsicContributions {
+                minimum: IntrinsicContribution::Sized(45.0),
+                max_content: IntrinsicContribution::Sized(135.0),
+                ..Default::default()
+            },
+            TrackIntrinsicContributions::default(),
+        ];
+        let tracks = [
+            RuntimeTrack::FitContent(LengthPercent::percent(30.0)),
+            RuntimeTrack::Fr(1.0),
+        ];
+
+        assert_eq!(
+            resolve_grid_columns(&tracks, 300.0, 30.0, &intrinsic),
+            [90.0, 180.0]
+        );
+    }
+
+    #[test]
+    fn fit_content_uses_auto_minimum_not_no_wrap_min_content() {
+        let intrinsic = [
+            TrackIntrinsicContributions {
+                minimum: IntrinsicContribution::Sized(39.0),
+                min_content: IntrinsicContribution::Sized(240.0),
+                max_content: IntrinsicContribution::Sized(240.0),
+            },
+            TrackIntrinsicContributions::default(),
+        ];
+
+        assert_eq!(
+            resolve_grid_columns(
+                &[
+                    RuntimeTrack::FitContent(LengthPercent::percent(0.0)),
+                    RuntimeTrack::Fr(1.0),
+                ],
+                300.0,
+                0.0,
+                &intrinsic,
+            ),
+            [39.0, 261.0]
+        );
+        assert_eq!(
+            resolve_grid_columns(
+                &[
+                    RuntimeTrack::FitContent(LengthPercent::percent(30.0)),
+                    RuntimeTrack::Fr(1.0),
+                ],
+                300.0,
+                0.0,
+                &intrinsic,
+            ),
+            [90.0, 210.0]
+        );
+    }
+
+    #[test]
+    fn fit_content_accepts_mixed_calc_and_rejects_negative_literal() {
+        let style = ComputedStyle::default();
+        let fonts = std::collections::HashMap::new();
+        let parser = RuntimeTrackParser::new(&style, 300.0, FontMetrics::new(&fonts));
+
+        let mixed = parse_runtime_track("fit-content(calc(30% - 10px))", &parser)
+            .expect("mixed length-percentage is valid");
+        let RuntimeTrack::FitContent(limit) = mixed else {
+            panic!("fit-content must retain its semantic limit");
+        };
+        assert!((limit.resolve(300.0) - 82.5).abs() < 0.001);
+        assert!(parse_runtime_track("fit-content(-1px)", &parser).is_none());
     }
 
     #[test]
@@ -3476,7 +4012,7 @@ mod tests {
         let effective_names = repeated_target_lines();
         let placement = place_grid_items(
             &container,
-            &[child],
+            &[GridItemStyle::principal_only(child)],
             4,
             Some(4),
             None,

@@ -145,8 +145,7 @@ fn gradients_for_lightning(input: &str) -> Cow<'_, str> {
             if bytes.get(cursor) == Some(&b'(')
                 && is_gradient_function(name)
                 && let Some(close) = matching_paren(input, cursor)
-                && let Some(replacement) =
-                    gradient_without_interpolation_method(name, &input[cursor + 1..close])
+                && let Some(replacement) = gradient_for_lightning(name, &input[cursor + 1..close])
             {
                 let output = output.get_or_insert_with(|| String::with_capacity(input.len()));
                 output.push_str(&input[copied_until..name_start]);
@@ -168,7 +167,24 @@ fn gradients_for_lightning(input: &str) -> Cow<'_, str> {
     Cow::Owned(output)
 }
 
-fn gradient_without_interpolation_method(name: &str, arguments: &str) -> Option<String> {
+fn gradient_for_lightning(name: &str, arguments: &str) -> Option<String> {
+    let without_interpolation = gradient_arguments_without_interpolation_method(arguments);
+    let compatible_arguments = without_interpolation.as_deref().unwrap_or(arguments);
+    let conic_percentages =
+        matches_ignore_ascii_case(name, &["conic-gradient", "repeating-conic-gradient"])
+            .then(|| conic_percent_stops_for_lightning(compatible_arguments))
+            .flatten();
+    if without_interpolation.is_none() && conic_percentages.is_none() {
+        return None;
+    }
+
+    Some(format!(
+        "{name}({})",
+        conic_percentages.as_deref().unwrap_or(compatible_arguments)
+    ))
+}
+
+fn gradient_arguments_without_interpolation_method(arguments: &str) -> Option<String> {
     let comma = first_top_level_delimiter(arguments, b',')?;
     let mut prelude = split_components(&arguments[..comma]);
     let indices = prelude
@@ -185,17 +201,63 @@ fn gradient_without_interpolation_method(name: &str, arguments: &str) -> Option<
     }
     prelude.drain(*index..=*index + 1);
 
-    let mut compatible = String::with_capacity(name.len() + arguments.len() + 2);
-    compatible.push_str(name);
-    compatible.push('(');
+    let mut compatible = String::with_capacity(arguments.len());
     if prelude.is_empty() {
         compatible.push_str(arguments[comma + 1..].trim_start());
     } else {
         compatible.push_str(&prelude.join(" "));
         compatible.push_str(&arguments[comma..]);
     }
-    compatible.push(')');
     Some(compatible)
+}
+
+/// Lightning alpha.71 rejects percentage positions in conic color stops even
+/// though CSS Images defines them as fractions of one turn. Convert only the
+/// temporary validation copy to equivalent `turn` positions; the authored
+/// declaration is restored after Lightning has established cascade order.
+/// Percentages inside colors/functions and the `at <position>` prelude remain
+/// untouched because components are split only at the gradient's top level.
+fn conic_percent_stops_for_lightning(arguments: &str) -> Option<String> {
+    let mut changed = false;
+    let parts = split_top_level(arguments, b',');
+    let mut compatible_parts = Vec::with_capacity(parts.len());
+
+    for (index, part) in parts.into_iter().enumerate() {
+        let components = split_components(part);
+        let is_prelude = index == 0
+            && components.iter().any(|component| {
+                component.eq_ignore_ascii_case("from") || component.eq_ignore_ascii_case("at")
+            });
+        if is_prelude {
+            compatible_parts.push(part.to_string());
+            continue;
+        }
+
+        let mut compatible = Vec::with_capacity(components.len());
+        for component in components {
+            let replacement = if component == "0" {
+                Some("0deg".to_string())
+            } else {
+                component.strip_suffix('%').and_then(|number| {
+                    number
+                        .trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite())
+                        .map(|value| format!("{}deg", value * 3.6))
+                })
+            };
+            if let Some(replacement) = replacement {
+                compatible.push(replacement);
+                changed = true;
+            } else {
+                compatible.push(component);
+            }
+        }
+        compatible_parts.push(compatible.join(" "));
+    }
+
+    changed.then(|| compatible_parts.join(", "))
 }
 
 /// Preserve authored color-function semantics across the Lightning AST.
@@ -410,6 +472,21 @@ fn push_sanitized_declaration(output: &mut String, declaration: &str) {
         }
         return;
     }
+    // Lightning alpha.71 implements the former calc multiplication rule and
+    // rejects valid CSS Values 4 expressions such as `40px * 3px / 1px`.
+    // Feed it a grammar-compatible length only to retain this declaration's
+    // cascade slot; the typed Ironpress AST is restored after Lightning has
+    // ordered the block. This is property-generic: the stand-in itself must be
+    // accepted by Lightning, so number-, color-, and transform-valued
+    // properties cannot accidentally enter the length path.
+    if typed_length_math_requires_compatibility(&property, value) {
+        output.push_str(&declaration[..=colon]);
+        output.push_str(" 0px");
+        if value.len() != raw_value.trim_end().len() {
+            output.push_str(" !important");
+        }
+        return;
+    }
     // This LightningCSS release rejects a valid second `border-image`
     // slash (the outset component). Its source/slice/width grammar is still
     // enough to retain a validated cascade slot; the full authored shorthand
@@ -456,6 +533,29 @@ fn push_sanitized_declaration(output: &mut String, declaration: &str) {
     if raw_declaration_is_valid(&property, value) {
         output.push_str(declaration);
     }
+}
+
+fn typed_length_math_requires_compatibility(property: &str, value: &str) -> bool {
+    if property.starts_with("--")
+        || !matches!(
+            parse_property_value(property, value),
+            Some(CssValue::Math(_))
+        )
+    {
+        return false;
+    }
+
+    let stand_in = format!("{property}: 0px");
+    StyleAttribute::parse(&stand_in, parser_options(&stand_in))
+        .ok()
+        .is_some_and(|attribute| {
+            attribute.declarations.iter().any(|(candidate, _)| {
+                candidate
+                    .property_id()
+                    .name()
+                    .eq_ignore_ascii_case(property)
+            })
+        })
 }
 
 /// Lightning alpha.71 does not accept the three-value `transform-origin`
@@ -565,14 +665,7 @@ fn text_spacing_requires_compatibility(property: &str, value: &str) -> bool {
 fn css_value_contains_percentage(value: &CssValue) -> bool {
     match value {
         CssValue::Percentage(_) => true,
-        CssValue::Calc(tokens) => tokens
-            .iter()
-            .any(|token| matches!(token, super::CalcToken::Percent(_))),
-        CssValue::Clamp(min, preferred, max) => {
-            css_value_contains_percentage(min)
-                || css_value_contains_percentage(preferred)
-                || css_value_contains_percentage(max)
-        }
+        CssValue::Math(expression) => expression.contains_percentage(),
         _ => false,
     }
 }
@@ -1064,6 +1157,13 @@ fn restore_authored_sources(map: &mut StyleMap, authored: &[AuthoredDeclaration]
     let restore_subgrid_tracks = authored.iter().any(|declaration| {
         subgrid_tracks_for_lightning(&declaration.property, &declaration.value).is_some()
     });
+    let restore_typed_math = authored
+        .iter()
+        .filter(|declaration| {
+            typed_length_math_requires_compatibility(&declaration.property, &declaration.value)
+        })
+        .map(|declaration| declaration.property.as_str())
+        .collect::<Vec<_>>();
 
     let mut source = StyleMap::new();
     for declaration in authored {
@@ -1112,6 +1212,12 @@ fn restore_authored_sources(map: &mut StyleMap, authored: &[AuthoredDeclaration]
                 declaration.property.as_str(),
                 "grid-template-columns" | "grid-template-rows"
             );
+        // Replay the complete cascade for every affected longhand. Restoring
+        // only the compound expression would incorrectly resurrect it over a
+        // later ordinary value or lose an earlier !important winner.
+        let typed_math = restore_typed_math
+            .iter()
+            .any(|property| *property == declaration.property);
         if (custom
             || background
             || mask
@@ -1122,7 +1228,8 @@ fn restore_authored_sources(map: &mut StyleMap, authored: &[AuthoredDeclaration]
             || flex
             || flex_basis
             || text_spacing
-            || subgrid_tracks)
+            || subgrid_tracks
+            || typed_math)
             && authored_declaration_is_accepted(declaration)
         {
             apply_declaration(
@@ -1494,6 +1601,27 @@ mod tests {
     }
 
     #[test]
+    fn conic_percentage_range_stops_survive_stylesheet_validation() {
+        let source = "conic-gradient(from 23deg at 64% 34%, #ff00c8 0 25%, #00ff67 25% 55%, #ff6a00 55% 83%, #402080 83% 100%)";
+        assert_eq!(
+            gradients_for_lightning(source),
+            "conic-gradient(from 23deg at 64% 34%, #ff00c8 0deg 90deg, #00ff67 90deg 198deg, #ff6a00 198deg 298.8deg, #402080 298.8deg 360deg)"
+        );
+        let stylesheet = parse_stylesheet_rules_with_lightning(&format!(
+            ".sample {{ background-image: {source} }}"
+        ))
+        .expect("stylesheet conic gradient should parse");
+        let CssValue::BackgroundLayers(layers) = stylesheet[0]
+            .declarations
+            .get("background-image")
+            .expect("stylesheet background image")
+        else {
+            panic!("expected typed image layers");
+        };
+        assert!(matches!(layers.as_slice(), [BackgroundLayerSource::Conic(raw)] if raw == source));
+    }
+
+    #[test]
     fn rejected_authored_gradient_does_not_replace_an_earlier_valid_image() {
         let style = parse_inline_style_with_lightning(concat!(
             "background-image: linear-gradient(red, blue); ",
@@ -1512,6 +1640,42 @@ mod tests {
     }
 
     #[test]
+    fn typed_length_arithmetic_survives_lightning_and_keeps_cascade_order() {
+        let source = "calc(40px * 3px / 1px)";
+        let inline = parse_inline_style_with_lightning(&format!("width: 8px; width: {source}"))
+            .expect("typed inline width should parse");
+        assert!(matches!(
+            inline.get("width"),
+            Some(CssValue::Math(expression))
+                if expression.to_css_string().as_deref() == Some(source)
+        ));
+
+        let rules = parse_stylesheet_rules_with_lightning(&format!(
+            ".sample {{ width: {source}; width: 24px }}"
+        ))
+        .expect("typed stylesheet width should preserve its cascade slot");
+        assert!(matches!(
+            rules[0].declarations.get("width"),
+            Some(CssValue::Length(value)) if (*value - 18.0).abs() < f32::EPSILON
+        ));
+
+        let important =
+            parse_inline_style_with_lightning(&format!("width: {source} !important; width: 24px"))
+                .expect("important typed width should parse");
+        assert!(matches!(important.get("width"), Some(CssValue::Math(_))));
+    }
+
+    #[test]
+    fn unmatched_compound_dimension_does_not_replace_a_valid_width() {
+        let inline = parse_inline_style_with_lightning("width: 8px; width: calc(10px * 2px)")
+            .expect("declaration list should parse");
+        assert!(matches!(
+            inline.get("width"),
+            Some(CssValue::Length(value)) if (*value - 6.0).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
     fn word_spacing_percentage_survives_lightning_compatibility() {
         let inline = parse_inline_style_with_lightning("word-spacing: 200%")
             .expect("percentage word spacing should parse");
@@ -1525,10 +1689,7 @@ mod tests {
                 .expect("percentage word spacing rule should parse");
         assert!(matches!(
             rules[0].declarations.get("word-spacing"),
-            Some(CssValue::Calc(tokens))
-                if tokens
-                    .iter()
-                    .any(|token| matches!(token, super::super::CalcToken::Percent(50.0)))
+            Some(CssValue::Math(expression)) if expression.contains_percentage()
         ));
 
         let later_length =

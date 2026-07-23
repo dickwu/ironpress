@@ -4,19 +4,21 @@
 //! that fractional position intact prevents paint-time rounding from changing
 //! a line's glyph coverage without changing its layout geometry.
 
-use super::LineBoxMetrics;
+use super::{LineBoxMetrics, transforms::PageContentTransform};
 
 /// Advances a text block's fractional flow position and resolves individual
 /// horizontal baselines for PDF painting.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TextBaselineCursor {
     flow_y: f32,
+    page_content: PageContentTransform,
 }
 
 impl TextBaselineCursor {
-    pub(super) const fn new(content_top: f32) -> Self {
+    pub(super) const fn new(content_top: f32, page_content: PageContentTransform) -> Self {
         Self {
             flow_y: content_top,
+            page_content,
         }
     }
 
@@ -31,7 +33,8 @@ impl TextBaselineCursor {
     /// Advance one ordinary horizontal line without perturbing fractional layout
     /// geometry at paint time.
     pub(super) fn next_horizontal(&mut self, metrics: LineBoxMetrics) -> f32 {
-        self.next_raw(metrics)
+        let baseline = self.next_raw(metrics);
+        self.page_content.snap_horizontal_baseline(baseline)
     }
 }
 
@@ -40,8 +43,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preserves_each_fractional_baseline_without_changing_line_advance() {
-        let mut cursor = TextBaselineCursor::new(103.5);
+    fn print_paint_snaps_each_baseline_without_changing_line_advance() {
+        let page = PageContentTransform::print(crate::render::pdf::PdfVector::new(150.0, 150.0));
+        let mut cursor = TextBaselineCursor::new(103.5, page);
         let metrics = LineBoxMetrics {
             ascender: 16.5,
             descender: 6.6,
@@ -49,7 +53,8 @@ mod tests {
         };
 
         assert_eq!(cursor.next_horizontal(metrics), 87.0);
-        assert!((cursor.next_horizontal(metrics) - 63.9).abs() < 0.000_1);
-        assert!((cursor.next_horizontal(metrics) - 40.8).abs() < 0.000_1);
+        assert_eq!(cursor.next_horizontal(metrics), 63.75);
+        assert_eq!(cursor.next_horizontal(metrics), 40.5);
+        assert!((cursor.flow_y - 34.2).abs() < 0.000_1);
     }
 }

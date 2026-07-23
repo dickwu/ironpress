@@ -8,6 +8,40 @@ use crate::types::{CornerRadii, EdgeSizes};
 use crate::util::{RasterDimensions, RasterTile};
 use std::ops::{Add, Mul, Sub};
 
+/// The border decoration which can occlude a border-box background.
+///
+/// CSS paints the background below either the ordinary border or the
+/// `border-image`.  Keeping both parts of that choice together prevents a
+/// fallback solid border from incorrectly shrinking the background when a
+/// border image owns the visible edge.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BackgroundBorderPaint<'a> {
+    fallback: &'a LayoutBorder,
+    image: Option<&'a crate::style::computed::BorderImagePaint>,
+}
+
+impl<'a> BackgroundBorderPaint<'a> {
+    pub(super) const fn new(
+        fallback: &'a LayoutBorder,
+        image: Option<&'a crate::style::computed::BorderImagePaint>,
+    ) -> Self {
+        Self { fallback, image }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn fallback(fallback: &'a LayoutBorder) -> Self {
+        Self::new(fallback, None)
+    }
+
+    fn opaque_solid_centerline_insets(self) -> EdgeSizes {
+        if self.image.is_some() {
+            EdgeSizes::ZERO
+        } else {
+            self.fallback.opaque_solid_centerline_insets()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct PdfPoint {
     pub(super) x: f32,
@@ -574,10 +608,11 @@ impl FragmentPaintGeometry {
         origin: BackgroundOrigin,
         clip: BackgroundClip,
         radii: CornerRadii,
+        border: BackgroundBorderPaint<'_>,
     ) -> BackgroundFragmentGeometry {
         BackgroundFragmentGeometry {
             positioning_box: self.reassembled.background_origin_box(origin),
-            painting_box: self.painting.background_clip_box(clip, radii),
+            painting_box: self.painting.background_paint_box(clip, radii, border),
         }
     }
 }
@@ -597,6 +632,22 @@ impl BoxGeometry {
         padding: EdgeSizes,
     ) -> Self {
         Self::new(border_box, border.widths(), padding)
+    }
+
+    /// Resolve this layout geometry onto the absolute print-paint grid.
+    ///
+    /// Call only at a paint boundary. Descendant placement must continue from
+    /// the unsnapped layout geometry so a rounded parent origin cannot be added
+    /// to an authored fractional child extent a second time.
+    pub(super) fn snapped_for_paint(
+        self,
+        page_content: super::transforms::PageContentTransform,
+    ) -> Self {
+        Self::new(
+            page_content.snap_layout_box(self.border_box),
+            self.border,
+            self.padding,
+        )
     }
 
     pub(super) fn padding_box(self) -> PdfRect {
@@ -664,6 +715,27 @@ impl BoxGeometry {
         self.rounded_border_box(radii).inset(inset)
     }
 
+    /// Effective paint box for a background layer.
+    ///
+    /// The CSS clip remains the border box. When an opaque solid border owns
+    /// an outer contour, however, its centerline is the nearest point at which
+    /// background paint can still affect the result. Guarding at that line
+    /// avoids two independently antialiased paints competing for the same
+    /// outer pixels. Patterned, translucent, and missing fragment sides get no
+    /// guard and therefore retain the literal CSS clip.
+    pub(super) fn background_paint_box(
+        self,
+        clip: BackgroundClip,
+        radii: CornerRadii,
+        border: BackgroundBorderPaint<'_>,
+    ) -> RoundedRect {
+        let clip_box = self.background_clip_box(clip, radii);
+        if clip != BackgroundClip::Border {
+            return clip_box;
+        }
+        clip_box.inset(border.opaque_solid_centerline_insets())
+    }
+
     pub(super) fn for_fragment(self, fragmentation: BoxFragmentation) -> FragmentPaintGeometry {
         let reassembled = fragmentation.reference_slice.map_or(self, |slice| {
             let edges = slice.edges();
@@ -702,21 +774,6 @@ impl RoundedRect {
         Self::new(self.rect.inset(edges), self.radii.inset(edges))
     }
 
-    /// Approximate the complete rounded-rectangle path length.
-    ///
-    /// Dash and dot arrays on a closed CSS border must divide the whole path;
-    /// otherwise the PDF dash iterator leaves a visibly compressed pair at its
-    /// closing seam. Straight spans are exact and each elliptical quarter uses
-    /// Ramanujan's second circumference approximation.
-    pub(super) fn perimeter(self) -> f32 {
-        let radii = self.radii.fit_to(self.rect.width, self.rect.height);
-        let straight = (self.rect.width - radii.top_left.x - radii.top_right.x).max(0.0)
-            + (self.rect.height - radii.top_right.y - radii.bottom_right.y).max(0.0)
-            + (self.rect.width - radii.bottom_right.x - radii.bottom_left.x).max(0.0)
-            + (self.rect.height - radii.bottom_left.y - radii.top_left.y).max(0.0);
-        straight + radii.iter().map(quarter_ellipse_perimeter).sum::<f32>()
-    }
-
     pub(super) fn path(self) -> Option<String> {
         let radii = self.radii.fit_to(self.rect.width, self.rect.height);
         if radii.is_zero() {
@@ -751,15 +808,6 @@ impl RoundedRect {
         self.push_clip(content);
         true
     }
-}
-
-fn quarter_ellipse_perimeter(radius: crate::types::CornerRadius) -> f32 {
-    if radius.is_zero() {
-        return 0.0;
-    }
-    let sum = radius.x + radius.y;
-    let h = ((radius.x - radius.y) / sum).powi(2);
-    std::f32::consts::PI * sum * (1.0 + 3.0 * h / (10.0 + (4.0 - 3.0 * h).sqrt())) / 4.0
 }
 
 fn rounded_rect_path_per_corner(rect: PdfRect, radii: CornerRadii) -> String {
@@ -839,16 +887,6 @@ mod tests {
         assert_eq!(rect, PdfRect::new(10.0, 60.0, 30.0, 40.0));
         assert_eq!(rect.right(), 40.0);
         assert_eq!(rect.top(), 100.0);
-    }
-
-    #[test]
-    fn rounded_rect_perimeter_includes_straights_and_corner_arcs() {
-        let square = PdfRect::new(0.0, 0.0, 100.0, 50.0).rounded(CornerRadii::ZERO);
-        assert_eq!(square.perimeter(), 300.0);
-
-        let rounded = PdfRect::new(0.0, 0.0, 100.0, 50.0).rounded(CornerRadii::circular(10.0));
-        let expected = 220.0 + 20.0 * std::f32::consts::PI;
-        assert!((rounded.perimeter() - expected).abs() < 0.001);
     }
 
     #[test]
@@ -1013,6 +1051,68 @@ mod tests {
                 .background_clip_box(BackgroundClip::Text, radii)
                 .rect,
             geometry.border_box
+        );
+    }
+
+    #[test]
+    fn opaque_border_guards_background_at_its_centerline() {
+        let side = crate::layout::engine::LayoutBorderSide {
+            width: 10.0,
+            color: crate::types::Color::BLACK,
+            style: crate::style::computed::BorderStyle::Solid,
+        };
+        let border = LayoutBorder {
+            top: side,
+            right: side,
+            bottom: Default::default(),
+            left: side,
+        };
+        let geometry = BoxGeometry::from_layout(
+            PdfRect::new(0.0, 0.0, 100.0, 80.0),
+            &border,
+            EdgeSizes::ZERO,
+        );
+
+        let paint = geometry.background_paint_box(
+            BackgroundClip::Border,
+            CornerRadii::circular(20.0),
+            BackgroundBorderPaint::fallback(&border),
+        );
+
+        assert_eq!(paint.rect, PdfRect::new(5.0, 0.0, 90.0, 75.0));
+        assert_eq!(
+            paint.radii,
+            CornerRadii::circular(20.0).inset(EdgeSizes::new(5.0, 5.0, 0.0, 5.0))
+        );
+    }
+
+    #[test]
+    fn border_image_owns_the_edge_without_shrinking_its_background() {
+        let side = crate::layout::engine::LayoutBorderSide {
+            width: 10.0,
+            color: crate::types::Color::BLACK,
+            style: crate::style::computed::BorderStyle::Solid,
+        };
+        let border = LayoutBorder::uniform(side);
+        let image = crate::style::computed::BorderImagePaint {
+            source: crate::style::computed::BorderImageSource::Url(String::from("fixture")),
+            geometry: Default::default(),
+        };
+        let geometry = BoxGeometry::from_layout(
+            PdfRect::new(0.0, 0.0, 100.0, 80.0),
+            &border,
+            EdgeSizes::ZERO,
+        );
+
+        let paint = geometry.background_paint_box(
+            BackgroundClip::Border,
+            CornerRadii::circular(20.0),
+            BackgroundBorderPaint::new(&border, Some(&image)),
+        );
+
+        assert_eq!(
+            paint,
+            geometry.rounded_border_box(CornerRadii::circular(20.0))
         );
     }
 }

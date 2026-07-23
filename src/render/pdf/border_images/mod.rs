@@ -4,8 +4,10 @@ use crate::style::computed::{
 };
 use crate::util::{AxisRepeatMode, AxisRepeatPattern, AxisRepeatPlacements};
 
+mod raster;
 mod source;
 
+use raster::RepeatedBorderImage;
 use source::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -40,6 +42,34 @@ struct BorderImagePatch {
     vertical_scale: f32,
 }
 
+impl BorderImagePatch {
+    fn repeats_image(self) -> bool {
+        self.horizontal != BorderImageRepeatMode::Stretch
+            || self.vertical != BorderImageRepeatMode::Stretch
+    }
+
+    fn tiling(self) -> Option<PatchTiling> {
+        Some(PatchTiling {
+            x: TiledAxis::new(
+                self.source.left,
+                self.source.width,
+                self.destination.left,
+                self.destination.width,
+                self.horizontal_scale,
+                self.horizontal,
+            )?,
+            y: TiledAxis::new(
+                self.source.bottom,
+                self.source.height,
+                self.destination.bottom,
+                self.destination.height,
+                self.vertical_scale,
+                self.vertical,
+            )?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AxisTile {
     source_start: f32,
@@ -57,6 +87,12 @@ struct TiledAxis {
     destination_start: f32,
     destination_size: f32,
     pattern: AxisRepeatPattern,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PatchTiling {
+    x: TiledAxis,
+    y: TiledAxis,
 }
 
 impl TiledAxis {
@@ -100,7 +136,7 @@ impl TiledAxis {
             source_size,
             destination_start,
             destination_size,
-            pattern: AxisRepeatPattern::new(mode, origin, tile_size, destination_size)?,
+            pattern: AxisRepeatPattern::new_layout(mode, origin, tile_size, destination_size)?,
         })
     }
 
@@ -244,24 +280,11 @@ impl BorderImageGrid {
 }
 
 fn paint_border_image_patch(content: &mut String, form: &ImageRef, patch: BorderImagePatch) {
-    let Some(x_axis) = TiledAxis::new(
-        patch.source.left,
-        patch.source.width,
-        patch.destination.left,
-        patch.destination.width,
-        patch.horizontal_scale,
-        patch.horizontal,
-    ) else {
-        return;
-    };
-    let Some(y_axis) = TiledAxis::new(
-        patch.source.bottom,
-        patch.source.height,
-        patch.destination.bottom,
-        patch.destination.height,
-        patch.vertical_scale,
-        patch.vertical,
-    ) else {
+    let Some(PatchTiling {
+        x: x_axis,
+        y: y_axis,
+    }) = patch.tiling()
+    else {
         return;
     };
     let Some(x_placements) = x_axis.placements() else {
@@ -318,6 +341,7 @@ pub(super) fn render_border_image(
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) -> bool {
+    let geometry = geometry.snapped_for_paint(pdf_writer.page_content_transform);
     let outer = geometry.border_box;
     if outer.is_empty() {
         return true;
@@ -329,7 +353,7 @@ pub(super) fn render_border_image(
     let Some(mut source) = resolve_border_image_source(&border_image.source) else {
         return false;
     };
-    let clamp_vector_slice_edges = source.needs_vector_slice_edge_clamp();
+    let clamp_slice_edges = source.needs_slice_edge_clamp();
     let Some(source_geometry) = source.prepare(image_area) else {
         return false;
     };
@@ -350,10 +374,19 @@ pub(super) fn render_border_image(
         pdf_writer,
         page_images,
     );
+    let repeated_source = RepeatedBorderImage::resolve(&source, source_geometry);
     page_images.push(form.clone());
     for patch in grid.patches() {
-        if clamp_vector_slice_edges {
-            let slice = register_border_image_slice(&form, patch.source, pdf_writer);
+        if patch.repeats_image()
+            && repeated_source
+                .as_ref()
+                .is_some_and(|source| source.paint_patch(content, patch, pdf_writer, page_images))
+        {
+            continue;
+        }
+        if clamp_slice_edges {
+            let slice =
+                register_border_image_slice(&source, &form, patch.source, pdf_writer, page_images);
             paint_border_image_patch(content, &slice, patch);
             page_images.push(slice);
         } else {

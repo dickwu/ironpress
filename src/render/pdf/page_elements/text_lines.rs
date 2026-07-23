@@ -46,7 +46,8 @@ pub(super) fn render_text_block_lines(
     // Text content is inset from the border-box top by the top
     // border width and the top padding.
     let content_top = block_y - border.top.width - padding.top;
-    let mut baseline_cursor = TextBaselineCursor::new(content_top);
+    let mut baseline_cursor =
+        TextBaselineCursor::new(content_top, ctx.text.pdf_writer.page_content_transform);
 
     // Horizontal insets: `block_x` / `render_width` are the
     // border-box left / width, so the content area starts after
@@ -206,7 +207,7 @@ pub(super) fn render_text_block_lines(
         // Merge consecutive runs with the same style so
         // spaces between words stay in a single PDF text
         // string, preventing viewers from dropping them.
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let mut text_clip_line_painted = false;
         if tb_text_clip_background {
             if let Some(gradient) = background_gradient {

@@ -44,7 +44,7 @@ pub(super) fn paint_simple_text_block(
     for (line_idx, line) in lines.iter().enumerate() {
         let metrics = line_box_metrics(line, custom_fonts);
         baseline_y += metrics.half_leading + metrics.ascender;
-        let merged = merge_runs(&line.runs);
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let line_width: f32 = merged
             .iter()
             .map(|run| {
@@ -307,7 +307,7 @@ pub(super) fn blurred_simple_container_group(
             for line in &element.lines {
                 let metrics = line_box_metrics(line, self.fonts);
                 baseline_y += metrics.half_leading + metrics.ascender;
-                let merged = merge_runs(&line.runs);
+                let merged = crate::text::coalesce_text_runs(&line.runs);
                 let line_width = merged
                     .iter()
                     .map(|run| estimate_run_width_with_fonts(run, self.fonts))

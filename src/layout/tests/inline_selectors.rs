@@ -27,6 +27,23 @@ fn nested_inline_runs_keep_their_real_sibling_selector_positions() {
 }
 
 #[test]
+fn anonymous_table_fixup_keeps_authored_ancestor_and_type_position() {
+    let runs = visible_runs(
+        r#"<style>
+            .node { display: table; }
+            .node > .own > .token { display: table-cell; }
+            .node > .own > .token:nth-of-type(2) { color: #c1121f; }
+        </style>
+        <div class="node"><div class="own"><span class="token">Ag</span><span class="token">Bb</span></div></div>"#,
+    );
+
+    assert_eq!(runs.len(), 2, "runs: {runs:#?}");
+    assert_eq!(runs[0].text, "Ag");
+    assert_eq!(runs[1].text, "Bb");
+    assert_eq!(runs[1].color, Color::rgb(193, 18, 31));
+}
+
+#[test]
 fn positioned_inline_is_out_of_flow_and_resolves_against_its_ancestor() {
     use crate::layout::elements::{LayoutElement, LayoutVisitor, TextBlock};
 
@@ -105,4 +122,80 @@ fn positioned_inline_is_out_of_flow_and_resolves_against_its_ancestor() {
     assert!((containing_block.height - 51.0).abs() < 0.001);
     assert!((positioned.positioning.insets.left - 77.496).abs() < 0.001);
     assert!((positioned.positioning.insets.top - 33.0).abs() < 0.001);
+}
+
+#[test]
+fn positioned_inline_inside_flex_item_uses_the_general_item_context() {
+    use crate::layout::elements::{LayoutElement, LayoutVisitor, TextBlock};
+    use crate::style::computed::Position;
+
+    #[derive(Default)]
+    struct Collector(Vec<(String, crate::layout::elements::Positioning)>);
+
+    impl LayoutVisitor for Collector {
+        fn visit_text_block(&mut self, block: &TextBlock) {
+            let text = block
+                .lines
+                .iter()
+                .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
+                .collect::<String>();
+            if !text.is_empty() {
+                self.0.push((text, block.positioning.clone()));
+            }
+        }
+    }
+
+    fn collect(element: &dyn LayoutElement, snapshots: &mut Collector) {
+        element.accept(snapshots);
+        element.visit_children(&mut |child| collect(child, snapshots));
+    }
+
+    let pages = layout_pages(
+        r#"<style>
+            .cb {
+                display: flex;
+                position: relative;
+                width: 126px;
+                height: 68px;
+                align-items: center;
+                justify-content: center;
+            }
+            .own { height: 22px; }
+            .cb > .own > .token:last-of-type {
+                position: absolute;
+                right: 4px;
+                bottom: 4px;
+            }
+        </style>
+        <div class="cb"><div class="own"><span class="token">Ag</span><span class="token">Bb</span></div></div>"#,
+    );
+    let mut snapshots = Collector::default();
+    for page in pages {
+        for (_, element) in page.elements {
+            collect(element.as_ref(), &mut snapshots);
+        }
+    }
+
+    let in_flow = snapshots
+        .0
+        .iter()
+        .find(|(text, _)| text == "Ag")
+        .expect("in-flow flex item text");
+    let positioned = snapshots
+        .0
+        .iter()
+        .find(|(text, _)| text == "Bb")
+        .expect("positioned flex descendant");
+    assert_eq!(in_flow.1.scheme, Position::Static);
+    assert_eq!(positioned.1.scheme, Position::Absolute);
+    assert!(
+        positioned.1.insets.left > in_flow.1.insets.left + 40.0,
+        "snapshots: {:#?}",
+        snapshots.0
+    );
+    assert!(
+        positioned.1.insets.top > in_flow.1.insets.top + 20.0,
+        "snapshots: {:#?}",
+        snapshots.0
+    );
 }

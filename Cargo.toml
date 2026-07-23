@@ -27,6 +27,7 @@ wasm = ["wasm-bindgen", "js-sys", "getrandom/wasm_js"]
 
 [dependencies]
 cssparser-color = "0.1"
+cssparser = "0.33"
 html5ever = "0.38"
 lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
 # lightningcss alpha.71 declares `parcel_selectors = "0.28.2"`, which also
@@ -49,6 +50,7 @@ wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 getrandom = { version = "0.3", optional = true }
 unicode-bidi = "0.3.18"
+unicode-linebreak = "0.1.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

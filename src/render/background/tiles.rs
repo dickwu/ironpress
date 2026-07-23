@@ -67,13 +67,13 @@ impl BackgroundTilePattern {
         let offset = resolve_position(position, positioning_area, tile_size);
         let repeat_modes = BackgroundRepeatModes::from(repeat);
         Some(Self {
-            horizontal: AxisRepeatPattern::new(
+            horizontal: AxisRepeatPattern::new_layout(
                 repeat_modes.horizontal,
                 offset.x,
                 tile_size.width,
                 positioning_area.width,
             )?,
-            vertical: AxisRepeatPattern::new(
+            vertical: AxisRepeatPattern::new_layout(
                 repeat_modes.vertical,
                 offset.y,
                 tile_size.height,
@@ -196,6 +196,7 @@ mod tests {
         )
         .expect("finite background tile pattern");
 
-        assert_eq!(pattern.tile_size(), Size::new(100.0 / 3.0, 100.0 / 3.0));
+        let rounded = crate::layout::units::LayoutUnit::from_points(100.0 / 3.0).to_points();
+        assert_eq!(pattern.tile_size(), Size::new(rounded, rounded));
     }
 }

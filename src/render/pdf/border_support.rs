@@ -1,35 +1,5 @@
 use super::*;
 
-/// Returns the PDF dash-pattern operator string for a given border style.
-/// Width-scaled dash/dot setup for a border side. Returns the PDF operators to
-/// install before stroking: a dash array (`d`) and, for dotted, a round line cap
-/// (`1 J`) so each dash collapses to a round dot of diameter = the stroke width.
-///
-/// CSS renders dotted as round dots roughly one border-width across spaced one
-/// width apart, and dashed as segments a few widths long. Scaling by the stroke
-/// width (rather than the previous fixed `[6 4]`/`[1 3]`) matches Chrome far more
-/// closely and makes the pattern visible at any border thickness.
-pub(super) fn dash_pattern_for_style(style: BorderStyle, width: f32) -> String {
-    let w = width.max(0.1);
-    match style {
-        // Chrome paints dashed strokes with dashes ~2x the line width and gaps a
-        // little under the line width (measured near 2:0.67), not the 3:3
-        // (period 6x) of a naive equal pattern.
-        BorderStyle::Dashed => {
-            let dash = (w * 2.0).max(1.0);
-            let gap = (w * (2.0 / 3.0)).max(1.0);
-            format!("[{dash} {gap}] 0 d\n")
-        }
-        // Round dots: a zero-length dash under a round cap paints a filled dot of
-        // diameter = line width; spacing = 2x width gives width-on / width-off.
-        BorderStyle::Dotted => {
-            let gap = (w * 2.0).max(1.0);
-            format!("1 J\n[0 {gap}] 0 d\n")
-        }
-        _ => String::new(),
-    }
-}
-
 /// Compute a corner-symmetric dash array and phase for one straight side.
 pub(super) fn corner_dash_array(length: f32, border_width: f32, dotted: bool) -> (String, f32) {
     let length = length.max(0.0);
@@ -56,47 +26,66 @@ pub(super) fn corner_dash_array(length: f32, border_width: f32, dotted: bool) ->
     (format!("{adjusted_on} {adjusted_gap}"), 0.0)
 }
 
-/// A dash pattern fitted to one side of a rounded border.
+/// Chromium-compatible cadence for one closed rounded border centerline.
 ///
-/// Dashed sides use the span offset to center a dash on each corner frontier.
-/// Dotted sides retain one continuous cadence around the path. Each side is
-/// clipped to its exclusive region, so neither construction creates corner
-/// overdraw.
-pub(super) fn side_dash_pattern_for_style(
+/// Patterned sides all stroke the same closed path and are clipped to their
+/// exclusive side regions. The dash effect therefore has one zero-phase
+/// cadence around the complete box; trying to recenter it independently at a
+/// corner moves every later dash and is observably wrong. Blink quantizes the
+/// path length and border thickness to CSS pixels before selecting the closest
+/// whole-path gap, so do that once here as part of the paint contract.
+pub(super) fn closed_border_pattern_for_style(
     style: BorderStyle,
     width: f32,
-    span: BorderPathSpan,
+    path_length: f32,
 ) -> String {
-    let width = width.max(0.1);
-    if !span.is_valid() {
-        return dash_pattern_for_style(style, width);
+    let css_pixel = crate::fonts::PT_PER_CSS_PX;
+    let width = ((width / css_pixel).round().max(1.0)) * css_pixel;
+    let path_length = ((path_length / css_pixel).trunc().max(0.0)) * css_pixel;
+    if path_length <= 0.0 {
+        return String::new();
     }
 
     match style {
-        // Dots retain one continuous cadence around the centerline. Restarting
-        // the pattern per side visibly changes the spacing at every corner;
-        // the exclusive clip already assigns each circular mark to one side.
-        BorderStyle::Dotted => dash_pattern_for_style(style, width),
         BorderStyle::Dashed => {
-            let dash = (2.0 * width).min(span.length);
-            let gap = width.max(1.0);
-            // Center one dash on each corner frontier. The exclusive side clip
-            // assigns one half to either adjoining side without overdraw.
-            let partial = dash / 2.0;
-            let period = dash + gap;
-            let phase =
-                (dash_phase_for_offset(span.offset, period) + dash - partial).rem_euclid(period);
-            format!("[{dash} {gap}] {phase} d\n")
+            let ratio = if width / css_pixel >= 3.0 { 2.0 } else { 3.0 };
+            let gap_ratio = if width / css_pixel >= 3.0 { 1.0 } else { 2.0 };
+            let dash = width * ratio;
+            let nominal_gap = width * gap_ratio;
+            if path_length <= 2.0 * dash {
+                return String::new();
+            }
+            let two_dashes_and_gaps = 2.0 * (dash + nominal_gap);
+            let (dash, gap) = if path_length <= two_dashes_and_gaps {
+                let scale = path_length / two_dashes_and_gaps;
+                (dash * scale, nominal_gap * scale)
+            } else {
+                (dash, best_closed_path_gap(path_length, dash, nominal_gap))
+            };
+            format!("[{dash} {gap}] 0 d\n")
+        }
+        BorderStyle::Dotted => {
+            let nominal = width;
+            let gap = best_closed_path_gap(path_length, nominal, nominal);
+            // Blink subtracts 0.01 CSS px so floating-point traversal cannot
+            // drop the closing dot when it lies exactly at the path endpoint.
+            let interval = (gap + width - 0.01 * css_pixel).max(0.0);
+            format!("1 J\n[0 {interval}] 0 d\n")
         }
         _ => String::new(),
     }
 }
 
-fn dash_phase_for_offset(offset: f32, period: f32) -> f32 {
-    if !offset.is_finite() || !period.is_finite() || period <= 0.0 {
-        return 0.0;
+fn best_closed_path_gap(path_length: f32, dash: f32, nominal_gap: f32) -> f32 {
+    let minimum_count = (path_length / (dash + nominal_gap)).floor().max(1.0);
+    let maximum_count = minimum_count + 1.0;
+    let minimum_gap = (path_length - minimum_count * dash) / minimum_count;
+    let maximum_gap = (path_length - maximum_count * dash) / maximum_count;
+    if maximum_gap <= 0.0 || (minimum_gap - nominal_gap).abs() < (maximum_gap - nominal_gap).abs() {
+        minimum_gap.max(0.0)
+    } else {
+        maximum_gap
     }
-    (period - offset.rem_euclid(period)).rem_euclid(period)
 }
 
 /// Reset the dash pattern (and line cap) back to solid/butt after a

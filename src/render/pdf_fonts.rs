@@ -396,7 +396,8 @@ fn collect_font_usage_from_lines(
     usage: &mut BTreeMap<FontUsageKey, FontUsage>,
 ) {
     for line in lines {
-        for run in &line.runs {
+        let painted_runs = crate::text::coalesce_text_runs(&line.runs);
+        for run in &painted_runs {
             collect_font_usage_from_run(run, custom_fonts, usage);
             collect_upright_vertical_font_usage(run, line, custom_fonts, usage);
         }
@@ -957,6 +958,58 @@ mod tests {
         assert_eq!(
             prepared_font_name_for_run("paritysans", &run, &fonts),
             "paritysans"
+        );
+    }
+
+    #[test]
+    fn font_subset_uses_the_same_coalesced_ligature_buffer_as_pdf_paint() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans font");
+        let fonts = HashMap::from([("paritysans".to_string(), font)]);
+        let runs = "verification"
+            .chars()
+            .map(|character| TextRun {
+                text: character.to_string(),
+                font_family: FontFamily::Custom("ParitySans".to_string()),
+                ..Default::default()
+            })
+            .collect();
+        let line = TextLine {
+            runs,
+            height: 12.0,
+            ..Default::default()
+        };
+        let mut usage = BTreeMap::new();
+
+        collect_font_usage_from_lines(&[line], &fonts, &mut usage);
+
+        let painted_run = TextRun {
+            text: "verification".to_string(),
+            font_family: FontFamily::Custom("ParitySans".to_string()),
+            ..Default::default()
+        };
+        let shaped = crate::text::shape_text_run(&painted_run, &fonts)
+            .expect("ParitySans verification text must shape");
+        let ligature = shaped
+            .glyphs
+            .iter()
+            .find(|glyph| glyph.unicode == [b'f' as u16, b'i' as u16])
+            .expect("fixture must form an fi ligature");
+        let collected = usage
+            .get(&FontUsageKey::plain("paritysans"))
+            .expect("ParitySans usage");
+
+        assert!(
+            collected.glyphs.contains(&ligature.glyph_id),
+            "every glyph discovered by the painted shaping buffer must be embedded"
+        );
+        assert_eq!(
+            collected.to_unicode_map.get(&ligature.glyph_id),
+            Some(&vec![b'f' as u16, b'i' as u16])
         );
     }
 

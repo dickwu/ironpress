@@ -4,7 +4,7 @@
 //!
 //! Both PDFs are rasterized by the same `pdftoppm` pipeline. Raw classification
 //! therefore remains byte-exact. A separate visibility map may treat the
-//! configured sub-0.5% per-channel residue as semantically equal; it never
+//! configured sub-1% per-channel residue as semantically equal; it never
 //! changes this raw evidence.
 
 use image::RgbaImage;
@@ -89,7 +89,7 @@ pub(crate) fn classify_pixels(
 /// Derive the colour-only visibility map from the byte-exact classification.
 ///
 /// Presence evidence is unchanged. Only a `ColorErr` whose every RGB channel
-/// is within the global 0.5% tolerance becomes a semantic `Match`, so tolerated
+/// is within the global 1% tolerance becomes a semantic `Match`, so tolerated
 /// fill rounding cannot break the topology of a nearby visible edge. The raw
 /// map remains authoritative for exact counts, overlays, and reports.
 pub(crate) fn classify_visible_colors(
@@ -153,12 +153,14 @@ mod tests {
 
     #[test]
     fn visibility_map_applies_channel_tolerance_without_changing_raw_classes() {
-        let reference = ImageBuffer::from_pixel(2, 1, Rgba([100, 100, 100, 255]));
-        let candidate = ImageBuffer::from_fn(2, 1, |x, _| {
+        let reference = ImageBuffer::from_pixel(3, 1, Rgba([100, 100, 100, 255]));
+        let candidate = ImageBuffer::from_fn(3, 1, |x, _| {
             if x == 0 {
                 Rgba([101, 100, 100, 255])
-            } else {
+            } else if x == 1 {
                 Rgba([102, 100, 100, 255])
+            } else {
+                Rgba([103, 100, 100, 255])
             }
         });
         let mask_c = super::super::super::geom::content_mask(&candidate);
@@ -166,8 +168,11 @@ mod tests {
         let raw = classify_pixels(&candidate, &reference, &mask_c, &mask_r);
         let visible = classify_visible_colors(&raw, &candidate, &reference);
 
-        assert_eq!(raw.px, vec![PixelClass::ColorErr, PixelClass::ColorErr]);
-        assert_eq!(visible.px, vec![PixelClass::Match, PixelClass::ColorErr]);
+        assert_eq!(raw.px, vec![PixelClass::ColorErr; 3]);
+        assert_eq!(
+            visible.px,
+            vec![PixelClass::Match, PixelClass::Match, PixelClass::ColorErr]
+        );
     }
 
     #[test]

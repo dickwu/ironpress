@@ -575,66 +575,6 @@ pub(super) fn text_block_total_height(
     block_height.unwrap_or(content_h)
 }
 
-/// Merge consecutive text runs that share the same visual properties (font,
-/// size, bold, italic, color, underline, line-through, link) into a single
-/// run.  This produces cleaner PDF output and ensures that spaces between
-/// words are part of one contiguous text string, preventing PDF viewers from
-/// dropping inter-word spaces during text extraction.
-pub(super) fn merge_runs(runs: &[TextRun]) -> Vec<TextRun> {
-    let mut merged: Vec<TextRun> = Vec::new();
-    for run in runs {
-        // Keep atomic inline boxes as standalone runs (they carry geometry, not
-        // text) so the renderer can paint them; never merge them with text.
-        if run.inline_box.is_some() {
-            merged.push(run.clone());
-            continue;
-        }
-        if run.text.is_empty() {
-            continue;
-        }
-        let can_merge = if let Some(prev) = merged.last() {
-            prev.inline_box.is_none()
-                // A horizontal-in-vertical composition is an atomic glyph for
-                // layout and decoration. Merging it would cross the inline box
-                // boundary that determined the composition.
-                && !prev.metadata.text_combine_upright.is_active()
-                && !run.metadata.text_combine_upright.is_active()
-                && prev.font_size == run.font_size
-                && prev.bold == run.bold
-                && prev.font_style == run.font_style
-                && prev.decorations == run.decorations
-                && prev.color == run.color
-                && prev.link_url == run.link_url
-                && prev.font_family == run.font_family
-                && prev.font_synthesis == run.font_synthesis
-                && prev.background_color == run.background_color
-                && prev.padding == run.padding
-                && prev.border_radii == run.border_radii
-                // A vertical-align or font-variant-position run has distinct
-                // baseline/glyph positioning; never merge it into a differently
-                // positioned neighbour.
-                && prev.vertical_align == run.vertical_align
-                && prev.font_variant_position == run.font_variant_position
-                // Don't merge across an RTL <-> LTR boundary: the bidi pass
-                // split these into separate runs in visual order, and merging
-                // would give the shaper a mixed-script buffer whose guessed
-                // direction flips glyph order for one side. See #139.
-                && crate::bidi::has_rtl_chars(&prev.text)
-                    == crate::bidi::has_rtl_chars(&run.text)
-        } else {
-            false
-        };
-        if can_merge {
-            if let Some(previous) = merged.last_mut() {
-                previous.text.push_str(&run.text);
-            }
-        } else {
-            merged.push(run.clone());
-        }
-    }
-    merged
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>grid-fit-content-percentage-basis-boxes</title>
+<style>
+  @page { size: 680px 480px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; color: #111; font: 16px/1 ParitySans; }
+  body { padding: 22px; }
+  .grid {
+    display: grid;
+    grid-template-columns: fit-content(30%) minmax(0, 1fr);
+    column-gap: 40px;
+    width: 580px;
+    height: 92px;
+    margin-bottom: 22px;
+    padding: 18px 30px;
+    border: 8px solid #111;
+    background: #f5f5f5;
+  }
+  .label { min-width: 52px; overflow: hidden; white-space: nowrap; color: #fff; background: #e63946; }
+  .value { color: #fff; background: #1d3557; }
+  .content-box { box-sizing: content-box; }
+  .border-box { box-sizing: border-box; }
+  .nested { width: 520px; padding: 20px; border: 6px solid #ff9f1c; }
+  .nested .grid { width: 100%; height: 82px; margin: 0; padding: 12px 20px; border-width: 6px; }
+</style>
+</head>
+<body>
+  <div class="grid content-box"><div class="label">CONTENT BOX BASIS MUST IGNORE GAP</div><div class="value">REMAINDER</div></div>
+  <div class="grid border-box"><div class="label">BORDER BOX CONTENT BASIS</div><div class="value">REMAINDER</div></div>
+  <div class="nested"><div class="grid border-box"><div class="label">PERCENT WIDTH NESTED BASIS</div><div class="value">REMAINDER</div></div></div>
+</body>
+</html>
