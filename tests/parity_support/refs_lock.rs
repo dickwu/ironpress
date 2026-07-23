@@ -56,6 +56,15 @@ struct Provenance {
     #[serde(default)]
     ua_stylesheet_sha256: String,
     pagedjs: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    font_backend: Option<FontBackendProvenance>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct FontBackendProvenance {
+    name: String,
+    features: Vec<String>,
+    launcher: LockedArtifact,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -554,6 +563,7 @@ fn valid_provenance(
             &provenance.generator,
             &provenance.generator_sha256,
         )
+        && font_backend_is_authenticated(repository_root, provenance)
         && current_font_bundle_sha256.is_some_and(|current| {
             is_sha256(&provenance.font_bundle_sha256) && provenance.font_bundle_sha256 == current
         })
@@ -561,6 +571,47 @@ fn valid_provenance(
             is_sha256(&provenance.ua_stylesheet_sha256)
                 && provenance.ua_stylesheet_sha256 == current
         })
+}
+
+fn font_backend_is_authenticated(repository_root: &Path, provenance: &Provenance) -> bool {
+    if provenance.oracle != "chrome" {
+        return provenance.font_backend.is_none();
+    }
+    let Some(backend) = &provenance.font_backend else {
+        return historical_generator_is_archived(
+            repository_root,
+            &provenance.generator,
+            &provenance.generator_sha256,
+        );
+    };
+    backend.name == "fontations"
+        && backend.features == ["FontationsFontBackend", "FontationsLinuxSystemFonts"]
+        && backend.launcher.file == "scripts/chromium-fontations.sh"
+        && authenticated_font_backend_launcher(repository_root, &backend.launcher)
+}
+
+fn historical_generator_is_archived(
+    repository_root: &Path,
+    generator: &str,
+    expected_sha256: &str,
+) -> bool {
+    let live = repository_root.join(generator);
+    let archived = archived_generator_path(repository_root, expected_sha256);
+    source_matches(repository_root, &archived, expected_sha256)
+        && !source_matches(repository_root, &live, expected_sha256)
+}
+
+fn authenticated_font_backend_launcher(repository_root: &Path, launcher: &LockedArtifact) -> bool {
+    if !is_sha256(&launcher.sha256) {
+        return false;
+    }
+    let archived = repository_root
+        .join("scripts/parity-generators/fontations/sha256")
+        .join(&launcher.sha256)
+        .join("chromium-fontations.sh");
+    [repository_root.join(&launcher.file), archived]
+        .into_iter()
+        .any(|path| source_matches(repository_root, &path, &launcher.sha256))
 }
 
 fn current_ua_stylesheet_sha256(repository_root: &Path, parity_dir: &Path) -> Option<String> {
@@ -581,12 +632,13 @@ fn generator_source_is_authenticated(
     let archived = archived_generator_path(repository_root, expected_sha256);
     [repository_root.join(generator), archived]
         .into_iter()
-        .any(|path| {
-            reject_symlink_components(repository_root, &path).is_ok()
-                && std::fs::symlink_metadata(&path)
-                    .is_ok_and(|metadata| metadata.file_type().is_file())
-                && std::fs::read(path).is_ok_and(|bytes| sha256_hex(&bytes) == expected_sha256)
-        })
+        .any(|path| source_matches(repository_root, &path, expected_sha256))
+}
+
+fn source_matches(repository_root: &Path, path: &Path, expected_sha256: &str) -> bool {
+    reject_symlink_components(repository_root, path).is_ok()
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && std::fs::read(path).is_ok_and(|bytes| sha256_hex(&bytes) == expected_sha256)
 }
 
 fn archived_generator_path(repository_root: &Path, sha256: &str) -> PathBuf {
@@ -724,6 +776,11 @@ mod tests {
                 std::fs::create_dir_all(directory).unwrap();
             }
             std::fs::write(root.join("scripts/parity-gen-refs.sh"), b"test generator").unwrap();
+            std::fs::write(
+                root.join("scripts/chromium-fontations.sh"),
+                b"test Fontations launcher",
+            )
+            .unwrap();
             std::fs::write(parity.join("ua-pins.css"), b":where(body){margin:0}").unwrap();
             std::fs::write(parity.join("cases/test/example.html"), b"<p>example</p>").unwrap();
             std::fs::write(
@@ -778,6 +835,17 @@ mod tests {
                 ua_stylesheet_sha256: current_ua_stylesheet_sha256(&self.root, &self.parity)
                     .unwrap(),
                 pagedjs: false,
+                font_backend: Some(FontBackendProvenance {
+                    name: "fontations".to_string(),
+                    features: vec![
+                        "FontationsFontBackend".to_string(),
+                        "FontationsLinuxSystemFonts".to_string(),
+                    ],
+                    launcher: LockedArtifact {
+                        file: "scripts/chromium-fontations.sh".to_string(),
+                        sha256: sha256_hex(b"test Fontations launcher"),
+                    },
+                }),
             };
             let identity = provenance_identity(&provenance).expect("serializable provenance");
             let manifests = read_manifest_inputs(&self.root, &self.parity).unwrap();
@@ -828,6 +896,55 @@ mod tests {
             check_refs_freshness(&directory.root, &directory.parity, &[directory.result()]);
         assert!(present);
         assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn current_chromium_provenance_requires_the_fontations_backend() {
+        let directory = TestDir::new();
+        directory.write_lock(b"%PDF oracle");
+        let lock_path = directory.parity.join("refs.lock");
+        let mut lock: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&lock_path).unwrap()).unwrap();
+        let old_identity = lock["fixtures"]["example"]["provenance"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut record = lock["provenance"][&old_identity].clone();
+        record.as_object_mut().unwrap().remove("font_backend");
+        let provenance: Provenance = serde_json::from_value(record).unwrap();
+        let identity = provenance_identity(&provenance).unwrap();
+        lock["fixtures"]["example"]["provenance"] = json!(identity);
+        lock["provenance"] = json!({ (identity): provenance });
+        std::fs::write(lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+
+        let (stale, present) =
+            check_refs_freshness(&directory.root, &directory.parity, &[directory.result()]);
+        assert!(present);
+        assert!(
+            stale
+                .iter()
+                .any(|entry| entry.reason == "invalid-provenance")
+        );
+    }
+
+    #[test]
+    fn fontations_launcher_bytes_are_authenticated() {
+        let directory = TestDir::new();
+        directory.write_lock(b"%PDF oracle");
+        std::fs::write(
+            directory.root.join("scripts/chromium-fontations.sh"),
+            b"tampered launcher",
+        )
+        .unwrap();
+
+        let (stale, present) =
+            check_refs_freshness(&directory.root, &directory.parity, &[directory.result()]);
+        assert!(present);
+        assert!(
+            stale
+                .iter()
+                .any(|entry| entry.reason == "invalid-provenance")
+        );
     }
 
     #[test]

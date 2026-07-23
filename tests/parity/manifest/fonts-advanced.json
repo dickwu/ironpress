@@ -144,9 +144,8 @@
     "category": "fonts-advanced",
     "feature": "font-size",
     "subfeature": "ex",
-    "description": "font-size: 4ex uses ParitySans's outline x-height (1120/2048em), rather than Chrome print's post-hinting metric rounding.",
+    "description": "font-size: 4ex resolves against the parent ParitySans face's used x-height; Fontations measures 11px at the 20px parent size, yielding 44px.",
     "file": "cases/fonts-advanced/fonts-advanced-font-size-ex.html",
-    "reference_file": "references/fonts-advanced/fonts-advanced-font-size-ex.html",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [

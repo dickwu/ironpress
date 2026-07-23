@@ -5310,15 +5310,15 @@
       "category": "fonts-advanced",
       "file": "cases/fonts-advanced/fonts-advanced-font-size-ex.html",
       "html_sha256": "10e82a6cc40877d281104251b903c3220595e4f590145385f167eda8ec7d6d35",
-      "manifest_sha256": "8b14e73438546f00e814f81f86ad0cbc9fb0547d7651169d01e1d5e76ee2991f",
+      "manifest_sha256": "d9ac0079a743b08c1d1a2ee014e833f1b845dc74c35ba07ada2ad29015f96345",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/fonts-advanced/fonts-advanced-font-size-ex.pdf",
-        "sha256": "339ea11ea669744f2405cbec1cf51603038c81fab65e05177b051edac819b7cf"
+        "sha256": "ca8d70533b32d2f8a06c1eda6fae76240433ee567875437f52b219a718f95600"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "references/fonts-advanced/fonts-advanced-font-size-ex.html",
-      "reference_html_sha256": "8475634e4a280b44fc9e4260b9ae7eaad74d5009168fc14556a6c738fbac5304"
+      "provenance": "1cd14b0b0a6659d8e37eb8a8f5a92ed6555bb10b1a61d59427a8506907f229a3",
+      "reference_file": "cases/fonts-advanced/fonts-advanced-font-size-ex.html",
+      "reference_html_sha256": "10e82a6cc40877d281104251b903c3220595e4f590145385f167eda8ec7d6d35"
     },
     "fonts-advanced-font-size-percent": {
       "category": "fonts-advanced",
@@ -22886,6 +22886,27 @@
       "pagedjs": false,
       "renderer": "weasyprint",
       "renderer_version": "WeasyPrint version 69.0",
+      "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
+    },
+    "1cd14b0b0a6659d8e37eb8a8f5a92ed6555bb10b1a61d59427a8506907f229a3": {
+      "font_backend": {
+        "features": [
+          "FontationsFontBackend",
+          "FontationsLinuxSystemFonts"
+        ],
+        "launcher": {
+          "file": "scripts/chromium-fontations.sh",
+          "sha256": "512064356160e631cef2f1eda128f6815d5329dd16671af8fcbe6a6daaf20ece"
+        },
+        "name": "fontations"
+      },
+      "font_bundle_sha256": "14e0dabd41048ffc7d0ba142a3c166656b4d14dabba93dd9185fb9aa4d9e5542",
+      "generator": "scripts/parity-gen-refs.sh",
+      "generator_sha256": "c34796bcf381e0ecf7dc3c0aa1a0685611b15f08616733069335be61e423e613",
+      "oracle": "chrome",
+      "pagedjs": false,
+      "renderer": "chromium",
+      "renderer_version": "Chromium 150.0.7871.114 snap",
       "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
     },
     "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f": {

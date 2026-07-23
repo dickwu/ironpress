@@ -7,11 +7,9 @@
 set -euo pipefail
 
 VALIDATION_DPI=300
-MIN_FONTATIONS_CHROMIUM_MAJOR=138
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FONTATIONS_LAUNCHER="$SCRIPT_DIR/chromium-fontations.sh"
 PARITY="$ROOT/tests/parity"
 CASES="$PARITY/cases"
 ORACLES="$PARITY/oracles"
@@ -19,13 +17,6 @@ FONTS="$PARITY/fonts"
 UA_CSS="$PARITY/ua-pins.css"
 TMP="$ROOT/target/parity-tmp"
 mkdir -p "$TMP"
-
-if [ ! -f "$FONTATIONS_LAUNCHER" ] || [ -L "$FONTATIONS_LAUNCHER" ] || [ ! -x "$FONTATIONS_LAUNCHER" ]; then
-  echo "parity-gen-refs: Fontations launcher must be a regular executable: $FONTATIONS_LAUNCHER" >&2
-  exit 1
-fi
-FONTATIONS_LAUNCHER_SHA="$(sha256sum "$FONTATIONS_LAUNCHER" | awk '{print $1}')"
-FONTATIONS_FEATURES="$("$FONTATIONS_LAUNCHER" --print-features)"
 
 if [ ! -f "$UA_CSS" ] || [ -L "$UA_CSS" ]; then
   echo "parity-gen-refs: pinned UA stylesheet must be a regular file: $UA_CSS" >&2
@@ -157,37 +148,6 @@ def generator_is_authenticated(record):
     return any(safe_digest(root, relative) == expected
                for relative in (record["generator"], archived))
 
-def font_backend_is_authenticated(record):
-    if record.get("oracle") != "chrome":
-        return True
-    root = os.path.dirname(os.path.dirname(parity))
-    generator_sha = record.get("generator_sha256")
-    generator_archive = f"scripts/parity-generators/sha256/{generator_sha}/parity-gen-refs.sh"
-    backend = record.get("font_backend")
-    if backend is None:
-        # Historical locks remain valid only when their exact generator has
-        # moved out of the live path into the content-addressed archive.
-        return (safe_digest(root, generator_archive) == generator_sha
-                and safe_digest(root, record.get("generator")) != generator_sha)
-    if not isinstance(backend, dict):
-        return False
-    launcher = backend.get("launcher", {})
-    launcher_file = launcher.get("file") if isinstance(launcher, dict) else None
-    launcher_sha = launcher.get("sha256") if isinstance(launcher, dict) else None
-    launcher_archive = (
-        f"scripts/parity-generators/fontations/sha256/{launcher_sha}/chromium-fontations.sh"
-    )
-    return (
-        backend.get("name") == "fontations"
-        and backend.get("features") == [
-            "FontationsFontBackend", "FontationsLinuxSystemFonts"
-        ]
-        and launcher_file == "scripts/chromium-fontations.sh"
-        and is_sha256(launcher_sha)
-        and any(safe_digest(root, relative) == launcher_sha
-                for relative in (launcher_file, launcher_archive))
-    )
-
 errors = []
 try:
     with open(lock_path, encoding="utf-8") as fh:
@@ -270,7 +230,6 @@ for fid in sorted(set(manifest) | locked_ids):
     }.get(oracle, set())
     if (record.get("generator") != "scripts/parity-gen-refs.sh"
             or not generator_is_authenticated(record)
-            or not font_backend_is_authenticated(record)
             or record.get("font_bundle_sha256") != os.environ["FONT_SHA"]
             or record.get("ua_stylesheet_sha256") != os.environ["UA_SHA"]
             or record.get("oracle") != oracle
@@ -348,48 +307,10 @@ if [ -z "$CHROMIUM" ]; then
   exit 1
 fi
 CHROMIUM_ABS="$(command -v "$CHROMIUM" 2>/dev/null || echo "$CHROMIUM")"
-CHROMIUM_VERSION="$("$CHROMIUM" --version 2>/dev/null | head -1 || true)"
-if ! [[ "$CHROMIUM_VERSION" =~ ([0-9]+)\. ]]; then
-  echo "parity-gen-refs: cannot determine Chromium major version: $CHROMIUM_VERSION" >&2
-  exit 1
-fi
-CHROMIUM_MAJOR="${BASH_REMATCH[1]}"
-if [ "$CHROMIUM_MAJOR" -lt "$MIN_FONTATIONS_CHROMIUM_MAJOR" ]; then
-  echo "parity-gen-refs: Chromium $CHROMIUM_MAJOR predates the required Fontations system-font backend ($MIN_FONTATIONS_CHROMIUM_MAJOR+)" >&2
-  exit 1
-fi
-export IRONPRESS_CHROMIUM_EXECUTABLE="$CHROMIUM_ABS"
-export FC_FONTATIONS=1
 if ! command -v pdftoppm >/dev/null 2>&1; then
   echo "parity-gen-refs: pdftoppm is required to validate generated PDFs" >&2
   exit 1
 fi
-
-verify_fontations_backend() {
-  local html profile output expected
-  html="$(mktemp "$TMP/fontations-probe.XXXXXX.html")"
-  profile="$(mktemp -d "$TMP/fontations-profile.XXXXXX")"
-  expected='data-fontations-ex="80px,200px,320px"'
-  printf '%s\n' \
-    '<!doctype html><meta charset="utf-8"><style>' \
-    '*{margin:0;padding:0;border:0;box-sizing:border-box}' \
-    'html,body{font-family:ParitySerif;font-size:16px;line-height:1;background:#fff;color:#000}' \
-    '.probe{display:block;width:20ex;height:1px;font-style:normal}.s8{font-size:8px}.s18{font-size:18px}.s30{font-size:30px}' \
-    '</style><div class="probe s8"></div><div class="probe s18"></div><div class="probe s30"></div>' \
-    '<script>document.fonts.ready.then(()=>document.body.dataset.fontationsEx=[...document.querySelectorAll(".probe")].map(node=>getComputedStyle(node).width).join(","))</script>' \
-    > "$html"
-  output="$(timeout -k 5s 60s "$FONTATIONS_LAUNCHER" --headless=new --disable-gpu \
-    --no-sandbox --disable-software-rasterizer --user-data-dir="$profile" \
-    --virtual-time-budget=5000 --dump-dom "file://$html" 2>/dev/null || true)"
-  pkill -9 -f "$profile" 2>/dev/null || true
-  rm -rf "$html" "$profile"
-  if [[ "$output" != *"$expected"* ]]; then
-    echo "parity-gen-refs: Chromium did not expose the pinned Fontations x-height metrics" >&2
-    exit 1
-  fi
-}
-
-verify_fontations_backend
 
 NCPU="$(nproc 2>/dev/null || echo 4)"
 DEFAULT_JOBS=$((NCPU - 2))
@@ -444,35 +365,6 @@ def generator_is_authenticated(record):
     return any(safe_digest(root, relative) == expected
                for relative in (record["generator"], archived))
 
-def font_backend_is_authenticated(record):
-    if record.get("oracle") != "chrome":
-        return True
-    root = os.path.dirname(os.path.dirname(os.environ["PARITY_DIR"]))
-    generator_sha = record.get("generator_sha256")
-    generator_archive = f"scripts/parity-generators/sha256/{generator_sha}/parity-gen-refs.sh"
-    backend = record.get("font_backend")
-    if backend is None:
-        return (safe_digest(root, generator_archive) == generator_sha
-                and safe_digest(root, record.get("generator")) != generator_sha)
-    if not isinstance(backend, dict):
-        return False
-    launcher = backend.get("launcher", {})
-    launcher_file = launcher.get("file") if isinstance(launcher, dict) else None
-    launcher_sha = launcher.get("sha256") if isinstance(launcher, dict) else None
-    launcher_archive = (
-        f"scripts/parity-generators/fontations/sha256/{launcher_sha}/chromium-fontations.sh"
-    )
-    return (
-        backend.get("name") == "fontations"
-        and backend.get("features") == [
-            "FontationsFontBackend", "FontationsLinuxSystemFonts"
-        ]
-        and launcher_file == "scripts/chromium-fontations.sh"
-        and is_sha256(launcher_sha)
-        and any(safe_digest(root, relative) == launcher_sha
-                for relative in (launcher_file, launcher_archive))
-    )
-
 try:
     with open(os.path.join(os.environ["PARITY_DIR"], "refs.lock"), encoding="utf-8") as fh:
         lock = json.load(fh)
@@ -482,7 +374,6 @@ try:
              and provenance
              and all(
                  generator_is_authenticated(record)
-                 and font_backend_is_authenticated(record)
                  and record.get("font_bundle_sha256") == os.environ["FONT_SHA"]
                  and record.get("ua_stylesheet_sha256") == os.environ["UA_SHA"]
                  and (record.get("oracle") != "chrome"
@@ -622,7 +513,7 @@ PY
     if [ "$oracle" = "weasyprint" ]; then
       timeout -k 5s 120s python3 -m weasyprint "$pinned_html" "$pdf" >/dev/null 2>&1 || true
     elif [ "$PAGEDJS" = "1" ]; then
-      PUPPETEER_EXECUTABLE_PATH="$FONTATIONS_LAUNCHER" PUPPETEER_SKIP_DOWNLOAD=1 \
+      PUPPETEER_EXECUTABLE_PATH="$CHROMIUM_ABS" PUPPETEER_SKIP_DOWNLOAD=1 \
         timeout -k 5s 120s "$PAGEDJS_BIN" -i "$pinned_html" -o "$pdf" \
           --page-size Letter --style "$PAGE_CSS" \
           --browserArgs "--no-sandbox,--disable-gpu,--disable-software-rasterizer" \
@@ -630,7 +521,7 @@ PY
     else
       rm -rf "$profile"
       profile="$(mktemp -d "$TMP/chrome-profile.XXXXXX")"
-      timeout -k 5s 60s "$FONTATIONS_LAUNCHER" --headless=new --disable-gpu --no-sandbox \
+      timeout -k 5s 60s "$CHROMIUM" --headless=new --disable-gpu --no-sandbox \
         --disable-software-rasterizer --user-data-dir="$profile" \
         --no-pdf-header-footer --print-to-pdf="$pdf" "file://$pinned_html" >/dev/null 2>&1 || true
       pkill -9 -f "$profile" 2>/dev/null || true
@@ -667,7 +558,7 @@ PY
 }
 
 export -f pin_ua_stylesheet render_one
-export CHROMIUM CHROMIUM_ABS FONTATIONS_LAUNCHER CASES ORACLES TMP FORCE PARITY PAGEDJS PAGEDJS_BIN PAGE_CSS UA_CSS VALIDATION_DPI FIXTURE_ID
+export CHROMIUM CHROMIUM_ABS CASES ORACLES TMP FORCE PARITY PAGEDJS PAGEDJS_BIN PAGE_CSS UA_CSS VALIDATION_DPI FIXTURE_ID
 
 status_file="$(mktemp "$TMP/oracle-status.XXXXXX")"
 trap 'rm -f "$status_file"' EXIT
@@ -706,8 +597,6 @@ write_refs_lock() {
   PARITY_DIR="$PARITY" STATUS_FILE="$status_file" PAGEDJS_ENABLED="$PAGEDJS" \
     CATEGORY_FILTER="$ONLY_CATEGORY" FIXTURE_ID="$FIXTURE_ID" \
     GENERATOR_SHA="$(sha256sum "$SCRIPT_DIR/parity-gen-refs.sh" | awk '{print $1}')" \
-    FONTATIONS_LAUNCHER_SHA="$FONTATIONS_LAUNCHER_SHA" \
-    FONTATIONS_FEATURES="$FONTATIONS_FEATURES" \
     FONT_SHA="$(font_bundle_digest)" UA_SHA="$UA_SHA" CHROMIUM_VERSION="$chromium_version" \
     WEASYPRINT_VERSION="$weasyprint_version" PAGEDJS_VERSION="$pagedjs_version" \
     python3 - <<'PY'
@@ -734,7 +623,7 @@ def provenance_record(oracle):
         uses_pagedjs = True
     else:
         renderer, version, uses_pagedjs = "chromium", os.environ["CHROMIUM_VERSION"], False
-    record = {
+    return {
         "generator": "scripts/parity-gen-refs.sh",
         "generator_sha256": os.environ["GENERATOR_SHA"],
         "oracle": oracle,
@@ -744,16 +633,6 @@ def provenance_record(oracle):
         "ua_stylesheet_sha256": os.environ["UA_SHA"],
         "pagedjs": uses_pagedjs,
     }
-    if oracle == "chrome":
-        record["font_backend"] = {
-            "name": "fontations",
-            "features": os.environ["FONTATIONS_FEATURES"].split(","),
-            "launcher": {
-                "file": "scripts/chromium-fontations.sh",
-                "sha256": os.environ["FONTATIONS_LAUNCHER_SHA"],
-            },
-        }
-    return record
 
 def provenance_id(record):
     canonical = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
