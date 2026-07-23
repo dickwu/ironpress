@@ -1,20 +1,19 @@
 {
   "schema_version": 12,
-  "invocation_id": "0186ec193835e64814f0e814f5ef8a32",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3776752-1784835019398649592-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3928553-1784839343045391298-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 91.59,
-    "pass": 1482,
-    "fail": 136,
+    "score_pct": 91.66,
+    "pass": 1483,
+    "fail": 135,
     "reference_disputed": 16,
     "total": 1634
   },
@@ -141873,9 +141872,9 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.4260952380952381,
-              "semantic_diff_pct": 0.4260952380952381,
-              "description": "font-size: 4ex uses ParitySans's outline x-height (1120/2048em), rather than Chrome print's post-hinting metric rounding.",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "font-size: 4ex resolves against the parent ParitySans face's used x-height; Fontations measures 11px at the 20px parent size, yielding 44px.",
               "note": "",
               "kind": "feature",
               "depends_on": [
@@ -141895,114 +141894,18 @@
                   {
                     "width": 1500,
                     "height": 350,
-                    "rgba_sha256": "9c0488676549cc7fe10fcfd4822f12ea1eaede208bfcd21ad9bcc118f6a9ba21",
-                    "painted_pixels": 238500
+                    "rgba_sha256": "8da0932f35b95987d4d93e9aecd8e61fd334d2b30412e623e71a84c96f16316b",
+                    "painted_pixels": 239625
                   }
                 ],
                 "oracle": [
                   {
                     "width": 1500,
                     "height": 350,
-                    "rgba_sha256": "41c3daa84c2d92af1728d4cf5bb464595b0fe6d3934a0738c017628bdc78b254",
+                    "rgba_sha256": "8da0932f35b95987d4d93e9aecd8e61fd334d2b30412e623e71a84c96f16316b",
                     "painted_pixels": 239625
                   }
                 ]
-              },
-              "diagnosis": {
-                "primary_class": "Missing",
-                "secondary": [
-                  "AntialiasCoverage"
-                ],
-                "headline": "visually accepted coverage phase; raw candidate lacks paint present in reference (0.5%)",
-                "magnitude": {
-                  "missing_area_pct": 0.4694835680751174,
-                  "extra_area_pct": 0.0,
-                  "modal_drgba": [
-                    -255,
-                    -173,
-                    -173,
-                    0
-                  ],
-                  "delta_e": 71.86071081692354,
-                  "recovered_alpha": null,
-                  "colorspace": null
-                },
-                "region_count": 2,
-                "region_classes": [
-                  {
-                    "class": "ColorErr",
-                    "region_count": 1,
-                    "total_pixels": 1112,
-                    "total_area_pct": 0.4640584246218049,
-                    "union_bbox_css": [
-                      2.24,
-                      65.92,
-                      357.76,
-                      65.92
-                    ],
-                    "largest_region_pixels": 1112,
-                    "largest_region_area_pct": 0.4640584246218049,
-                    "max_delta_e": 0.0
-                  },
-                  {
-                    "class": "Missing",
-                    "region_count": 1,
-                    "total_pixels": 1125,
-                    "total_area_pct": 0.4694835680751174,
-                    "union_bbox_css": [
-                      0.0,
-                      67.84,
-                      359.68,
-                      67.84
-                    ],
-                    "largest_region_pixels": 1125,
-                    "largest_region_area_pct": 0.4694835680751174,
-                    "max_delta_e": 0.0
-                  }
-                ],
-                "region_examples": [
-                  {
-                    "class": "Missing",
-                    "bbox_css": [
-                      0.0,
-                      67.84,
-                      359.68,
-                      67.84
-                    ],
-                    "area_pct": 0.4694835680751174,
-                    "modal_drgba": [
-                      0,
-                      0,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "candidate lacks paint present in reference (0.5%)"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      2.24,
-                      65.92,
-                      357.76,
-                      65.92
-                    ],
-                    "area_pct": 0.4640584246218049,
-                    "modal_drgba": [
-                      -255,
-                      -173,
-                      -173,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  }
-                ],
-                "confidence": 0.5029056772463121,
-                "different_pixels": 2237,
-                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-outline coverage"
               }
             },
             {
@@ -495485,10 +495388,10 @@
     },
     {
       "category": "units-values",
-      "score_pct": 97.62,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 41,
-        "fail": 1,
+        "pass": 42,
+        "fail": 0,
         "reference_disputed": 0
       },
       "features": [
@@ -496259,10 +496162,10 @@
         },
         {
           "feature": "font-relative-length",
-          "score_pct": 75.0,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 3,
-            "fail": 1,
+            "pass": 4,
+            "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
@@ -496423,9 +496326,9 @@
               "subfeature": "ex-x-height",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 1.528888888888889,
-              "semantic_diff_pct": 1.528888888888889,
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
               "description": "The ex unit uses the font x-height in layout lengths; catches treating ex as em, unsupported, or a hard-coded unrelated ratio.",
               "note": "",
               "kind": "feature",
@@ -496447,8 +496350,8 @@
                   {
                     "width": 825,
                     "height": 300,
-                    "rgba_sha256": "0f605ee024b7fa51b88a7791404c797a9fc5f7231df4347b9c30d16a7ecc11b2",
-                    "painted_pixels": 89172
+                    "rgba_sha256": "5fcfffef18d7d7cc99a9d189e3a79738e00a65f348d08b4755684bd7455a503b",
+                    "painted_pixels": 92956
                   }
                 ],
                 "oracle": [
@@ -496459,65 +496362,6 @@
                     "painted_pixels": 92956
                   }
                 ]
-              },
-              "diagnosis": {
-                "primary_class": "Missing",
-                "secondary": [],
-                "headline": "candidate lacks paint present in reference (4.1%)",
-                "magnitude": {
-                  "missing_area_pct": 4.070743147295494,
-                  "extra_area_pct": 0.0,
-                  "modal_drgba": [
-                    0,
-                    0,
-                    0,
-                    0
-                  ],
-                  "delta_e": 0.0,
-                  "recovered_alpha": null,
-                  "colorspace": null
-                },
-                "region_count": 1,
-                "region_classes": [
-                  {
-                    "class": "Missing",
-                    "region_count": 1,
-                    "total_pixels": 3784,
-                    "total_area_pct": 3.847483477376716,
-                    "union_bbox_css": [
-                      166.08,
-                      27.84,
-                      179.52,
-                      55.68
-                    ],
-                    "largest_region_pixels": 3784,
-                    "largest_region_area_pct": 3.847483477376716,
-                    "max_delta_e": 0.0
-                  }
-                ],
-                "region_examples": [
-                  {
-                    "class": "Missing",
-                    "bbox_css": [
-                      166.08,
-                      27.84,
-                      179.52,
-                      55.68
-                    ],
-                    "area_pct": 3.847483477376716,
-                    "modal_drgba": [
-                      0,
-                      0,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "candidate lacks paint present in reference (3.8%)"
-                  }
-                ],
-                "confidence": 1.0,
-                "different_pixels": 3784
               }
             },
             {
@@ -498726,7 +498570,7 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "7c1e18768858fcf5c61e3383c0fc1af837bc4cac6f4cfdf427083f82ac9615fd",
+  "refs_lock_sha256": "f90bd3aee28c372f0836825022979561b6898f6f5e6a84ad40c76314af8265d5",
   "baseline_present": false,
-  "gate_failure": "parity integrity gate FAILED (136 issue(s)):\n  - fixture is FAIL: background-repeat-space-round [backgrounds-borders/background-repeat] expected_support=implemented \n  - fixture is FAIL: repeating-linear-gradient-px-stops [backgrounds-gradients/repeating-linear-gradient] expected_support=implemented \n  - fixture is FAIL: mask-image-radial-gradient [clip-mask/mask-image: radial-gradient()] expected_support=implemented \n  - fixture is FAIL: background-blend-mode-multiply [effects/background-blend-mode] expected_support=implemented \n  - fixture is FAIL: background-blend-mode-overlay [effects/background-blend-mode] expected_support=implemented \n  - fixture is FAIL: r2-background-blend-mode-list-matching [effects/background-blend-mode comma-separated list] expected_support=implemented \n  - fixture is FAIL: r2-box-shadow-inset-blur-radius [effects/box-shadow inset blur with border-radius] expected_support=implemented \n  - fixture is FAIL: r2-box-shadow-spread-blur-radius [effects/box-shadow positive spread with blur and border-radius] expected_support=implemented \n  - fixture is FAIL: r2-mix-blend-mode-difference [effects/mix-blend-mode] expected_support=implemented \n  - fixture is FAIL: r2-mix-blend-mode-clipped-rounded-overflow [effects/mix-blend-mode with overflow] expected_support=implemented \n  - fixture is FAIL: text-shadow-blur [effects/text-shadow] expected_support=implemented \n  - fixture is FAIL: r2-text-shadow-blur-rgba [effects/text-shadow blur with rgba color] expected_support=implemented \n  - fixture is FAIL: r2-filter-before-mask-image-order [filters/filter compositing order with mask-image] expected_support=implemented \n  - fixture is FAIL: r2-filter-stacking-context-negative-z [filters/filter establishes stacking context] expected_support=implemented \n  - fixture is FAIL: filter-blur-box [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: filter-blur-img [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: filter-on-box-blur [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: r2-filter-blur-group-descendants [filters/filter: blur() on a container group] expected_support=implemented \n  - fixture is FAIL: r2-filter-blur-text-glyphs [filters/filter: blur() on text] expected_support=implemented \n  - fixture is FAIL: r2-filter-blur-visual-overflow-layout [filters/filter: blur() visual overflow] expected_support=implemented \n  - fixture is FAIL: filter-chain-order-contrast-blur [filters/filter: chained] expected_support=implemented \n  - fixture is FAIL: filter-drop-shadow [filters/filter: drop-shadow()] expected_support=implemented \n  - fixture is FAIL: filter-drop-shadow-currentcolor [filters/filter: drop-shadow()] expected_support=implemented \n  - fixture is FAIL: r2-filter-saturate-group-descendants [filters/filter: saturate() on a container group] expected_support=implemented \n  - fixture is FAIL: r2-filter-url-fedropshadow [filters/filter: url(#id) with feDropShadow] expected_support=implemented \n  - fixture is FAIL: filter-url-svg-gaussian-blur [filters/filter: url()] expected_support=implemented \n  - fixture is FAIL: grid-explicit-start-end-lines-create-an-implicit-named-area [grid/grid-area] expected_support=implemented \n  - fixture is FAIL: grid-negative-grid-line-numbers-count-from-the-end [grid/grid-column] expected_support=implemented \n  - fixture is FAIL: img-taller-than-page-sliced [images-replaced/fragmentation] expected_support=implemented page 2: above-floor complete-page mismatch 4.789474% exceeds 1.0% PASS ceiling; fill colour differs (ΔE 0.2)\n  - fixture is FAIL: img-object-fit-cover [images-replaced/object-fit] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-default-center [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-position [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-position-length [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: box-model-overflow-hidden-x-border-radius [interactions/overflow-hidden-x-border-radius] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.061067% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-gradients-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-gradients-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.430933% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(+0,+1,+1) (ΔE 0.3)\n  - fixture is FAIL: interactions-cartesian-block-box-model-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-block-box-model-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-color-opacity [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-clip-mask-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-fonts-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-inline-text [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-fonts-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-inline-text [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 2.335200% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(-6,-4,-4) (ΔE 0.4)\n  - fixture is FAIL: interactions-cartesian-filters-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-text-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-fonts-advanced-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.493067% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-grid-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.379467% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-inline-text-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.411200% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-lists-counters-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-lists-counters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-multicol-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-overflow-clipping-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-paged-media-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-text-advanced [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.352800% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.844267% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-positioning-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-selectors-cascade-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-text-advanced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-transforms-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: list-style-type-circle [lists-counters/list-style-type] expected_support=implemented \n  - fixture is FAIL: paged-bleed-crop-background [paged-media/bleed] expected_support=implemented \n  - fixture is FAIL: paged-marks-crop-cross [paged-media/marks] expected_support=implemented \n  - fixture is FAIL: paged-running-named-page-margin-box [paged-media/running-element] expected_support=implemented page 2: above-floor complete-page mismatch 1.170397% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%)\n  - fixture is FAIL: paged-string-set-attr-start [paged-media/running-header] expected_support=implemented \n  - fixture is FAIL: tables-border-collapse [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-origin-groups [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-outer-table-border [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-span-origin-conflicts [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-colspan [tables/colspan] expected_support=implemented \n  - fixture is FAIL: tables-width-percent-columns [tables/column-width] expected_support=implemented \n  - fixture is FAIL: tables-empty-cells-collapse-ignored [tables/empty-cells] expected_support=implemented \n  - fixture is FAIL: tables-border-attribute [tables/html-table-attributes] expected_support=implemented \n  - fixture is FAIL: tables-colspan-rowspan [tables/spanning] expected_support=implemented \n  - fixture is FAIL: tables-fixed-overflow-clip [tables/table-layout] expected_support=implemented \n  - fixture is FAIL: tables-layout-auto-overflow [tables/table-layout] expected_support=partial \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: units-length-ex-x-height [units-values/font-relative-length] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
+  "gate_failure": "parity integrity gate FAILED (135 issue(s)):\n  - fixture is FAIL: background-repeat-space-round [backgrounds-borders/background-repeat] expected_support=implemented \n  - fixture is FAIL: repeating-linear-gradient-px-stops [backgrounds-gradients/repeating-linear-gradient] expected_support=implemented \n  - fixture is FAIL: mask-image-radial-gradient [clip-mask/mask-image: radial-gradient()] expected_support=implemented \n  - fixture is FAIL: background-blend-mode-multiply [effects/background-blend-mode] expected_support=implemented \n  - fixture is FAIL: background-blend-mode-overlay [effects/background-blend-mode] expected_support=implemented \n  - fixture is FAIL: r2-background-blend-mode-list-matching [effects/background-blend-mode comma-separated list] expected_support=implemented \n  - fixture is FAIL: r2-box-shadow-inset-blur-radius [effects/box-shadow inset blur with border-radius] expected_support=implemented \n  - fixture is FAIL: r2-box-shadow-spread-blur-radius [effects/box-shadow positive spread with blur and border-radius] expected_support=implemented \n  - fixture is FAIL: r2-mix-blend-mode-difference [effects/mix-blend-mode] expected_support=implemented \n  - fixture is FAIL: r2-mix-blend-mode-clipped-rounded-overflow [effects/mix-blend-mode with overflow] expected_support=implemented \n  - fixture is FAIL: text-shadow-blur [effects/text-shadow] expected_support=implemented \n  - fixture is FAIL: r2-text-shadow-blur-rgba [effects/text-shadow blur with rgba color] expected_support=implemented \n  - fixture is FAIL: r2-filter-before-mask-image-order [filters/filter compositing order with mask-image] expected_support=implemented \n  - fixture is FAIL: r2-filter-stacking-context-negative-z [filters/filter establishes stacking context] expected_support=implemented \n  - fixture is FAIL: filter-blur-box [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: filter-blur-img [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: filter-on-box-blur [filters/filter: blur()] expected_support=partial \n  - fixture is FAIL: r2-filter-blur-group-descendants [filters/filter: blur() on a container group] expected_support=implemented \n  - fixture is FAIL: r2-filter-blur-text-glyphs [filters/filter: blur() on text] expected_support=implemented \n  - fixture is FAIL: r2-filter-blur-visual-overflow-layout [filters/filter: blur() visual overflow] expected_support=implemented \n  - fixture is FAIL: filter-chain-order-contrast-blur [filters/filter: chained] expected_support=implemented \n  - fixture is FAIL: filter-drop-shadow [filters/filter: drop-shadow()] expected_support=implemented \n  - fixture is FAIL: filter-drop-shadow-currentcolor [filters/filter: drop-shadow()] expected_support=implemented \n  - fixture is FAIL: r2-filter-saturate-group-descendants [filters/filter: saturate() on a container group] expected_support=implemented \n  - fixture is FAIL: r2-filter-url-fedropshadow [filters/filter: url(#id) with feDropShadow] expected_support=implemented \n  - fixture is FAIL: filter-url-svg-gaussian-blur [filters/filter: url()] expected_support=implemented \n  - fixture is FAIL: grid-explicit-start-end-lines-create-an-implicit-named-area [grid/grid-area] expected_support=implemented \n  - fixture is FAIL: grid-negative-grid-line-numbers-count-from-the-end [grid/grid-column] expected_support=implemented \n  - fixture is FAIL: img-taller-than-page-sliced [images-replaced/fragmentation] expected_support=implemented page 2: above-floor complete-page mismatch 4.789474% exceeds 1.0% PASS ceiling; fill colour differs (ΔE 0.2)\n  - fixture is FAIL: img-object-fit-cover [images-replaced/object-fit] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-default-center [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-position [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-position-length [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: box-model-overflow-hidden-x-border-radius [interactions/overflow-hidden-x-border-radius] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.061067% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-gradients-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-gradients-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.430933% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(+0,+1,+1) (ΔE 0.3)\n  - fixture is FAIL: interactions-cartesian-block-box-model-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-block-box-model-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-color-opacity [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-clip-mask-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-fonts-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-inline-text [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-flexbox [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-fonts-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-inline-text [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 2.335200% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(-6,-4,-4) (ΔE 0.4)\n  - fixture is FAIL: interactions-cartesian-filters-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-text-advanced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-fonts-advanced-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.493067% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-grid-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.379467% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-inline-text-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.411200% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-lists-counters-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-lists-counters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-multicol-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-overflow-clipping-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-paged-media-x-paged-media [interactions/supported-family-cartesian-product] expected_support=implemented page 2: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-text-advanced [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.352800% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.278133% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-paged-media-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented page 3: above-floor complete-page mismatch 1.844267% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw antialiasing coverage residue on a shared outline\n  - fixture is FAIL: interactions-cartesian-positioning-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-selectors-cascade-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-text-advanced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-transforms-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: list-style-type-circle [lists-counters/list-style-type] expected_support=implemented \n  - fixture is FAIL: paged-bleed-crop-background [paged-media/bleed] expected_support=implemented \n  - fixture is FAIL: paged-marks-crop-cross [paged-media/marks] expected_support=implemented \n  - fixture is FAIL: paged-running-named-page-margin-box [paged-media/running-element] expected_support=implemented page 2: above-floor complete-page mismatch 1.170397% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%)\n  - fixture is FAIL: paged-string-set-attr-start [paged-media/running-header] expected_support=implemented \n  - fixture is FAIL: tables-border-collapse [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-origin-groups [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-outer-table-border [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-span-origin-conflicts [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-colspan [tables/colspan] expected_support=implemented \n  - fixture is FAIL: tables-width-percent-columns [tables/column-width] expected_support=implemented \n  - fixture is FAIL: tables-empty-cells-collapse-ignored [tables/empty-cells] expected_support=implemented \n  - fixture is FAIL: tables-border-attribute [tables/html-table-attributes] expected_support=implemented \n  - fixture is FAIL: tables-colspan-rowspan [tables/spanning] expected_support=implemented \n  - fixture is FAIL: tables-fixed-overflow-clip [tables/table-layout] expected_support=implemented \n  - fixture is FAIL: tables-layout-auto-overflow [tables/table-layout] expected_support=partial \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
 }
