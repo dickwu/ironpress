@@ -52,12 +52,44 @@ pub struct FontVerticalMetricSet {
 /// they stay separate from [`FontVerticalMetricSet`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FontTextMetrics {
-    /// The font's x-height in font units.
-    pub x_height: u16,
+    /// The font's x-height and the source that controls whether it scales
+    /// linearly or must be measured from a grid-fitted glyph outline.
+    pub x_height: FontXHeightMetric,
     /// The font's cap-height in font units.
     pub cap_height: u16,
     /// Advance width of the ZERO glyph in font units.
     pub zero_advance: u16,
+}
+
+/// Source-aware x-height used by CSS font-relative units.
+///
+/// OpenType's explicit `sxHeight` is a scalable font metric. A measured `x`
+/// outline is different: its used height depends on the active grid-fitting
+/// mode and point size. Keeping the distinction in the type prevents those
+/// two rules from being accidentally collapsed into one ratio.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontXHeightMetric {
+    #[default]
+    Unavailable,
+    OpenType(u16),
+    GlyphOutline(u16),
+}
+
+impl FontXHeightMetric {
+    const fn open_type(value: u16) -> Self {
+        if value == 0 {
+            Self::Unavailable
+        } else {
+            Self::OpenType(value)
+        }
+    }
+
+    const fn font_units(self) -> Option<u16> {
+        match self {
+            Self::OpenType(value) | Self::GlyphOutline(value) if value != 0 => Some(value),
+            Self::Unavailable | Self::OpenType(_) | Self::GlyphOutline(_) => None,
+        }
+    }
 }
 
 impl FontVerticalMetricSet {
@@ -291,10 +323,61 @@ impl TtfFont {
     /// x-height as a fraction of the em (css-values-4 §6.1.1 `ex`). Falls back
     /// to the CSS-recommended 0.5em when the metric could not be determined.
     pub fn x_height_ratio(&self) -> f32 {
-        if self.units_per_em == 0 || self.text_metrics.x_height == 0 {
+        let Some(x_height) = self.text_metrics.x_height.font_units() else {
+            return 0.5;
+        };
+        if self.units_per_em == 0 {
             return 0.5;
         }
-        f32::from(self.text_metrics.x_height) / f32::from(self.units_per_em)
+        f32::from(x_height) / f32::from(self.units_per_em)
+    }
+
+    /// X-height exposed to CSS layout at this point size.
+    ///
+    /// TrueType instructions grid-fit the lowercase `x` differently at
+    /// different CSS sizes, so scaling the design-space bounding box is not
+    /// the font's used x-height. When the hinted outline cannot be obtained,
+    /// retain the metric/fallback ratio required by CSS Values.
+    pub fn used_x_height(&self, font_size: f32) -> f32 {
+        let scaled_metric = || self.x_height_ratio() * font_size.max(0.0);
+        match self.text_metrics.x_height {
+            FontXHeightMetric::GlyphOutline(_) => self
+                .hinted_x_height(font_size)
+                .unwrap_or_else(scaled_metric),
+            FontXHeightMetric::OpenType(_) | FontXHeightMetric::Unavailable => scaled_metric(),
+        }
+    }
+
+    fn hinted_x_height(&self, font_size: f32) -> Option<f32> {
+        use skrifa::MetadataProvider as _;
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::outline::{
+            Engine, HintingInstance, HintingOptions, SmoothMode, Target, pen::ControlBoundsPen,
+        };
+
+        if !font_size.is_finite() || font_size <= 0.0 {
+            return None;
+        }
+        let font_size_px = font_size / crate::fonts::PT_PER_CSS_PX;
+        let font = skrifa::FontRef::from_index(&self.data, self.face_index.get()).ok()?;
+        let outlines = font.outline_glyphs();
+        let glyph = outlines.get(font.charmap().map('x')?)?;
+        let hinting = HintingInstance::new(
+            &outlines,
+            Size::new(font_size_px),
+            LocationRef::default(),
+            HintingOptions {
+                engine: Engine::Auto(None),
+                target: Target::from(SmoothMode::Light),
+            },
+        )
+        .ok()?;
+        let mut bounds = ControlBoundsPen::new();
+        glyph.draw(&hinting, &mut bounds).ok()?;
+        let bounds = bounds.bounding_box()?;
+        let x_height_px = bounds.y_max - bounds.y_min;
+        (x_height_px.is_finite() && x_height_px > 0.0)
+            .then_some(x_height_px * crate::fonts::PT_PER_CSS_PX)
     }
 
     /// The x-height aspect Blink exposes to `font-size-adjust` for this CSS
@@ -305,9 +388,9 @@ impl TtfFont {
         if !computed_font_size.is_finite() || computed_font_size <= 0.0 {
             return self.x_height_ratio();
         }
-        let css_x_height = (self.x_height_ratio() * computed_font_size).round();
-        if css_x_height > 0.0 {
-            css_x_height / computed_font_size
+        let used_x_height = self.used_x_height(computed_font_size);
+        if used_x_height > 0.0 {
+            used_x_height / computed_font_size
         } else {
             self.x_height_ratio()
         }
@@ -555,9 +638,15 @@ fn parse_ttf_at_offset(
     // version 2 and therefore carries no sxHeight field.
     let os2 = tables.get(b"OS/2");
     let os2_x_height = parse_os2_positive_metric(&data, os2, 86);
-    let x_height = os2_x_height
-        .or_else(|| measure_glyph_y_max(&data, face_index, 'x'))
-        .unwrap_or(0);
+    let x_height = os2_x_height.map_or_else(
+        || {
+            measure_glyph_y_max(&data, face_index, 'x').map_or(
+                FontXHeightMetric::Unavailable,
+                FontXHeightMetric::GlyphOutline,
+            )
+        },
+        FontXHeightMetric::open_type,
+    );
     // CSS Inline 3 initial-letter sizing uses cap-height rather than a
     // first-letter outline. Prefer OS/2.sCapHeight (version >= 2), then the
     // conventional Latin H measurement when the metric is absent.
@@ -1611,6 +1700,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_ttf_uses_os2_x_height_as_a_linear_metric() {
+        let head = make_head_table(1000);
+        let hhea = make_hhea_table(800, -200, 1);
+        let maxp = make_maxp_table(1);
+        let hmtx = make_hmtx_table(&[500]);
+        let cmap = make_cmap_format4(65, 65, -64);
+        let name = make_name_table_ascii(1, b"Test");
+        let mut os2 = vec![0u8; 90];
+        os2[..2].copy_from_slice(&2u16.to_be_bytes());
+        os2[86..88].copy_from_slice(&537i16.to_be_bytes());
+
+        let data = build_full_ttf(&head, &hhea, &maxp, &hmtx, &cmap, &name, Some(&os2));
+        let font = parse_ttf(data).unwrap();
+
+        assert_eq!(font.text_metrics.x_height, FontXHeightMetric::OpenType(537));
+        assert!((font.used_x_height(20.0) - 10.74).abs() < 1e-6);
+    }
+
+    #[test]
     fn parse_ttf_os2_table_too_short_falls_back_to_hhea() {
         // Line 125: OS/2 present but too short
         let head = make_head_table(1000);
@@ -2120,7 +2228,7 @@ mod tests {
             is_bold: false,
             is_italic: false,
             text_metrics: FontTextMetrics {
-                x_height,
+                x_height: FontXHeightMetric::open_type(x_height),
                 cap_height,
                 zero_advance,
             },
@@ -2136,10 +2244,17 @@ mod tests {
 
     #[test]
     fn font_size_adjust_uses_the_css_x_height_metric() {
-        // 1063 font units is ParitySerif's measured `x` height. At 30 CSS px,
-        // Blink exposes the 16px CSS x-height to `font-size-adjust`.
-        let font = metrics_font(2048, 1063, 0, 0);
-        assert!((font.font_size_adjust_x_height_ratio(30.0) - 16.0 / 30.0).abs() < 1e-6);
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySerif.ttf"),
+        )
+        .expect("ParitySerif test font");
+        let font = parse_ttf(bytes).expect("valid ParitySerif TTF");
+        let font_size = 30.0 * crate::fonts::PT_PER_CSS_PX;
+
+        // Current Chromium/Skia Fontations exposes a 16px hinted contour
+        // height at 30 CSS px for this face, which has no OS/2.sxHeight.
+        assert!((font.font_size_adjust_x_height_ratio(font_size) - 16.0 / 30.0).abs() < 1e-6);
     }
 
     #[test]

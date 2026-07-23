@@ -5599,9 +5599,7 @@ fn resolve_font_size_value(
     let size = match value {
         CssValue::Length(value) => *value,
         CssValue::Em(value) => *value * parent.font_size,
-        CssValue::Ex(value) => {
-            *value * parent.font_size * style_ex_length_ratio(parent, font_metrics)
-        }
+        CssValue::Ex(value) => *value * style_ex_length(parent, font_metrics),
         CssValue::Ch(value) => {
             *value * parent.font_size * font_metrics.style_ch_ratio(parent).unwrap_or(0.5)
         }
@@ -13314,7 +13312,7 @@ fn line_height_length_context(
 impl ComputedStyle {
     pub(crate) fn font_unit_lengths(&self, font_metrics: FontMetrics<'_>) -> FontUnitLengths {
         FontUnitLengths {
-            ex: self.font_size * style_ex_length_ratio(self, font_metrics),
+            ex: style_ex_length(self, font_metrics),
             ch: self.font_size * font_metrics.style_ch_ratio(self).unwrap_or(0.5),
             cap: self.font_size * style_cap_height_ratio(self),
             // CSS Values 4 requires a 1em fallback when the ideographic
@@ -13357,7 +13355,7 @@ fn resolve_css_length_for_style(
         CssValue::Em(v) => Some(*v * style.font_size),
         CssValue::Number(v) if *v == 0.0 => Some(0.0),
         CssValue::Percentage(v) => Some(base.percentage_basis * *v / 100.0),
-        CssValue::Ex(v) => Some(*v * style.font_size * style_ex_length_ratio(style, font_metrics)),
+        CssValue::Ex(v) => Some(*v * style_ex_length(style, font_metrics)),
         CssValue::Ch(v) => {
             Some(*v * style.font_size * font_metrics.style_ch_ratio(style).unwrap_or(0.5))
         }
@@ -13509,8 +13507,10 @@ fn style_cap_height_ratio(_style: &ComputedStyle) -> f32 {
     0.75
 }
 
-fn style_ex_length_ratio(style: &ComputedStyle, font_metrics: FontMetrics<'_>) -> f32 {
-    font_metrics.style_x_height_ratio(style).unwrap_or(0.5)
+fn style_ex_length(style: &ComputedStyle, font_metrics: FontMetrics<'_>) -> f32 {
+    font_metrics
+        .style_x_height(style)
+        .unwrap_or(style.font_size * 0.5)
 }
 
 fn resolved_line_height_length(style: &ComputedStyle) -> f32 {
@@ -20115,8 +20115,10 @@ mod tests {
         )
         .expect("valid ex font size");
 
-        // ParitySans has an x-height of 1120 font units in a 2048-unit em.
-        assert!((size - 43.75).abs() < f32::EPSILON);
+        // ParitySans has no OS/2.sxHeight. Current Chromium's Fontations
+        // backend measures a 15px hinted `x` at the inherited 26.667px size,
+        // so `4ex` computes to 60px / 45pt.
+        assert_eq!(size, 45.0);
     }
 
     #[test]
