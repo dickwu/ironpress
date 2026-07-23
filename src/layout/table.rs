@@ -3821,15 +3821,13 @@ pub(crate) fn flatten_table(
         last.margins_mut().end = 0.0;
     }
 
-    let principal_height = style.height.map_or(
-        box_height + table_level_border.vertical_width(),
-        |height| match style.box_sizing {
-            BoxSizing::BorderBox => height,
-            BoxSizing::ContentBox => {
-                height + style.padding.vertical() + table_level_border.vertical_width()
-            }
-        },
-    );
+    // CSS Tables treats `height` on a table-root as a minimum for the table
+    // grid. `box_height` is measured after row expansion and therefore is the
+    // authoritative used padding-box extent even when content exceeds that
+    // authored minimum. Preserve the distinction in `BlockSize`: marking the
+    // authored value definite here made flex alignment and containing blocks
+    // use a shorter box than the rows that were actually painted.
+    let table_border_box_height = box_height + table_level_border.vertical_width();
     let establishes_containing_block = crate::layout::helpers::establishes_containing_block(style);
     if establishes_containing_block {
         crate::layout::helpers::patch_absolute_descendants_containing_block(
@@ -3837,7 +3835,7 @@ pub(crate) fn flatten_table(
             ContainingBlock {
                 x: 0.0,
                 width: box_width,
-                height: principal_height,
+                height: table_border_box_height,
                 depth: context.positioned_depth,
             },
         );
@@ -3847,7 +3845,10 @@ pub(crate) fn flatten_table(
         parts,
         style,
         BoxModel {
-            size: LayoutSize::fixed(box_width, style.height.map(|_| principal_height)),
+            size: LayoutSize::fixed_inline(
+                box_width,
+                crate::layout::elements::BlockSize::minimum(table_border_box_height),
+            ),
             margins: BlockMargins::new(style.margin.top, style.margin.bottom),
             ..Default::default()
         },
@@ -4958,5 +4959,55 @@ mod border_tests {
                 .any(|(_, element)| has_fixup_boundary(element.as_ref())),
             "computed table-cell children form an anonymous table before the replaced sibling"
         );
+    }
+
+    #[test]
+    fn generated_table_rows_expand_the_table_height_minimum() {
+        use crate::layout::elements::LayoutElementTestExt;
+        use crate::layout::engine::layout_with_rules;
+        use crate::parser::html::parse_html_with_styles;
+        use crate::types::{Margin, PageSize};
+
+        let document = parse_html_with_styles(
+            r#"<style>
+                * { box-sizing:border-box; margin:0; }
+                .table { display:table; width:126px; height:68px; padding:7px;
+                    border:2px solid; border-spacing:3px; }
+                .table::before { content:'before'; }
+                .table::after { content:'after'; }
+                .own { height:22px; white-space:nowrap; }
+                .table > .own > span { display:table-cell; }
+            </style>
+            <div class="table"><div class="own"><span>Ag</span><span>Bb</span></div></div>"#,
+        )
+        .expect("generated table fixture should parse");
+        let rules = document
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| crate::parser::css::parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &document.nodes,
+            PageSize::new(200.0, 120.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let table_root = pages[0]
+            .elements
+            .iter()
+            .find_map(|(_, element)| element.inspect_table(|_| ()).map(|()| element.as_ref()))
+            .expect("table principal box");
+        let (used_height, is_definite) = table_root
+            .inspect_container(|principal| {
+                (
+                    principal.box_model.size.height.used().unwrap_or_default(),
+                    principal.box_model.size.height.is_definite(),
+                )
+            })
+            .expect("table principal geometry");
+
+        assert!(used_height > 68.0 * 0.75);
+        assert!(!is_definite, "table height is a minimum, not a hard cap");
+        assert!(estimate_element_height(table_root) >= used_height);
     }
 }
