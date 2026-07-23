@@ -1,18 +1,18 @@
 # ironpress parity health
 
-<!-- parity-invocation-id: ad858d03bac38b7d3b4fcd119e11456e -->
+<!-- parity-invocation-id: a9c4cf2b9c4cb47bd695cd75f765fe66 -->
 
-<!-- parity-report-json-sha256: 3b06c72c1cdb7b366f34fc4772439544148ceac4841ea6e31cba9aa4378986ea -->
+<!-- parity-report-json-sha256: a6fa10bc4f1dd36a3f714366d96650ee43000b8d46eee2553c46db4e8b56688a -->
 
 | health | verified visual parity | exact raster | visual-policy | FAIL | disputed refs | total |
 |:------:|-----------------------:|-------------:|--------------:|-----:|--------------:|------:|
-| **BROKEN** | 91.47% | 904 | 575 | 138 | 16 | 1633 |
+| **BROKEN** | 91.53% | 903 | 578 | 137 | 16 | 1634 |
 
-**Needs attention: 138 failing fixture(s) · 16 disputed reference(s) · 1 integrity item(s).** PASS rule: a fixed, same-coordinate human-visibility policy is applied after both PDFs use the same pdftoppm executable and arguments. It never translates, registers, or fixture-tunes either image. Every raw RGBA difference remains reported.
+**Needs attention: 137 failing fixture(s) · 16 disputed reference(s) · 1 integrity item(s).** PASS rule: a fixed, same-coordinate human-visibility policy is applied after both PDFs use the same pdftoppm executable and arguments. It never translates, registers, or fixture-tunes either image. Every raw RGBA difference remains reported.
 
-Scope: 514 category/feature pairs · labels only: implemented 1596 · partial 37 · unsupported 0 · supported-family interactions 300/300 across 24 families.
+Scope: 514 category/feature pairs · labels only: implemented 1597 · partial 37 · unsupported 0 · supported-family interactions 300/300 across 24 families.
 
-**Raster audit: 904 exact PASSes · 575 visual-policy PASSes (max raw difference 44.32%; CSS-scale observation: conserved sub-CSS coverage 14 · CSS-scale observation: one-sided sub-CSS outline coverage 73 · CSS-scale observation: predominant shared-outline coverage 10 · CSS-scale observation: stable same-coordinate outline phase 53 · CSS-scale observation: sub-CSS shared-colour coverage 240 · CSS-scale observation: sub-CSS shared-outline coverage 115 · raw policy 70).** Each visual-policy fixture card keeps its raw difference and policy basis.
+**Raster audit: 903 exact PASSes · 578 visual-policy PASSes (max raw difference 44.32%; CSS-scale observation: conserved sub-CSS coverage 14 · CSS-scale observation: one-sided sub-CSS outline coverage 73 · CSS-scale observation: predominant shared-outline coverage 10 · CSS-scale observation: stable same-coordinate outline phase 53 · CSS-scale observation: sub-CSS shared-colour coverage 242 · CSS-scale observation: sub-CSS shared-outline coverage 115 · raw policy 71).** Each visual-policy fixture card keeps its raw difference and policy basis.
 
 ## Integrity
 
@@ -22,7 +22,7 @@ Scope: 514 category/feature pairs · labels only: implemented 1596 · partial 37
 
 ### Gate result
 
-**REGRESSION — FAILED.** parity integrity gate FAILED (138 issue(s)):
+**REGRESSION — FAILED.** parity integrity gate FAILED (137 issue(s)):
 
 ## Failure triage
 
@@ -30,8 +30,8 @@ Direct paint mismatches are listed before colour-only residuals. Both remain FAI
 
 | direct evidence | fixtures | how to read it |
 |-----------------|---------:|----------------|
-| direct paint mismatch | 11 | Missing/Extra paint is the policy-triggering defect; inspect first |
-| colour-only residual | 127 | colour/coverage is the policy-triggering defect; review at authored scale |
+| direct paint mismatch | 13 | Missing/Extra paint is the policy-triggering defect; inspect first |
+| colour-only residual | 124 | colour/coverage is the policy-triggering defect; review at authored scale |
 
 ## Failure groups
 
@@ -39,18 +39,20 @@ Raster-output symptoms, not inferred root causes.
 
 | raster symptom | fixtures |
 |----------------|---------:|
-| ColorValue | 94 |
+| ColorValue | 91 |
 | AntialiasCoverage | 33 |
-| Extra | 8 |
-| Missing | 3 |
+| Extra | 9 |
+| Missing | 4 |
 
 ## Needs attention
 
-Integrity problems first, then all 138 rendering failure(s) and 16 disputed reference(s). A disputed reference retains its raw comparison evidence but is not a candidate verdict. The gate result is summarized once above. Support labels provide context only and never hide a defect. Generated-local visual inventory: `reports/index.html`.
+Integrity problems first, then all 137 rendering failure(s) and 16 disputed reference(s). A disputed reference retains its raw comparison evidence but is not a candidate verdict. The gate result is summarized once above. Support labels provide context only and never hide a defect. Generated-local visual inventory: `reports/index.html`.
 
 | issue | category | fixture | detail |
 |-------|----------|---------|--------|
 | INTEGRITY | — | — | baseline.json is missing, invalid, or incompatible; regression comparison is unavailable |
+| FAIL | interactions | [`interactions-cartesian-generated-content-x-tables`](cases/interactions/interactions-cartesian-generated-content-x-tables.html) | supported-family-cartesian-product · direct paint mismatch · Extra · above-floor diff 2.97% · raw RGBA diff 2.97% · 30159 differing RGBA pixels · candidate adds paint absent from reference (3.0%) |
+| FAIL | units-values | [`units-length-ex-x-height`](cases/units-values/units-length-ex-x-height.html) | font-relative-length · direct paint mismatch · Missing · above-floor diff 1.53% · raw RGBA diff 1.53% · 3784 differing RGBA pixels · candidate lacks paint present in reference (4.1%) |
 | FAIL | paged-media | [`paged-running-named-page-margin-box`](cases/paged-media/paged-running-named-page-margin-box.html) | running-element · direct paint mismatch · Missing · above-floor diff 1.17% · raw RGBA diff 1.18% · 2497 differing RGBA pixels · page 2: above-floor complete-page mismatch 1.170397% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%) |
 | FAIL | paged-media | [`paged-string-set-attr-start`](cases/paged-media/paged-string-set-attr-start.html) | running-header · direct paint mismatch · Missing · above-floor diff 1.16% · raw RGBA diff 1.18% · 2845 differing RGBA pixels · above-floor complete-page mismatch 1.160251% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (1.5%) |
 | FAIL | tables | [`tables-border-attribute`](cases/tables/tables-border-attribute.html) | html-table-attributes · direct paint mismatch · Extra · above-floor diff 1.02% · raw RGBA diff 1.03% · 2890 differing RGBA pixels · above-floor complete-page mismatch 1.021867% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate adds paint absent from reference (1.7%) |
@@ -67,7 +69,6 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 | FAIL | filters | [`r2-filter-blur-group-descendants`](cases/filters/r2-filter-blur-group-descendants.html) | filter: blur() on a container group · colour-only residual · ColorValue · above-floor diff 11.69% · raw RGBA diff 36.35% · 164957 differing RGBA pixels · above-floor complete-page mismatch 11.688595% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(-1,-1,-1) (ΔE 0.6) |
 | FAIL | effects | [`r2-box-shadow-spread-blur-radius`](cases/effects/r2-box-shadow-spread-blur-radius.html) | box-shadow positive spread with blur and border-radius · colour-only residual · ColorValue · above-floor diff 10.46% · raw RGBA diff 36.10% · 163826 differing RGBA pixels · above-floor complete-page mismatch 10.464132% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(-1,-1,-1) (ΔE 0.5) |
 | FAIL | effects | [`r2-box-shadow-inset-blur-radius`](cases/effects/r2-box-shadow-inset-blur-radius.html) | box-shadow inset blur with border-radius · colour-only residual · ColorValue · above-floor diff 14.20% · raw RGBA diff 34.49% · 108654 differing RGBA pixels · above-floor complete-page mismatch 14.199365% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(-1,-1,-1) (ΔE 0.5) |
-| FAIL | filters | [`r2-filter-url-feblend-multiply`](cases/filters/r2-filter-url-feblend-multiply.html) | filter: url(#id) with feBlend multiply · colour-only residual · ColorValue · above-floor diff 31.98% · raw RGBA diff 31.98% · 100725 differing RGBA pixels · above-floor complete-page mismatch 31.976190% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+3,+0,+0) (ΔE 1.2) |
 | FAIL | clip-mask | [`mask-image-radial-gradient`](cases/clip-mask/mask-image-radial-gradient.html) | mask-image: radial-gradient() · colour-only residual · ColorValue · above-floor diff 4.60% · raw RGBA diff 29.36% · 160567 differing RGBA pixels · above-floor complete-page mismatch 4.602514% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+1,+0,+0) (ΔE 0.4) |
 | FAIL | filters | [`r2-filter-stacking-context-negative-z`](cases/filters/r2-filter-stacking-context-negative-z.html) | filter establishes stacking context · colour-only residual · ColorValue · above-floor diff 1.10% · raw RGBA diff 26.43% · 83239 differing RGBA pixels · above-floor complete-page mismatch 1.099365% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(+0,+0,-1) (ΔE 0.1) |
 | FAIL | filters | [`filter-url-svg-gaussian-blur`](cases/filters/filter-url-svg-gaussian-blur.html) | filter: url() · colour-only residual · ColorValue · above-floor diff 1.62% · raw RGBA diff 25.48% · 80276 differing RGBA pixels · above-floor complete-page mismatch 1.624762% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(-1,+0,+0) (ΔE 0.4) |
@@ -82,7 +83,6 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 | FAIL | effects | [`r2-text-shadow-blur-rgba`](cases/effects/r2-text-shadow-blur-rgba.html) | text-shadow blur with rgba color · colour-only residual · ColorValue · above-floor diff 1.08% · raw RGBA diff 12.14% · 35060 differing RGBA pixels · above-floor complete-page mismatch 1.078442% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill colour differs (ΔE 0.4) |
 | FAIL | filters | [`r2-filter-url-fedropshadow`](cases/filters/r2-filter-url-fedropshadow.html) | filter: url(#id) with feDropShadow · colour-only residual · ColorValue · above-floor diff 9.91% · raw RGBA diff 10.06% · 31677 differing RGBA pixels · above-floor complete-page mismatch 9.910159% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+4,+4,+4) (ΔE 0.8) |
 | FAIL | backgrounds-borders | [`background-repeat-space-round`](cases/backgrounds-borders/background-repeat-space-round.html) | background-repeat · colour-only residual · ColorValue · above-floor diff 4.44% · raw RGBA diff 7.22% · 13000 differing RGBA pixels · above-floor complete-page mismatch 4.444444% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+0,+1,+0) (ΔE 0.6) |
-| FAIL | fonts-advanced | [`fonts-advanced-font-size-ex`](cases/fonts-advanced/fonts-advanced-font-size-ex.html) | font-size · colour-only residual · ColorValue · above-floor diff 6.09% · raw RGBA diff 6.12% · 32126 differing RGBA pixels · fill recolour ΔRGB(+43,+49,+46) (ΔE 58.2) |
 | FAIL | interactions | [`interactions-cartesian-effects-x-filters`](cases/interactions/interactions-cartesian-effects-x-filters.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 1.97% · raw RGBA diff 4.35% · 44147 differing RGBA pixels · above-floor complete-page mismatch 1.970609% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(+1,+0,+0) (ΔE 0.3) |
 | FAIL | effects | [`text-shadow-blur`](cases/effects/text-shadow-blur.html) | text-shadow · colour-only residual · ColorValue · above-floor diff 1.47% · raw RGBA diff 3.59% · 36614 differing RGBA pixels · above-floor complete-page mismatch 1.467549% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+1,+0,+1) (ΔE 0.6) |
 | FAIL | interactions | [`interactions-cartesian-filters-x-filters`](cases/interactions/interactions-cartesian-filters-x-filters.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 2.56% · raw RGBA diff 3.42% · 34684 differing RGBA pixels · above-floor complete-page mismatch 2.556751% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw fill recolour ΔRGB(-1,-1,-1) (ΔE 9.1) |
@@ -140,7 +140,6 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 | FAIL | interactions | [`interactions-cartesian-backgrounds-borders-x-flexbox`](cases/interactions/interactions-cartesian-backgrounds-borders-x-flexbox.html) | supported-family-cartesian-product · colour-only residual · AntialiasCoverage · above-floor diff 0.38% · raw RGBA diff 0.40% · 4054 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | interactions | [`interactions-cartesian-backgrounds-borders-x-images-replaced`](cases/interactions/interactions-cartesian-backgrounds-borders-x-images-replaced.html) | supported-family-cartesian-product · colour-only residual · AntialiasCoverage · above-floor diff 0.34% · raw RGBA diff 0.39% · 3949 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | interactions | [`interactions-cartesian-backgrounds-borders-x-effects`](cases/interactions/interactions-cartesian-backgrounds-borders-x-effects.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.33% · raw RGBA diff 0.37% · 3803 differing RGBA pixels · fill recolour ΔRGB(-3,-2,+0) (ΔE 3.5) |
-| FAIL | interactions | [`interactions-cartesian-grid-x-positioning`](cases/interactions/interactions-cartesian-grid-x-positioning.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.37% · raw RGBA diff 0.37% · 3771 differing RGBA pixels · fill recolour ΔRGB(-20,-19,-17) (ΔE 69.2) |
 | FAIL | interactions | [`interactions-cartesian-backgrounds-borders-x-positioning`](cases/interactions/interactions-cartesian-backgrounds-borders-x-positioning.html) | supported-family-cartesian-product · colour-only residual · AntialiasCoverage · above-floor diff 0.30% · raw RGBA diff 0.35% · 3539 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | images-replaced | [`img-object-position-length`](cases/images-replaced/img-object-position-length.html) | object-position · colour-only residual · ColorValue · above-floor diff 0.35% · raw RGBA diff 0.35% · 2899 differing RGBA pixels · fill recolour ΔRGB(-11,-4,-4) (ΔE 14.8) |
 | FAIL | interactions | [`interactions-cartesian-images-replaced-x-typography`](cases/interactions/interactions-cartesian-images-replaced-x-typography.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.34% · raw RGBA diff 0.34% · 3420 differing RGBA pixels · fill recolour ΔRGB(+7,+75,+30) (ΔE 58.6) |
@@ -149,12 +148,12 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 | FAIL | interactions | [`interactions-cartesian-multicol-x-overflow-clipping`](cases/interactions/interactions-cartesian-multicol-x-overflow-clipping.html) | supported-family-cartesian-product · colour-only residual · AntialiasCoverage · above-floor diff 0.25% · raw RGBA diff 0.29% · 2953 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | effects | [`background-blend-mode-overlay`](cases/effects/background-blend-mode-overlay.html) | background-blend-mode · colour-only residual · ColorValue · above-floor diff 0.29% · raw RGBA diff 0.29% · 625 differing RGBA pixels · fill recolour ΔRGB(+0,+0,+25) (ΔE 8.5) |
 | FAIL | interactions | [`interactions-cartesian-flexbox-x-lists-counters`](cases/interactions/interactions-cartesian-flexbox-x-lists-counters.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.26% · raw RGBA diff 0.26% · 2616 differing RGBA pixels · fill recolour ΔRGB(+17,+89,+81) (ΔE 66.8) |
-| FAIL | interactions | [`interactions-cartesian-positioning-x-tables`](cases/interactions/interactions-cartesian-positioning-x-tables.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.22% · raw RGBA diff 0.22% · 2242 differing RGBA pixels · fill recolour ΔRGB(+1,+1,+1) (ΔE 69.2) |
 | FAIL | interactions | [`box-model-overflow-hidden-x-border-radius`](cases/interactions/box-model-overflow-hidden-x-border-radius.html) | overflow-hidden-x-border-radius · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.21% · 1407 differing RGBA pixels · fill recolour ΔRGB(-6,-5,-4) (ΔE 2.9) · declared bases PASS; interaction fixture FAILS |
 | FAIL | tables | [`tables-colspan`](cases/tables/tables-colspan.html) | colspan · colour-only residual · AntialiasCoverage · above-floor diff 0.19% · raw RGBA diff 0.19% · 1360 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | interactions | [`interactions-cartesian-positioning-x-typography`](cases/interactions/interactions-cartesian-positioning-x-typography.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.19% · 1937 differing RGBA pixels · fill recolour ΔRGB(-4,-4,-3) (ΔE 69.2) |
 | FAIL | interactions | [`interactions-cartesian-grid-x-tables`](cases/interactions/interactions-cartesian-grid-x-tables.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.19% · 1936 differing RGBA pixels · fill recolour ΔRGB(-1,-1,-1) (ΔE 69.2) |
 | FAIL | tables | [`tables-colspan-rowspan`](cases/tables/tables-colspan-rowspan.html) | spanning · colour-only residual · AntialiasCoverage · above-floor diff 0.19% · raw RGBA diff 0.19% · 1680 differing RGBA pixels · antialiasing coverage residue on a shared outline |
+| FAIL | interactions | [`interactions-cartesian-positioning-x-tables`](cases/interactions/interactions-cartesian-positioning-x-tables.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.19% · 1913 differing RGBA pixels · fill recolour ΔRGB(-2,-2,-2) (ΔE 69.2) |
 | FAIL | interactions | [`interactions-cartesian-effects-x-inline-text`](cases/interactions/interactions-cartesian-effects-x-inline-text.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.18% · raw RGBA diff 0.18% · 1867 differing RGBA pixels · fill recolour ΔRGB(+9,-12,-53) (ΔE 20.5) |
 | FAIL | tables | [`tables-width-percent-columns`](cases/tables/tables-width-percent-columns.html) | column-width · colour-only residual · AntialiasCoverage · above-floor diff 0.18% · raw RGBA diff 0.18% · 1384 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | text-advanced | [`text-advanced-text-combine-upright-digits`](cases/text-advanced/text-advanced-text-combine-upright-digits.html) | text-combine-upright:digits 2 · colour-only residual · ColorValue · above-floor diff 0.16% · raw RGBA diff 0.17% · 801 differing RGBA pixels · fill recolour ΔRGB(+1,+6,+5) (ΔE 26.6) |
@@ -210,15 +209,15 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 
 | category | verified visual parity | pass | fail | disputed refs |
 |----------|-----------------------:|-----:|-----:|--------------:|
-| [filters](cases/filters/) | 67.39% | 31 | 15 | 1 |
-| [interactions](cases/interactions/) | 74.63% | 250 | 85 | 1 |
+| [filters](cases/filters/) | 69.57% | 32 | 14 | 1 |
+| [interactions](cases/interactions/) | 74.70% | 251 | 85 | 1 |
 | [effects](cases/effects/) | 84.75% | 50 | 9 | 1 |
 | [images-replaced](cases/images-replaced/) | 86.84% | 33 | 5 | 0 |
 | [tables](cases/tables/) | 88.78% | 87 | 11 | 1 |
 | [paged-media](cases/paged-media/) | 95.06% | 77 | 4 | 3 |
 | [text-advanced](cases/text-advanced/) | 95.92% | 47 | 2 | 0 |
-| [fonts-advanced](cases/fonts-advanced/) | 96.15% | 25 | 1 | 0 |
 | [lists-counters](cases/lists-counters/) | 97.06% | 33 | 1 | 1 |
+| [units-values](cases/units-values/) | 97.62% | 41 | 1 | 0 |
 | [backgrounds-gradients](cases/backgrounds-gradients/) | 97.83% | 45 | 1 | 0 |
 | [grid](cases/grid/) | 97.92% | 94 | 2 | 0 |
 | [clip-mask](cases/clip-mask/) | 98.08% | 51 | 1 | 0 |
@@ -229,13 +228,13 @@ Integrity problems first, then all 138 rendering failure(s) and 16 disputed refe
 | [overflow-clipping](cases/overflow-clipping/) | 100.00% | 17 | 0 | 3 |
 | [block-box-model](cases/block-box-model/) | 100.00% | 59 | 0 | 0 |
 | [flexbox](cases/flexbox/) | 100.00% | 132 | 0 | 0 |
+| [fonts-advanced](cases/fonts-advanced/) | 100.00% | 26 | 0 | 0 |
 | [multicol](cases/multicol/) | 100.00% | 36 | 0 | 0 |
 | [positioning](cases/positioning/) | 100.00% | 22 | 0 | 0 |
 | [probes](cases/probes/) | 100.00% | 6 | 0 | 0 |
 | [selectors-cascade](cases/selectors-cascade/) | 100.00% | 60 | 0 | 0 |
 | [transforms](cases/transforms/) | 100.00% | 44 | 0 | 0 |
 | [typography](cases/typography/) | 100.00% | 24 | 0 | 0 |
-| [units-values](cases/units-values/) | 100.00% | 42 | 0 | 0 |
 
 ## Support labels
 
@@ -247,7 +246,7 @@ These labels describe intended surface coverage only. They never change a verdic
 
 ## Run details
 
-- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤2.3; a ColorErr pixel with every RGB channel delta ≤1.0% is semantically correct (its exact RGBA evidence remains reported); complete-page above-floor mismatch must be ≤1.0%; color ΔE2000 ≤2.3; edge color above that per-pixel allowance ≤1.50% of paint only when no component, span, or aggregate crosses the authored visibility floors; interior color ≤0.125%; Missing/Extra or unproven ColorErr component ≥4 CSS px²; component ≥8 CSS px span; disconnected total ≥16 CSS px². Balanced colour coverage requires page bias ≤0.10, every independently visible component (≥16 CSS px² or ≥16 CSS px span) bias ≤0.25, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least 75% of its pixels directly prove the shared ramp and the remainder is below 16 CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤6.0% each, balance bias ≤0.05, ColorErr coverage ≥2× direct presence, component bounds below the normal glyph limits, interior colour ≤0.25%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥95% byte-identical shared paint, ≤1.0% direct presence, ColorErr ≥2× presence, zero interior recolour, and a directly proven unchanged-endpoint ramp; edge-sample Delta-E is not an independent rejection when that topology is proven. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤1.0% of paint; a coherent outline may exceed that only with at most 4 direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Exact RGBA mismatch remains in the numeric report; the full-page diff paints only pixels above the per-channel floor. 300 DPI · source `/usr/bin/pdftoppm` · executed snapshot `/tmp/ironpress-pdftoppm-3492320-1784827004982337082-0/pdftoppm` · argv `[-r, 300, -png, <PDF>, <PREFIX>]` · pdftoppm version 24.08.0 · binary SHA-256 `b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013`.
+- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤2.3; a ColorErr pixel with every RGB channel delta ≤1.0% is semantically correct (its exact RGBA evidence remains reported); complete-page above-floor mismatch must be ≤1.0%; color ΔE2000 ≤2.3; edge color above that per-pixel allowance ≤1.50% of paint only when no component, span, or aggregate crosses the authored visibility floors; interior color ≤0.125%; Missing/Extra or unproven ColorErr component ≥4 CSS px²; component ≥8 CSS px span; disconnected total ≥16 CSS px². Balanced colour coverage requires page bias ≤0.10, every independently visible component (≥16 CSS px² or ≥16 CSS px span) bias ≤0.25, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least 75% of its pixels directly prove the shared ramp and the remainder is below 16 CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤6.0% each, balance bias ≤0.05, ColorErr coverage ≥2× direct presence, component bounds below the normal glyph limits, interior colour ≤0.25%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥95% byte-identical shared paint, ≤1.0% direct presence, ColorErr ≥2× presence, zero interior recolour, and a directly proven unchanged-endpoint ramp; edge-sample Delta-E is not an independent rejection when that topology is proven. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤1.0% of paint; a coherent outline may exceed that only with at most 4 direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Exact RGBA mismatch remains in the numeric report; the full-page diff paints only pixels above the per-channel floor. 300 DPI · source `/usr/bin/pdftoppm` · executed snapshot `/tmp/ironpress-pdftoppm-3699762-1784833097129177903-0/pdftoppm` · argv `[-r, 300, -png, <PDF>, <PREFIX>]` · pdftoppm version 24.08.0 · binary SHA-256 `b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013`.
 - Reference lock: present · stale refs 0 · ref-name mismatches 0.
 - Regression baseline: MISSING/INVALID/INCOMPATIBLE.
 - Generated by `cargo test --test feature_parity`.
