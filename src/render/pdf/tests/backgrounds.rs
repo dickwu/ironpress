@@ -307,6 +307,78 @@ fn svg_background_uses_outer_clip_box() {
     );
 }
 
+fn render_fragmented_jpeg_background(
+    clip_box: SvgViewportBox,
+    repeat: BackgroundRepeat,
+) -> (String, Vec<ImageRef>) {
+    let tree = crate::layout::images::build_raster_background_tree(TEST_JPEG_DATA_URI)
+        .expect("test JPEG should produce a raster background tree");
+    let mut content = String::new();
+    let mut pdf_writer = PdfWriter::new();
+    let mut page_images = Vec::new();
+    let mut shadings = Vec::new();
+    let mut shading_counter = 0usize;
+    render_svg_background(
+        &mut content,
+        &tree,
+        PdfBackgroundResources::new(
+            &mut pdf_writer,
+            &mut page_images,
+            &mut shadings,
+            &mut shading_counter,
+            None,
+        ),
+        PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
+            SvgViewportBox::new(0.0, 0.0, 100.0, 100.0),
+            clip_box,
+            CornerRadii::ZERO,
+            0.0,
+            BackgroundSize::Explicit {
+                width: 20.0,
+                height: Some(20.0),
+                width_is_percent: false,
+                height_is_percent: false,
+            },
+            BackgroundPosition::default(),
+            repeat,
+        )),
+    );
+    (content, page_images)
+}
+
+#[test]
+fn no_repeat_background_outside_fragment_allocates_no_pdf_resources() {
+    let (content, page_images) = render_fragmented_jpeg_background(
+        SvgViewportBox::new(0.0, 0.0, 100.0, 50.0),
+        BackgroundRepeat::NoRepeat,
+    );
+
+    assert!(content.is_empty());
+    assert!(page_images.is_empty());
+}
+
+#[test]
+fn no_repeat_background_intersecting_fragment_retains_its_pdf_resource() {
+    let (content, page_images) = render_fragmented_jpeg_background(
+        SvgViewportBox::new(0.0, 75.0, 100.0, 25.0),
+        BackgroundRepeat::NoRepeat,
+    );
+
+    assert!(content.contains(" Do\n"));
+    assert_eq!(page_images.len(), 1);
+}
+
+#[test]
+fn repeated_background_is_not_culled_by_its_first_tile() {
+    let (content, page_images) = render_fragmented_jpeg_background(
+        SvgViewportBox::new(0.0, 0.0, 100.0, 50.0),
+        BackgroundRepeat::Repeat,
+    );
+
+    assert!(content.contains(" Do\n"));
+    assert!(!page_images.is_empty());
+}
+
 #[test]
 fn flexrow_with_gradient() {
     let html = r#"<div style="display: flex; background: linear-gradient(to right, red, blue); height: 40pt"><div style="width: 100pt">A</div></div>"#;

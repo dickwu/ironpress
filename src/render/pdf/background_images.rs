@@ -5,7 +5,7 @@ use super::patterns::{
 };
 use super::{SvgPageImageSink, begin_blend_mode};
 use crate::render::background::{
-    BackgroundPaintContext, RasterBackgroundRequest, overflow_from_viewport_box,
+    BackgroundPaintContext, RasterBackgroundRequest, SvgVisualOverflow, overflow_from_viewport_box,
     register_background_image, svg_visual_overflow, synthetic_raster_background,
     viewport_box_from_overflow,
 };
@@ -29,6 +29,42 @@ pub(super) struct BlockBackground<'a> {
     pub(super) clip: BackgroundClip,
     pub(super) blur_radius: f32,
     pub(super) blend_mode: BlendMode,
+}
+
+/// Map the complete visual cell from the SVG's top-down tile coordinates into
+/// the PDF page's bottom-up coordinate system.
+fn placed_tile_visual_box(
+    tile: PdfRect,
+    viewport: SvgViewportBox,
+    overflow: SvgVisualOverflow,
+) -> PdfRect {
+    let visual = viewport_box_from_overflow(viewport, overflow);
+    PdfRect::new(
+        tile.left + visual.x,
+        tile.top() - visual.y - visual.height,
+        visual.width,
+        visual.height,
+    )
+}
+
+/// A no-repeat background whose complete visual cell misses the fragment clip
+/// cannot contribute paint. Resolve this before allocating page resources so
+/// continuation fragments do not retain invisible image or SVG objects.
+fn single_tile_misses_clip(
+    pattern: LayerTilePattern,
+    tile: PdfRect,
+    viewport: SvgViewportBox,
+    clip: SvgViewportBox,
+    overflow: SvgVisualOverflow,
+) -> bool {
+    if !pattern.is_single() {
+        return false;
+    }
+
+    let tile = placed_tile_visual_box(tile, viewport, overflow);
+    let clip = viewport_box_from_overflow(clip, overflow);
+    let clip = PdfRect::new(clip.x, clip.y, clip.width, clip.height);
+    tile.intersection(clip).is_none()
 }
 
 pub(super) fn render_block_svg_background(
@@ -256,6 +292,19 @@ pub(super) fn render_svg_background(
     let Some(placement) = placement else {
         return;
     };
+    let source_visual_overflow =
+        svg_visual_overflow(tree).scale(placement.scale_x, placement.scale_y);
+    if paint.blur_radius <= 0.0
+        && single_tile_misses_clip(
+            tile_pattern,
+            first_tile,
+            placement.viewport,
+            paint.clip_box,
+            source_visual_overflow,
+        )
+    {
+        return;
+    }
     let raster_background = synthetic_raster_background(tree).and_then(|(href, source_box)| {
         let image_box = SvgViewportBox::new(
             placement.translate_x + source_box.x * placement.scale_x,
@@ -273,7 +322,7 @@ pub(super) fn render_svg_background(
             .map(|registered| (image_box, registered))
     });
     let visual_overflow = raster_background.as_ref().map_or_else(
-        || svg_visual_overflow(tree).scale(placement.scale_x, placement.scale_y),
+        || source_visual_overflow,
         |(image_box, registered)| {
             overflow_from_viewport_box(
                 placement.viewport,
