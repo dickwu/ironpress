@@ -599,11 +599,6 @@ PY
     printf 'S\t%s\t%s\n' "$id" "$oracle"
     return 0
   fi
-  if [ "$oracle" != "chrome" ]; then
-    echo "parity-gen-refs: $id declares legacy oracle $oracle; future oracle PDFs require Chromium Fontations mode" >&2
-    printf 'F\t%s\n' "$id"
-    return 0
-  fi
   mkdir -p "$ORACLES/$category"
   # Keep the temporary beside its source so relative assets resolve unchanged.
   # Chromium needs an HTML-like suffix to select its HTML parser. `.htm` does
@@ -624,7 +619,9 @@ PY
   local attempt
   for attempt in 1 2 3; do
     rm -f "$pdf"
-    if [ "$PAGEDJS" = "1" ]; then
+    if [ "$oracle" = "weasyprint" ]; then
+      timeout -k 5s 120s python3 -m weasyprint "$pinned_html" "$pdf" >/dev/null 2>&1 || true
+    elif [ "$PAGEDJS" = "1" ]; then
       PUPPETEER_EXECUTABLE_PATH="$FONTATIONS_LAUNCHER" PUPPETEER_SKIP_DOWNLOAD=1 \
         timeout -k 5s 120s "$PAGEDJS_BIN" -i "$pinned_html" -o "$pdf" \
           --page-size Letter --style "$PAGE_CSS" \

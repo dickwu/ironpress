@@ -20,43 +20,10 @@ mod source_borders;
 
 use canvas::{DevicePoint, RasterCanvas, SurfaceRect, box_shadow_overflow};
 use gradient::FilterBackground;
+mod geometry;
 
-/// Border-box geometry retained when a painted filter source becomes an image.
-#[derive(Debug, Clone)]
-pub(crate) struct SourceGeometry {
-    pub(crate) size: Size,
-    pub(crate) margins: BlockMargins,
-    pub(crate) positioning: Positioning,
-}
-
-/// One completely painted, unfiltered `SourceGraphic`.
-pub(crate) struct SourceGraphic {
-    pub(crate) pixels: image::RgbaImage,
-    pub(crate) geometry: SourceRasterGeometry,
-}
-
-/// Relationship between the layout border box and its offscreen paint surface.
-///
-/// Layout retains the unexpanded border box. Paint overflow only changes the
-/// raster's origin and extent, so reinserting a filtered image never changes
-/// normal flow.
-pub(crate) struct SourceRasterGeometry {
-    pub(crate) layout: SourceGeometry,
-    pub(crate) paint_overflow: EdgeSizes,
-}
-
-impl SourceRasterGeometry {
-    pub(super) fn surface_size(&self) -> Size {
-        Size::new(
-            self.layout.size.width + self.paint_overflow.horizontal(),
-            self.layout.size.height + self.paint_overflow.vertical(),
-        )
-    }
-
-    fn border_origin(&self) -> Point {
-        Point::new(self.paint_overflow.left, self.paint_overflow.top)
-    }
-}
+pub(crate) use geometry::{SourceGeometry, SourceGraphic, source_geometry};
+use geometry::{SourceRasterGeometry, block_child_frames};
 
 /// Common box state used by the source painter without flattening concrete
 /// layout elements into another tagged representation.
@@ -452,11 +419,13 @@ impl SourcePainter<'_> {
         children: &[crate::layout::elements::LayoutNode],
         area: DescendantPaintArea,
     ) -> Option<()> {
-        let mut cursor_y = area.content_box.origin.y;
-        let mut previous_margin_end = 0.0;
-        for child in children {
-            let geometry = source_geometry_in_content(child.as_ref(), area.content_box.size.width)?;
-            let positioning = &geometry.positioning;
+        let frames = block_child_frames(
+            children,
+            crate::types::Rect::new(area.content_box.origin, area.content_box.size),
+            area.absolute_containing_block
+                .map(|rect| crate::types::Rect::new(rect.origin, rect.size)),
+        )?;
+        for (child, frame) in children.iter().zip(frames) {
             if child
                 .paint_group_owner()
                 .is_some_and(|owner| owner.paint_group().transform.value.is_some())
@@ -464,43 +433,11 @@ impl SourcePainter<'_> {
             {
                 return None;
             }
-            let (origin, advances_flow) = match positioning.scheme {
-                Position::Absolute | Position::Fixed => {
-                    let containing_block = area.absolute_containing_block?;
-                    (
-                        Point::new(
-                            containing_block.origin.x + positioning.insets.left,
-                            containing_block.origin.y + positioning.insets.top,
-                        ),
-                        false,
-                    )
-                }
-                Position::Static | Position::Relative | Position::Sticky => {
-                    cursor_y +=
-                        collapsed_margin_start_extra(geometry.margins.start, previous_margin_end);
-                    (
-                        Point::new(
-                            area.content_box.origin.x + positioning.insets.left,
-                            cursor_y + positioning.insets.top,
-                        ),
-                        true,
-                    )
-                }
-            };
             paint_element(
                 &mut self.canvas,
                 child.as_ref(),
                 ElementPaintSpace {
-                    border_box: SurfaceRect::new(
-                        origin,
-                        Size::new(
-                            geometry
-                                .size
-                                .width
-                                .max(area.content_box.size.width.min(geometry.size.width)),
-                            geometry.size.height,
-                        ),
-                    ),
+                    border_box: SurfaceRect::new(frame.border_box.origin, frame.border_box.size),
                     inherited_containing_block: area.absolute_containing_block,
                     establishes_containing_block: false,
                     root_effects: area.direct_child_effects,
@@ -508,10 +445,6 @@ impl SourcePainter<'_> {
                 self.fonts,
                 self.filter_dpi,
             )?;
-            if advances_flow {
-                cursor_y += geometry.size.height + geometry.margins.end;
-                previous_margin_end = geometry.margins.end;
-            }
         }
         Some(())
     }
@@ -833,15 +766,9 @@ pub(crate) fn paint_source_graphic(
 ) -> Option<SourceGraphic> {
     let layout = source_geometry(element)?;
     let paint_overflow = source_paint_overflow(element, layout.size, filter_dpi)?;
-    let geometry = SourceRasterGeometry {
-        layout,
-        paint_overflow,
-    };
-    let surface_size = geometry.surface_size();
-    let mut pixels = image::RgbaImage::new(
-        crate::render::blur::filter_raster_pixels_at_dpi(surface_size.width, filter_dpi)?,
-        crate::render::blur::filter_raster_pixels_at_dpi(surface_size.height, filter_dpi)?,
-    );
+    let geometry = SourceRasterGeometry::resolve(layout, paint_overflow, filter_dpi)?;
+    let dimensions = geometry.dimensions();
+    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
     let mut canvas = RasterCanvas {
         pixels: &mut pixels,
         pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
@@ -873,21 +800,16 @@ pub(crate) fn paint_grid_cell_source(
         margins: BlockMargins::ZERO,
         positioning: Positioning::default(),
     };
-    let geometry = SourceRasterGeometry {
-        layout,
-        paint_overflow: EdgeSizes::ZERO,
-    };
-    let mut pixels = image::RgbaImage::new(
-        crate::render::blur::filter_raster_pixels_at_dpi(size.width, filter_dpi)?,
-        crate::render::blur::filter_raster_pixels_at_dpi(size.height, filter_dpi)?,
-    );
+    let geometry = SourceRasterGeometry::resolve(layout, EdgeSizes::ZERO, filter_dpi)?;
+    let dimensions = geometry.dimensions();
+    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
     let mut painter = SourcePainter {
         canvas: RasterCanvas {
             pixels: &mut pixels,
             pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
         },
         space: ElementPaintSpace {
-            border_box: SurfaceRect::new(Point::default(), size),
+            border_box: SurfaceRect::new(geometry.border_origin(), size),
             inherited_containing_block: None,
             establishes_containing_block: true,
             root_effects: RootEffectHandling::DeferToOwner,
@@ -896,7 +818,8 @@ pub(crate) fn paint_grid_cell_source(
         filter_dpi,
         result: None,
     };
-    painter.result = painter.paint_grid_cell(cell, SurfaceRect::new(Point::default(), size));
+    painter.result =
+        painter.paint_grid_cell(cell, SurfaceRect::new(geometry.border_origin(), size));
     painter.result?;
     Some(SourceGraphic { pixels, geometry })
 }
@@ -947,15 +870,13 @@ pub(crate) fn paint_flex_cell_source(
         margins: BlockMargins::ZERO,
         positioning: Positioning::default(),
     };
-    let geometry = SourceRasterGeometry {
+    let geometry = SourceRasterGeometry::resolve(
         layout,
-        paint_overflow: flex_cell_paint_overflow(cell, size, filter_dpi)?,
-    };
-    let surface_size = geometry.surface_size();
-    let mut pixels = image::RgbaImage::new(
-        crate::render::blur::filter_raster_pixels_at_dpi(surface_size.width, filter_dpi)?,
-        crate::render::blur::filter_raster_pixels_at_dpi(surface_size.height, filter_dpi)?,
-    );
+        flex_cell_paint_overflow(cell, size, filter_dpi)?,
+        filter_dpi,
+    )?;
+    let dimensions = geometry.dimensions();
+    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
     let border_box = SurfaceRect::new(geometry.border_origin(), size);
     let mut painter = SourcePainter {
         canvas: RasterCanvas {
@@ -1138,165 +1059,6 @@ fn element_group_opacity(element: &dyn LayoutElement) -> f32 {
     opacity.0.clamp(0.0, 1.0)
 }
 
-pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeometry> {
-    struct Geometry(Option<SourceGeometry>);
-
-    impl LayoutVisitor for Geometry {
-        fn visit_column_rule(&mut self, element: &ColumnRule) {
-            self.0 = Some(SourceGeometry {
-                size: Size::new(element.paint.width, element.height),
-                margins: BlockMargins::ZERO,
-                positioning: element.positioning.clone(),
-            });
-        }
-
-        fn visit_text_block(&mut self, element: &TextBlock) {
-            let text_height = element.lines.iter().map(|line| line.height).sum::<f32>();
-            let height = element.box_model.size.height.resolve(
-                element.box_model.padding.vertical()
-                    + text_height
-                    + element.box_model.border.vertical_width(),
-            );
-            self.0 = element
-                .box_model
-                .size
-                .width
-                .fixed_value()
-                .map(|width| SourceGeometry {
-                    size: Size::new(width, height),
-                    margins: element.box_model.margins,
-                    positioning: element.positioning.clone(),
-                });
-        }
-
-        fn visit_container(&mut self, element: &Container) {
-            let height = container_source_height(element);
-            self.0 = element
-                .box_model
-                .size
-                .width
-                .fixed_value()
-                .map(|width| SourceGeometry {
-                    size: Size::new(width, height),
-                    margins: element.box_model.margins,
-                    positioning: element.positioning.clone(),
-                });
-        }
-
-        fn visit_flex_row(&mut self, element: &FlexRow) {
-            let height = element.box_model.padding.vertical()
-                + element
-                    .box_model
-                    .size
-                    .height
-                    .resolve(element.content.row_height)
-                + element.box_model.border.vertical_width();
-            self.0 = element.box_model.size.width.fixed_value().map(|width| {
-                let mut positioning = element.positioning.clone();
-                positioning.insets.left += element.inline_offset.value();
-                SourceGeometry {
-                    size: Size::new(width, height),
-                    margins: element.box_model.margins,
-                    positioning,
-                }
-            });
-        }
-
-        fn visit_grid_row(&mut self, element: &GridRow) {
-            let width = element.content.column_widths.iter().sum::<f32>()
-                + element.content.gap
-                    * element.content.column_widths.len().saturating_sub(1) as f32
-                + element.box_model.padding.horizontal()
-                + element.box_model.border.horizontal_width();
-            let height = element
-                .content
-                .cells
-                .iter()
-                .map(|cell| cell.layout.box_model.minimum_block_size)
-                .fold(0.0_f32, f32::max)
-                + element.box_model.padding.vertical()
-                + element.box_model.border.vertical_width();
-            self.0 = Some(SourceGeometry {
-                size: Size::new(width, height),
-                margins: element.box_model.margins,
-                positioning: Default::default(),
-            });
-        }
-
-        fn visit_image(&mut self, element: &Image) {
-            self.0 = Some(SourceGeometry {
-                size: element.geometry.size,
-                margins: element.geometry.flow.margins,
-                positioning: element.positioning.clone(),
-            });
-        }
-    }
-
-    let mut geometry = Geometry(None);
-    element.accept(&mut geometry);
-    geometry.0
-}
-
-/// Resolve an auto-width block descendant against the known content box that
-/// contains it. Root filter sources remain strict because their containing
-/// width is not implicit at this boundary.
-fn source_geometry_in_content(
-    element: &dyn LayoutElement,
-    available_width: f32,
-) -> Option<SourceGeometry> {
-    if let Some(geometry) = source_geometry(element) {
-        return Some(geometry);
-    }
-
-    struct AutoWidthGeometry {
-        available_width: f32,
-        geometry: Option<SourceGeometry>,
-    }
-
-    impl LayoutVisitor for AutoWidthGeometry {
-        fn visit_text_block(&mut self, element: &TextBlock) {
-            if !element.box_model.size.width.is_fill_available() {
-                return;
-            }
-            let text_height = element.lines.iter().map(|line| line.height).sum::<f32>();
-            let height = element.box_model.size.height.resolve(
-                element.box_model.padding.vertical()
-                    + text_height
-                    + element.box_model.border.vertical_width(),
-            );
-            self.geometry = Some(SourceGeometry {
-                size: Size::new(self.available_width, height),
-                margins: element.box_model.margins,
-                positioning: element.positioning.clone(),
-            });
-        }
-
-        fn visit_container(&mut self, element: &Container) {
-            if element.box_model.size.width.is_fill_available() {
-                self.geometry = Some(SourceGeometry {
-                    size: Size::new(self.available_width, container_source_height(element)),
-                    margins: element.box_model.margins,
-                    positioning: element.positioning.clone(),
-                });
-            }
-        }
-    }
-
-    let mut geometry = AutoWidthGeometry {
-        available_width,
-        geometry: None,
-    };
-    element.accept(&mut geometry);
-    geometry.geometry
-}
-
-fn container_source_height(element: &Container) -> f32 {
-    let natural_height = element.box_model.padding.vertical()
-        + element.box_model.border.vertical_width()
-        + crate::layout::paginate::simulate_block_flow(&element.children).height;
-    element.box_model.size.height.resolve(natural_height)
-}
-
 fn flex_cell_baseline(cell: &FlexCell, fonts: &HashMap<String, TtfFont>) -> Option<f32> {
     let mut prior = 0.0;
     let last = cell
@@ -1426,17 +1188,6 @@ fn merged_runs(runs: &[TextRun]) -> Vec<TextRun> {
         }
     }
     merged
-}
-
-fn collapsed_margin_start_extra(start: f32, previous_end: f32) -> f32 {
-    let collapsed = if start >= 0.0 && previous_end >= 0.0 {
-        start.max(previous_end)
-    } else if start < 0.0 && previous_end < 0.0 {
-        start.min(previous_end)
-    } else {
-        start + previous_end
-    };
-    collapsed - previous_end
 }
 
 #[cfg(test)]

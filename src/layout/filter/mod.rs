@@ -195,9 +195,9 @@ pub(crate) fn composite_source(
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) -> Option<FilteredGraphic> {
-    let exact_vector = element
-        .exact_vector_filter_source()
-        .is_some_and(|source| source.supports_exact_vector_filter(&filter.operations));
+    let exact_vector = element.exact_vector_filter_source().is_some_and(|source| {
+        !filter.linear_rgb && source.supports_exact_vector_filter(&filter.operations)
+    });
     if !filter.has_composited_output() || exact_vector {
         return None;
     }
@@ -242,8 +242,8 @@ pub(crate) fn composite_source_graphic(
             pixel[3] = (f32::from(pixel[3]) * opacity).round() as u8;
         }
     }
+    let raster_overflow = source.geometry.paint_overflow() + filtered.overflow;
     let layout_geometry = source.geometry.layout;
-    let raster_overflow = source.geometry.paint_overflow + filtered.overflow;
     Some((
         FilterRasterOutput {
             asset: crate::render::blur::rgba_to_png_alpha_asset(filtered.pixels, filter_dpi)?,

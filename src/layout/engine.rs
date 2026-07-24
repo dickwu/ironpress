@@ -6590,6 +6590,26 @@ mod tests {
     }
 
     #[test]
+    fn authored_width_equal_to_available_width_remains_fixed() {
+        let page_size = PageSize::new(240.0, 200.0);
+        let margin = Margin::uniform(0.0);
+        let nodes = parse_html(r#"<div style="width: 240pt">Full-width block</div>"#).unwrap();
+        let pages = layout(&nodes, page_size, margin);
+
+        assert_eq!(pages.len(), 1);
+        pages[0].elements[0]
+            .1
+            .inspect_text(|text| {
+                assert_eq!(
+                    text.box_model.size.width.fixed_value(),
+                    Some(page_size.width)
+                );
+                assert!(!text.box_model.size.width.is_fill_available());
+            })
+            .expect("expected text block");
+    }
+
+    #[test]
     fn css_max_width_limits_width() {
         let html = r#"<div style="max-width: 300pt">Limited block</div>"#;
         let nodes = parse_html(html).unwrap();

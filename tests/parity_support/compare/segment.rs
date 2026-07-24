@@ -505,7 +505,85 @@ type CrossSection = (usize, usize, usize);
 struct ColorRampProof {
     strict_proven: usize,
     layered_proven: usize,
+    continuation_proven: usize,
     total: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CoverageRamp {
+    start: image::Rgba<u8>,
+    end: image::Rgba<u8>,
+}
+
+impl Default for CoverageRamp {
+    fn default() -> Self {
+        Self {
+            start: image::Rgba([0; 4]),
+            end: image::Rgba([0; 4]),
+        }
+    }
+}
+
+/// Bounded endpoint pairs directly observed on one connected colour contour.
+/// A component may reuse those exact ramps at a corner where no single device
+/// normal reaches both endpoints. This is component-local evidence, never a
+/// page-wide palette search.
+struct CoverageRampSet {
+    ramps: [CoverageRamp; 8],
+    len: usize,
+}
+
+impl Default for CoverageRampSet {
+    fn default() -> Self {
+        Self {
+            ramps: [CoverageRamp::default(); 8],
+            len: 0,
+        }
+    }
+}
+
+impl CoverageRampSet {
+    fn insert(&mut self, ramp: CoverageRamp) -> bool {
+        if self.iter().any(|existing| existing.same_endpoints(ramp)) {
+            return true;
+        }
+        let Some(slot) = self.ramps.get_mut(self.len) else {
+            return false;
+        };
+        *slot = ramp;
+        self.len += 1;
+        true
+    }
+
+    fn covers(&self, sample: &image::Rgba<u8>) -> bool {
+        self.iter().any(|ramp| ramp.encloses(sample))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CoverageRamp> + '_ {
+        self.ramps[..self.len].iter().copied()
+    }
+}
+
+impl CoverageRamp {
+    fn same_endpoints(self, other: Self) -> bool {
+        (self.start == other.start && self.end == other.end)
+            || (self.start == other.end && self.end == other.start)
+    }
+
+    /// Filter primitives can composite coverage in linear light, so their
+    /// encoded sRGB continuation is not necessarily a straight segment. Once
+    /// a supermajority has directly proved this endpoint pair, continuation
+    /// samples may use only its per-channel envelope. No new hue extremum can
+    /// enter through this component-local fallback.
+    fn encloses(self, sample: &image::Rgba<u8>) -> bool {
+        (0..3).all(|channel| {
+            let start = i16::from(self.start[channel]);
+            let end = i16::from(self.end[channel]);
+            let sample = i16::from(sample[channel]);
+            let tolerance = COVERAGE_RAMP_CHANNEL_TOLERANCE as i16;
+            sample >= start.min(end) - tolerance && sample <= start.max(end) + tolerance
+        })
+    }
 }
 
 /// Bounded exact shared colours observed on one local edge normal. Solid
@@ -553,6 +631,10 @@ impl ColorRampProof {
     }
 
     fn proven(&self) -> usize {
+        (self.strict_proven + self.layered_proven).max(self.continuation_proven)
+    }
+
+    fn directly_proven(&self) -> usize {
         self.strict_proven + self.layered_proven
     }
 
@@ -1203,21 +1285,64 @@ fn sub_css_shared_coverage_color_proof(
         total: members.len(),
         ..Default::default()
     };
+    let mut ramps = CoverageRampSet::default();
+    let mut complete_ramp_set = true;
     for &index in members {
         let x = (index % width) as isize;
         let y = (index / width) as isize;
-        if CONTOUR_NORMALS
-            .into_iter()
-            .any(|(dx, dy)| shared_coverage_color_normal(&component, cand, reference, x, y, dx, dy))
-        {
+        if let Some(ramp) = CONTOUR_NORMALS.into_iter().find_map(|(dx, dy)| {
+            shared_coverage_color_normal(&component, cand, reference, x, y, dx, dy)
+        }) {
             proof.strict_proven += 1;
+            complete_ramp_set &= ramps.insert(ramp);
         } else if CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
             shared_layered_coverage_color_normal(&component, cand, reference, x, y, dx, dy)
         }) {
             proof.layered_proven += 1;
         }
     }
+
+    // A rectangular or curved contour can directly expose both unchanged
+    // endpoint colours along its straight sections but not at every corner.
+    // Extend only when a supermajority is already proven, the complete
+    // connected component remains sub-CSS on a local normal, and both unequal
+    // samples stay on one of the endpoint pairs observed in that component.
+    let narrow_contour = is_sub_css_color_contour(members, width, &component);
+    if complete_ramp_set
+        && reaches_discrete_ratio(
+            proof.directly_proven(),
+            proof.total,
+            VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO,
+        )
+        && narrow_contour
+    {
+        proof.continuation_proven = members
+            .iter()
+            .filter(|&&index| {
+                let x = (index % width) as u32;
+                let y = (index / width) as u32;
+                ramps.covers(cand.get_pixel(x, y)) && ramps.covers(reference.get_pixel(x, y))
+            })
+            .count();
+    }
     proof
+}
+
+/// A raster proportion has an integral number of device samples. Rounding the
+/// required count down keeps one semantically tolerated pixel from making the
+/// same contour alternate across a nominal percentage boundary.
+fn reaches_discrete_ratio(proven: usize, total: usize, minimum: f64) -> bool {
+    total > 0 && proven >= (total as f64 * minimum).floor() as usize
+}
+
+fn is_sub_css_color_contour(members: &[usize], width: usize, component: &ComponentPixels) -> bool {
+    members.iter().all(|&index| {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        CONTOUR_NORMALS
+            .into_iter()
+            .any(|(dx, dy)| sub_css_normal_boundaries(component, x, y, dx, dy).is_some())
+    })
 }
 
 /// One local normal cross-section through a curved coverage component.
@@ -1255,11 +1380,11 @@ fn shared_coverage_color_normal(
     y: isize,
     dx: isize,
     dy: isize,
-) -> bool {
+) -> Option<CoverageRamp> {
     let Some(((before_x, before_y), (after_x, after_y))) =
         sub_css_normal_boundaries(component, x, y, dx, dy)
     else {
-        return false;
+        return None;
     };
     let pixel = (x as usize, y as usize);
     let before = (before_x, before_y, -dx, -dy);
@@ -1352,14 +1477,14 @@ fn shared_coverage_color_transition(
     pixel: (usize, usize),
     before: (usize, usize, isize, isize),
     after: (usize, usize, isize, isize),
-) -> bool {
+) -> Option<CoverageRamp> {
     let (Some(before_color), Some(after_color)) = (
         nearest_exact_color(cand, reference, before),
         nearest_exact_color(cand, reference, after),
     ) else {
-        return false;
+        return None;
     };
-    before_color != after_color
+    (before_color != after_color
         && is_coverage_ramp_color(
             cand.get_pixel(pixel.0 as u32, pixel.1 as u32),
             before_color,
@@ -1369,7 +1494,11 @@ fn shared_coverage_color_transition(
             reference.get_pixel(pixel.0 as u32, pixel.1 as u32),
             before_color,
             after_color,
-        )
+        ))
+    .then_some(CoverageRamp {
+        start: before_color,
+        end: after_color,
+    })
 }
 
 /// Prove coverage at an edge where the same foreground is composited over two
@@ -1697,13 +1826,39 @@ fn median_f64(v: &mut [f64]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorRampProof, ComponentPixels, is_predominantly_shared_coverage};
+    use super::{
+        ColorRampProof, ComponentPixels, CoverageRamp, is_coverage_ramp_color,
+        is_predominantly_shared_coverage, reaches_discrete_ratio,
+    };
 
     #[test]
     fn aggregate_shared_coverage_keeps_partial_component_evidence() {
         assert!(is_predominantly_shared_coverage(625, 1000));
         assert!(!is_predominantly_shared_coverage(624, 1000));
         assert!(!is_predominantly_shared_coverage(0, 0));
+    }
+
+    #[test]
+    fn discrete_ramp_ratio_is_stable_when_one_tolerated_sample_disappears() {
+        assert!(reaches_discrete_ratio(1_385, 1_847, 0.75));
+        assert!(!reaches_discrete_ratio(1_384, 1_847, 0.75));
+    }
+
+    #[test]
+    fn linear_light_filter_coverage_stays_inside_observed_endpoint_bounds() {
+        let ramp = CoverageRamp {
+            start: image::Rgba([22, 101, 192, 255]),
+            end: image::Rgba([13, 0, 0, 255]),
+        };
+        let encoded_linear_light_sample = image::Rgba([14, 57, 114, 255]);
+
+        assert!(!is_coverage_ramp_color(
+            &encoded_linear_light_sample,
+            ramp.start,
+            ramp.end
+        ));
+        assert!(ramp.encloses(&encoded_linear_light_sample));
+        assert!(!ramp.encloses(&image::Rgba([198, 40, 40, 255])));
     }
 
     #[test]

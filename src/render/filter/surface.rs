@@ -1,6 +1,8 @@
 use crate::style::computed::{FilterOperation, ImageRendering};
 use crate::types::{EdgeSizes, Size};
 
+use super::color_space::RasterFilterColorSpace;
+
 /// Filtered pixels and their directional paint overflow around the source box.
 pub(crate) struct FilteredSurface {
     pub(crate) pixels: image::RgbaImage,
@@ -20,6 +22,8 @@ pub(crate) fn apply_operations_to_surface(
     filter_dpi: f32,
 ) -> Option<FilteredSurface> {
     let mut pixels = source.clone();
+    let working_space = RasterFilterColorSpace::resolve(linear_rgb);
+    working_space.enter_surface(&mut pixels);
     let mut overflow = EdgeSizes::ZERO;
     let mut color_run_start = None;
     for (operation_index, operation) in operations.iter().enumerate() {
@@ -28,7 +32,7 @@ pub(crate) fn apply_operations_to_surface(
             continue;
         }
         if let Some(start) = color_run_start.take() {
-            apply_color_operations(&mut pixels, &operations[start..operation_index], linear_rgb);
+            apply_color_operations(&mut pixels, &operations[start..operation_index]);
         }
         match *operation {
             FilterOperation::BlendWithFlood {
@@ -40,10 +44,9 @@ pub(crate) fn apply_operations_to_surface(
                     &pixels,
                     source_size,
                     overflow,
-                    color,
+                    working_space.enter_color(color),
                     mode,
                     region,
-                    linear_rgb,
                     filter_dpi,
                 )?;
                 pixels = filtered.pixels;
@@ -56,6 +59,10 @@ pub(crate) fn apply_operations_to_surface(
                 overflow += EdgeSizes::uniform(amount);
             }
             FilterOperation::DropShadow(shadow) => {
+                let shadow = crate::style::computed::DropShadow {
+                    color: working_space.enter_color(shadow.color),
+                    ..shadow
+                };
                 let painted_size = Size::new(
                     source_size.width + overflow.horizontal(),
                     source_size.height + overflow.vertical(),
@@ -79,8 +86,9 @@ pub(crate) fn apply_operations_to_surface(
         }
     }
     if let Some(start) = color_run_start {
-        apply_color_operations(&mut pixels, &operations[start..], linear_rgb);
+        apply_color_operations(&mut pixels, &operations[start..]);
     }
+    working_space.leave_surface(&mut pixels);
     Some(FilteredSurface { pixels, overflow })
 }
 
@@ -128,10 +136,10 @@ impl RasterRegion {
         let width = f64::from(source_size.width * scale.horizontal);
         let height = f64::from(source_size.height * scale.vertical);
         let resolved = Self {
-            left: rounded_coordinate(f64::from(region.origin.x) * width)?,
-            top: rounded_coordinate(f64::from(region.origin.y) * height)?,
-            right: rounded_coordinate(f64::from(region.right()) * width)?,
-            bottom: rounded_coordinate(f64::from(region.bottom()) * height)?,
+            left: floored_coordinate(f64::from(region.origin.x) * width)?,
+            top: floored_coordinate(f64::from(region.origin.y) * height)?,
+            right: ceiled_coordinate(f64::from(region.right()) * width)?,
+            bottom: ceiled_coordinate(f64::from(region.bottom()) * height)?,
         };
         (resolved.right > resolved.left && resolved.bottom > resolved.top).then_some(resolved)
     }
@@ -142,11 +150,41 @@ impl RasterRegion {
             u32::try_from(self.bottom.checked_sub(self.top)?).ok()?,
         ))
     }
+
+    fn paint_overflow(self, source_size: Size, scale: RasterScale) -> EdgeSizes {
+        EdgeSizes::new(
+            -(self.top as f32) / scale.vertical,
+            self.right as f32 / scale.horizontal - source_size.width,
+            self.bottom as f32 / scale.vertical - source_size.height,
+            -(self.left as f32) / scale.horizontal,
+        )
+    }
 }
 
 fn rounded_coordinate(value: f64) -> Option<i64> {
-    (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64)
-        .then(|| value.round() as i64)
+    Some(stabilized_coordinate(value)?.round() as i64)
+}
+
+fn floored_coordinate(value: f64) -> Option<i64> {
+    Some(stabilized_coordinate(value)?.floor() as i64)
+}
+
+fn ceiled_coordinate(value: f64) -> Option<i64> {
+    Some(stabilized_coordinate(value)?.ceil() as i64)
+}
+
+fn stabilized_coordinate(value: f64) -> Option<f64> {
+    const DEVICE_EDGE_EPSILON: f64 = 0.001;
+
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return None;
+    }
+    let integer = value.round();
+    Some(if (value - integer).abs() <= DEVICE_EDGE_EPSILON {
+        integer
+    } else {
+        value
+    })
 }
 
 fn blend_with_flood(
@@ -156,7 +194,6 @@ fn blend_with_flood(
     color: crate::types::Color,
     mode: crate::style::computed::BlendMode,
     region: crate::types::Rect,
-    linear_rgb: bool,
     filter_dpi: f32,
 ) -> Option<FilteredSurface> {
     let scale = RasterScale::at_dpi(filter_dpi)?;
@@ -178,18 +215,12 @@ fn blend_with_flood(
             .zip(u32::try_from(local_y).ok())
             .filter(|(x, y)| *x < source.width() && *y < source.height())
             .map_or(transparent, |(x, y)| *source.get_pixel(x, y));
-        *output_pixel =
-            crate::render::blend::composite_pixel(source_pixel, flood, mode, linear_rgb)?;
+        *output_pixel = crate::render::blend::composite_pixel(source_pixel, flood, mode, false)?;
     }
 
     Some(FilteredSurface {
         pixels: output,
-        overflow: EdgeSizes::new(
-            -region.origin.y * source_size.height,
-            (region.right() - 1.0) * source_size.width,
-            (region.bottom() - 1.0) * source_size.height,
-            -region.origin.x * source_size.width,
-        ),
+        overflow: raster_region.paint_overflow(source_size, scale),
     })
 }
 
@@ -197,11 +228,7 @@ fn blend_with_flood(
 /// quantize only when the run returns to the raster surface. Quantizing between
 /// functions compounds channel error and does not represent the conceptual
 /// image pipeline defined by Filter Effects.
-fn apply_color_operations(
-    pixels: &mut image::RgbaImage,
-    operations: &[FilterOperation],
-    linear_rgb: bool,
-) {
+fn apply_color_operations(pixels: &mut image::RgbaImage, operations: &[FilterOperation]) {
     for pixel in pixels.pixels_mut() {
         let color = (
             f32::from(pixel[0]) / 255.0,
@@ -209,8 +236,7 @@ fn apply_color_operations(
             f32::from(pixel[2]) / 255.0,
             f32::from(pixel[3]) / 255.0,
         );
-        let (red, green, blue, alpha) =
-            super::apply_operations_to_color(color, operations, linear_rgb);
+        let (red, green, blue, alpha) = super::apply_operations_to_color(color, operations, false);
         *pixel = image::Rgba([channel(red), channel(green), channel(blue), channel(alpha)]);
     }
 }
@@ -251,8 +277,39 @@ mod tests {
         ] {
             assert!((actual - expected).abs() < 0.000_01);
         }
-        assert_eq!(filtered.pixels.get_pixel(0, 0).0, flood.to_rgba8());
+        assert_eq!(filtered.pixels.get_pixel(0, 0).0, [22, 101, 192, 255]);
         assert_eq!(filtered.pixels.get_pixel(2, 3).0, [13, 0, 0, 255]);
+    }
+
+    #[test]
+    fn fractional_filter_region_uses_outward_device_bounds() {
+        let source_size = Size::new(10.0, 6.0);
+        let scale = RasterScale {
+            horizontal: 3.125,
+            vertical: 3.125,
+        };
+        let region =
+            RasterRegion::resolve(Rect::from_xywh(-0.2, -0.5, 1.4, 2.0), source_size, scale)
+                .expect("a finite positive filter region has device bounds");
+
+        assert_eq!(region.dimensions(), Some((45, 39)));
+        let overflow = region.paint_overflow(source_size, scale);
+        for (actual, expected) in [
+            (overflow.top, 3.2),
+            (overflow.right, 2.16),
+            (overflow.bottom, 3.28),
+            (overflow.left, 2.24),
+        ] {
+            assert!((actual - expected).abs() < 0.000_01);
+        }
+    }
+
+    #[test]
+    fn device_edge_stabilization_does_not_grow_integral_bounds() {
+        assert_eq!(floored_coordinate(11.999_999), Some(12));
+        assert_eq!(ceiled_coordinate(12.000_001), Some(12));
+        assert_eq!(floored_coordinate(11.99), Some(11));
+        assert_eq!(ceiled_coordinate(12.01), Some(13));
     }
 
     #[test]

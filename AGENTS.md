@@ -19,6 +19,7 @@
 
 - The parity bar is specification compliance to the point of untrained-human indistinguishability from a correct render. Raw differences remain evidence; configuration-controlled optimizations may trade only imperceptible precision.
 - Paged CSS compliance is the target. Do not assume an oracle is correct: check disputed behavior against the applicable standard and repair or regenerate an incorrect reference.
+- Future oracle PDFs must be generated only by the pinned Chromium Fontations/Foundation launcher. Authenticated historical non-Chromium references may remain as evidence, but must never be regenerated or used as the source of a new oracle.
 - Candidate and oracle PDFs use the same pinned `pdf2ppm`/`pdftoppm` executable and arguments. A raster difference means the PDFs differ; do not attribute it to different rasterizers.
 - Never translate, register, jitter, crop, resize, filter, resample, or replace either comparison raster. Diffs must show the complete page canvas without copying source content into the diff.
 - A per-pixel RGB channel delta below 1% is semantically correct, while the exact RGBA mismatch remains reported. A complete page may contain at most 1% above-floor pixels; authored-scale defects can still fail below that aggregate ceiling.

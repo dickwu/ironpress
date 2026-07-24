@@ -486,10 +486,10 @@ impl PageContentTransform {
                 value
             }
         };
-        let left = stabilize_edge(f64::from(rect.left) * Self::POINT_TO_DEVICE).floor();
+        let left = stabilize_edge(f64::from(rect.left) * Self::POINT_TO_DEVICE).round();
         let top =
             stabilize_edge((device.page_height() - f64::from(rect.top())) * Self::POINT_TO_DEVICE)
-                .floor();
+                .round();
         let source_to_device = PRINT_DEVICE_DPI / f64::from(density.dpi());
         let width = f64::from(dimensions.width) * source_to_device;
         let height = f64::from(dimensions.height) * source_to_device;
@@ -779,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_raster_origin_rounds_out_fractional_device_bounds() {
+    fn generated_raster_origin_quantizes_to_the_nearest_device_cell() {
         let transform = PageContentTransform::print(PdfVector::new(192.0, 192.0));
         let placement = transform
             .device_raster_placement(
@@ -794,7 +794,7 @@ mod tests {
 
         assert_eq!(
             placement.image_matrix().translation,
-            PdfPoint::new(57.0, 445.0)
+            PdfPoint::new(57.0, 446.0)
         );
     }
 }

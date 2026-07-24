@@ -892,7 +892,10 @@ pub(crate) fn layout_block_element(
         let inline_size = InlineSize::from_used(
             render_w,
             available_width,
-            style.min_width.is_some() || shrink_to_fit,
+            style.width.is_some()
+                || style.percentage_sizing.width.is_some()
+                || style.min_width.is_some()
+                || shrink_to_fit,
         );
         let mut block = TextBlock::from_style(
             lines,
@@ -1533,7 +1536,10 @@ pub(crate) fn layout_block_element(
         let inline_size = InlineSize::from_used(
             render_block_w,
             available_width,
-            style.min_width.is_some() || shrink_to_fit,
+            style.width.is_some()
+                || style.percentage_sizing.width.is_some()
+                || style.min_width.is_some()
+                || shrink_to_fit,
         );
 
         // Compute clip rect — CSS overflow:hidden clips to the padding box

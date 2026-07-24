@@ -188,8 +188,8 @@ fn flex_cell_source_includes_outset_shadow_overflow() {
     )
     .expect("flex source with an outset shadow");
 
-    assert_eq!(source.geometry.paint_overflow.right, 4.0);
-    assert_eq!(source.geometry.paint_overflow.bottom, 3.0);
+    assert_eq!(source.geometry.paint_overflow().right, 4.0);
+    assert_eq!(source.geometry.paint_overflow().bottom, 3.0);
     assert_eq!(source.pixels.dimensions(), (24, 13));
     let shadow = source.pixels.get_pixel(22, 11);
     assert!(shadow[0] > 240 && shadow[1] < 10 && shadow[2] < 10);
@@ -309,8 +309,8 @@ fn flex_cell_source_includes_nested_principal_box_overflow() {
     )
     .expect("complex flex source with principal-box overflow");
 
-    assert_eq!(source.geometry.paint_overflow.right, 4.0);
-    assert_eq!(source.geometry.paint_overflow.bottom, 3.0);
+    assert_eq!(source.geometry.paint_overflow().right, 4.0);
+    assert_eq!(source.geometry.paint_overflow().bottom, 3.0);
     let shadow = source.pixels.get_pixel(22, 11);
     assert!(shadow[0] > 240 && shadow[1] < 10 && shadow[2] < 10);
 }
