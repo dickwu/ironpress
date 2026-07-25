@@ -7,7 +7,7 @@ pub(super) struct MaskLayerPaint {
 }
 
 impl MaskLayerPaint {
-    pub(super) fn resolve(layer: &MaskLayer, geometry: BoxGeometry) -> Option<Self> {
+    pub(super) fn resolve(layer: &MaskLayer, geometry: PaintBoxGeometry) -> Option<Self> {
         let origin = geometry.shape_box(layer.origin);
         let clip = geometry.shape_box(layer.clip);
         let resolve_axis = |value: f32, is_percent: bool, extent: f32| {
@@ -80,8 +80,8 @@ impl MaskLayerPaint {
 mod geometry_consumer_tests {
     use super::*;
 
-    pub(super) fn asymmetric_geometry() -> BoxGeometry {
-        BoxGeometry::new(
+    pub(super) fn asymmetric_geometry() -> PaintBoxGeometry {
+        PaintBoxGeometry::new(
             PdfRect::from_top(10.0, 200.0, 100.0, 80.0),
             EdgeSizes::new(3.0, 5.0, 7.0, 11.0),
             EdgeSizes::new(13.0, 17.0, 19.0, 23.0),

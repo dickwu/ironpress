@@ -1,7 +1,6 @@
 use super::*;
 use crate::layout::elements::Container;
 use crate::layout::engine::StackingContext;
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 fn push_nested_background_clip(
     content: &mut String,
@@ -143,19 +142,18 @@ pub(super) fn render_nested_container(
     // `content_h.max(h)` for non-hidden overflow wrongly inflated the
     // box to the child height, e.g. an `overflow:visible` box grew to
     // its oversized child instead of letting the child spill out.)
-    let nk_geometry = BoxGeometry::from_layout(
+    let nk_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::from_top(nk_x, nk_top_y, nk_w, nk_total_h),
         border,
         *padding,
     );
-    let nk_fragment_geometry = nk_geometry.for_fragment(child.fragmentation);
-    let nk_border_box = nk_geometry.border_box.rounded(*cont_radii);
-    let background_geometry = nk_fragment_geometry.background(
-        *nk_bg_origin,
-        *nk_bg_clip,
-        *cont_radii,
-        BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
-    );
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let nk_box_geometry = nk_geometry.for_paint(page_content);
+    let nk_paint_geometry = nk_box_geometry.painting();
+    let nk_fragment_geometry = nk_box_geometry.fragment(child.fragmentation);
+    let nk_border_box = nk_paint_geometry.rounded_border_box(*cont_radii);
+    let background_geometry =
+        nk_fragment_geometry.background(*nk_bg_origin, *nk_bg_clip, *cont_radii);
     let nk_background_reference = background_geometry.positioning_box;
     let nk_background_clip = background_geometry.painting_box;
     let force_background_clip = child.fragmentation.reference_slice.is_some()
@@ -180,8 +178,8 @@ pub(super) fn render_nested_container(
         && cont_radii.is_zero()
         && *nk_outline_width == 0.0
         && let Some(blurred) = crate::render::blur::blur_box(
-            nk_geometry.border_box.width,
-            nk_geometry.border_box.height,
+            nk_paint_geometry.border_box.width,
+            nk_paint_geometry.border_box.height,
             *background_color,
             border,
             *nk_bg_blur,
@@ -200,10 +198,10 @@ pub(super) fn render_nested_container(
         let img_name = format!("Im{img_obj_id}");
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = nk_geometry.border_box.width + 2.0 * ov,
-            h = nk_geometry.border_box.height + 2.0 * ov,
-            ix = nk_geometry.border_box.left - ov,
-            iy = nk_geometry.border_box.bottom - ov,
+            w = nk_paint_geometry.border_box.width + 2.0 * ov,
+            h = nk_paint_geometry.border_box.height + 2.0 * ov,
+            ix = nk_paint_geometry.border_box.left - ov,
+            iy = nk_paint_geometry.border_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -252,7 +250,7 @@ pub(super) fn render_nested_container(
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                     nk_box_transform,
-                    nk_geometry,
+                    nk_paint_geometry,
                     *background_color,
                     border,
                     nested_kids,
@@ -292,7 +290,7 @@ pub(super) fn render_nested_container(
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                     nk_box_transform,
-                    nk_geometry,
+                    nk_paint_geometry,
                     *background_color,
                     border,
                 )
@@ -331,7 +329,7 @@ pub(super) fn render_nested_container(
                 content,
                 ctx.text.pdf_writer.page_content_transform,
                 nk_box_transform,
-                nk_geometry,
+                nk_paint_geometry,
                 *background_color,
                 border,
             );
@@ -555,7 +553,7 @@ pub(super) fn render_nested_container(
                     ow = nk_outline_width
                 ));
                 content.push_str(
-                    &nk_geometry
+                    &nk_paint_geometry
                         .border_box
                         .outset_uniform(gap)
                         .rounded(cont_radii.grow(gap))
@@ -571,6 +569,7 @@ pub(super) fn render_nested_container(
         // overflows. Chrome renders these in print, insetting the
         // content clip by the gutter on each scrolling axis.
         let padding_box = nk_geometry.padding_box();
+        let paint_padding_box = nk_paint_geometry.padding_box();
         let content_box = nk_geometry.content_box();
         let content_avail_w = content_box.width;
         let content_avail_h = content_box.height;
@@ -628,7 +627,7 @@ pub(super) fn render_nested_container(
                 // Rectangular clip inset by the per-side border and the
                 // reserved gutter (right gutter for vertical, bottom for
                 // horizontal — matching the LTR/top-anchored UA layout).
-                let scroll_clip = padding_box.inset(EdgeSizes {
+                let scroll_clip = paint_padding_box.inset(EdgeSizes {
                     right: v_gutter,
                     bottom: h_gutter,
                     ..Default::default()
@@ -636,7 +635,11 @@ pub(super) fn render_nested_container(
                 command.push_str(&scroll_clip.rect_path());
                 command.push_str("W n\n");
             } else {
-                command.push_str(&nk_geometry.rounded_padding_box(*cont_radii).path_or_rect());
+                command.push_str(
+                    &nk_paint_geometry
+                        .rounded_padding_box(*cont_radii)
+                        .path_or_rect(),
+                );
                 command.push_str("W n\n");
             }
             command
@@ -692,10 +695,10 @@ pub(super) fn render_nested_container(
         if phase.paints_decoration() && (has_v || has_h) {
             paint_scrollbars(
                 content,
-                padding_box.left,
-                padding_box.bottom,
-                padding_box.width,
-                padding_box.height,
+                paint_padding_box.left,
+                paint_padding_box.bottom,
+                paint_padding_box.width,
+                paint_padding_box.height,
                 has_v,
                 has_h,
                 thumb_ratio_v.max(1.0),

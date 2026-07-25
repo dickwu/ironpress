@@ -1,5 +1,7 @@
 use super::transforms::PdfDeviceSpace;
-use super::{BackgroundClip, BorderStyle, BoxGeometry, ImageRef, PdfRect, PdfVector, PdfWriter};
+use super::{
+    BackgroundClip, BorderStyle, ImageRef, PaintBoxGeometry, PdfRect, PdfVector, PdfWriter,
+};
 use crate::layout::elements::{BoxTransform, Container, LayoutElement, LayoutNode, LayoutVisitor};
 use crate::layout::engine::LayoutBorder;
 use crate::render::pdf_syntax::format_pdf_number_fixed;
@@ -338,7 +340,7 @@ pub(super) fn render_affine_solid_box(
     writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
     box_transform: &BoxTransform,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     background: Option<crate::types::Color>,
     border: &LayoutBorder,
 ) -> bool {
@@ -388,7 +390,7 @@ pub(super) fn render_affine_solid_group(
     writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
     box_transform: &BoxTransform,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     background: Option<crate::types::Color>,
     border: &LayoutBorder,
     children: &[LayoutNode],
@@ -455,7 +457,7 @@ mod tests {
             &mut writer,
             &mut page_images,
             &box_transform,
-            BoxGeometry::new(
+            PaintBoxGeometry::new(
                 PdfRect::from_top(106.5, 151.5, 75.0, 45.0),
                 crate::types::EdgeSizes::ZERO,
                 crate::types::EdgeSizes::ZERO,
@@ -492,7 +494,7 @@ mod tests {
             &mut writer,
             &mut Vec::new(),
             &box_transform,
-            BoxGeometry::new(
+            PaintBoxGeometry::new(
                 PdfRect::new(0.0, 0.0, 10.0, 10.0),
                 crate::types::EdgeSizes::ZERO,
                 crate::types::EdgeSizes::ZERO,

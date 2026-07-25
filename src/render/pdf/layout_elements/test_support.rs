@@ -1,6 +1,5 @@
 use super::*;
 use crate::layout::elements::{LayoutElementTestExt, LayoutNode};
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 #[cfg(test)]
 pub(in crate::render::pdf) fn table_row_total_height(row: &dyn LayoutElement) -> f32 {
@@ -22,7 +21,7 @@ pub(in crate::render::pdf) fn render_nested_text_block(
     let padding_box_height =
         text_block_total_height(block.lines, block.padding, block.block_height, block.clips);
     let border_box_height = padding_box_height + block.border.vertical_width();
-    let geometry = BoxGeometry::from_layout(
+    let geometry = LayoutBoxGeometry::from_layout(
         PdfRect::from_top(
             frame.origin.x,
             frame.origin.y,
@@ -32,6 +31,10 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         &block.border,
         block.padding,
     );
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let box_geometry = geometry.for_paint(page_content);
+    let paint_geometry = box_geometry.painting();
+    let fragment_geometry = box_geometry.fragment(Default::default());
     // CSS `filter: blur()` on a solid box (css-filter-effects-1 §4.1): rasterize
     // the box's painted output (bg fill + border), gaussian-blur it, and embed it
     // overflowing the border box. Restricted to a plain solid box (no SVG/raster
@@ -44,8 +47,8 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         && !block.clips
         && block.border_radii.is_zero()
         && let Some(blurred) = crate::render::blur::blur_box(
-            geometry.border_box.width,
-            geometry.border_box.height,
+            paint_geometry.border_box.width,
+            paint_geometry.border_box.height,
             block.background_color,
             &block.border,
             block.background_blur_radius,
@@ -63,10 +66,10 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = geometry.border_box.width + 2.0 * ov,
-            h = geometry.border_box.height + 2.0 * ov,
-            ix = geometry.border_box.left - ov,
-            iy = geometry.border_box.bottom - ov,
+            w = paint_geometry.border_box.width + 2.0 * ov,
+            h = paint_geometry.border_box.height + 2.0 * ov,
+            ix = paint_geometry.border_box.left - ov,
+            iy = paint_geometry.border_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -76,11 +79,8 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         return;
     }
 
-    let background_clip = geometry.background_paint_box(
-        block.background_clip,
-        block.border_radii,
-        BackgroundBorderPaint::fallback(&block.border),
-    );
+    let background_clip =
+        paint_geometry.background_clip_box(block.background_clip, block.border_radii);
 
     if let Some(color) = block.background_color {
         let (r, g, b) = color.to_f32_rgb();
@@ -101,7 +101,9 @@ pub(in crate::render::pdf) fn render_nested_text_block(
     }
 
     if let Some(svg_tree) = block.background_svg {
-        let origin_box = geometry.background_origin_box(block.background_origin);
+        let origin_box = box_geometry
+            .layout()
+            .background_origin_box(block.background_origin);
         render_svg_background(
             content,
             svg_tree,
@@ -129,7 +131,7 @@ pub(in crate::render::pdf) fn render_nested_text_block(
 
     paint_box_decoration(
         content,
-        geometry.for_fragment(Default::default()),
+        fragment_geometry,
         &block.border,
         block.border_radii,
         None,
@@ -224,6 +226,15 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                     } else {
                         row_height
                     };
+                    let cell_geometry = LayoutBoxGeometry::from_layout(
+                        PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
+                        &cell.layout.box_model.border,
+                        cell.layout.box_model.padding(),
+                    );
+                    let page_content = ctx.text.pdf_writer.page_content_transform;
+                    let cell_box_geometry = cell_geometry.for_paint(page_content);
+                    let cell_paint_geometry = cell_box_geometry.painting();
+                    let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
 
                     if let Some(color) = cell
                         .layout
@@ -243,10 +254,10 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                         }
                         content.push_str(&format!(
                             "{r} {g} {b} rg\n{x} {y} {w} {h} re\nf\n",
-                            x = cell_x,
-                            y = row_y - cell_height,
-                            w = cell_w,
-                            h = cell_height,
+                            x = cell_paint_geometry.border_box.left,
+                            y = cell_paint_geometry.border_box.bottom,
+                            w = cell_paint_geometry.border_box.width,
+                            h = cell_paint_geometry.border_box.height,
                         ));
                         if needs_cell_bg_alpha {
                             content.push_str("/GSDefault gs\n");
@@ -256,12 +267,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                     if !cell.table.hide_if_empty {
                         paint_box_decoration(
                             content,
-                            BoxGeometry::from_layout(
-                                PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
-                                &cell.layout.box_model.border,
-                                cell.layout.box_model.padding(),
-                            )
-                            .for_fragment(Default::default()),
+                            cell_fragment_geometry,
                             &cell.layout.box_model.border,
                             cell.layout.paint.border_radii,
                             cell.layout.paint.border_image.as_ref(),
@@ -363,7 +369,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                 .map_or(padding.vertical() + children_h, |height| {
                     (height - border.vertical_width()).max(0.0)
                 });
-            let geometry = BoxGeometry::from_layout(
+            let geometry = LayoutBoxGeometry::from_layout(
                 PdfRect::from_top(
                     planned_element.origin.x,
                     planned_element.origin.y,

@@ -205,7 +205,7 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
                 collapsed_margin_top_extra(element.margins.start, position.previous_margin_bottom);
             position.y = position.cursor_y;
         }
-        let geometry = BoxGeometry::new(
+        let layout_geometry = LayoutBoxGeometry::new(
             PdfRect::from_top(
                 self.flow.frame.content_origin.x,
                 position.y,
@@ -214,14 +214,20 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             ),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
-        )
-        .for_fragment(Default::default());
+        );
+        let box_geometry =
+            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let paint_geometry = box_geometry.painting();
+        let geometry = box_geometry.fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
             let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
             paint_horizontal_rule(
                 self.content,
-                PdfPoint::new(self.flow.frame.content_origin.x, position.y),
-                self.flow.frame.width(),
+                PdfPoint::new(
+                    paint_geometry.border_box.left,
+                    paint_geometry.border_box.top(),
+                ),
+                paint_geometry.border_box.width,
             );
             group.finish(self.content, self.ctx);
         }
@@ -249,11 +255,14 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             element.size.width,
             element.size.height,
         );
-        let geometry = BoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO)
-            .for_fragment(Default::default());
+        let layout_geometry = LayoutBoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO);
+        let box_geometry =
+            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let paint_geometry = box_geometry.painting();
+        let geometry = box_geometry.fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
             let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
-            paint_progress_bar(self.content, element, rect);
+            paint_progress_bar(self.content, element, paint_geometry.border_box);
             group.finish(self.content, self.ctx);
         }
         if planned_flow_top.is_none() {
@@ -274,7 +283,7 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
                 collapsed_margin_top_extra(element.margins.start, position.previous_margin_bottom);
             position.cursor_y
         };
-        let geometry = BoxGeometry::new(
+        let layout_geometry = LayoutBoxGeometry::new(
             PdfRect::from_top(
                 self.flow.frame.content_origin.x,
                 top,
@@ -283,8 +292,10 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             ),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
-        )
-        .for_fragment(Default::default());
+        );
+        let geometry = layout_geometry
+            .for_paint(self.ctx.text.pdf_writer.page_content_transform)
+            .fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
             let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
             paint_math_block(

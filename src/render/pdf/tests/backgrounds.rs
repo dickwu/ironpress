@@ -32,10 +32,10 @@ fn border_top_only_renders_filled_area() {
     let pages = layout(&nodes, PageSize::A4, Margin::default());
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
-    // A solid CSS side is its border-area quadrilateral, not a stroked
-    // centerline. The path closes and fills with the side color.
+    // A square solid side is its exact axis-aligned border band, not a
+    // stroked centerline.
     assert!(
-        pdf_str.contains("1 0 0 rg") && pdf_str.contains("h\nf\n"),
+        pdf_str.contains("1 0 0 rg") && filled_rect_count(&pdf_str) >= 1,
         "Should have a filled red top border area"
     );
 }
@@ -48,7 +48,7 @@ fn border_bottom_renders() {
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
     assert!(
-        pdf_str.contains("0 0 1 rg") && pdf_str.contains("h\nf\n"),
+        pdf_str.contains("0 0 1 rg") && filled_rect_count(&pdf_str) >= 1,
         "Should have a filled blue bottom border area"
     );
     assert!(
@@ -69,7 +69,7 @@ fn border_left_renders() {
             || pdf_str.contains("0 0.501960")
             || pdf_str.contains("0 0.5019 0 rg")
             || pdf_str.contains("0 0.502 0 rg"))
-            && pdf_str.contains("h\nf\n"),
+            && filled_rect_count(&pdf_str) >= 1,
         "Should have a filled green left border area"
     );
 }
@@ -450,12 +450,8 @@ fn flexrow_border_renders() {
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
     assert!(
-        pdf_str.contains("0 J\n0 j\n2 w\n") && pdf_str.contains("re\nS\n"),
-        "Should have the canonical exact stroke for the uniform flex border"
-    );
-    assert!(
-        pdf_str.contains("0 0 0 RG"),
-        "Should have black stroke color"
+        pdf_str.contains("0 0 0 rg") && filled_rect_count(&pdf_str) >= 4,
+        "Should have four non-overlapping black border bands"
     );
 }
 

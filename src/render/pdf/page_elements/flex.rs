@@ -47,25 +47,25 @@ pub(in crate::render::pdf) fn render_flex_row(
     // border-left width must be added, mirroring the cross-axis
     // `text_area_top` which already subtracts `border.top.width`).
     let cells_left = flex_left + border.left.width;
-    let flex_geometry = BoxGeometry::from_layout(
+    let flex_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::new(flex_left, row_y - full_height, container_width, full_height),
         border,
         *padding,
     );
-    let flex_box = flex_geometry.border_box.rounded(*flex_radii);
-    let flex_group = PaintGroupScope::begin(
-        content,
-        element,
-        flex_geometry.for_fragment(Default::default()),
-        ctx,
-    );
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let flex_box_geometry = flex_geometry.for_paint(page_content);
+    let flex_paint_geometry = flex_box_geometry.painting();
+    let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
+    let flex_paint_box = flex_paint_geometry.border_box;
+    let flex_box = flex_paint_geometry.rounded_border_box(*flex_radii);
+    let flex_group = PaintGroupScope::begin(content, element, flex_fragment_geometry, ctx);
 
     if phase.paints_decoration() {
         // Draw box shadow with blur
         render_box_shadows(
             content,
             box_shadow,
-            flex_geometry.for_fragment(Default::default()),
+            flex_fragment_geometry,
             *flex_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -169,7 +169,7 @@ pub(in crate::render::pdf) fn render_flex_row(
         render_box_shadows_inset(
             content,
             box_shadow,
-            flex_geometry.for_fragment(Default::default()),
+            flex_fragment_geometry,
             *flex_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -179,7 +179,9 @@ pub(in crate::render::pdf) fn render_flex_row(
 
         // Draw SVG background image for flex container
         if let Some(svg_tree) = background_svg {
-            let reference = flex_geometry.background_origin_box(*flex_bg_origin);
+            let reference = flex_box_geometry
+                .layout()
+                .background_origin_box(*flex_bg_origin);
             render_svg_background(
                 content,
                 svg_tree,
@@ -206,7 +208,7 @@ pub(in crate::render::pdf) fn render_flex_row(
         if border.has_any() || element.paint.border_image.is_some() {
             paint_box_decoration(
                 content,
-                flex_geometry.for_fragment(Default::default()),
+                flex_fragment_geometry,
                 border,
                 *flex_radii,
                 element.paint.border_image.as_ref(),
@@ -228,11 +230,11 @@ pub(in crate::render::pdf) fn render_flex_row(
     if needs_clip {
         let mut command = String::from("q\n");
         command.push_str(&overflow_clip_path(
-            flex_left,
-            row_y - full_height,
-            container_width,
-            full_height,
-            flex_geometry.border,
+            flex_paint_box.left,
+            flex_paint_box.bottom,
+            flex_paint_box.width,
+            flex_paint_box.height,
+            flex_paint_geometry.border,
             *flex_radii,
         ));
         command.push_str("W n\n");
@@ -284,7 +286,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 .fragment_block_extent
                 .unwrap_or(cross_geometry.size);
             let cell_y_shift = cross_geometry.offset;
-            let cell_geometry = BoxGeometry::from_layout(
+            let cell_geometry = LayoutBoxGeometry::from_layout(
                 PdfRect::new(
                     cell_x,
                     text_area_top - cell_y_shift - cell_render_h,
@@ -294,16 +296,16 @@ pub(in crate::render::pdf) fn render_flex_row(
                 &cell.border,
                 cell.padding,
             );
-            let cell_box = cell_geometry.border_box.rounded(cell.paint.border_radii);
-            let cell_shadows = FlexCellShadows::new(cell, cell_geometry);
+            let cell_box_geometry = cell_geometry.for_paint(page_content);
+            let cell_paint_geometry = cell_box_geometry.painting();
+            let cell_fragment_geometry =
+                cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
+            let cell_paint_box = cell_paint_geometry.border_box;
+            let cell_box = cell_paint_geometry.rounded_border_box(cell.paint.border_radii);
+            let cell_shadows = FlexCellShadows::new(cell, cell_fragment_geometry);
             let cell_inner_w = cell_geometry.content_box().width;
-            let cell_group = PaintGroupScope::begin(
-                content,
-                cell,
-                cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
-                ctx,
-            );
-            if paint_cell_filter_output(content, &cell.paint, cell_geometry, ctx) {
+            let cell_group = PaintGroupScope::begin(content, cell, cell_fragment_geometry, ctx);
+            if paint_cell_filter_output(content, &cell.paint, cell_paint_geometry, ctx) {
                 cell_group.finish(content, ctx);
                 break 'paint_cell;
             }
@@ -318,8 +320,8 @@ pub(in crate::render::pdf) fn render_flex_row(
                 && cell.paint.background.layers.svg.is_none()
                 && cell.paint.border_radii.is_zero()
                 && let Some(blurred) = crate::render::blur::blur_box(
-                    cell.width,
-                    cell_render_h,
+                    cell_paint_box.width,
+                    cell_paint_box.height,
                     cell.paint.background.color,
                     &cell.border,
                     cell.paint.background.layers.blur_radius,
@@ -335,14 +337,12 @@ pub(in crate::render::pdf) fn render_flex_row(
                 );
                 let img_name = format!("Im{img_obj_id}");
                 let ov = blurred.overflow_pt;
-                let cell_bg_x = cells_left + padding.left + cell.x_offset;
-                let cell_bg_y = text_area_top - cell_y_shift - cell_render_h;
                 content.push_str(&format!(
                     "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-                    w = cell.width + 2.0 * ov,
-                    h = cell_render_h + 2.0 * ov,
-                    ix = cell_bg_x - ov,
-                    iy = cell_bg_y - ov,
+                    w = cell_paint_box.width + 2.0 * ov,
+                    h = cell_paint_box.height + 2.0 * ov,
+                    ix = cell_paint_box.left - ov,
+                    iy = cell_paint_box.bottom - ov,
                     name = img_name,
                 ));
                 ctx.text.page_images.push(ImageRef {
@@ -371,7 +371,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 }
             }
 
-            paint_box_gradient_backgrounds(content, &cell.paint, &cell.border, cell_geometry, ctx);
+            paint_box_gradient_backgrounds(content, &cell.paint, cell_box_geometry, ctx);
 
             cell_shadows.paint_inset(content, ctx);
 
@@ -379,7 +379,7 @@ pub(in crate::render::pdf) fn render_flex_row(
             if cell.border.has_any() || cell.paint.border_image.is_some() {
                 paint_box_decoration(
                     content,
-                    cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
+                    cell_fragment_geometry,
                     &cell.border,
                     cell.paint.border_radii,
                     cell.paint.border_image.as_ref(),
@@ -388,8 +388,9 @@ pub(in crate::render::pdf) fn render_flex_row(
             }
 
             if let Some(svg_tree) = &cell.paint.background.layers.svg {
-                let reference =
-                    cell_geometry.background_origin_box(cell.paint.background.layers.origin);
+                let reference = cell_box_geometry
+                    .layout()
+                    .background_origin_box(cell.paint.background.layers.origin);
                 render_svg_background(
                     content,
                     svg_tree,

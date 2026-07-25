@@ -1,5 +1,5 @@
 use super::backgrounds::{PdfBackgroundPaintContext, PdfBackgroundResources};
-use super::geometry::{BackgroundBorderPaint, BoxGeometry, PdfRect};
+use super::geometry::{BoxPaintGeometry, PdfRect};
 use super::patterns::{
     LayerTilePattern, RepeatModes, paint_page_tiling_pattern, paint_tiling_pattern,
 };
@@ -18,9 +18,8 @@ use crate::types::CornerRadii;
 use crate::util::AxisRepeatPattern;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct BlockBackground<'a> {
-    pub(super) geometry: BoxGeometry,
-    pub(super) border: BackgroundBorderPaint<'a>,
+pub(super) struct BlockBackground {
+    pub(super) geometry: BoxPaintGeometry,
     pub(super) border_radii: CornerRadii,
     pub(super) size: BackgroundSize,
     pub(super) position: BackgroundPosition,
@@ -71,14 +70,14 @@ pub(super) fn render_block_svg_background(
     content: &mut String,
     tree: &crate::parser::svg::SvgTree,
     mut resources: PdfBackgroundResources<'_>,
-    background: BlockBackground<'_>,
+    background: BlockBackground,
 ) {
-    let clip = background.geometry.background_paint_box(
-        background.clip,
-        background.border_radii,
-        background.border,
-    );
-    let reference = background.geometry.background_origin_box(background.origin);
+    let geometry =
+        background
+            .geometry
+            .background(background.origin, background.clip, background.border_radii);
+    let clip = geometry.painting_box;
+    let reference = geometry.positioning_box;
     let blended = background.blend_mode != BlendMode::Normal
         && resources.ext_gstates.as_deref_mut().is_some_and(|states| {
             content.push_str("q\n");

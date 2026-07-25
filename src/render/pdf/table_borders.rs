@@ -3,20 +3,70 @@ use super::*;
 /// Track geometry needed to map layout-owned collapsed-border segments into
 /// page coordinates. Segment state remains in row/column units until paint so
 /// pagination never has to rewrite physical endpoints.
-pub(super) struct CollapsedCellTrackGeometry<'a> {
-    pub(super) border_box: PdfRect,
-    pub(super) column_widths: &'a [f32],
-    pub(super) column_start: usize,
-    pub(super) row_heights: &'a [Option<f32>],
-    pub(super) row_element_index: usize,
-    pub(super) current_row_height: f32,
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CollapsedColumnTracks<'a> {
+    widths: &'a [f32],
+    start: usize,
 }
 
-impl CollapsedCellTrackGeometry<'_> {
+impl<'a> CollapsedColumnTracks<'a> {
+    pub(super) const fn new(widths: &'a [f32], start: usize) -> Self {
+        Self { widths, start }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CollapsedRowTracks<'a> {
+    heights: &'a [Option<f32>],
+    element_index: usize,
+    current_height: f32,
+}
+
+impl<'a> CollapsedRowTracks<'a> {
+    pub(super) const fn new(
+        heights: &'a [Option<f32>],
+        element_index: usize,
+        current_height: f32,
+    ) -> Self {
+        Self {
+            heights,
+            element_index,
+            current_height,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CollapsedCellTrackGeometry<'a> {
+    /// Collapsed borders resolve on the unsnapped table grid. Chromium snaps
+    /// cell background destinations independently, but not these centerlines.
+    cell: LayoutBoxGeometry,
+    columns: CollapsedColumnTracks<'a>,
+    rows: CollapsedRowTracks<'a>,
+}
+
+impl<'a> CollapsedCellTrackGeometry<'a> {
+    pub(super) const fn new(
+        cell: LayoutBoxGeometry,
+        columns: CollapsedColumnTracks<'a>,
+        rows: CollapsedRowTracks<'a>,
+    ) -> Self {
+        Self {
+            cell,
+            columns,
+            rows,
+        }
+    }
+
+    fn border_box(self) -> PdfRect {
+        self.cell.border_box
+    }
+
     fn column_offset(&self, offset: usize) -> f32 {
-        self.column_widths
+        self.columns
+            .widths
             .iter()
-            .skip(self.column_start)
+            .skip(self.columns.start)
             .take(offset)
             .sum()
     }
@@ -25,11 +75,12 @@ impl CollapsedCellTrackGeometry<'_> {
         if offset == 0 {
             return 0.0;
         }
-        self.current_row_height
+        self.rows.current_height
             + self
-                .row_heights
+                .rows
+                .heights
                 .iter()
-                .skip(self.row_element_index.saturating_add(1))
+                .skip(self.rows.element_index.saturating_add(1))
                 .filter_map(|height| *height)
                 .take(offset.saturating_sub(1))
                 .sum::<f32>()
@@ -44,6 +95,7 @@ pub(super) fn paint_resolved_collapsed_cell_borders(
     page_ext_gstates: &mut Vec<(String, f32)>,
     bg_alpha_counter: &mut usize,
 ) {
+    let border_box = geometry.border_box();
     for edge in [
         PhysicalSide::Top,
         PhysicalSide::Right,
@@ -59,9 +111,8 @@ pub(super) fn paint_resolved_collapsed_cell_borders(
         for segment in cell.table.collapsed_segments.get(physical_side) {
             let (x1, y1, x2, y2) = match edge {
                 PhysicalSide::Top | PhysicalSide::Bottom => {
-                    let mut left =
-                        geometry.border_box.left + geometry.column_offset(segment.track_offset);
-                    let mut right = geometry.border_box.left
+                    let mut left = border_box.left + geometry.column_offset(segment.track_offset);
+                    let mut right = border_box.left
                         + geometry
                             .column_offset(segment.track_offset.saturating_add(segment.track_span));
                     if segment.track_offset == 0 {
@@ -76,16 +127,15 @@ pub(super) fn paint_resolved_collapsed_cell_borders(
                         right += cell.layout.box_model.border_insets.right;
                     }
                     let y = if edge == PhysicalSide::Top {
-                        geometry.border_box.top()
+                        border_box.top()
                     } else {
-                        geometry.border_box.bottom
+                        border_box.bottom
                     };
                     (left, y, right, y)
                 }
                 PhysicalSide::Right | PhysicalSide::Left => {
-                    let mut top =
-                        geometry.border_box.top() - geometry.row_offset(segment.track_offset);
-                    let mut bottom = geometry.border_box.top()
+                    let mut top = border_box.top() - geometry.row_offset(segment.track_offset);
+                    let mut bottom = border_box.top()
                         - geometry
                             .row_offset(segment.track_offset.saturating_add(segment.track_span));
                     if segment.track_offset == 0 && cell.table.collapsed_outer_edges.top {
@@ -97,9 +147,9 @@ pub(super) fn paint_resolved_collapsed_cell_borders(
                         bottom += cell.layout.box_model.border_insets.bottom;
                     }
                     let x = if edge == PhysicalSide::Right {
-                        geometry.border_box.right()
+                        border_box.right()
                     } else {
-                        geometry.border_box.left
+                        border_box.left
                     };
                     (x, top, x, bottom)
                 }

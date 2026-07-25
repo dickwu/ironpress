@@ -67,11 +67,16 @@ pub(in crate::render::pdf) fn paint_image_box(
     ctx: &mut PageRenderContext<'_>,
 ) {
     let image = &element.source;
-    let geometry = BoxGeometry::from_layout(image_box, &element.geometry.border, EdgeSizes::ZERO);
-    let fragment_geometry = geometry.for_fragment(Default::default());
+    let geometry =
+        LayoutBoxGeometry::from_layout(image_box, &element.geometry.border, EdgeSizes::ZERO);
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let box_geometry = geometry.for_paint(page_content);
+    let paint_geometry = box_geometry.painting();
+    let fragment_geometry = box_geometry.fragment(Default::default());
+    let paint_box = paint_geometry.border_box;
     let raster_overflow = element.paint.raster_overflow;
     if !raster_overflow.is_zero() {
-        let expanded_box = image_box.outset(raster_overflow);
+        let expanded_box = paint_box.outset(raster_overflow);
         let group = PaintGroupScope::begin(content, element, fragment_geometry, ctx);
         let image_id = ctx.text.pdf_writer.add_image_object_with_interpolation(
             &image.data,
@@ -99,7 +104,7 @@ pub(in crate::render::pdf) fn paint_image_box(
 
     let group = PaintGroupScope::begin(content, element, fragment_geometry, ctx);
     if let Some(effect) = &element.paint.filter_effect {
-        paint_image_effect_raster(content, effect, image_box, element.sampling.rendering, ctx);
+        paint_image_effect_raster(content, effect, paint_box, element.sampling.rendering, ctx);
     }
     if let Some(background) = element.paint.background_color
         && background.alpha() > 0.0
@@ -114,14 +119,16 @@ pub(in crate::render::pdf) fn paint_image_box(
         }
         content.push_str(&format!(
             "{r} {g} {b} rg\n{}f\n",
-            image_box.rounded(element.paint.border_radii).path_or_rect()
+            paint_geometry
+                .rounded_border_box(element.paint.border_radii)
+                .path_or_rect()
         ));
         if needs_alpha {
             content.push_str("/GSDefault gs\n");
         }
     }
 
-    let image_content = geometry.padding_box();
+    let image_content = paint_geometry.padding_box();
     let sliced = element
         .sampling
         .source_crop
@@ -221,13 +228,13 @@ pub(in crate::render::pdf) fn paint_svg_box(
     svg_box: PdfRect,
     ctx: &mut PageRenderContext<'_>,
 ) {
-    let geometry = BoxGeometry::from_layout(svg_box, &element.geometry.border, EdgeSizes::ZERO);
-    let group = PaintGroupScope::begin(
-        content,
-        element,
-        geometry.for_fragment(Default::default()),
-        ctx,
-    );
+    let geometry =
+        LayoutBoxGeometry::from_layout(svg_box, &element.geometry.border, EdgeSizes::ZERO);
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let box_geometry = geometry.for_paint(page_content);
+    let paint_geometry = box_geometry.painting();
+    let fragment_geometry = box_geometry.fragment(Default::default());
+    let group = PaintGroupScope::begin(content, element, fragment_geometry, ctx);
     if let Some(background) = element.paint.background_color
         && background.alpha() > 0.0
     {
@@ -241,14 +248,16 @@ pub(in crate::render::pdf) fn paint_svg_box(
         }
         content.push_str(&format!(
             "{r} {g} {b} rg\n{}f\n",
-            svg_box.rounded(element.paint.border_radii).path_or_rect()
+            paint_geometry
+                .rounded_border_box(element.paint.border_radii)
+                .path_or_rect()
         ));
         if needs_alpha {
             content.push_str("/GSDefault gs\n");
         }
     }
 
-    let svg_content = geometry.padding_box();
+    let svg_content = paint_geometry.padding_box();
     let content_w = svg_content.width;
     let content_h = svg_content.height;
     content.push_str("q\n");
@@ -298,7 +307,7 @@ pub(in crate::render::pdf) fn paint_svg_box(
     content.push_str("Q\n");
     paint_box_decoration(
         content,
-        geometry.for_fragment(Default::default()),
+        fragment_geometry,
         &element.geometry.border,
         element.paint.border_radii,
         element.paint.border_image.as_ref(),

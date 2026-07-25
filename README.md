@@ -199,7 +199,9 @@ scripts/parity-gen-refs.sh --check      # authenticate the complete corpus
 - **Oracles:** committed PDFs are the source of truth. Oracle-preview, candidate,
   and diff PNGs are generated report evidence and are intentionally ignored.
   `refs.lock` authenticates each fixture, oracle PDF, manifest entry, renderer,
-  fonts, and generator provenance.
+  fonts, and generator provenance. Every future oracle PDF is generated only by
+  the pinned Chromium Fontations/Foundation launcher; authenticated historical
+  non-Chromium PDFs are evidence-only and cannot be regenerated.
 - **Baseline:** `tests/parity/baseline.json` is a separately reviewed regression
   baseline. Updating it is explicit and cannot bless a visibility regression or
   hide raw evidence.

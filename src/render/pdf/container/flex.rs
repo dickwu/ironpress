@@ -60,18 +60,17 @@ pub(super) fn render_flex_child(
     );
     let x = flow.frame.content_origin.x + used_origin.x;
     let paint_y = flow.container_top_y - used_origin.y;
-    let flex_geometry = BoxGeometry::from_layout(
+    let flex_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::from_top(x, paint_y, flex_w, row_h),
         border,
         *flex_padding,
     );
-    let flex_border_box = flex_geometry.border_box.rounded(*flex_border_radii);
-    let flex_group = PaintGroupScope::begin(
-        content,
-        child,
-        flex_geometry.for_fragment(Default::default()),
-        ctx,
-    );
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let flex_box_geometry = flex_geometry.for_paint(page_content);
+    let flex_paint_geometry = flex_box_geometry.painting();
+    let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
+    let flex_border_box = flex_paint_geometry.rounded_border_box(*flex_border_radii);
+    let flex_group = PaintGroupScope::begin(content, child, flex_fragment_geometry, ctx);
 
     // A flex container that establishes a containing block records its
     // padding-box origin under its `positioned_depth`.
@@ -87,7 +86,7 @@ pub(super) fn render_flex_child(
         render_box_shadows(
             content,
             box_shadow,
-            flex_geometry.for_fragment(Default::default()),
+            flex_fragment_geometry,
             *flex_border_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -129,10 +128,10 @@ pub(super) fn render_flex_child(
                         || background_svg.is_some(),
                     child.paint.background.blend_mode.background_layer(0),
                 ),
-                flex_geometry.border_box.left,
-                flex_geometry.border_box.bottom,
-                flex_geometry.border_box.width,
-                flex_geometry.border_box.height,
+                flex_paint_geometry.border_box.left,
+                flex_paint_geometry.border_box.bottom,
+                flex_paint_geometry.border_box.width,
+                flex_paint_geometry.border_box.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -150,10 +149,10 @@ pub(super) fn render_flex_child(
             render_radial_gradient(
                 content,
                 &gradient,
-                flex_geometry.border_box.left,
-                flex_geometry.border_box.bottom,
-                flex_geometry.border_box.width,
-                flex_geometry.border_box.height,
+                flex_paint_geometry.border_box.left,
+                flex_paint_geometry.border_box.bottom,
+                flex_paint_geometry.border_box.width,
+                flex_paint_geometry.border_box.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -173,10 +172,10 @@ pub(super) fn render_flex_child(
             render_conic_gradient(
                 content,
                 &gradient,
-                flex_geometry.border_box.left,
-                flex_geometry.border_box.bottom,
-                flex_geometry.border_box.width,
-                flex_geometry.border_box.height,
+                flex_paint_geometry.border_box.left,
+                flex_paint_geometry.border_box.bottom,
+                flex_paint_geometry.border_box.width,
+                flex_paint_geometry.border_box.height,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -188,7 +187,7 @@ pub(super) fn render_flex_child(
         render_box_shadows_inset(
             content,
             box_shadow,
-            flex_geometry.for_fragment(Default::default()),
+            flex_fragment_geometry,
             *flex_border_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -197,7 +196,9 @@ pub(super) fn render_flex_child(
         );
 
         if let Some(svg_tree) = background_svg {
-            let origin_box = flex_geometry.background_origin_box(*flex_bg_origin);
+            let origin_box = flex_box_geometry
+                .layout()
+                .background_origin_box(*flex_bg_origin);
             render_svg_background(
                 content,
                 svg_tree,
@@ -210,7 +211,7 @@ pub(super) fn render_flex_child(
                 ),
                 PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
                     origin_box.into(),
-                    flex_geometry.border_box.into(),
+                    flex_paint_geometry.border_box.into(),
                     *flex_border_radii,
                     *background_blur_radius,
                     *flex_bg_size,
@@ -227,7 +228,7 @@ pub(super) fn render_flex_child(
         if border.has_any() || child.paint.border_image.is_some() {
             paint_box_decoration(
                 content,
-                flex_geometry.for_fragment(Default::default()),
+                flex_fragment_geometry,
                 border,
                 *flex_border_radii,
                 child.paint.border_image.as_ref(),
@@ -291,21 +292,20 @@ pub(super) fn render_flex_child(
             let cell_y_shift = cross_geometry.offset;
             let cell_top = content_y - cell_y_shift;
             let cell_bottom = cell_top - cell_h;
-            let cell_geometry = BoxGeometry::from_layout(
+            let cell_geometry = LayoutBoxGeometry::from_layout(
                 PdfRect::new(cell_x, cell_bottom, cell_w, cell_h),
                 &cell.border,
                 cell.padding,
             );
-            let cell_border_box = cell_geometry.border_box.rounded(cell.paint.border_radii);
-            let cell_shadows = FlexCellShadows::new(cell, cell_geometry);
-            let cell_group = PaintGroupScope::begin(
-                content,
-                cell,
-                cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
-                ctx,
-            );
+            let cell_box_geometry = cell_geometry.for_paint(page_content);
+            let cell_paint_geometry = cell_box_geometry.painting();
+            let cell_fragment_geometry =
+                cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
+            let cell_border_box = cell_paint_geometry.rounded_border_box(cell.paint.border_radii);
+            let cell_shadows = FlexCellShadows::new(cell, cell_fragment_geometry);
+            let cell_group = PaintGroupScope::begin(content, cell, cell_fragment_geometry, ctx);
             if cell_phase == ElementPaintPhase::All
-                && paint_cell_filter_output(content, &cell.paint, cell_geometry, ctx)
+                && paint_cell_filter_output(content, &cell.paint, cell_paint_geometry, ctx)
             {
                 cell_group.finish(content, ctx);
                 break 'paint_cell;
@@ -329,19 +329,13 @@ pub(super) fn render_flex_child(
                         content.push_str("/GSDefault gs\n");
                     }
                 }
-                paint_box_gradient_backgrounds(
-                    content,
-                    &cell.paint,
-                    &cell.border,
-                    cell_geometry,
-                    ctx,
-                );
+                paint_box_gradient_backgrounds(content, &cell.paint, cell_box_geometry, ctx);
                 cell_shadows.paint_inset(content, ctx);
                 // Draw cell border through the shared rounded-ring painter.
                 if cell.border.has_any() || cell.paint.border_image.is_some() {
                     paint_box_decoration(
                         content,
-                        cell_geometry.for_fragment(cell.fragmentation.box_fragmentation),
+                        cell_fragment_geometry,
                         &cell.border,
                         cell.paint.border_radii,
                         cell.paint.border_image.as_ref(),

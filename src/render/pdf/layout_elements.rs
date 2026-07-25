@@ -1,5 +1,5 @@
 #[cfg(test)]
-use super::geometry::BoxGeometry;
+use super::geometry::LayoutBoxGeometry;
 use super::geometry::{PdfPoint, PdfRect};
 use super::*;
 use crate::layout::elements::LayoutNode;

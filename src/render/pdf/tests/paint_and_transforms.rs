@@ -216,12 +216,12 @@ fn masked_bordered_container_emits_only_authored_box_paint() {
 
     assert_eq!(
         masked_group.matches(" re\nf\n").count(),
-        1,
-        "only the authored background fill belongs in the isolated box group"
+        5,
+        "the isolated group contains one background and four exclusive border bands"
     );
     assert!(
-        masked_group.contains("0 J\n0 j\n") && masked_group.contains("re\nS\n"),
-        "the authored border must composite inside the isolated box group"
+        !masked_group.contains("re\nS\n"),
+        "the authored border must composite as exact filled geometry"
     );
     assert!(
         !content.contains("/ca 0.13"),
@@ -536,7 +536,7 @@ fn translucent_elliptical_border_is_an_exact_ring_not_a_centerline_stroke() {
 }
 
 #[test]
-fn varying_width_uniform_solid_border_is_one_exact_ring() {
+fn varying_width_uniform_solid_border_uses_exclusive_bands() {
     let html = r#"<style>@page { size: 192px 144px; margin: 0; }
             * { margin: 0; box-sizing: border-box; }
             .box { width:130px; height:90px; margin:20px;
@@ -549,10 +549,12 @@ fn varying_width_uniform_solid_border_is_one_exact_ring() {
         .unwrap();
     let content = String::from_utf8_lossy(&pdf);
 
-    assert!(
-        content.contains("f*\n"),
-        "one shared solid paint must emit one outer-minus-inner ring"
+    assert_eq!(
+        content.matches(" re\nf\n").count(),
+        4,
+        "one shared square paint must emit four exclusive border bands"
     );
+    assert!(!content.contains("f*\n"));
 }
 
 #[test]

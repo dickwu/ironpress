@@ -182,7 +182,7 @@ pub(super) fn rasterize_mask_layer_source(
 pub(super) fn rasterize_mask_layer(
     layer: &MaskLayer,
     window: MaskRasterWindow,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     svg_defs: &crate::parser::svg::SvgDefs,
 ) -> Option<Vec<u8>> {
     let border_box = geometry.border_box;
@@ -346,7 +346,7 @@ pub(super) fn composite_mask(source: u8, dest: u8, op: MaskComposite) -> u8 {
 pub(super) fn rasterize_mask_layers(
     layers: &[MaskLayer],
     window: MaskRasterWindow,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     svg_defs: &crate::parser::svg::SvgDefs,
 ) -> Option<Vec<u8>> {
     let mut accum = vec![0u8; window.len()?];
@@ -589,7 +589,7 @@ pub(super) fn rasterize_mask_source(
     source: &MaskSource,
     mode: MaskMode,
     window: MaskRasterWindow,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     svg_defs: &crate::parser::svg::SvgDefs,
 ) -> Option<Vec<u8>> {
     match source {

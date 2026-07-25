@@ -77,12 +77,16 @@ pub(in crate::render::pdf) fn render_container(
     let children_h: f32 = collapsed_children_height(children);
     let content_h = c_padding.vertical() + children_h + border.vertical_width();
     let total_h = c_block_height.resolve(content_h);
-    let c_geometry = BoxGeometry::from_layout(
+    let c_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::new(container_x, container_y_top - total_h, container_w, total_h),
         border,
         *c_padding,
     );
-    let c_fragment_geometry = c_geometry.for_fragment(element.fragmentation);
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let c_box_geometry = c_geometry.for_paint(page_content);
+    let c_paint_geometry = c_box_geometry.painting();
+    let c_fragment_geometry = c_box_geometry.fragment(element.fragmentation);
+    let c_paint_box = c_paint_geometry.border_box;
 
     if c_visible_self
         && let Some(t) = c_transform
@@ -103,9 +107,9 @@ pub(in crate::render::pdf) fn render_container(
     {
         render_projected_solid_box(
             content,
-            ctx.text.pdf_writer.page_content_transform,
+            page_content,
             c_box_transform,
-            c_geometry,
+            c_paint_geometry,
             *background_color,
             border,
         );
@@ -133,7 +137,7 @@ pub(in crate::render::pdf) fn render_container(
             ctx.text.pdf_writer,
             ctx.text.page_images,
             c_box_transform,
-            c_geometry,
+            c_paint_geometry,
             *background_color,
             border,
         )
@@ -155,8 +159,8 @@ pub(in crate::render::pdf) fn render_container(
         && !border.has_visible()
         && let Some(blurred) = blurred_simple_container_group(
             children,
-            container_w,
-            total_h,
+            c_paint_box.width,
+            c_paint_box.height,
             *background_color,
             border,
             *c_padding,
@@ -176,10 +180,10 @@ pub(in crate::render::pdf) fn render_container(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = container_w + 2.0 * ov,
-            h = total_h + 2.0 * ov,
-            ix = container_x - ov,
-            iy = container_y_top - total_h - ov,
+            w = c_paint_box.width + 2.0 * ov,
+            h = c_paint_box.height + 2.0 * ov,
+            ix = c_paint_box.left - ov,
+            iy = c_paint_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -200,8 +204,8 @@ pub(in crate::render::pdf) fn render_container(
         && c_border_radii.is_zero()
         && *c_outline_width == 0.0
         && let Some(blurred) = crate::render::blur::blur_box(
-            container_w,
-            total_h,
+            c_paint_box.width,
+            c_paint_box.height,
             *background_color,
             border,
             *c_bg_blur,
@@ -219,10 +223,10 @@ pub(in crate::render::pdf) fn render_container(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = container_w + 2.0 * ov,
-            h = total_h + 2.0 * ov,
-            ix = container_x - ov,
-            iy = container_y_top - total_h - ov,
+            w = c_paint_box.width + 2.0 * ov,
+            h = c_paint_box.height + 2.0 * ov,
+            ix = c_paint_box.left - ov,
+            iy = c_paint_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -244,6 +248,7 @@ pub(in crate::render::pdf) fn render_container(
     }
 
     let c_padding_box = c_geometry.padding_box();
+    let c_paint_padding_box = c_paint_geometry.padding_box();
     let c_pad_box_w = c_padding_box.width;
     let c_pad_box_h = c_padding_box.height;
     let c_avail_w = (c_pad_box_w - c_padding.horizontal()).max(0.0);
@@ -296,18 +301,18 @@ pub(in crate::render::pdf) fn render_container(
     let clip_command = needs_clip.then(|| {
         let mut command = String::from("q\n");
         if c_has_v || c_has_h {
-            let cx = container_x + border.left.width;
-            let cy = (container_y_top - total_h) + border.bottom.width + c_h_gutter;
-            let cw = c_pad_box_w - c_v_gutter;
-            let ch = c_pad_box_h - c_h_gutter;
+            let cx = c_paint_padding_box.left;
+            let cy = c_paint_padding_box.bottom + c_h_gutter;
+            let cw = c_paint_padding_box.width - c_v_gutter;
+            let ch = c_paint_padding_box.height - c_h_gutter;
             command.push_str(&format!("{cx} {cy} {cw} {ch} re W n\n"));
         } else {
             command.push_str(&overflow_clip_path(
-                container_x,
-                container_y_top - total_h,
-                container_w,
-                total_h,
-                c_geometry.border,
+                c_paint_box.left,
+                c_paint_box.bottom,
+                c_paint_box.width,
+                c_paint_box.height,
+                c_paint_geometry.border,
                 *c_border_radii,
             ));
             command.push_str("W n\n");
@@ -370,10 +375,10 @@ pub(in crate::render::pdf) fn render_container(
     if phase.paints_decoration() && (c_has_v || c_has_h) {
         paint_scrollbars(
             content,
-            c_padding_box.left,
-            c_padding_box.bottom,
-            c_pad_box_w,
-            c_pad_box_h,
+            c_paint_padding_box.left,
+            c_paint_padding_box.bottom,
+            c_paint_padding_box.width,
+            c_paint_padding_box.height,
             c_has_v,
             c_has_h,
             c_thumb_ratio_v.max(1.0),

@@ -95,22 +95,6 @@ impl LayoutBorderSide {
     pub fn same_paint(&self, other: &Self) -> bool {
         self.width == other.width && self.color == other.color && self.style == other.style
     }
-
-    /// Inset that an opaque, continuous side safely covers from its outer
-    /// edge toward the padding box.
-    ///
-    /// A border-box background remains conceptually painted below the border,
-    /// but independently antialiasing both paints at the same outer contour
-    /// lets the background leak through the border's fractional coverage.
-    /// Keeping the background through the border centerline preserves its
-    /// complete CSS-visible area while giving that contour one paint owner.
-    pub fn opaque_solid_centerline_inset(&self) -> f32 {
-        (self.paints()
-            && self.style == crate::style::computed::BorderStyle::Solid
-            && self.color.alpha() == 1.0)
-            .then_some(self.width * 0.5)
-            .unwrap_or_default()
-    }
 }
 
 /// The part of an SVG content viewport that belongs to one fragment.
@@ -211,12 +195,6 @@ impl PhysicalEdges<LayoutBorderSide> {
         )
     }
 
-    /// Per-edge background guard supplied by continuous opaque border paint.
-    /// Missing fragment edges and patterned/translucent sides stay at zero so
-    /// their background remains visible all the way to the authored edge.
-    pub fn opaque_solid_centerline_insets(&self) -> EdgeSizes {
-        self.map(|side| side.opaque_solid_centerline_inset())
-    }
     /// Largest used width among the four sides.
     pub fn max_width(&self) -> f32 {
         self.top
@@ -9814,35 +9792,6 @@ mod tests {
     }
 
     #[test]
-    fn background_guard_stops_at_each_opaque_solid_centerline() {
-        let opaque_solid = LayoutBorderSide {
-            width: 8.0,
-            color: Color::from_srgb(0.1, 0.2, 0.3, 1.0),
-            style: crate::style::computed::BorderStyle::Solid,
-        };
-        let border = LayoutBorder {
-            top: opaque_solid,
-            right: LayoutBorderSide {
-                color: Color::from_srgb(0.1, 0.2, 0.3, 0.5),
-                ..opaque_solid
-            },
-            bottom: LayoutBorderSide {
-                style: crate::style::computed::BorderStyle::Dashed,
-                ..opaque_solid
-            },
-            left: LayoutBorderSide {
-                width: 0.0,
-                ..opaque_solid
-            },
-        };
-
-        assert_eq!(
-            border.opaque_solid_centerline_insets(),
-            EdgeSizes::new(4.0, 0.0, 0.0, 0.0)
-        );
-    }
-
-    #[test]
     fn none_and_hidden_borders_have_zero_used_layout_width() {
         use crate::style::computed::{BorderSide, BorderStyle};
 
@@ -11980,7 +11929,10 @@ line 3</pre>
             .expect("fixture must render");
         let pdf = String::from_utf8_lossy(&pdf);
         assert!(
-            pdf.contains("1 1 1 rg\n81 63.75 m\n0 63.75 l"),
+            pdf.split("1 1 1 rg\n").skip(1).any(|paint| {
+                let mut lines = paint.lines();
+                lines.next().is_some_and(|line| line.ends_with(" re")) && lines.next() == Some("f")
+            }),
             "multicol item borders must reach the PDF paint stream"
         );
     }

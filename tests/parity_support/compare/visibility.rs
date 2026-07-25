@@ -136,10 +136,12 @@ pub(crate) fn has_visible_interior_recolor(tally: &ClassTally) -> bool {
 ///
 /// A boundary mask is not proof of antialias coverage: glyphs, borders, and
 /// overlap frontiers are themselves boundaries. Once the explicit shared-ramp
-/// paths have declined a colour field, the same component, span, and aggregate
-/// area floors used for paint-presence changes decide whether its shape is
-/// visible. This rejects mangled text, chromatic glyph swaps, and wrong paint
-/// order without turning isolated device-pixel noise into failures.
+/// paths have declined a colour field, its component area and span decide
+/// whether it forms an authored-scale mark. The complete-page post-floor
+/// percentage is enforced separately, so disconnected sub-CSS samples must not
+/// be summed into a fictitious visible component. This rejects mangled text,
+/// chromatic glyph swaps, and wrong paint order without turning isolated
+/// device-pixel noise into failures.
 pub(crate) fn has_visible_unproven_color_change(tally: &ClassTally, regions: &RegionSet) -> bool {
     if tally.color_de <= VISUAL_COLOR_JND {
         return false;
@@ -147,11 +149,9 @@ pub(crate) fn has_visible_unproven_color_change(tally: &ClassTally, regions: &Re
 
     let component_pixels = VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2 * CSS_PX * CSS_PX;
     let component_span_pixels = VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX * CSS_PX;
-    let total_pixels = VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2 * CSS_PX * CSS_PX;
 
     f64::from(regions.largest_area(PixelClass::ColorErr)) >= component_pixels
         || f64::from(regions.largest_span(PixelClass::ColorErr)) >= component_span_pixels
-        || tally.color_px as f64 >= total_pixels
 }
 
 /// Apply the fixed authored-space policy to direct 300-DPI evidence.
@@ -285,4 +285,62 @@ fn visible_class(
     // substitutes either raster. An absent stroke, a one-CSS-pixel strip, or an
     // interior cut cannot satisfy it.
     crosses_presence_floor && !shared_coverage_residue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::segment::{CoverageEvidence, DiffRegion};
+    use super::*;
+
+    fn unproven_color_fragment(index: u32) -> DiffRegion {
+        let x = f64::from(index * 2) / CSS_PX;
+        DiffRegion {
+            bbox_css: [x, 0.0, x + 3.0 / CSS_PX, 0.0],
+            class: PixelClass::ColorErr,
+            area_px: 4,
+            longest_span_px: 4,
+            area_pct: 0.0,
+            modal_drgba: [48, 48, 48, 0],
+            delta_e: VISUAL_COLOR_JND + 1.0,
+            interior_color_px: 0,
+            coverage: CoverageEvidence::default(),
+            large_color_component_is_balanced: false,
+            max_direct_delta_e: VISUAL_COLOR_JND + 1.0,
+        }
+    }
+
+    #[test]
+    fn disconnected_sub_css_color_fragments_do_not_form_a_visible_component() {
+        let mut regions = RegionSet::default();
+        for index in 0..147 {
+            regions.record(unproven_color_fragment(index));
+        }
+        let tally = ClassTally {
+            color_px: 147 * 4,
+            color_de: VISUAL_COLOR_JND + 1.0,
+            ..Default::default()
+        };
+
+        assert!(
+            !has_visible_unproven_color_change(&tally, &regions),
+            "post-floor samples below every component and span floor are not an authored-scale defect"
+        );
+    }
+
+    #[test]
+    fn one_authored_scale_color_component_remains_visible() {
+        let mut regions = RegionSet::default();
+        let component_side = (VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2.sqrt() * CSS_PX).ceil() as u32;
+        let mut component = unproven_color_fragment(0);
+        component.area_px = component_side * component_side;
+        component.longest_span_px = component_side;
+        regions.record(component);
+        let tally = ClassTally {
+            color_px: u64::from(component_side * component_side),
+            color_de: VISUAL_COLOR_JND + 1.0,
+            ..Default::default()
+        };
+
+        assert!(has_visible_unproven_color_change(&tally, &regions));
+    }
 }

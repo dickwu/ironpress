@@ -322,10 +322,9 @@
             content.contains("rg\n"),
             "Container should have background color fill"
         );
-        // Container border stroke
         assert!(
-            content.contains("RG\n"),
-            "Container should have border stroke color"
+            content.contains("0 0 1 rg"),
+            "Container should have blue border fill"
         );
         assert!(
             content.contains("Inside container"),
@@ -345,10 +344,9 @@
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        // Flex container border: red = 1 0 0 RG
         assert!(
-            content.contains("1 0 0 RG"),
-            "FlexRow border should use red stroke color"
+            content.contains("1 0 0 rg"),
+            "FlexRow border should use red fill color"
         );
     }
 
@@ -462,10 +460,9 @@
             pdf.starts_with(b"%PDF"),
             "Grid with border should produce valid PDF"
         );
-        // Green border: 0 0.50196... 0 RG (CSS green = #008000)
         assert!(
-            content.contains("RG\n"),
-            "Grid border should produce stroke color"
+            content.contains("0 0.502 0 rg") && filled_rect_count(&content) >= 4,
+            "Grid border should produce four green filled bands"
         );
     }
 

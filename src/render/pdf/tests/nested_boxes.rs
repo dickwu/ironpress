@@ -230,7 +230,7 @@ fn layout_elements_nested_text_block_top_border_only() {
     );
     assert!(content.contains("1 0 0 rg"), "Should have red top border");
     assert!(
-        content.contains("10 100 m\n90 100 l\n90 98 l\n10 98 l\nh\n"),
+        content.contains("10 98 80 2 re\nf\n"),
         "The top side should own exactly the two-point border band"
     );
 }

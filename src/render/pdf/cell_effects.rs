@@ -1,4 +1,4 @@
-use super::{BoxGeometry, ImageRef, PageRenderContext};
+use super::{ImageRef, PageRenderContext, PaintBoxGeometry};
 use crate::layout::cells::{CellBox, CellPaint};
 
 /// Paint a cell's already-composited filter surface over its source border box.
@@ -6,7 +6,7 @@ use crate::layout::cells::{CellBox, CellPaint};
 pub(super) fn paint_cell_filter_output(
     content: &mut String,
     paint: &CellPaint,
-    source_geometry: BoxGeometry,
+    source_geometry: PaintBoxGeometry,
     ctx: &mut PageRenderContext<'_>,
 ) -> bool {
     let Some(output) = &paint.filter_output else {
@@ -39,7 +39,7 @@ pub(super) fn paint_cell_filter_output(
 pub(super) fn paint_box_filter_output(
     content: &mut String,
     cell: &CellBox,
-    source_geometry: BoxGeometry,
+    source_geometry: PaintBoxGeometry,
     ctx: &mut PageRenderContext<'_>,
 ) -> bool {
     paint_cell_filter_output(content, &cell.paint, source_geometry, ctx)

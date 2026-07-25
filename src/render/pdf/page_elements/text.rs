@@ -1,6 +1,5 @@
 use super::*;
 use crate::layout::elements::TextBlock;
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(in crate::render::pdf) fn render_text_block(
     content: &mut String,
@@ -120,12 +119,17 @@ pub(in crate::render::pdf) fn render_text_block(
     let border_vert = border.top.width + border.bottom.width;
     let border_box_h = total_h + border_vert;
     let block_bottom = block_y - border_box_h;
-    let tb_geometry = BoxGeometry::from_layout(
+    let tb_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::new(block_x, block_bottom, render_width, border_box_h),
         border,
         *padding,
     );
-    let tb_border_box = tb_geometry.border_box.rounded(*tb_radii);
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let tb_box_geometry = tb_geometry.for_paint(page_content);
+    let tb_paint_geometry = tb_box_geometry.painting();
+    let tb_fragment_geometry = tb_box_geometry.fragment(element.fragmentation.box_fragmentation);
+    let tb_paint_box = tb_paint_geometry.border_box;
+    let tb_border_box = tb_paint_geometry.rounded_border_box(*tb_radii);
 
     // Apply transform if set (wrap in q/Q).
     // Rotate and scale are applied around the element's centre so
@@ -151,9 +155,9 @@ pub(in crate::render::pdf) fn render_text_block(
     {
         render_projected_solid_box(
             content,
-            ctx.text.pdf_writer.page_content_transform,
+            page_content,
             box_transform,
-            tb_geometry,
+            tb_paint_geometry,
             *background_color,
             border,
         );
@@ -181,7 +185,7 @@ pub(in crate::render::pdf) fn render_text_block(
             ctx.text.pdf_writer,
             ctx.text.page_images,
             box_transform,
-            tb_geometry,
+            tb_paint_geometry,
             *background_color,
             border,
         )
@@ -189,12 +193,7 @@ pub(in crate::render::pdf) fn render_text_block(
         return;
     }
 
-    let tb_group = PaintGroupScope::begin(
-        content,
-        element,
-        tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
-        ctx,
-    );
+    let tb_group = PaintGroupScope::begin(content, element, tb_fragment_geometry, ctx);
     let transformed_paint_space = ctx.text.pdf_writer.transformed_paint_space(ctx.paint_box);
     let needs_transform = transformed_paint_space.is_some();
 
@@ -213,7 +212,7 @@ pub(in crate::render::pdf) fn render_text_block(
         render_box_shadows(
             content,
             box_shadow,
-            tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
+            tb_fragment_geometry,
             *tb_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -242,8 +241,8 @@ pub(in crate::render::pdf) fn render_text_block(
         && *outline_width == 0.0
         && box_shadow.is_empty()
         && let Some(blurred) = crate::render::blur::blur_box(
-            render_width,
-            border_box_h,
+            tb_paint_box.width,
+            tb_paint_box.height,
             *background_color,
             border,
             *background_blur_radius,
@@ -261,10 +260,10 @@ pub(in crate::render::pdf) fn render_text_block(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = render_width + 2.0 * ov,
-            h = border_box_h + 2.0 * ov,
-            ix = block_x - ov,
-            iy = block_bottom - ov,
+            w = tb_paint_box.width + 2.0 * ov,
+            h = tb_paint_box.height + 2.0 * ov,
+            ix = tb_paint_box.left - ov,
+            iy = tb_paint_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -294,8 +293,8 @@ pub(in crate::render::pdf) fn render_text_block(
         && box_shadow.is_empty()
         && *background_clip == BackgroundClip::Border
         && let Some(blurred) = blurred_simple_text_block(
-            render_width,
-            border_box_h,
+            tb_paint_box.width,
+            tb_paint_box.height,
             *background_color,
             lines,
             *padding,
@@ -320,10 +319,10 @@ pub(in crate::render::pdf) fn render_text_block(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = render_width + 2.0 * ov,
-            h = border_box_h + 2.0 * ov,
-            ix = block_x - ov,
-            iy = block_bottom - ov,
+            w = tb_paint_box.width + 2.0 * ov,
+            h = tb_paint_box.height + 2.0 * ov,
+            ix = tb_paint_box.left - ov,
+            iy = tb_paint_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -334,12 +333,10 @@ pub(in crate::render::pdf) fn render_text_block(
         return;
     }
 
-    let tb_reference = tb_geometry.background_origin_box(*background_origin);
-    let tb_clip_box = tb_geometry.background_paint_box(
-        *background_clip,
-        *tb_radii,
-        BackgroundBorderPaint::new(border, element.paint.border_image.as_ref()),
-    );
+    let tb_background_geometry =
+        tb_box_geometry.background(*background_origin, *background_clip, *tb_radii);
+    let tb_reference = tb_background_geometry.positioning_box;
+    let tb_clip_box = tb_background_geometry.painting_box;
     let tb_needs_clip = *background_clip != BackgroundClip::Border || tb_clip_box != tb_border_box;
     let tb_text_clip_background = *background_clip == BackgroundClip::Text;
     let tb_gradient_clip = !tb_text_clip_background;
@@ -541,7 +538,7 @@ pub(in crate::render::pdf) fn render_text_block(
         render_box_shadows_inset(
             content,
             box_shadow,
-            tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
+            tb_fragment_geometry,
             *tb_radii,
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
@@ -598,7 +595,7 @@ pub(in crate::render::pdf) fn render_text_block(
     if phase.paints_decoration() && (border.has_visible() || element.paint.border_image.is_some()) {
         paint_box_decoration(
             content,
-            tb_geometry.for_fragment(element.fragmentation.box_fragmentation),
+            tb_fragment_geometry,
             border,
             *tb_radii,
             element.paint.border_image.as_ref(),
@@ -612,10 +609,10 @@ pub(in crate::render::pdf) fn render_text_block(
     // beyond the offset edge so the stroke stays fully outside.
     if phase.paints_decoration() && *outline_width > 0.0 {
         let gap = *tb_outline_offset + *outline_width / 2.0;
-        let outline_x = block_x - gap;
-        let outline_y = block_bottom - gap;
-        let outline_w = render_width + 2.0 * gap;
-        let outline_h = border_box_h + 2.0 * gap;
+        let outline_x = tb_paint_box.left - gap;
+        let outline_y = tb_paint_box.bottom - gap;
+        let outline_w = tb_paint_box.width + 2.0 * gap;
+        let outline_h = tb_paint_box.height + 2.0 * gap;
         let (or, og, ob) = outline_color
             .unwrap_or(crate::types::Color::BLACK)
             .to_f32_rgb();
@@ -638,11 +635,11 @@ pub(in crate::render::pdf) fn render_text_block(
     if needs_clip {
         content.push_str("q\n");
         content.push_str(&overflow_clip_path(
-            block_x,
-            block_bottom,
-            render_width,
-            border_box_h,
-            tb_geometry.border,
+            tb_paint_box.left,
+            tb_paint_box.bottom,
+            tb_paint_box.width,
+            tb_paint_box.height,
+            tb_paint_geometry.border,
             *tb_radii,
         ));
         content.push_str("W n\n");

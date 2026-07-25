@@ -7,7 +7,7 @@ fn fragmented_effect_geometry_uses_one_composite_size_at_each_fragment_origin() 
         ..Default::default()
     };
     let (_, continuation) = BoxFragmentSlice::split(100.0, 80.0, &box_model);
-    let painting = BoxGeometry::new(
+    let painting = PaintBoxGeometry::new(
         PdfRect::from_top(10.0, 200.0, 100.0, 80.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -181,7 +181,7 @@ fn table_cell_borders_render() {
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
     assert!(
-        pdf_str.contains("h\nf\n"),
+        filled_rect_count(&pdf_str) >= 1,
         "Table cell border should produce a filled coverage band"
     );
 }
@@ -529,17 +529,13 @@ fn table_cell_all_borders() {
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
     assert!(pdf_str.contains("Bordered Cell"), "Should render cell text");
-    // Red border paint
     assert!(
-        pdf_str.contains("1 0 0 RG"),
-        "Should have red border stroke color"
+        pdf_str.contains("1 0 0 rg"),
+        "Should have red border fill color"
     );
-    // A uniform opaque square frame is one exact closed stroke rather than
-    // four overlapping side strokes.
-    let stroke_count = pdf_str.matches("0 J\n0 j\n2 w\n").count();
     assert!(
-        stroke_count >= 1,
-        "Should have at least one canonical border stroke, got {stroke_count}"
+        filled_rect_count(&pdf_str) >= 4,
+        "Should have at least four non-overlapping border bands"
     );
 }
 

@@ -334,14 +334,13 @@ fn paint_slice(content: &mut String, form: &ImageRef, source: PdfRect, destinati
 pub(super) fn render_border_image(
     content: &mut String,
     border_image: &BorderImagePaint,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
     page_ext_gstates: &mut Vec<(String, f32)>,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) -> bool {
-    let geometry = geometry.snapped_for_paint(pdf_writer.page_content_transform);
     let outer = geometry.border_box;
     if outer.is_empty() {
         return true;

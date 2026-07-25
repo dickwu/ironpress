@@ -118,8 +118,8 @@ use flex_cell_shadows::FlexCellShadows;
 use flow_layout::*;
 use function_gradients::*;
 use geometry::{
-    BoxGeometry, FragmentPaintGeometry, PdfEllipse, PdfMatrix, PdfPoint, PdfRect, PdfVector,
-    RoundedRect,
+    FragmentPaintGeometry, LayoutBoxGeometry, PaintBoxGeometry, PdfEllipse, PdfMatrix, PdfPoint,
+    PdfRect, PdfVector, RoundedRect,
 };
 use gradient_rasters::*;
 use gradient_support::*;
@@ -269,17 +269,23 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
 
     fn visit_horizontal_rule(&mut self, element: &HorizontalRule) {
         let y = self.frame.page_size.height - self.frame.margin.top - self.frame.y_pos;
-        let geometry = BoxGeometry::new(
+        let layout_geometry = LayoutBoxGeometry::new(
             PdfRect::from_top(self.frame.margin.left, y, self.frame.available_width, 1.0),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
-        )
-        .for_fragment(Default::default());
+        );
+        let box_geometry =
+            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let paint_geometry = box_geometry.painting();
+        let geometry = box_geometry.fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
         paint_horizontal_rule(
             self.content,
-            PdfPoint::new(self.frame.margin.left, y),
-            self.frame.available_width,
+            PdfPoint::new(
+                paint_geometry.border_box.left,
+                paint_geometry.border_box.top(),
+            ),
+            paint_geometry.border_box.width,
         );
         group.finish(self.content, self.ctx);
     }
@@ -295,16 +301,19 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
             element.size.width,
             element.size.height,
         );
-        let geometry = BoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO)
-            .for_fragment(Default::default());
+        let layout_geometry = LayoutBoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO);
+        let box_geometry =
+            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let paint_geometry = box_geometry.painting();
+        let geometry = box_geometry.fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
-        paint_progress_bar(self.content, element, rect);
+        paint_progress_bar(self.content, element, paint_geometry.border_box);
         group.finish(self.content, self.ctx);
     }
 
     fn visit_math_block(&mut self, element: &MathBlock) {
         let top = self.frame.page_size.height - self.frame.margin.top - self.frame.y_pos;
-        let geometry = BoxGeometry::new(
+        let layout_geometry = LayoutBoxGeometry::new(
             PdfRect::from_top(
                 self.frame.margin.left,
                 top,
@@ -313,8 +322,10 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
             ),
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
-        )
-        .for_fragment(Default::default());
+        );
+        let geometry = layout_geometry
+            .for_paint(self.ctx.text.pdf_writer.page_content_transform)
+            .fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
         paint_math_block(
             self.content,

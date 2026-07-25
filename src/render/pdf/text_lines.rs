@@ -145,12 +145,16 @@ pub(super) fn render_inline_box(
     // downward shift subtracts from y).
     let box_x = box_x + inline.rel_offset_x;
     let box_bottom = box_bottom - inline.rel_offset_y;
-    let geometry = BoxGeometry::from_layout(
+    let geometry = LayoutBoxGeometry::from_layout(
         PdfRect::new(box_x, box_bottom, inline.width, h),
         &inline.border,
         inline.padding,
     );
-    let border_box = geometry.border_box.rounded(inline.border_radii);
+    let page_content = pdf_writer.page_content_transform;
+    let box_geometry = geometry.for_paint(page_content);
+    let paint_geometry = box_geometry.painting();
+    let fragment_geometry = box_geometry.fragment(Default::default());
+    let border_box = paint_geometry.rounded_border_box(inline.border_radii);
 
     // Background fill.
     if let Some(background) = inline.background_color {
@@ -173,7 +177,7 @@ pub(super) fn render_inline_box(
     // Replaced-element image (pseudo `content: url(...)`): fill the content box
     // (inside the border) with the decoded raster, scaled to the box size.
     if let Some(image) = &inline.image {
-        let content_box = geometry.content_box();
+        let content_box = paint_geometry.content_box();
         let img_obj_id = pdf_writer.add_image_object(
             &image.data,
             image.source_width,
@@ -198,7 +202,7 @@ pub(super) fn render_inline_box(
     // Border (drawn inside the border box, matching border-box sizing).
     paint_box_decoration(
         content,
-        geometry.for_fragment(Default::default()),
+        fragment_geometry,
         &inline.border,
         inline.border_radii,
         inline.border_image.as_ref(),

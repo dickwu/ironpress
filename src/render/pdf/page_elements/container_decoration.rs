@@ -1,6 +1,5 @@
 use super::*;
 use crate::layout::elements::Container;
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(super) fn paint_container_decoration(
     content: &mut String,
@@ -35,7 +34,7 @@ pub(super) fn paint_container_decoration(
     let container_y_top = c_geometry.border_box.top();
     let container_w = c_geometry.border_box.width;
     let total_h = c_geometry.border_box.height;
-    let container_box = c_geometry.border_box.rounded(*c_border_radii);
+    let container_box = c_geometry.rounded_border_box(*c_border_radii);
     let c_visible_self = *c_visible;
     let transformed_paint_space = ctx.text.pdf_writer.transformed_paint_space(ctx.paint_box);
 
@@ -56,12 +55,7 @@ pub(super) fn paint_container_decoration(
         );
 
         // The box `background-clip` confines the painted fill to.
-        let background_geometry = geometry.background(
-            *c_bg_origin,
-            *c_bg_clip,
-            *c_border_radii,
-            BackgroundBorderPaint::new(border, element.paint.border_image.as_ref()),
-        );
+        let background_geometry = geometry.background(*c_bg_origin, *c_bg_clip, *c_border_radii);
         let c_clip_box = background_geometry.painting_box;
         let c_reference = background_geometry.positioning_box;
         let c_needs_clip = *c_bg_clip != BackgroundClip::Border || c_clip_box != container_box;

@@ -190,8 +190,8 @@ fn render_svg_honors_root_preserve_aspect_ratio() {
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let content = String::from_utf8_lossy(&pdf);
     assert!(
-        content.contains("0.2 0 0 0.2 0 8 cm"),
-        "expected meet scaling with vertical centering for the root SVG viewport"
+        content.contains("0.2025 0 0 0.20250002 0 8.1 cm"),
+        "expected meet scaling inside the snapped replaced-element paint box"
     );
 }
 

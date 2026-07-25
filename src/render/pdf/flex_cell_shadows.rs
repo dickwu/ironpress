@@ -1,7 +1,7 @@
 //! Shared shadow paint for flex items at every renderer depth.
 
 use super::{
-    BoxGeometry, FlexCell, FragmentPaintGeometry, PageRenderContext, render_box_shadows,
+    FlexCell, FragmentPaintGeometry, PageRenderContext, render_box_shadows,
     render_box_shadows_inset,
 };
 
@@ -16,10 +16,10 @@ pub(super) struct FlexCellShadows<'a> {
 }
 
 impl<'a> FlexCellShadows<'a> {
-    pub(super) fn new(cell: &'a FlexCell, geometry: BoxGeometry) -> Self {
+    pub(super) fn new(cell: &'a FlexCell, geometry: FragmentPaintGeometry) -> Self {
         Self {
             shadows: &cell.paint.shadows,
-            geometry: geometry.for_fragment(cell.fragmentation.box_fragmentation),
+            geometry,
             radii: cell.paint.border_radii,
         }
     }

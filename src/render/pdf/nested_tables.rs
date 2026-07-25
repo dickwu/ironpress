@@ -161,14 +161,17 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         .take(cell.span.rows.saturating_sub(1))
                         .flatten()
                         .sum::<f32>();
-                let cell_geometry = BoxGeometry::from_layout(
+                let cell_geometry = LayoutBoxGeometry::from_layout(
                     PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
                     &cell.layout.box_model.border,
                     cell.layout.box_model.padding(),
                 );
-                let cell_border_box = cell_geometry
-                    .border_box
-                    .rounded(cell.layout.paint.border_radii);
+                let page_content = pdf_writer.page_content_transform;
+                let cell_box_geometry = cell_geometry.for_paint(page_content);
+                let cell_paint_geometry = cell_box_geometry.painting();
+                let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
+                let cell_border_box =
+                    cell_paint_geometry.rounded_border_box(cell.layout.paint.border_radii);
                 let cell_group = {
                     let mut cell_ctx = PageRenderContext::new(
                         pdf_writer,
@@ -187,7 +190,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     PaintGroupScope::begin(
                         content,
                         &cell.layout,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         &mut cell_ctx,
                     )
                 };
@@ -206,7 +209,12 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         page_height,
                     )
                     .with_initial_fixed_origin(initial_fixed_origin);
-                    paint_box_filter_output(content, &cell.layout, cell_geometry, &mut cell_ctx)
+                    paint_box_filter_output(
+                        content,
+                        &cell.layout,
+                        cell_paint_geometry,
+                        &mut cell_ctx,
+                    )
                 };
                 if filtered {
                     let mut cell_ctx = PageRenderContext::new(
@@ -230,7 +238,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     render_box_shadows(
                         content,
                         &cell.layout.paint.shadows,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         cell.layout.paint.border_radii,
                         page_ext_gstates,
                         bg_alpha_counter,
@@ -279,14 +287,13 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     paint_box_gradient_backgrounds(
                         content,
                         &cell.layout.paint,
-                        &cell.layout.box_model.border,
-                        cell_geometry,
+                        cell_box_geometry,
                         &mut cell_ctx,
                     );
                     render_box_shadows_inset(
                         content,
                         &cell.layout.paint.shadows,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         cell.layout.paint.border_radii,
                         cell_ctx.page_ext_gstates,
                         cell_ctx.bg_alpha_counter,
@@ -303,7 +310,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 {
                     paint_box_decoration(
                         content,
-                        cell_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         border,
                         cell.layout.paint.border_radii,
                         cell.layout.paint.border_image.as_ref(),
@@ -323,19 +330,15 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         paint_resolved_collapsed_cell_borders(
                             content,
                             cell,
-                            CollapsedCellTrackGeometry {
-                                border_box: PdfRect::new(
-                                    cell_x,
-                                    row_y - cell_height,
-                                    cell_w,
-                                    cell_height,
+                            CollapsedCellTrackGeometry::new(
+                                cell_geometry,
+                                CollapsedColumnTracks::new(col_widths, col_pos),
+                                CollapsedRowTracks::new(
+                                    &self.row_heights,
+                                    self.element_index,
+                                    row_height,
                                 ),
-                                column_widths: col_widths,
-                                column_start: col_pos,
-                                row_heights: &self.row_heights,
-                                row_element_index: self.element_index,
-                                current_row_height: row_height,
-                            },
+                            ),
                             page_ext_gstates,
                             bg_alpha_counter,
                         );
@@ -518,16 +521,17 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
             + gap * col_widths.len().saturating_sub(1) as f32
             + grid_padding.horizontal()
             + grid_border.horizontal_width();
-        let grid_geometry = BoxGeometry::from_layout(
+        let grid_geometry = LayoutBoxGeometry::from_layout(
             PdfRect::from_top(origin_x, row_y, grid_total_w, row_height),
             grid_border,
             *grid_padding,
         );
-        let grid_paint_geometry =
-            grid_geometry.snapped_for_paint(pdf_writer.page_content_transform);
+        let grid_fragment_geometry = grid_geometry
+            .for_paint(pdf_writer.page_content_transform)
+            .fragment(Default::default());
         paint_box_decoration(
             content,
-            grid_paint_geometry.for_fragment(Default::default()),
+            grid_fragment_geometry,
             grid_border,
             CornerRadii::ZERO,
             None,
@@ -577,13 +581,14 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         cell_content_h,
                     ),
                 };
-                let cell_geometry = BoxGeometry::from_layout(
+                let cell_geometry = LayoutBoxGeometry::from_layout(
                     PdfRect::new(box_x, box_y, box_w, box_h),
                     &cell.layout.box_model.border,
                     cell.layout.box_model.padding(),
                 );
-                let cell_paint_geometry =
-                    cell_geometry.snapped_for_paint(pdf_writer.page_content_transform);
+                let cell_box_geometry = cell_geometry.for_paint(pdf_writer.page_content_transform);
+                let cell_paint_geometry = cell_box_geometry.painting();
+                let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
                 let cell_border_box = cell_paint_geometry
                     .border_box
                     .rounded(cell.layout.paint.border_radii);
@@ -606,7 +611,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     PaintGroupScope::begin(
                         content,
                         &cell.layout,
-                        cell_paint_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         &mut cell_ctx,
                     )
                 };
@@ -654,7 +659,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 render_box_shadows(
                     content,
                     &cell.layout.paint.shadows,
-                    cell_paint_geometry.for_fragment(Default::default()),
+                    cell_fragment_geometry,
                     cell.layout.paint.border_radii,
                     page_ext_gstates,
                     bg_alpha_counter,
@@ -702,14 +707,13 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     paint_box_gradient_backgrounds(
                         content,
                         &cell.layout.paint,
-                        &cell.layout.box_model.border,
-                        cell_paint_geometry,
+                        cell_box_geometry,
                         &mut cell_ctx,
                     );
                     render_box_shadows_inset(
                         content,
                         &cell.layout.paint.shadows,
-                        cell_paint_geometry.for_fragment(Default::default()),
+                        cell_fragment_geometry,
                         cell.layout.paint.border_radii,
                         cell_ctx.page_ext_gstates,
                         cell_ctx.bg_alpha_counter,
@@ -721,7 +725,7 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 // Draw the cell border through the shared rounded ring.
                 paint_box_decoration(
                     content,
-                    cell_paint_geometry.for_fragment(Default::default()),
+                    cell_fragment_geometry,
                     &cell.layout.box_model.border,
                     cell.layout.paint.border_radii,
                     cell.layout.paint.border_image.as_ref(),

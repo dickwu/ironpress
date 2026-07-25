@@ -1,6 +1,5 @@
+use super::geometry::BoxPaintGeometry;
 use super::*;
-use crate::layout::engine::LayoutBorder;
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 /// Paint an ordinary box's gradient layers with independent positioning and
 /// painting areas.
@@ -12,17 +11,13 @@ use crate::render::pdf::geometry::BackgroundBorderPaint;
 pub(super) fn paint_box_gradient_backgrounds(
     content: &mut String,
     paint: &crate::layout::elements::BoxPaint,
-    border: &LayoutBorder,
-    geometry: BoxGeometry,
+    geometry: BoxPaintGeometry,
     ctx: &mut PageRenderContext<'_>,
 ) {
     let layers = &paint.background.layers;
-    let positioning_box = geometry.background_origin_box(layers.origin);
-    let painted_box = geometry.background_paint_box(
-        layers.clip,
-        paint.border_radii,
-        BackgroundBorderPaint::new(border, paint.border_image.as_ref()),
-    );
+    let geometry = geometry.background(layers.origin, layers.clip, paint.border_radii);
+    let positioning_box = geometry.positioning_box;
+    let painted_box = geometry.painting_box;
     let PdfRect {
         left: box_x,
         bottom: box_y,

@@ -209,7 +209,7 @@ impl PdfWriter {
         &mut self,
         source: &MaskSource,
         mode: MaskMode,
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let border_box = geometry.border_box;
         if border_box.is_empty() {
@@ -328,7 +328,7 @@ impl PdfWriter {
     pub(super) fn try_svg_vector_soft_mask(
         &mut self,
         svg_bytes: &[u8],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let border_box = geometry.border_box;
         let svg_text = std::str::from_utf8(svg_bytes).ok()?;
@@ -387,7 +387,7 @@ impl PdfWriter {
     fn try_single_linear_mask_layer_shading(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [layer] = layers else {
             return None;
@@ -408,7 +408,7 @@ impl PdfWriter {
     fn try_single_conic_mask_layer_shading(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [layer] = layers else {
             return None;
@@ -429,7 +429,7 @@ impl PdfWriter {
     fn try_single_repeating_radial_mask_layer_function(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [layer] = layers else {
             return None;
@@ -519,7 +519,7 @@ impl PdfWriter {
         &mut self,
         lg: &crate::style::computed::LinearGradient,
         mode: crate::style::computed::MaskMode,
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         self.try_linear_gradient_luminosity_mask(lg, geometry.border_box, |color| {
             f32::from(coverage_byte(color.to_f32_rgba(), mode)) / 255.0
@@ -533,7 +533,7 @@ impl PdfWriter {
         &mut self,
         gradient: &ConicGradient,
         mode: MaskMode,
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let gradient = alpha_mask_conic_gradient(gradient, mode)?;
         let border_box = geometry.border_box;
@@ -699,7 +699,7 @@ impl PdfWriter {
     fn try_radial_layer_luminosity_mask(
         &mut self,
         layer: &MaskLayer,
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
         invert_coverage: bool,
     ) -> Option<String> {
         let MaskLayerSource::Radial(gradient) = &layer.source else {
@@ -732,7 +732,7 @@ impl PdfWriter {
     fn try_two_layer_add_mask_alpha(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [top, bottom] = layers else {
             return None;
@@ -771,7 +771,7 @@ impl PdfWriter {
     fn try_radial_binary_composite_mask(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [radial, linear] = layers else {
             return None;
@@ -818,7 +818,7 @@ impl PdfWriter {
     pub(super) fn try_opaque_linear_exclude_radial_mask(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [top, bottom] = layers else {
             return None;
@@ -856,7 +856,7 @@ impl PdfWriter {
     pub(super) fn try_single_radial_mask_layer_shading(
         &mut self,
         layers: &[MaskLayer],
-        geometry: BoxGeometry,
+        geometry: PaintBoxGeometry,
     ) -> Option<String> {
         let [layer] = layers else {
             return None;

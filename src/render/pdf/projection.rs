@@ -152,7 +152,7 @@ pub(super) fn render_projected_solid_box(
     content: &mut String,
     page_content: PageContentTransform,
     box_transform: &crate::layout::elements::BoxTransform,
-    geometry: BoxGeometry,
+    geometry: PaintBoxGeometry,
     background_color: Option<crate::types::Color>,
     border: &crate::layout::engine::LayoutBorder,
 ) {

@@ -130,22 +130,20 @@
     }
 
     #[test]
-    fn render_opaque_square_border_draws_exact_rectangle_stroke() {
+    fn render_opaque_square_border_draws_non_overlapping_bands() {
         let html = r#"<div style="border: 1px solid black">Bordered text</div>"#;
         let nodes = parse_html(html).unwrap();
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        // An opaque square border is exactly representable by a centered,
-        // miter-joined rectangle stroke.
+        // The bands are exact filled geometry and never overlap at corners.
         assert!(
-            content.contains("0 J\n0 j\n0.75 w\n") && content.contains("re\nS\n"),
-            "PDF should contain the canonical exact rectangle stroke"
+            content.contains("0 0 0 rg") && filled_rect_count(&content) >= 4,
+            "PDF should contain four non-overlapping black border bands"
         );
-        // The shared border paint operator sets both PDF paint channels.
         assert!(
-            content.contains("0 0 0 RG"),
-            "Border stroke color should be black"
+            !content.contains("0 J\n0 j\n0.75 w\n"),
+            "A square border must not fall back to a centerline stroke"
         );
     }
 
@@ -156,14 +154,13 @@
         let pages = layout(&nodes, PageSize::A4, Margin::default());
         let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        // Red border stroke.
         assert!(
-            content.contains("1 0 0 RG"),
-            "Border stroke color should be red"
+            content.contains("1 0 0 rg"),
+            "Border fill color should be red"
         );
         assert!(
-            content.contains("0 J\n0 j\n1.5 w\n") && content.contains("re\nS\n"),
-            "PDF should contain the canonical exact rectangle stroke"
+            filled_rect_count(&content) >= 4,
+            "PDF should contain four non-overlapping red border bands"
         );
     }
 

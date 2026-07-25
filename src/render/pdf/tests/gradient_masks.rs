@@ -123,7 +123,7 @@ fn default_repeated_linear_mask_uses_the_full_origin_box_as_its_tile() {
         120.0,
     )
     .unwrap();
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, 180.0, 120.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -195,7 +195,7 @@ fn oversized_mask_layer_is_windowed_without_truncating_its_source_tile() {
         1.0,
     )
     .unwrap();
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, grid.width_pt, grid.height_pt),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -256,7 +256,7 @@ fn subpixel_repeating_mask_work_is_bounded_by_the_output_window() {
         1.0,
     )
     .unwrap();
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, grid.width_pt, grid.height_pt),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -439,7 +439,7 @@ fn local_form_resources_are_exact_and_acyclic() {
 
 #[test]
 fn alpha_conic_mask_uses_a_vector_luminosity_shading() {
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(12.0, 24.0, 150.0, 150.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -528,7 +528,7 @@ fn alpha_repeating_radial_mask_uses_a_vector_luminosity_function() {
         clip: crate::style::computed::ShapeBox::Border,
         composite: MaskComposite::Add,
     }]);
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, 150.0, 150.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -573,7 +573,7 @@ fn full_size_radial_add_layers_are_eligible_for_vector_alpha_composition() {
     let Some(MaskSource::Layers(layers)) = style.mask_image else {
         panic!("expected the two computed mask layers");
     };
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, 150.0, 105.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -614,7 +614,7 @@ fn opaque_linear_exclude_radial_uses_an_inverse_vector_mask() {
     let Some(MaskSource::Layers(layers)) = style.mask_image else {
         panic!("expected the two computed mask layers");
     };
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(0.0, 0.0, 150.0, 105.0),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -636,7 +636,7 @@ fn opaque_linear_exclude_radial_uses_an_inverse_vector_mask() {
 #[test]
 fn oversized_luminance_conic_mask_emits_lossless_noninterpolated_devicegray_tiles() {
     let width = 5_000.0 * 0.75 / 4.0;
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(12.0, 24.0, width, 0.75),
         EdgeSizes::ZERO,
         EdgeSizes::ZERO,
@@ -870,7 +870,7 @@ fn border_image_gradient_uses_one_source_form_across_eight_slices() {
                 ..Default::default()
         },
     };
-    let geometry = BoxGeometry::new(
+    let geometry = PaintBoxGeometry::new(
         PdfRect::new(10.0, 20.0, 100.0, 40.0),
         EdgeSizes::new(3.0, 5.0, 7.0, 11.0),
         EdgeSizes::ZERO,

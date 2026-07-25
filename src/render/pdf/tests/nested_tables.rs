@@ -190,8 +190,8 @@
             "Should have blue cell border color"
         );
         assert!(
-            content.contains("0 J\n0 j\n1 w\n") && content.contains("re\nS\n"),
-            "A uniform opaque square cell border should paint as one exact stroke"
+            filled_rect_count(&content) >= 4,
+            "A uniform opaque square cell border should paint as four non-overlapping bands"
         );
     }
 

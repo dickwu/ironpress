@@ -104,6 +104,16 @@ fn paint_css_border(
     page_ext_gstates: &mut Vec<(String, f32)>,
     bg_alpha_counter: &mut usize,
 ) {
+    if paint_square_solid_border(
+        content,
+        border_box,
+        border,
+        radii,
+        page_ext_gstates,
+        bg_alpha_counter,
+    ) {
+        return;
+    }
     if let Some(side) = border.uniform_paint_side()
         && paint_uniform_border(
             content,

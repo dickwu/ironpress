@@ -1,6 +1,5 @@
 use super::*;
 use crate::layout::elements::TextBlock;
-use crate::render::pdf::geometry::BackgroundBorderPaint;
 
 pub(super) fn render_text_child(
     content: &mut String,
@@ -83,17 +82,16 @@ pub(super) fn render_text_child(
         let anchor = abs_child_anchor(tb_containing_block, abs_origins, self_pad_origin);
         let abs_x = anchor.x + offset_left;
         let abs_y = anchor.y - offset_top;
-        let tb_geometry = BoxGeometry::from_layout(
+        let tb_geometry = LayoutBoxGeometry::from_layout(
             PdfRect::from_top(abs_x, abs_y, abs_w, abs_h),
             border,
             *padding,
         );
-        let tb_background_box = tb_geometry.background_paint_box(
-            *tb_bg_clip,
-            *tb_radii,
-            BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
-        );
-        let tb_fragment_geometry = tb_geometry.for_fragment(child.fragmentation.box_fragmentation);
+        let page_content = ctx.text.pdf_writer.page_content_transform;
+        let tb_box_geometry = tb_geometry.for_paint(page_content);
+        let tb_paint_geometry = tb_box_geometry.painting();
+        let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+        let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);
 
         if phase == ElementPaintPhase::All
             && let Some(t) = tb_transform
@@ -114,7 +112,7 @@ pub(super) fn render_text_child(
                 content,
                 ctx.text.pdf_writer.page_content_transform,
                 tb_box_transform,
-                tb_geometry,
+                tb_paint_geometry,
                 *background_color,
                 border,
             );
@@ -169,8 +167,7 @@ pub(super) fn render_text_child(
                     Some(ctx.page_ext_gstates),
                 ),
                 BlockBackground {
-                    geometry: tb_geometry,
-                    border: BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
+                    geometry: tb_box_geometry,
                     border_radii: *tb_radii,
                     size: *tb_bg_size,
                     position: *tb_bg_position,
@@ -315,17 +312,16 @@ pub(super) fn render_text_child(
     );
     let render_x = x + used_origin.x;
     let render_y = container_top_y - used_origin.y;
-    let tb_geometry = BoxGeometry::from_layout(
+    let tb_geometry = LayoutBoxGeometry::from_layout(
         PdfRect::from_top(render_x, render_y, render_w, vertical_column_paint_h),
         border,
         *padding,
     );
-    let tb_background_box = tb_geometry.background_paint_box(
-        *tb_bg_clip,
-        *tb_radii,
-        BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
-    );
-    let tb_fragment_geometry = tb_geometry.for_fragment(child.fragmentation.box_fragmentation);
+    let page_content = ctx.text.pdf_writer.page_content_transform;
+    let tb_box_geometry = tb_geometry.for_paint(page_content);
+    let tb_paint_geometry = tb_box_geometry.painting();
+    let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+    let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);
 
     // CSS `filter: blur()` on a nested solid box (css-filter-effects-1
     // §4.1): rasterize the bg fill + border, gaussian-blur it, and
@@ -348,8 +344,8 @@ pub(super) fn render_text_child(
         && child.paint.outline.width == 0.0
         && child.paint.background.blend_mode == crate::style::computed::BlendMode::Normal
         && let Some(blurred) = crate::render::blur::blur_box(
-            tb_geometry.border_box.width,
-            tb_geometry.border_box.height,
+            tb_paint_geometry.border_box.width,
+            tb_paint_geometry.border_box.height,
             *background_color,
             border,
             *tb_bg_blur,
@@ -367,10 +363,10 @@ pub(super) fn render_text_child(
         let ov = blurred.overflow_pt;
         content.push_str(&format!(
             "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = tb_geometry.border_box.width + 2.0 * ov,
-            h = tb_geometry.border_box.height + 2.0 * ov,
-            ix = tb_geometry.border_box.left - ov,
-            iy = tb_geometry.border_box.bottom - ov,
+            w = tb_paint_geometry.border_box.width + 2.0 * ov,
+            h = tb_paint_geometry.border_box.height + 2.0 * ov,
+            ix = tb_paint_geometry.border_box.left - ov,
+            iy = tb_paint_geometry.border_box.bottom - ov,
             name = img_name,
         ));
         ctx.text.page_images.push(ImageRef {
@@ -427,7 +423,7 @@ pub(super) fn render_text_child(
                 && paint_device_clipped_css_solid(
                     content,
                     ctx.text.pdf_writer.page_content_transform,
-                    tb_geometry.border_box,
+                    tb_paint_geometry.border_box,
                     tb_background_box.rect,
                     color,
                 );
@@ -461,10 +457,10 @@ pub(super) fn render_text_child(
                     tb_bg_radial.is_some() || tb_bg_conic.is_some() || tb_bg_svg.is_some(),
                     bg_blend_mode,
                 ),
-                tb_geometry.border_box.left,
-                tb_geometry.border_box.bottom,
-                tb_geometry.border_box.width,
-                tb_geometry.border_box.height,
+                tb_paint_geometry.border_box.left,
+                tb_paint_geometry.border_box.bottom,
+                tb_paint_geometry.border_box.width,
+                tb_paint_geometry.border_box.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -488,10 +484,10 @@ pub(super) fn render_text_child(
             render_radial_gradient(
                 content,
                 gradient,
-                tb_geometry.border_box.left,
-                tb_geometry.border_box.bottom,
-                tb_geometry.border_box.width,
-                tb_geometry.border_box.height,
+                tb_paint_geometry.border_box.left,
+                tb_paint_geometry.border_box.bottom,
+                tb_paint_geometry.border_box.width,
+                tb_paint_geometry.border_box.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -515,10 +511,10 @@ pub(super) fn render_text_child(
             render_conic_gradient(
                 content,
                 gradient,
-                tb_geometry.border_box.left,
-                tb_geometry.border_box.bottom,
-                tb_geometry.border_box.width,
-                tb_geometry.border_box.height,
+                tb_paint_geometry.border_box.left,
+                tb_paint_geometry.border_box.bottom,
+                tb_paint_geometry.border_box.width,
+                tb_paint_geometry.border_box.height,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -542,8 +538,7 @@ pub(super) fn render_text_child(
                     Some(ctx.page_ext_gstates),
                 ),
                 BlockBackground {
-                    geometry: tb_geometry,
-                    border: BackgroundBorderPaint::new(border, child.paint.border_image.as_ref()),
+                    geometry: tb_box_geometry,
                     border_radii: *tb_radii,
                     size: *tb_bg_size,
                     position: *tb_bg_position,
@@ -584,7 +579,7 @@ pub(super) fn render_text_child(
     // overflow:hidden/clip/scroll/auto.
     let tb_needs_clip = phase.paints_contents() && tb_clip_rect.is_some();
     if tb_needs_clip {
-        tb_geometry
+        tb_paint_geometry
             .rounded_padding_box(*tb_radii)
             .push_clip(content);
     }

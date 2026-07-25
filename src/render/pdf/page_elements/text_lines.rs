@@ -4,7 +4,7 @@ use crate::layout::elements::TextBlock;
 pub(super) fn render_text_block_lines(
     content: &mut String,
     element: &TextBlock,
-    geometry: BoxGeometry,
+    geometry: LayoutBoxGeometry,
     frame: PageElementFrame<'_>,
     opacity_active: bool,
     text_space: PdfTextSpace,
