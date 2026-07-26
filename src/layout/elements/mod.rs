@@ -171,7 +171,8 @@ pub(crate) trait LayoutElement: Debug {
     }
 
     fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
-        None
+        self.paint_group_owner_mut()
+            .map(|owner| owner.paint_group_mut() as &mut dyn FilterHolder)
     }
 
     fn table_box_decoration_owner(&self) -> Option<&dyn TableBoxDecorationOwner> {
@@ -488,7 +489,7 @@ pub(crate) trait BoxPaintOwner {
         paint.group.is_identity()
             && paint.background.layers.blur_radius == 0.0
             && paint.background.layers.clip != crate::style::computed::BackgroundClip::Text
-            && paint.filter.is_none()
+            && paint.group.filter.is_none()
     }
 }
 

@@ -1,8 +1,8 @@
 use super::LayoutNode;
 use super::{
-    BlockFlowParticipant, BoxPaint, BoxPaintOwner, ChildContainer, FilterHolder, InlineFlowExtent,
-    LayoutElement, LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole,
-    PaintGroupOwner, Positioning, PositioningOwner,
+    BlockFlowParticipant, BoxPaint, BoxPaintOwner, ChildContainer, InlineFlowExtent, LayoutElement,
+    LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole, PaintGroupOwner,
+    Positioning, PositioningOwner,
 };
 use crate::layout::engine::{FlexCell, FlexFragmentRole, ForcedFlexLineBreak};
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -154,10 +154,6 @@ impl LayoutElement for FlexRow {
 
     fn visit_child_nodes_mut(&mut self, visitor: &mut dyn FnMut(&mut LayoutNode)) {
         self.visit_layout_child_nodes_mut(visitor);
-    }
-
-    fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
-        Some(&mut self.paint)
     }
 
     fn positioning_owner(&self) -> Option<&dyn PositioningOwner> {

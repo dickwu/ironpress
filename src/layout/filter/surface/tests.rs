@@ -1,12 +1,20 @@
+use std::collections::HashMap;
+
+use super::canvas::{RasterCanvas, SurfaceRect};
+use super::text::line_baseline_ascent;
 use super::*;
 use crate::layout::cells::CellPaint;
-use crate::layout::elements::{IntoLayoutNode, LayoutSize};
-use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight};
+use crate::layout::elements::{
+    BoxModel, BoxPaint, ColumnRule, Container, IntoLayoutNode, LayoutSize, Positioning, TextBlock,
+};
+use crate::layout::engine::{FlexCell, FontSynthesisState, SyntheticFontWeight, TextLine, TextRun};
+use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
     BorderStyle, BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition,
     GradientRamp, GradientStop, LinearGradient, Overflow, TextDecoration, TextDecorationLines,
     TextDecorationStyle,
 };
+use crate::types::{Color, EdgeSizes, Point, Size};
 
 fn test_fonts() -> HashMap<String, TtfFont> {
     let bytes = std::fs::read(
@@ -15,6 +23,10 @@ fn test_fonts() -> HashMap<String, TtfFont> {
     .expect("ParitySans test font");
     let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans TTF");
     HashMap::from([("paritysans".to_string(), font)])
+}
+
+fn test_anchor() -> SourceRasterAnchor {
+    SourceRasterAnchor::at_border_origin(Point::ORIGIN)
 }
 
 fn border_box_pixel(source: &SourceGraphic, point: Point) -> image::Rgba<u8> {
@@ -48,7 +60,7 @@ fn filtered_text_alpha(weight: SyntheticFontWeight) -> u64 {
         },
         ..Default::default()
     };
-    paint_source_graphic(&block, &test_fonts(), 300.0, Default::default())
+    paint_source_graphic(&block, &test_fonts(), 300.0, test_anchor())
         .expect("filter text source")
         .pixels
         .pixels()
@@ -156,7 +168,7 @@ fn positioned_column_rule_uses_the_parent_padding_box_once() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, Default::default())
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_anchor())
         .expect("positioned column rule filter source");
 
     assert_eq!(
@@ -226,7 +238,7 @@ fn flex_cell_source_includes_outset_shadow_overflow() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        Default::default(),
+        test_anchor(),
     )
     .expect("flex source with an outset shadow");
 
@@ -264,7 +276,7 @@ fn flex_cell_filter_source_clips_background_to_rounded_border_box() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        Default::default(),
+        test_anchor(),
     )
     .expect("rounded flex source");
 
@@ -306,7 +318,7 @@ fn container_filter_source_clips_descendants_to_rounded_padding_box() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&container, &HashMap::new(), 72.0, Default::default())
+    let source = paint_source_graphic(&container, &HashMap::new(), 72.0, test_anchor())
         .expect("overflow-clipped container filter source");
 
     assert_eq!(source.pixels.get_pixel(0, 0)[3], 0);
@@ -351,7 +363,7 @@ fn flex_cell_source_includes_nested_principal_box_overflow() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        Default::default(),
+        test_anchor(),
     )
     .expect("complex flex source with principal-box overflow");
 
@@ -396,7 +408,7 @@ fn source_graphic_composites_linear_gradient_with_the_box() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&block, &HashMap::new(), 72.0, Default::default())
+    let source = paint_source_graphic(&block, &HashMap::new(), 72.0, test_anchor())
         .expect("linear gradient is a supported composited source");
 
     assert!(border_box_pixel(&source, Point::new(1.0, 5.0))[0] < 32);
@@ -439,7 +451,7 @@ fn absolute_descendant_skips_a_static_intermediate_containing_box() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, Default::default())
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_anchor())
         .expect("positioned filter source paints");
 
     assert_eq!(border_box_pixel(&source, Point::new(20.0, 10.0))[0], 255);
@@ -472,7 +484,7 @@ fn positioned_descendant_expands_the_source_allocation_past_the_border_box() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, Default::default())
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_anchor())
         .expect("the positioned descendant expands its filter source");
 
     assert_eq!(
@@ -525,7 +537,7 @@ fn filtered_text_source_paints_shared_decoration_and_shadow_geometry() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&block, &test_fonts(), 72.0, Default::default())
+    let source = paint_source_graphic(&block, &test_fonts(), 72.0, test_anchor())
         .expect("decorated filter text source paints");
 
     assert!(

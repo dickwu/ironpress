@@ -1,9 +1,9 @@
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource, BoxFragmentation,
     BoxFragmentationOwner, BoxModel, BoxPaint, BoxPaintOwner, ChildContainer,
-    ContainingBlockConsumer, FilterHolder, FragmentBreakQuery, InlineFlowExtent, LayoutElement,
-    LayoutNode, LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole,
-    PaintGroupOwner, Positioning, PositioningOwner,
+    ContainingBlockConsumer, FragmentBreakQuery, InlineFlowExtent, LayoutElement, LayoutNode,
+    LayoutVisitor, LayoutVisitorMut, OverflowBehavior, PageContentRole, PaintGroupOwner,
+    Positioning, PositioningOwner,
 };
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
 
@@ -306,10 +306,6 @@ impl LayoutElement for Container {
 
     fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
         Some(self)
-    }
-
-    fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
-        Some(&mut self.paint)
     }
 
     fn exact_vector_filter_source(

@@ -198,10 +198,6 @@ macro_rules! impl_principal_layout_element {
                 Some(self)
             }
 
-            fn filter_holder_mut(&mut self) -> Option<&mut dyn super::FilterHolder> {
-                Some(&mut self.principal_mut().paint)
-            }
-
             fn exact_vector_filter_source(
                 &self,
             ) -> Option<&dyn crate::layout::filter::ExactVectorFilterSource> {

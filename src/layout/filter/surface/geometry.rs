@@ -13,7 +13,7 @@ use crate::types::{EdgeSizes, Point, Size};
 /// makes the subpixel phase part of SourceGraphic construction, so the
 /// resulting PDF image can be placed on integral device bounds without being
 /// resampled a second time.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SourceRasterAnchor {
     border_origin: Point,
 }

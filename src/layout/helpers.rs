@@ -2165,7 +2165,7 @@ pub(crate) fn build_pseudo_block(
         ..BoxPaint::default()
     };
     if filter.requires_source_surface() {
-        paint.filter = Some(filter);
+        paint.group.filter = Some(filter);
     }
 
     TextBlock {

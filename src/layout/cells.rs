@@ -74,7 +74,7 @@ impl std::ops::DerefMut for CellPaint {
 
 impl crate::layout::elements::FilterHolder for CellPaint {
     fn filter_slot_mut(&mut self) -> &mut Option<crate::layout::filter::ResolvedFilter> {
-        &mut self.box_paint.filter
+        &mut self.box_paint.group.filter
     }
 }
 

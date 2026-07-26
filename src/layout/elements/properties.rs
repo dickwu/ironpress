@@ -414,6 +414,9 @@ pub(crate) struct PaintGroup {
     pub(crate) stacking: super::Stacking,
     pub(crate) transform: BoxTransform,
     pub(crate) effects: GroupEffects,
+    /// A resolved filter retained until fragmentation establishes this
+    /// group's absolute device-space anchor.
+    pub(crate) filter: Option<crate::layout::filter::ResolvedFilter>,
 }
 
 impl PaintGroup {
@@ -427,6 +430,7 @@ impl PaintGroup {
                 perspective: style.perspective,
             },
             effects: GroupEffects::from_style(style),
+            filter: None,
         }
     }
 
@@ -447,6 +451,7 @@ impl PaintGroup {
     /// with its already-isolated raster output.
     pub(crate) fn with_materialized_filter(mut self) -> Self {
         self.effects.stacking_context = self.effects.stacking_context.materialized();
+        self.filter = None;
         self
     }
 }
@@ -459,7 +464,6 @@ pub(crate) struct BoxPaint {
     pub(crate) border_radii: CornerRadii,
     pub(crate) shadows: Vec<BoxShadow>,
     pub(crate) outline: OutlinePaint,
-    pub(crate) filter: Option<crate::layout::filter::ResolvedFilter>,
     pub(crate) group: PaintGroup,
     pub(crate) visible: bool,
 }
@@ -472,7 +476,6 @@ impl Default for BoxPaint {
             border_radii: CornerRadii::ZERO,
             shadows: Vec::new(),
             outline: OutlinePaint::default(),
-            filter: None,
             group: PaintGroup::default(),
             visible: true,
         }
@@ -492,7 +495,6 @@ impl BoxPaint {
             border_radii: style.resolve_corner_radii(width, height),
             shadows: style.box_shadow.clone(),
             outline: OutlinePaint::from_style(style),
-            filter: None,
             group: PaintGroup::from_style(style),
             visible: style.visibility == Visibility::Visible,
         }
@@ -510,6 +512,7 @@ impl BoxPaint {
             || self.outline.width > 0.0
             || self.background.layers.blur_radius > 0.0
             || self
+                .group
                 .filter
                 .as_ref()
                 .is_some_and(crate::layout::filter::ResolvedFilter::requires_source_surface)
@@ -533,7 +536,7 @@ pub(crate) trait FilterHolder {
     }
 }
 
-impl FilterHolder for BoxPaint {
+impl FilterHolder for PaintGroup {
     fn filter_slot_mut(&mut self) -> &mut Option<crate::layout::filter::ResolvedFilter> {
         &mut self.filter
     }

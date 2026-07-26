@@ -2,9 +2,9 @@ use super::LayoutNode;
 use super::{
     BlockFlow, BlockFlowOwner, BlockFlowParticipant, BlockFragmentationSource,
     BoxFragmentationOwner, BoxModel, BoxPaint, BoxPaintOwner, ContainingBlockConsumer,
-    DescendantClip, FilterHolder, FragmentBreakQuery, InlineFlowExtent, LayoutElement,
-    LayoutVisitor, LayoutVisitorMut, PaintGroupOwner, Positioning, PositioningOwner,
-    TextBlockStyle, TextFragmentation, TextSemantics,
+    DescendantClip, FragmentBreakQuery, InlineFlowExtent, LayoutElement, LayoutVisitor,
+    LayoutVisitorMut, PaintGroupOwner, Positioning, PositioningOwner, TextBlockStyle,
+    TextFragmentation, TextSemantics,
 };
 use crate::layout::engine::TextLine;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -327,10 +327,6 @@ impl LayoutElement for TextBlock {
 
     fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
         Some(self)
-    }
-
-    fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
-        Some(&mut self.paint)
     }
 
     fn page_content_role(&self) -> super::PageContentRole {

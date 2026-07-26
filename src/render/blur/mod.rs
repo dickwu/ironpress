@@ -35,7 +35,7 @@ pub(crate) use boxes::blur_box;
 use discrete::{DiscreteGaussianPlan, box_blur_axes};
 pub(crate) use drop_shadow::drop_shadow_surface;
 pub(crate) use glyphs::{
-    GlyphBaselineOrigin, GlyphRasterRequest, GlyphRasterStyle, RasterBaselineAdvance,
+    GlyphBaselineOrigin, GlyphRaster, GlyphRasterRequest, GlyphRasterStyle, RasterBaselineAdvance,
     RasterBaselineCursor, rasterize_run_alpha,
 };
 pub(crate) use images::{pixelated_image_at_css_size, rasterize_image_buffer};

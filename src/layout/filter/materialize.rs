@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::layout::elements::{
-    Container, FlexRow, LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut,
+    Container, FlexRow, GridRow, LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut,
 };
 use crate::parser::ttf::TtfFont;
 use crate::types::{EdgeSizes, Point, Rect};
@@ -85,6 +85,28 @@ impl ChildRasterAnchors {
                     match nested {
                         Some(nested) => anchors.extend(nested),
                         None => anchors.extend(cell.nested_elements.iter().map(|_| cell_anchor)),
+                    }
+                }
+                self.anchors = Some(anchors);
+            }
+
+            fn visit_grid_row(&mut self, element: &GridRow) {
+                let frames = super::surface::grid_cell_source_frames(element);
+                let mut anchors = Vec::new();
+                for (cell, frame) in element.content.cells.iter().zip(frames) {
+                    let cell_anchor = frame.anchor_in(self.parent_anchor);
+                    let cell_box = Rect::new(cell_anchor.border_origin(), frame.size);
+                    let nested = self.block_anchors(
+                        &cell.layout.content.children,
+                        cell_box,
+                        cell.layout.box_model.border.widths(),
+                        cell.layout.box_model.padding(),
+                    );
+                    match nested {
+                        Some(nested) => anchors.extend(nested),
+                        None => {
+                            anchors.extend(cell.layout.content.children.iter().map(|_| cell_anchor))
+                        }
                     }
                 }
                 self.anchors = Some(anchors);
@@ -169,6 +191,10 @@ fn materialize_node_filter(
     impl LayoutVisitorMut for CellFilterMaterializer<'_> {
         fn visit_flex_row(&mut self, element: &mut FlexRow) {
             super::cells::materialize_flex_row(element, self.anchor, self.fonts, self.filter_dpi);
+        }
+
+        fn visit_grid_row(&mut self, element: &mut GridRow) {
+            super::cells::materialize_grid_row(element, self.anchor, self.fonts, self.filter_dpi);
         }
     }
 

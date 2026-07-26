@@ -2814,14 +2814,7 @@ fn prepare_filtered_output(
             });
         raster
     } else {
-        super::filter::composite_source(
-            element.as_ref(),
-            filter,
-            env.fonts,
-            env.filter_dpi,
-            Default::default(),
-        )
-        .map(|graphic| graphic.into_layout_node())
+        None
     };
     let Some(replacement) = replacement else {
         output.push(element);

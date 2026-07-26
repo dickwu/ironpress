@@ -3468,14 +3468,7 @@ fn layout_grid_container_inner(
             let mut filter_style = cs.principal.clone();
             let filter =
                 super::filter::ResolvedFilter::from_style(&mut filter_style, env.filter_defs);
-            super::filter::cells::composite_grid_cell(
-                &mut cell,
-                painted_size,
-                Default::default(),
-                &filter,
-                env.fonts,
-                env.filter_dpi,
-            );
+            super::filter::cells::retain_grid_cell_filter(&mut cell, filter);
             cells.push(cell);
             next_col = next_col.max(p.col + p.col_span);
         }

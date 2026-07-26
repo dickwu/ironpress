@@ -8,12 +8,20 @@
 use std::collections::HashMap;
 
 use crate::layout::cells::{CellPaintHolder, GridCell};
-use crate::layout::elements::{FilterHolder, FlexRow};
+use crate::layout::elements::{FilterHolder, FlexRow, GridRow};
 use crate::layout::engine::FlexCell;
 use crate::parser::ttf::TtfFont;
 use crate::types::Size;
 
 use super::ResolvedFilter;
+
+/// Retain a grid-item filter until pagination supplies the row's absolute
+/// device-space anchor.
+pub(crate) fn retain_grid_cell_filter(cell: &mut GridCell, filter: ResolvedFilter) {
+    if filter.requires_source_surface() {
+        *cell.cell_paint_mut().filter_slot_mut() = Some(filter);
+    }
+}
 
 /// Materialize filters retained on flattened flex items after pagination has
 /// established the concrete cell fragment sizes.
@@ -68,7 +76,33 @@ fn composite_flex_cell(
     true
 }
 
-pub(crate) fn composite_grid_cell(
+/// Materialize filters retained on grid items after pagination has established
+/// the concrete cell fragment sizes and device-space phase.
+pub(crate) fn materialize_grid_row(
+    grid: &mut GridRow,
+    anchor: super::surface::SourceRasterAnchor,
+    fonts: &HashMap<String, TtfFont>,
+    filter_dpi: f32,
+) {
+    let frames = super::surface::grid_cell_source_frames(grid);
+    for (cell, frame) in grid.content.cells.iter_mut().zip(frames) {
+        let Some(filter) = cell.cell_paint_mut().take_filter() else {
+            continue;
+        };
+        if !composite_grid_cell(
+            cell,
+            frame.size,
+            frame.anchor_in(anchor),
+            &filter,
+            fonts,
+            filter_dpi,
+        ) {
+            *cell.cell_paint_mut().filter_slot_mut() = Some(filter);
+        }
+    }
+}
+
+fn composite_grid_cell(
     cell: &mut GridCell,
     size: Size,
     anchor: super::surface::SourceRasterAnchor,

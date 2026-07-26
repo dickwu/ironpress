@@ -9,7 +9,8 @@ use crate::types::EdgeSizes;
 
 use super::canvas::{PaintBounds, RasterCanvas, SurfaceRect};
 use super::geometry::{SourceGraphic, SourceRasterAnchor, SourceRasterGeometry, source_geometry};
-use super::{ElementPaintSpace, RootEffectHandling, paint_element, source_paint_overflow};
+use super::overflow::source_paint_overflow;
+use super::painter::{ElementPaintSpace, RootEffectHandling, paint_element};
 
 struct SourcePaintPass {
     pixels: PremultipliedRgba8,
@@ -35,13 +36,10 @@ impl SourcePaintPass {
             paint_element(
                 &mut canvas,
                 element,
-                ElementPaintSpace {
-                    border_box: SurfaceRect::new(geometry.border_origin(), geometry.layout.size),
-                    css_pixel_grid_origin: geometry.border_origin(),
-                    inherited_containing_block: None,
-                    establishes_containing_block: true,
-                    root_effects: RootEffectHandling::DeferToOwner,
-                },
+                ElementPaintSpace::root(
+                    SurfaceRect::new(geometry.border_origin(), geometry.layout.size),
+                    RootEffectHandling::DeferToOwner,
+                ),
                 fonts,
                 filter_dpi,
             )?;

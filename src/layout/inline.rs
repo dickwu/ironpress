@@ -512,16 +512,8 @@ fn inline_atomic_cell(
         );
         let mut filter_style = child_style.clone();
         let filter = super::filter::ResolvedFilter::from_style(&mut filter_style, env.filter_defs);
-        if !filter.operations.is_empty()
-            && let Some(graphic) = super::filter::composite_source(
-                replaced.as_ref(),
-                &filter,
-                env.fonts,
-                env.filter_dpi,
-                Default::default(),
-            )
-        {
-            replaced = graphic.into_layout_node();
+        if filter.requires_source_surface() {
+            super::filter::retain_for_fragmentation(replaced.as_mut(), &filter);
         }
         let width = replaced_width(replaced.as_ref())?;
         let height = estimate_element_height(replaced.as_ref());

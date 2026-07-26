@@ -37,6 +37,7 @@ fn empty_string_generated_box_retains_absolute_background_and_filter() {
             let has_background = block.paint.background.color.is_some();
             let has_filter = block
                 .paint
+                .group
                 .filter
                 .as_ref()
                 .is_some_and(|filter| filter.requires_source_surface());
