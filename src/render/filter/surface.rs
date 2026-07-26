@@ -9,13 +9,18 @@ pub(crate) struct FilteredSurface {
     pub(crate) overflow: EdgeSizes,
 }
 
+struct PremultipliedFilteredSurface {
+    pixels: crate::render::raster_pixels::PremultipliedRgba8,
+    overflow: EdgeSizes,
+}
+
 /// Evaluate one ordered filter list over an already-composited source graphic.
 ///
 /// Returning `None` for an unsupported SVG graph operation is deliberate: the
 /// caller can retain the vector source and use its explicit fallback, while a
 /// silent no-op would publish an incorrect filtered surface.
 pub(crate) fn apply_operations_to_surface(
-    source: &image::RgbaImage,
+    source: &crate::render::raster_pixels::PremultipliedRgba8,
     source_size: Size,
     operations: &[FilterOperation],
     linear_rgb: bool,
@@ -54,7 +59,7 @@ pub(crate) fn apply_operations_to_surface(
             }
             FilterOperation::Blur(radius) if radius > 0.0 => {
                 let (filtered, amount) =
-                    crate::render::blur::blur_painted_buffer_to_rgba(&pixels, radius, filter_dpi)?;
+                    crate::render::blur::blur_premultiplied_buffer(&pixels, radius, filter_dpi)?;
                 pixels = filtered;
                 overflow += EdgeSizes::uniform(amount);
             }
@@ -68,16 +73,18 @@ pub(crate) fn apply_operations_to_surface(
                     source_size.height + overflow.vertical(),
                 );
                 let filtered = crate::render::blur::drop_shadow_image(
-                    &pixels,
+                    &pixels.clone().into_straight(),
                     painted_size.width,
                     painted_size.height,
                     shadow,
                     ImageRendering::Auto,
                     filter_dpi,
                 )?;
-                pixels = image::load_from_memory(&filtered.asset.data)
-                    .ok()?
-                    .to_rgba8();
+                pixels = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+                    &image::load_from_memory(&filtered.asset.data)
+                        .ok()?
+                        .to_rgba8(),
+                );
                 overflow += EdgeSizes::uniform(filtered.overflow_pt);
             }
             FilterOperation::Blur(_) => {}
@@ -89,7 +96,10 @@ pub(crate) fn apply_operations_to_surface(
         apply_color_operations(&mut pixels, &operations[start..]);
     }
     working_space.leave_surface(&mut pixels);
-    Some(FilteredSurface { pixels, overflow })
+    Some(FilteredSurface {
+        pixels: pixels.into_straight(),
+        overflow,
+    })
 }
 
 fn is_color_operation(operation: &FilterOperation) -> bool {
@@ -188,14 +198,14 @@ fn stabilized_coordinate(value: f64) -> Option<f64> {
 }
 
 fn blend_with_flood(
-    source: &image::RgbaImage,
+    source: &crate::render::raster_pixels::PremultipliedRgba8,
     source_size: Size,
     source_overflow: EdgeSizes,
     color: crate::types::Color,
     mode: crate::style::computed::BlendMode,
     region: crate::types::Rect,
     filter_dpi: f32,
-) -> Option<FilteredSurface> {
+) -> Option<PremultipliedFilteredSurface> {
     let scale = RasterScale::at_dpi(filter_dpi)?;
     let raster_region = RasterRegion::resolve(region, source_size, scale)?;
     let (width, height) = raster_region.dimensions()?;
@@ -203,6 +213,7 @@ fn blend_with_flood(
     let source_top = rounded_coordinate(-f64::from(source_overflow.top * scale.vertical))?;
     let flood = image::Rgba(color.to_rgba8());
     let transparent = image::Rgba([0, 0, 0, 0]);
+    let source = source.clone().into_straight();
     let mut output = image::RgbaImage::new(width, height);
 
     for (x, y, output_pixel) in output.enumerate_pixels_mut() {
@@ -218,8 +229,8 @@ fn blend_with_flood(
         *output_pixel = crate::render::blend::composite_pixel(source_pixel, flood, mode, false)?;
     }
 
-    Some(FilteredSurface {
-        pixels: output,
+    Some(PremultipliedFilteredSurface {
+        pixels: crate::render::raster_pixels::PremultipliedRgba8::from_straight(&output),
         overflow: raster_region.paint_overflow(source_size, scale),
     })
 }
@@ -228,21 +239,11 @@ fn blend_with_flood(
 /// quantize only when the run returns to the raster surface. Quantizing between
 /// functions compounds channel error and does not represent the conceptual
 /// image pipeline defined by Filter Effects.
-fn apply_color_operations(pixels: &mut image::RgbaImage, operations: &[FilterOperation]) {
-    for pixel in pixels.pixels_mut() {
-        let color = (
-            f32::from(pixel[0]) / 255.0,
-            f32::from(pixel[1]) / 255.0,
-            f32::from(pixel[2]) / 255.0,
-            f32::from(pixel[3]) / 255.0,
-        );
-        let (red, green, blue, alpha) = super::apply_operations_to_color(color, operations, false);
-        *pixel = image::Rgba([channel(red), channel(green), channel(blue), channel(alpha)]);
-    }
-}
-
-fn channel(value: f32) -> u8 {
-    (value * 255.0).round().clamp(0.0, 255.0) as u8
+fn apply_color_operations(
+    pixels: &mut crate::render::raster_pixels::PremultipliedRgba8,
+    operations: &[FilterOperation],
+) {
+    pixels.map_straight(|color| super::apply_operations_to_color(color, operations, false));
 }
 
 #[cfg(test)]
@@ -253,7 +254,9 @@ mod tests {
 
     #[test]
     fn flood_blend_preserves_the_flood_only_region() {
-        let source = image::RgbaImage::from_pixel(10, 6, image::Rgba([213, 0, 0, 255]));
+        let source = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+            &image::RgbaImage::from_pixel(10, 6, image::Rgba([213, 0, 0, 255])),
+        );
         let flood = Color::rgb(21, 101, 192);
         let filtered = apply_operations_to_surface(
             &source,
@@ -314,7 +317,9 @@ mod tests {
 
     #[test]
     fn ordered_drop_shadow_consumes_the_composited_source() {
-        let source = image::RgbaImage::from_pixel(450, 269, image::Rgba([20, 80, 160, 255]));
+        let source = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+            &image::RgbaImage::from_pixel(450, 269, image::Rgba([20, 80, 160, 255])),
+        );
         let filtered = apply_operations_to_surface(
             &source,
             Size::new(108.0, 64.5),
@@ -336,7 +341,9 @@ mod tests {
 
     #[test]
     fn opacity_remains_in_filter_list_order() {
-        let source = image::RgbaImage::from_pixel(1, 1, image::Rgba([20, 80, 160, 255]));
+        let source = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+            &image::RgbaImage::from_pixel(1, 1, image::Rgba([20, 80, 160, 255])),
+        );
         let filtered = apply_operations_to_surface(
             &source,
             Size::new(0.75, 0.75),
@@ -351,7 +358,9 @@ mod tests {
 
     #[test]
     fn consecutive_color_functions_quantize_only_at_the_surface_boundary() {
-        let source = image::RgbaImage::from_pixel(1, 1, image::Rgba([231, 245, 255, 255]));
+        let source = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+            &image::RgbaImage::from_pixel(1, 1, image::Rgba([231, 245, 255, 255])),
+        );
         let filtered = apply_operations_to_surface(
             &source,
             Size::new(0.75, 0.75),

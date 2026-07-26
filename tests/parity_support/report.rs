@@ -1990,10 +1990,10 @@ value=\"0\" style=\"width:6ch\" oninput=\"filterCards()\"></label>\
                     fx.diagnosis.as_ref().filter(|diagnosis| diagnosis.different_pixels > 0).map_or_else(
                         || "<span class=\"meta\">exact match</span>".to_string(),
                         |diagnosis| format!(
-                            "<span class=\"meta\">visually equivalent · {} raw differing RGBA pixels · above-floor {} · raw {}</span>",
-                            diagnosis.different_pixels,
+                            "<span class=\"meta\">visually equivalent · no rejecting defect · thresholded evidence {} · raw {} ({} px)</span>",
                             display_diff_pct(fx.semantic_diff_pct),
-                            display_diff_pct(fx.diff_pct)
+                            display_diff_pct(fx.diff_pct),
+                            diagnosis.different_pixels,
                         ),
                     )
                 } else {
@@ -2556,7 +2556,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
 
         assert!(category.contains(
-            "visually equivalent · 12 raw differing RGBA pixels · above-floor 0.20% · raw 0.25%"
+            "visually equivalent · no rejecting defect · thresholded evidence 0.20% · raw 0.25% (12 px)"
         ));
         assert!(category.contains("edge coverage differs below the visibility policy"));
     }

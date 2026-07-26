@@ -37,8 +37,8 @@ pub(super) fn render_text_shadow_blur(
             style: crate::render::blur::GlyphRasterStyle {
                 embolden: embolden_pt,
                 shear: run.synthetic_italic_shear(custom_fonts).unwrap_or_default(),
-                ..Default::default()
             },
+            origin: crate::render::blur::GlyphBaselineOrigin::pdf(origin_x_pt, baseline_y_pt),
             dpi: pdf_writer.opts.raster_quality.filter_dpi,
         }) {
             Some(r) => r,
@@ -63,8 +63,8 @@ pub(super) fn render_text_shadow_blur(
     let h_pt = buf_h_px / px_per_pt;
 
     // Text origin inside the blurred buffer (device px from top-left).
-    let bx = raster.origin_x_px + pad as f32;
-    let by = raster.baseline_y_px + pad as f32;
+    let bx = raster.placement.baseline_in_mask.x + pad as f32;
+    let by = raster.placement.baseline_in_mask.y + pad as f32;
 
     // Place the buffer so its text-origin pixel lands at the shadow PDF origin.
     let ix = origin_x_pt - bx / px_per_pt;

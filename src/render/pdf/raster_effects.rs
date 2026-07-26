@@ -40,10 +40,14 @@ pub(super) fn paint_simple_text_block(
         );
     }
     let content_w = (width_pt - border.horizontal_width() - padding.horizontal()).max(0.0);
-    let mut baseline_y = y_pt + border.top.width + padding.top;
+    let mut baseline_cursor =
+        crate::render::blur::RasterBaselineCursor::new(y_pt + border.top.width + padding.top, 0.0);
     for (line_idx, line) in lines.iter().enumerate() {
         let metrics = line_box_metrics(line, custom_fonts);
-        baseline_y += metrics.half_leading + metrics.ascender;
+        let baseline_y = baseline_cursor.next(crate::render::blur::RasterBaselineAdvance::new(
+            metrics.half_leading + metrics.ascender,
+            metrics.descender + metrics.half_leading,
+        ));
         let merged = crate::text::coalesce_text_runs(&line.runs);
         let line_width: f32 = merged
             .iter()
@@ -97,24 +101,23 @@ pub(super) fn paint_simple_text_block(
                     font_size: font.adjusted_font_size(run.font_size),
                     glyphs: &shaped.glyphs,
                     style: crate::render::blur::GlyphRasterStyle {
+                        embolden: synthetic_bold_width.unwrap_or_default(),
                         shear: run.synthetic_italic_shear(custom_fonts).unwrap_or_default(),
-                        ..Default::default()
                     },
+                    origin: crate::render::blur::GlyphBaselineOrigin::top_down(run_x, baseline_y),
                     dpi: filter_dpi,
                 },
             )?;
-            let mask = if let Some(stroke_width) = synthetic_bold_width {
-                let stroke_px = (stroke_width * px_per_pt / 2.0).ceil().max(1.0) as u32;
-                dilate_alpha_mask(&raster.mask, stroke_px)
-            } else {
-                raster.mask
-            };
-            let dst_x = (run_x * px_per_pt - raster.origin_x_px).round() as i32;
-            let dst_y = (baseline_y * px_per_pt - raster.baseline_y_px).round() as i32;
-            composite_text_mask(img, &mask, dst_x, dst_y, run.color);
+            let placement = raster.placement;
+            composite_text_mask(
+                img,
+                &raster.mask,
+                placement.mask_origin.x,
+                placement.mask_origin.y,
+                run.color,
+            );
             run_x += estimate_run_width_with_fonts(run, custom_fonts);
         }
-        baseline_y += metrics.descender + metrics.half_leading;
     }
     Some(())
 }
@@ -303,10 +306,17 @@ pub(super) fn blurred_simple_container_group(
                     background.to_f32_rgba(),
                 );
             }
-            let mut baseline_y = child_y + element.box_model.padding.top;
+            let mut baseline_cursor = crate::render::blur::RasterBaselineCursor::new(
+                child_y + element.box_model.padding.top,
+                0.0,
+            );
             for line in &element.lines {
                 let metrics = line_box_metrics(line, self.fonts);
-                baseline_y += metrics.half_leading + metrics.ascender;
+                let baseline_y =
+                    baseline_cursor.next(crate::render::blur::RasterBaselineAdvance::new(
+                        metrics.half_leading + metrics.ascender,
+                        metrics.descender + metrics.half_leading,
+                    ));
                 let merged = crate::text::coalesce_text_runs(&line.runs);
                 let line_width = merged
                     .iter()
@@ -339,22 +349,30 @@ pub(super) fn blurred_simple_container_group(
                             font_size: font.adjusted_font_size(run.font_size),
                             glyphs: &shaped.glyphs,
                             style: crate::render::blur::GlyphRasterStyle {
+                                embolden: run
+                                    .synthetic_bold_stroke_width(self.fonts)
+                                    .unwrap_or_default(),
                                 shear: run.synthetic_italic_shear(self.fonts).unwrap_or_default(),
                                 ..Default::default()
                             },
+                            origin: crate::render::blur::GlyphBaselineOrigin::top_down(
+                                run_x, baseline_y,
+                            ),
                             dpi: self.filter_dpi,
                         },
                     ) else {
                         self.valid = false;
                         return;
                     };
-                    let dst_x = (run_x * self.pixels_per_point - raster.origin_x_px).round() as i32;
-                    let dst_y =
-                        (baseline_y * self.pixels_per_point - raster.baseline_y_px).round() as i32;
-                    composite_text_mask(self.image, &raster.mask, dst_x, dst_y, run.color);
+                    composite_text_mask(
+                        self.image,
+                        &raster.mask,
+                        raster.placement.mask_origin.x,
+                        raster.placement.mask_origin.y,
+                        run.color,
+                    );
                     run_x += estimate_run_width_with_fonts(run, self.fonts);
                 }
-                baseline_y += metrics.descender + metrics.half_leading;
             }
             *self.cursor_y += child_height + margins.end;
             *self.previous_margin_end = margins.end;

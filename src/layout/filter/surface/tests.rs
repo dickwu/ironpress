@@ -17,6 +17,14 @@ fn test_fonts() -> HashMap<String, TtfFont> {
     HashMap::from([("paritysans".to_string(), font)])
 }
 
+fn border_box_pixel(source: &SourceGraphic, point: Point) -> image::Rgba<u8> {
+    let origin = source.geometry.border_origin();
+    *source.pixels.get_pixel(
+        (origin.x + point.x).round() as u32,
+        (origin.y + point.y).round() as u32,
+    )
+}
+
 fn filtered_text_alpha(weight: SyntheticFontWeight) -> u64 {
     let block = TextBlock {
         lines: vec![TextLine {
@@ -83,7 +91,7 @@ fn text_raster_uses_typed_synthetic_weight() {
 
 #[test]
 fn axis_aligned_source_paint_retains_fractional_pixel_coverage() {
-    let mut pixels = image::RgbaImage::new(2, 1);
+    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(2, 1);
     RasterCanvas {
         pixels: &mut pixels,
         pixels_per_point: 1.0,
@@ -93,7 +101,7 @@ fn axis_aligned_source_paint_retains_fractional_pixel_coverage() {
         Color::from_srgb(1.0, 0.0, 0.0, 1.0),
     );
 
-    assert!((127..=128).contains(&pixels.get_pixel(0, 0)[3]));
+    assert_eq!(pixels.get_pixel(0, 0)[3], 128);
     assert_eq!(pixels.get_pixel(1, 0)[3], 0);
 }
 
@@ -123,13 +131,16 @@ fn positioned_column_rule_uses_the_parent_padding_box_once() {
     let source = paint_source_graphic(&root, &HashMap::new(), 72.0)
         .expect("positioned column rule filter source");
 
-    assert_eq!(source.pixels.get_pixel(10, 1).0, [255, 0, 0, 255]);
-    assert_eq!(source.pixels.get_pixel(15, 1)[3], 0);
+    assert_eq!(
+        border_box_pixel(&source, Point::new(10.0, 1.0)).0,
+        [255, 0, 0, 255]
+    );
+    assert_eq!(border_box_pixel(&source, Point::new(15.0, 1.0))[3], 0);
 }
 
 #[test]
 fn inset_shadow_ring_uses_the_padding_box_without_corner_overdraw() {
-    let mut pixels = image::RgbaImage::new(10, 10);
+    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(10, 10);
     RasterCanvas {
         pixels: &mut pixels,
         pixels_per_point: 1.0,
@@ -188,11 +199,13 @@ fn flex_cell_source_includes_outset_shadow_overflow() {
     )
     .expect("flex source with an outset shadow");
 
-    assert_eq!(source.geometry.paint_overflow().right, 4.0);
-    assert_eq!(source.geometry.paint_overflow().bottom, 3.0);
+    assert_eq!(
+        source.geometry.paint_overflow(),
+        EdgeSizes::new(0.0, 4.0, 3.0, 0.0)
+    );
     assert_eq!(source.pixels.dimensions(), (24, 13));
-    let shadow = source.pixels.get_pixel(22, 11);
-    assert!(shadow[0] > 240 && shadow[1] < 10 && shadow[2] < 10);
+    let shadow = border_box_pixel(&source, Point::new(22.0, 11.0));
+    assert!(shadow[0] > 120 && shadow[1] < 10 && shadow[2] < 10);
     assert!((127..=128).contains(&shadow[3]));
 }
 
@@ -309,10 +322,12 @@ fn flex_cell_source_includes_nested_principal_box_overflow() {
     )
     .expect("complex flex source with principal-box overflow");
 
-    assert_eq!(source.geometry.paint_overflow().right, 4.0);
-    assert_eq!(source.geometry.paint_overflow().bottom, 3.0);
-    let shadow = source.pixels.get_pixel(22, 11);
-    assert!(shadow[0] > 240 && shadow[1] < 10 && shadow[2] < 10);
+    assert_eq!(
+        source.geometry.paint_overflow(),
+        EdgeSizes::new(0.0, 4.0, 3.0, 0.0)
+    );
+    let shadow = border_box_pixel(&source, Point::new(22.0, 11.0));
+    assert!(shadow[0] > 120 && shadow[1] < 10 && shadow[2] < 10);
 }
 
 #[test]
@@ -351,8 +366,8 @@ fn source_graphic_composites_linear_gradient_with_the_box() {
     let source = paint_source_graphic(&block, &HashMap::new(), 72.0)
         .expect("linear gradient is a supported composited source");
 
-    assert!(source.pixels.get_pixel(1, 5)[0] < 32);
-    assert!(source.pixels.get_pixel(18, 5)[0] > 223);
+    assert!(border_box_pixel(&source, Point::new(1.0, 5.0))[0] < 32);
+    assert!(border_box_pixel(&source, Point::new(18.0, 5.0))[0] > 223);
 }
 
 #[test]
@@ -394,8 +409,8 @@ fn absolute_descendant_skips_a_static_intermediate_containing_box() {
     let source = paint_source_graphic(&root, &HashMap::new(), 72.0)
         .expect("positioned filter source paints");
 
-    assert_eq!(source.pixels.get_pixel(20, 10)[0], 255);
-    assert_eq!(source.pixels.get_pixel(25, 15)[3], 0);
+    assert_eq!(border_box_pixel(&source, Point::new(20.0, 10.0))[0], 255);
+    assert_eq!(border_box_pixel(&source, Point::new(25.0, 15.0))[3], 0);
 }
 
 #[test]

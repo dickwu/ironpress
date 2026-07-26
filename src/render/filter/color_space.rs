@@ -22,23 +22,35 @@ impl RasterFilterColorSpace {
         }
     }
 
-    pub(super) fn enter_surface(self, pixels: &mut image::RgbaImage) {
+    pub(super) fn enter_surface(
+        self,
+        pixels: &mut crate::render::raster_pixels::PremultipliedRgba8,
+    ) {
         if let Self::LinearRgb = self {
-            for pixel in pixels.pixels_mut() {
-                for channel in &mut pixel.0[..3] {
-                    *channel = srgb_to_linear_byte(*channel);
-                }
-            }
+            pixels.map_straight(|(red, green, blue, alpha)| {
+                (
+                    srgb_to_linear(red),
+                    srgb_to_linear(green),
+                    srgb_to_linear(blue),
+                    alpha,
+                )
+            });
         }
     }
 
-    pub(super) fn leave_surface(self, pixels: &mut image::RgbaImage) {
+    pub(super) fn leave_surface(
+        self,
+        pixels: &mut crate::render::raster_pixels::PremultipliedRgba8,
+    ) {
         if let Self::LinearRgb = self {
-            for pixel in pixels.pixels_mut() {
-                for channel in &mut pixel.0[..3] {
-                    *channel = linear_to_srgb_byte(*channel);
-                }
-            }
+            pixels.map_straight(|(red, green, blue, alpha)| {
+                (
+                    linear_to_srgb(red),
+                    linear_to_srgb(green),
+                    linear_to_srgb(blue),
+                    alpha,
+                )
+            });
         }
     }
 
@@ -57,23 +69,28 @@ impl RasterFilterColorSpace {
 }
 
 fn srgb_to_linear_byte(component: u8) -> u8 {
-    let component = f32::from(component) / 255.0;
-    let linear = if component <= 0.04045 {
+    quantize(srgb_to_linear(f32::from(component) / 255.0))
+}
+
+fn srgb_to_linear(component: f32) -> f32 {
+    if component <= 0.04045 {
         component / 12.92
     } else {
         ((component + 0.055) / 1.055).powf(2.4)
-    };
-    quantize(linear)
+    }
 }
 
+#[cfg(test)]
 fn linear_to_srgb_byte(component: u8) -> u8 {
-    let component = f32::from(component) / 255.0;
-    let srgb = if component <= 0.0031308 {
+    quantize(linear_to_srgb(f32::from(component) / 255.0))
+}
+
+fn linear_to_srgb(component: f32) -> f32 {
+    if component <= 0.0031308 {
         12.92 * component
     } else {
         1.055 * component.powf(1.0 / 2.4) - 0.055
-    };
-    quantize(srgb)
+    }
 }
 
 fn quantize(component: f32) -> u8 {

@@ -42,7 +42,7 @@ impl RasterSurfaceFrame {
 
 /// One completely painted, unfiltered `SourceGraphic`.
 pub(crate) struct SourceGraphic {
-    pub(crate) pixels: image::RgbaImage,
+    pub(crate) pixels: crate::render::raster_pixels::PremultipliedRgba8,
     pub(crate) geometry: SourceRasterGeometry,
 }
 

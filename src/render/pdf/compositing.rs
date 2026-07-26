@@ -286,32 +286,3 @@ pub(super) fn composite_text_mask(
         }
     }
 }
-
-pub(super) fn dilate_alpha_mask(mask: &image::GrayImage, radius: u32) -> image::GrayImage {
-    if radius == 0 {
-        return mask.clone();
-    }
-    let mut out = image::GrayImage::new(mask.width(), mask.height());
-    let radius_sq = radius * radius;
-    for y in 0..mask.height() {
-        for x in 0..mask.width() {
-            let x0 = x.saturating_sub(radius);
-            let y0 = y.saturating_sub(radius);
-            let x1 = (x + radius).min(mask.width().saturating_sub(1));
-            let y1 = (y + radius).min(mask.height().saturating_sub(1));
-            let mut max_a = 0;
-            for yy in y0..=y1 {
-                for xx in x0..=x1 {
-                    let dx = xx.abs_diff(x);
-                    let dy = yy.abs_diff(y);
-                    if dx * dx + dy * dy > radius_sq {
-                        continue;
-                    }
-                    max_a = max_a.max(mask.get_pixel(xx, yy)[0]);
-                }
-            }
-            out.put_pixel(x, y, image::Luma([max_a]));
-        }
-    }
-    out
-}

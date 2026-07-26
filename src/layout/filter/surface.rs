@@ -18,7 +18,7 @@ mod canvas;
 mod gradient;
 mod source_borders;
 
-use canvas::{DevicePoint, RasterCanvas, SurfaceRect, box_shadow_overflow};
+use canvas::{RasterCanvas, SurfaceRect, box_shadow_overflow};
 use gradient::FilterBackground;
 mod geometry;
 
@@ -39,6 +39,7 @@ trait FilterBox {
 #[derive(Clone, Copy)]
 struct ElementPaintSpace {
     border_box: SurfaceRect,
+    css_pixel_grid_origin: Point,
     inherited_containing_block: Option<SurfaceRect>,
     establishes_containing_block: bool,
     root_effects: RootEffectHandling,
@@ -134,8 +135,10 @@ impl SourcePainter<'_> {
         clip: CssRoundedRect,
         paint: impl FnOnce(&mut SourcePainter<'_>) -> Option<()>,
     ) -> Option<()> {
-        let mut group =
-            image::RgbaImage::new(self.canvas.pixels.width(), self.canvas.pixels.height());
+        let mut group = crate::render::raster_pixels::PremultipliedRgba8::transparent(
+            self.canvas.pixels.width(),
+            self.canvas.pixels.height(),
+        );
         let mut descendant_painter = SourcePainter {
             canvas: RasterCanvas {
                 pixels: &mut group,
@@ -194,10 +197,16 @@ impl SourcePainter<'_> {
         alignment: TextAlign,
         indent: f32,
     ) -> Option<()> {
-        let mut line_top = content.origin.y;
+        let mut baseline_cursor = crate::render::blur::RasterBaselineCursor::new(
+            content.origin.y,
+            self.space.css_pixel_grid_origin.y,
+        );
         for (line_index, line) in lines.iter().enumerate() {
             let baseline_ascent = line_baseline_ascent(line, self.fonts);
-            let baseline = line_top + baseline_ascent;
+            let baseline = baseline_cursor.next(crate::render::blur::RasterBaselineAdvance::new(
+                baseline_ascent,
+                (line.height - baseline_ascent).max(0.0),
+            ));
             let runs = merged_runs(&line.runs);
             let parent_font_size = crate::layout::text::line_primary_font_size(&runs);
             let line_width = runs
@@ -244,22 +253,25 @@ impl SourcePainter<'_> {
                         }
                     }
                 }
+                let run_baseline = baseline - run.glyph_baseline_shift(parent_font_size);
                 let raster = crate::render::blur::rasterize_run_alpha(
                     crate::render::blur::GlyphRasterRequest {
                         font,
                         font_size: font.adjusted_font_size(run.font_size),
                         glyphs: &shaped.glyphs,
                         style: crate::render::blur::GlyphRasterStyle {
-                            outline: run
+                            embolden: run
                                 .synthetic_bold_stroke_width(self.fonts)
                                 .unwrap_or_default(),
                             shear: run.synthetic_italic_shear(self.fonts).unwrap_or_default(),
-                            ..Default::default()
                         },
+                        origin: crate::render::blur::GlyphBaselineOrigin::top_down(
+                            run_x,
+                            run_baseline,
+                        ),
                         dpi: self.filter_dpi,
                     },
                 )?;
-                let run_baseline = baseline - run.glyph_baseline_shift(parent_font_size);
                 let run_advance = run_width(run, self.fonts)?;
                 for shadow in run.text_shadow.iter().rev() {
                     if shadow.blur > 0.0 {
@@ -277,14 +289,13 @@ impl SourcePainter<'_> {
                     )?;
                     self.canvas.composite_mask(
                         &raster.mask,
-                        DevicePoint::new(
-                            ((run_x + shadow.offset_x) * self.canvas.pixels_per_point
-                                - raster.origin_x_px)
-                                .round() as i32,
-                            ((run_baseline + shadow.offset_y) * self.canvas.pixels_per_point
-                                - raster.baseline_y_px)
-                                .round() as i32,
-                        ),
+                        raster.placement.mask_origin_at(
+                            crate::render::blur::GlyphBaselineOrigin::top_down(
+                                run_x + shadow.offset_x,
+                                run_baseline + shadow.offset_y,
+                            ),
+                            self.canvas.pixels_per_point,
+                        )?,
                         shadow.color,
                     );
                 }
@@ -297,15 +308,8 @@ impl SourcePainter<'_> {
                     None,
                     SurfaceDecorationPhase::BelowText,
                 )?;
-                self.canvas.composite_mask(
-                    &raster.mask,
-                    DevicePoint::new(
-                        (run_x * self.canvas.pixels_per_point - raster.origin_x_px).round() as i32,
-                        (run_baseline * self.canvas.pixels_per_point - raster.baseline_y_px).round()
-                            as i32,
-                    ),
-                    run.color,
-                );
+                self.canvas
+                    .composite_mask(&raster.mask, raster.placement.mask_origin, run.color);
                 self.paint_run_decorations(
                     run,
                     run_x,
@@ -317,7 +321,6 @@ impl SourcePainter<'_> {
                 )?;
                 run_x += run_advance;
             }
-            line_top += line.height;
         }
         Some(())
     }
@@ -438,6 +441,7 @@ impl SourcePainter<'_> {
                 child.as_ref(),
                 ElementPaintSpace {
                     border_box: SurfaceRect::new(frame.border_box.origin, frame.border_box.size),
+                    css_pixel_grid_origin: self.space.css_pixel_grid_origin,
                     inherited_containing_block: area.absolute_containing_block,
                     establishes_containing_block: false,
                     root_effects: area.direct_child_effects,
@@ -768,7 +772,10 @@ pub(crate) fn paint_source_graphic(
     let paint_overflow = source_paint_overflow(element, layout.size, filter_dpi)?;
     let geometry = SourceRasterGeometry::resolve(layout, paint_overflow, filter_dpi)?;
     let dimensions = geometry.dimensions();
-    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
+    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(
+        dimensions.width,
+        dimensions.height,
+    );
     let mut canvas = RasterCanvas {
         pixels: &mut pixels,
         pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
@@ -778,6 +785,7 @@ pub(crate) fn paint_source_graphic(
         element,
         ElementPaintSpace {
             border_box: SurfaceRect::new(geometry.border_origin(), geometry.layout.size),
+            css_pixel_grid_origin: geometry.border_origin(),
             inherited_containing_block: None,
             establishes_containing_block: true,
             root_effects: RootEffectHandling::DeferToOwner,
@@ -802,7 +810,10 @@ pub(crate) fn paint_grid_cell_source(
     };
     let geometry = SourceRasterGeometry::resolve(layout, EdgeSizes::ZERO, filter_dpi)?;
     let dimensions = geometry.dimensions();
-    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
+    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(
+        dimensions.width,
+        dimensions.height,
+    );
     let mut painter = SourcePainter {
         canvas: RasterCanvas {
             pixels: &mut pixels,
@@ -810,6 +821,7 @@ pub(crate) fn paint_grid_cell_source(
         },
         space: ElementPaintSpace {
             border_box: SurfaceRect::new(geometry.border_origin(), size),
+            css_pixel_grid_origin: geometry.border_origin(),
             inherited_containing_block: None,
             establishes_containing_block: true,
             root_effects: RootEffectHandling::DeferToOwner,
@@ -876,7 +888,10 @@ pub(crate) fn paint_flex_cell_source(
         filter_dpi,
     )?;
     let dimensions = geometry.dimensions();
-    let mut pixels = image::RgbaImage::new(dimensions.width, dimensions.height);
+    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(
+        dimensions.width,
+        dimensions.height,
+    );
     let border_box = SurfaceRect::new(geometry.border_origin(), size);
     let mut painter = SourcePainter {
         canvas: RasterCanvas {
@@ -885,6 +900,7 @@ pub(crate) fn paint_flex_cell_source(
         },
         space: ElementPaintSpace {
             border_box,
+            css_pixel_grid_origin: geometry.border_origin(),
             inherited_containing_block: None,
             establishes_containing_block: true,
             root_effects: RootEffectHandling::DeferToOwner,
@@ -1005,7 +1021,10 @@ fn paint_element(
 ) -> Option<()> {
     let opacity = element_group_opacity(element);
     if space.root_effects == RootEffectHandling::Paint && opacity < 1.0 {
-        let mut group = image::RgbaImage::new(canvas.pixels.width(), canvas.pixels.height());
+        let mut group = crate::render::raster_pixels::PremultipliedRgba8::transparent(
+            canvas.pixels.width(),
+            canvas.pixels.height(),
+        );
         let mut group_canvas = RasterCanvas {
             pixels: &mut group,
             pixels_per_point: canvas.pixels_per_point,
