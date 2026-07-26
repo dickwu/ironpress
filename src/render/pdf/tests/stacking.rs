@@ -4,6 +4,20 @@ fn paint_position(pdf: &[u8], color: &str) -> usize {
         .unwrap_or_else(|| panic!("missing PDF paint operator {color}"))
 }
 
+fn first_image_paint_position(pdf: &[u8]) -> usize {
+    let content = String::from_utf8_lossy(pdf);
+    content
+        .match_indices("/Im")
+        .find_map(|(position, _)| {
+            content[position..]
+                .lines()
+                .next()
+                .is_some_and(|line| line.ends_with(" Do"))
+                .then_some(position)
+        })
+        .expect("missing filtered image paint operator")
+}
+
 #[test]
 fn positive_descendant_escapes_a_non_stacking_ancestor() {
     let html = r#"
@@ -220,10 +234,14 @@ fn non_positioning_stacking_contexts_remain_atomic() {
             .convert(&html)
             .unwrap();
 
-        let red = paint_position(&pdf, "1 0 0 rg");
+        let context = if declaration.starts_with("filter:") {
+            first_image_paint_position(&pdf)
+        } else {
+            paint_position(&pdf, "1 0 0 rg")
+        };
         let blue = paint_position(&pdf, "0 0 1 rg");
         assert!(
-            red < blue,
+            context < blue,
             "{declaration} must keep its positive descendant below a z-index:1 sibling"
         );
     }

@@ -512,7 +512,7 @@ impl BoxPaint {
             || self
                 .filter
                 .as_ref()
-                .is_some_and(crate::layout::filter::ResolvedFilter::has_composited_output)
+                .is_some_and(crate::layout::filter::ResolvedFilter::requires_source_surface)
     }
 }
 

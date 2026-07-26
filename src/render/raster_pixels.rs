@@ -107,6 +107,39 @@ impl PremultipliedRgba8 {
             ]);
         }
     }
+
+    /// Composite another premultiplied surface over this one at an integer
+    /// device-space origin.
+    pub(crate) fn composite_over(&mut self, source: &Self, origin: DevicePixelPoint) -> Option<()> {
+        let target_width = i64::from(self.width());
+        let target_height = i64::from(self.height());
+        for (source_x, source_y, source_pixel) in source.pixels.enumerate_pixels() {
+            let target_x = i64::from(origin.x).checked_add(i64::from(source_x))?;
+            let target_y = i64::from(origin.y).checked_add(i64::from(source_y))?;
+            if target_x < 0 || target_y < 0 || target_x >= target_width || target_y >= target_height
+            {
+                continue;
+            }
+            let target = self
+                .pixels
+                .get_pixel_mut(u32::try_from(target_x).ok()?, u32::try_from(target_y).ok()?);
+            *target = premultiplied_source_over(*source_pixel, *target);
+        }
+        Some(())
+    }
+}
+
+fn premultiplied_source_over(
+    source: image::Rgba<u8>,
+    destination: image::Rgba<u8>,
+) -> image::Rgba<u8> {
+    let inverse_source_alpha = u16::from(u8::MAX - source[3]);
+    image::Rgba(std::array::from_fn(|channel| {
+        let retained = (u16::from(destination[channel]) * inverse_source_alpha + 127) / 255;
+        u16::from(source[channel])
+            .saturating_add(retained)
+            .min(u16::from(u8::MAX)) as u8
+    }))
 }
 
 /// One integer sample location in a physical raster surface.

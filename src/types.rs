@@ -358,6 +358,14 @@ impl<T> PhysicalEdges<T> {
             map(self.left),
         )
     }
+
+    /// Whether a predicate holds for every physical edge.
+    pub fn all(self, mut predicate: impl FnMut(T) -> bool) -> bool {
+        predicate(self.top)
+            && predicate(self.right)
+            && predicate(self.bottom)
+            && predicate(self.left)
+    }
 }
 
 impl<T: Copy> PhysicalEdges<T> {
@@ -410,6 +418,14 @@ impl PhysicalEdges<f32> {
             self.bottom.max(other.bottom),
             self.left.max(other.left),
         )
+    }
+
+    /// Whether every edge is at least as large as the corresponding edge.
+    pub fn contains_each(self, other: Self) -> bool {
+        self.top >= other.top
+            && self.right >= other.right
+            && self.bottom >= other.bottom
+            && self.left >= other.left
     }
 
     /// Clamp each physical edge independently to its corresponding rectangle

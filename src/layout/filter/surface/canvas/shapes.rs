@@ -31,6 +31,7 @@ impl RasterCanvas<'_> {
         if rect.size.width <= 0.0 || rect.size.height <= 0.0 {
             return;
         }
+        self.include_paint_bounds(rect);
         let x0 = device_floor(rect.origin.x, self.pixels_per_point, self.pixels.width());
         let y0 = device_floor(rect.origin.y, self.pixels_per_point, self.pixels.height());
         let x1 = device_ceil(rect.right(), self.pixels_per_point, self.pixels.width());
@@ -67,8 +68,9 @@ impl RasterCanvas<'_> {
             return Some(());
         }
         let rect = SurfaceRect::new(origin, crate::types::Size::new(paint.width, height));
+        self.include_paint_bounds(rect);
         let rule = RasterColumnRule::new(rect, paint);
-        self.paint_sampled(rect, |point| rule.sample(point));
+        self.paint_color_samples(rect, |point| rule.sample(point));
         Some(())
     }
 
@@ -81,14 +83,23 @@ impl RasterCanvas<'_> {
         if !border.has_visible() {
             return Some(());
         }
+        self.include_paint_bounds(rect);
+        if radii.is_zero()
+            && let Some(side) = border.uniform_paint_side()
+            && side.style == crate::style::computed::BorderStyle::Solid
+        {
+            self.fill_ring(rect, rect.inset(border.widths()), side.color);
+            return Some(());
+        }
         let paint = RasterBorder::new(rect, border, radii);
-        self.paint_sampled(rect, |point| paint.sample(point));
+        self.paint_color_samples(rect, |point| paint.sample(point));
         Some(())
     }
 
     /// Paint `outer - inner` once, retaining fractional device-pixel coverage
     /// at both edges. This is the square-corner form of an inset shadow.
     pub(super) fn fill_ring(&mut self, outer: SurfaceRect, inner: SurfaceRect, color: Color) {
+        self.include_paint_bounds(outer);
         let Some(inner) = outer.intersection(inner) else {
             self.fill(outer, color);
             return;
@@ -122,6 +133,7 @@ impl RasterCanvas<'_> {
         if rect.size.width <= 0.0 || rect.size.height <= 0.0 || color.3 <= 0.0 {
             return;
         }
+        self.include_paint_bounds(rect);
         let device_left = rect.origin.x * self.pixels_per_point;
         let device_top = rect.origin.y * self.pixels_per_point;
         let device_right = rect.right() * self.pixels_per_point;
@@ -146,9 +158,12 @@ impl RasterCanvas<'_> {
         }
     }
 
-    /// Paint one analytically sampled shape without compositing neighboring
-    /// subpixel regions over each other.
-    fn paint_sampled(&mut self, bounds: Rect, mut sample: impl FnMut(Point) -> Option<Color>) {
+    /// Paint one complex shape from a shared subpixel color sampler.
+    pub(in crate::layout::filter::surface) fn paint_color_samples(
+        &mut self,
+        bounds: Rect,
+        mut sample: impl FnMut(Point) -> Option<Color>,
+    ) {
         let x0 = device_floor(bounds.origin.x, self.pixels_per_point, self.pixels.width());
         let y0 = device_floor(bounds.origin.y, self.pixels_per_point, self.pixels.height());
         let x1 = device_ceil(bounds.right(), self.pixels_per_point, self.pixels.width());

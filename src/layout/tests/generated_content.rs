@@ -39,7 +39,7 @@ fn empty_string_generated_box_retains_absolute_background_and_filter() {
                 .paint
                 .filter
                 .as_ref()
-                .is_some_and(|filter| filter.has_composited_output());
+                .is_some_and(|filter| filter.requires_source_surface());
             self.text_boxes
                 .push((block.positioning.scheme, has_background, has_filter));
             self.found |=

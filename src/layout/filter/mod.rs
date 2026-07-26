@@ -7,21 +7,23 @@
 
 pub(crate) mod cells;
 mod fallback;
+mod materialize;
+mod raster_frame;
 pub(crate) mod surface;
 mod vector_source;
 
+pub(crate) use materialize::materialize_page_filters;
 pub(crate) use vector_source::ExactVectorFilterSource;
 
 use std::collections::HashMap;
 
 use crate::layout::elements::{
-    Image, ImagePaint, ImageSampling, IntoLayoutNode, LayoutNode, LayoutVisitorMut,
-    ReplacedGeometry,
+    Image, ImagePaint, ImageSampling, IntoLayoutNode, LayoutNode, ReplacedGeometry,
 };
 use crate::layout::engine::{LayoutBorder, RasterImageAsset};
 use crate::parser::dom::ElementNode;
 use crate::parser::ttf::TtfFont;
-use crate::style::computed::{ComputedStyle, FilterOperation, ObjectFit};
+use crate::style::computed::{ComputedStyle, FilterOperation, NormalizedFilterRegion, ObjectFit};
 use crate::types::EdgeSizes;
 
 /// An owned filter surface kept with the semantic box that produced it.
@@ -36,24 +38,41 @@ pub(crate) struct FilterRasterOutput {
 }
 
 /// A resolved filter list together with its color-interpolation space.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedFilter {
     pub(crate) operations: Vec<FilterOperation>,
     pub(crate) linear_rgb: bool,
+    pub(crate) svg_region: Option<NormalizedFilterRegion>,
+    pub(crate) isolates_source: bool,
 }
 
 /// Effects applied after an element's filter has produced its composited
 /// output. CSS applies these to the filtered group rather than to each source
 /// primitive independently.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FilterCompositing {
-    pub(crate) opacity: f32,
+    output_clip: FilterOutputClip,
 }
 
-impl Default for FilterCompositing {
-    fn default() -> Self {
-        Self { opacity: 1.0 }
+impl FilterCompositing {
+    fn from_group(group: &crate::layout::elements::PaintGroup) -> Self {
+        Self {
+            output_clip: if group.effects.masking.image.is_some() {
+                FilterOutputClip::BorderBox
+            } else {
+                FilterOutputClip::None
+            },
+        }
     }
+}
+
+/// Conservative finite bound imposed after filter evaluation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FilterOutputClip {
+    #[default]
+    None,
+    /// Every supported `mask-clip` geometry box is contained by the border box.
+    BorderBox,
 }
 
 impl ResolvedFilter {
@@ -62,31 +81,33 @@ impl ResolvedFilter {
         definitions: &HashMap<String, ElementNode>,
     ) -> Self {
         let mut linear_rgb = false;
+        let mut svg_region = None;
+        let isolates_source = style.filter.establishes_stacking_context;
         if let Some(id) = style.filter.url_id.clone() {
             let Some(filter) = definitions.get(&id) else {
                 style.filter = Default::default();
-                return Self {
-                    operations: Vec::new(),
-                    linear_rgb,
-                };
+                return Self::default();
             };
-            let (operations, uses_linear_rgb) =
-                crate::parser::svg::filter_element_color_ops(filter);
-            if !operations.is_empty() {
-                linear_rgb = uses_linear_rgb;
+            let Some(definition) = crate::parser::svg::filter_element_definition(filter) else {
+                style.filter = Default::default();
+                return Self::default();
+            };
+            if !definition.operations.is_empty() {
+                linear_rgb = definition.linear_rgb;
             }
-            style.filter.operations.extend(operations);
+            svg_region = Some(definition.region);
+            style.filter.operations.extend(definition.operations);
         }
         Self {
             operations: style.filter.operations.clone(),
             linear_rgb,
+            svg_region,
+            isolates_source,
         }
     }
 
-    pub(crate) fn has_composited_output(&self) -> bool {
-        self.operations
-            .iter()
-            .any(FilterOperation::requires_group_rasterization)
+    pub(crate) const fn requires_source_surface(&self) -> bool {
+        self.isolates_source
     }
 }
 
@@ -136,81 +157,34 @@ pub(crate) fn retain_for_fragmentation(
     true
 }
 
-/// Materialize every retained filter after pagination, deepest descendants
-/// first. Child replacement is intentionally exposed by the layout tree as a
-/// generic node operation so nested filters compose at arbitrary depth.
-pub(crate) fn materialize_page_filters(
-    pages: &mut [crate::layout::engine::Page],
-    fonts: &HashMap<String, TtfFont>,
-    filter_dpi: f32,
-) {
-    for page in pages {
-        for (_, element) in &mut page.elements {
-            materialize_node_filter(element, fonts, filter_dpi);
-        }
-        for element in page.running_elements.values_mut() {
-            materialize_node_filter(element, fonts, filter_dpi);
-        }
-    }
-}
-
-fn materialize_node_filter(
-    element: &mut LayoutNode,
-    fonts: &HashMap<String, TtfFont>,
-    filter_dpi: f32,
-) {
-    element.visit_child_nodes_mut(&mut |child| {
-        materialize_node_filter(child, fonts, filter_dpi);
-    });
-
-    struct CellFilterMaterializer<'a> {
-        fonts: &'a HashMap<String, TtfFont>,
-        filter_dpi: f32,
-    }
-
-    impl LayoutVisitorMut for CellFilterMaterializer<'_> {
-        fn visit_flex_row(&mut self, element: &mut crate::layout::elements::FlexRow) {
-            cells::materialize_flex_row(element, self.fonts, self.filter_dpi);
-        }
-    }
-
-    element.accept_mut(&mut CellFilterMaterializer { fonts, filter_dpi });
-
-    let Some(filter) = element
-        .filter_holder_mut()
-        .and_then(crate::layout::elements::FilterHolder::take_filter)
-    else {
-        return;
-    };
-    if let Some(graphic) = composite_source(element.as_ref(), &filter, fonts, filter_dpi) {
-        *element = graphic.into_layout_node();
-    } else {
-        filter.apply_primitive_fallback(std::slice::from_mut(element));
-    }
-}
-
 pub(crate) fn composite_source(
     element: &dyn crate::layout::elements::LayoutElement,
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
+    anchor: surface::SourceRasterAnchor,
 ) -> Option<FilteredGraphic> {
     let exact_vector = element.exact_vector_filter_source().is_some_and(|source| {
         !filter.linear_rgb && source.supports_exact_vector_filter(&filter.operations)
     });
-    if !filter.has_composited_output() || exact_vector {
+    if !filter.requires_source_surface() || exact_vector {
         return None;
     }
-    let source = surface::paint_source_graphic(element, fonts, filter_dpi)?;
-    let (output, geometry) =
-        composite_source_graphic(source, filter, Default::default(), filter_dpi)?;
+    let group = element
+        .paint_group_owner()
+        .map(crate::layout::elements::PaintGroupOwner::paint_group);
+    let source = surface::paint_source_graphic(element, fonts, filter_dpi, anchor)?;
+    let (output, geometry) = composite_source_graphic(
+        source,
+        filter,
+        group.map(FilterCompositing::from_group).unwrap_or_default(),
+        filter_dpi,
+    )?;
     Some(FilteredGraphic {
         asset: output.asset,
         geometry,
         overflow: output.raster_overflow,
-        group: element
-            .paint_group_owner()
-            .map(crate::layout::elements::PaintGroupOwner::paint_group)
+        group: group
             .cloned()
             .unwrap_or_default()
             .with_materialized_filter(),
@@ -225,29 +199,49 @@ pub(crate) fn composite_source_graphic(
     compositing: FilterCompositing,
     filter_dpi: f32,
 ) -> Option<(FilterRasterOutput, surface::SourceGeometry)> {
-    if !filter.has_composited_output() {
+    if !filter.requires_source_surface() {
         return None;
     }
-    let surface_size = source.geometry.surface_size();
-    let mut filtered = crate::render::filter::apply_operations_to_surface(
+    let filter_geometry = source.geometry.filter_geometry()?;
+    let filtered = crate::render::filter::apply_operations_to_surface(
         &source.pixels,
-        surface_size,
+        filter_geometry,
         &filter.operations,
         filter.linear_rgb,
+        filter.svg_region,
         filter_dpi,
     )?;
-    if compositing.opacity < 1.0 {
-        let opacity = compositing.opacity.clamp(0.0, 1.0);
-        for pixel in filtered.pixels.pixels_mut() {
-            pixel[3] = (f32::from(pixel[3]) * opacity).round() as u8;
+    let filter_bounds = filtered.bounds;
+    let frame = raster_frame::FilterRasterFrame::new(
+        filtered.pixels,
+        source.geometry.paint_overflow() + filter_bounds.raster_overflow,
+    );
+    let retain_complete_region = filter.svg_region.is_some()
+        && filter
+            .operations
+            .iter()
+            .any(FilterOperation::requires_complete_svg_region);
+    let frame = if retain_complete_region {
+        frame
+    } else {
+        frame.subset_to_paint_bounds(
+            source.paint_bounds,
+            filter_bounds.raster_overflow,
+            filter_bounds.effect_support,
+            filter_dpi,
+        )
+    };
+    let frame = match compositing.output_clip {
+        FilterOutputClip::None => frame,
+        FilterOutputClip::BorderBox => {
+            frame.subset_to_border_box(source.geometry.layout.size, filter_dpi)
         }
-    }
-    let raster_overflow = source.geometry.paint_overflow() + filtered.overflow;
+    };
     let layout_geometry = source.geometry.layout;
     Some((
         FilterRasterOutput {
-            asset: crate::render::blur::rgba_to_png_alpha_asset(filtered.pixels, filter_dpi)?,
-            raster_overflow,
+            asset: crate::render::blur::rgba_to_png_alpha_asset(frame.pixels, filter_dpi)?,
+            raster_overflow: frame.overflow,
         },
         layout_geometry,
     ))

@@ -1,12 +1,28 @@
-use crate::style::computed::{FilterOperation, ImageRendering};
-use crate::types::{EdgeSizes, Size};
+mod geometry;
+
+pub(crate) use geometry::FilterSourceGeometry;
+
+use crate::style::computed::{FilterOperation, NormalizedFilterRegion};
+use crate::types::EdgeSizes;
 
 use super::color_space::RasterFilterColorSpace;
+use geometry::{RasterRegion, RasterScale};
 
 /// Filtered pixels and their directional paint overflow around the source box.
 pub(crate) struct FilteredSurface {
     pub(crate) pixels: image::RgbaImage,
-    pub(crate) overflow: EdgeSizes,
+    pub(crate) bounds: FilterSurfaceBounds,
+}
+
+/// Distinguishes the serialized raster allocation from finite effect support.
+///
+/// An explicit SVG region can be larger than the pixels a local operation
+/// affects. Gaussian filters retain that complete allocation, while local
+/// operations may serialize only their finite support without changing paint.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FilterSurfaceBounds {
+    pub(crate) raster_overflow: EdgeSizes,
+    pub(crate) effect_support: EdgeSizes,
 }
 
 struct PremultipliedFilteredSurface {
@@ -21,9 +37,10 @@ struct PremultipliedFilteredSurface {
 /// silent no-op would publish an incorrect filtered surface.
 pub(crate) fn apply_operations_to_surface(
     source: &crate::render::raster_pixels::PremultipliedRgba8,
-    source_size: Size,
+    geometry: FilterSourceGeometry,
     operations: &[FilterOperation],
     linear_rgb: bool,
+    svg_region: Option<NormalizedFilterRegion>,
     filter_dpi: f32,
 ) -> Option<FilteredSurface> {
     let mut pixels = source.clone();
@@ -47,7 +64,7 @@ pub(crate) fn apply_operations_to_surface(
             } => {
                 let filtered = blend_with_flood(
                     &pixels,
-                    source_size,
+                    geometry,
                     overflow,
                     working_space.enter_color(color),
                     mode,
@@ -68,24 +85,10 @@ pub(crate) fn apply_operations_to_surface(
                     color: working_space.enter_color(shadow.color),
                     ..shadow
                 };
-                let painted_size = Size::new(
-                    source_size.width + overflow.horizontal(),
-                    source_size.height + overflow.vertical(),
-                );
-                let filtered = crate::render::blur::drop_shadow_image(
-                    &pixels.clone().into_straight(),
-                    painted_size.width,
-                    painted_size.height,
-                    shadow,
-                    ImageRendering::Auto,
-                    filter_dpi,
-                )?;
-                pixels = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
-                    &image::load_from_memory(&filtered.asset.data)
-                        .ok()?
-                        .to_rgba8(),
-                );
-                overflow += EdgeSizes::uniform(filtered.overflow_pt);
+                let filtered =
+                    crate::render::blur::drop_shadow_surface(&pixels, shadow, filter_dpi)?;
+                pixels = filtered.pixels;
+                overflow += filtered.overflow;
             }
             FilterOperation::Blur(_) => {}
             FilterOperation::Offset { .. } | FilterOperation::MorphologyDilate(_) => return None,
@@ -95,10 +98,21 @@ pub(crate) fn apply_operations_to_surface(
     if let Some(start) = color_run_start {
         apply_color_operations(&mut pixels, &operations[start..]);
     }
+    let effect_support = overflow;
+    if let Some(region) = svg_region {
+        let scale = RasterScale::at_dpi(filter_dpi)?;
+        let region = RasterRegion::resolve(region, geometry, scale)?;
+        let source_frame = RasterRegion::source_frame(&pixels, overflow, scale)?;
+        pixels = region.extract(&pixels, source_frame)?;
+        overflow = region.paint_overflow(geometry, scale);
+    }
     working_space.leave_surface(&mut pixels);
     Some(FilteredSurface {
         pixels: pixels.into_straight(),
-        overflow,
+        bounds: FilterSurfaceBounds {
+            raster_overflow: overflow,
+            effect_support,
+        },
     })
 }
 
@@ -117,100 +131,19 @@ fn is_color_operation(operation: &FilterOperation) -> bool {
     )
 }
 
-#[derive(Clone, Copy)]
-struct RasterScale {
-    horizontal: f32,
-    vertical: f32,
-}
-
-impl RasterScale {
-    fn at_dpi(dpi: f32) -> Option<Self> {
-        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
-        (pixels_per_point.is_finite() && pixels_per_point > 0.0).then_some(Self {
-            horizontal: pixels_per_point,
-            vertical: pixels_per_point,
-        })
-    }
-}
-
-#[derive(Clone, Copy)]
-struct RasterRegion {
-    left: i64,
-    top: i64,
-    right: i64,
-    bottom: i64,
-}
-
-impl RasterRegion {
-    fn resolve(region: crate::types::Rect, source_size: Size, scale: RasterScale) -> Option<Self> {
-        let width = f64::from(source_size.width * scale.horizontal);
-        let height = f64::from(source_size.height * scale.vertical);
-        let resolved = Self {
-            left: floored_coordinate(f64::from(region.origin.x) * width)?,
-            top: floored_coordinate(f64::from(region.origin.y) * height)?,
-            right: ceiled_coordinate(f64::from(region.right()) * width)?,
-            bottom: ceiled_coordinate(f64::from(region.bottom()) * height)?,
-        };
-        (resolved.right > resolved.left && resolved.bottom > resolved.top).then_some(resolved)
-    }
-
-    fn dimensions(self) -> Option<(u32, u32)> {
-        Some((
-            u32::try_from(self.right.checked_sub(self.left)?).ok()?,
-            u32::try_from(self.bottom.checked_sub(self.top)?).ok()?,
-        ))
-    }
-
-    fn paint_overflow(self, source_size: Size, scale: RasterScale) -> EdgeSizes {
-        EdgeSizes::new(
-            -(self.top as f32) / scale.vertical,
-            self.right as f32 / scale.horizontal - source_size.width,
-            self.bottom as f32 / scale.vertical - source_size.height,
-            -(self.left as f32) / scale.horizontal,
-        )
-    }
-}
-
-fn rounded_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.round() as i64)
-}
-
-fn floored_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.floor() as i64)
-}
-
-fn ceiled_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.ceil() as i64)
-}
-
-fn stabilized_coordinate(value: f64) -> Option<f64> {
-    const DEVICE_EDGE_EPSILON: f64 = 0.001;
-
-    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return None;
-    }
-    let integer = value.round();
-    Some(if (value - integer).abs() <= DEVICE_EDGE_EPSILON {
-        integer
-    } else {
-        value
-    })
-}
-
 fn blend_with_flood(
     source: &crate::render::raster_pixels::PremultipliedRgba8,
-    source_size: Size,
+    geometry: FilterSourceGeometry,
     source_overflow: EdgeSizes,
     color: crate::types::Color,
     mode: crate::style::computed::BlendMode,
-    region: crate::types::Rect,
+    region: NormalizedFilterRegion,
     filter_dpi: f32,
 ) -> Option<PremultipliedFilteredSurface> {
     let scale = RasterScale::at_dpi(filter_dpi)?;
-    let raster_region = RasterRegion::resolve(region, source_size, scale)?;
+    let raster_region = RasterRegion::resolve(region, geometry, scale)?;
     let (width, height) = raster_region.dimensions()?;
-    let source_left = rounded_coordinate(-f64::from(source_overflow.left * scale.horizontal))?;
-    let source_top = rounded_coordinate(-f64::from(source_overflow.top * scale.vertical))?;
+    let source_region = RasterRegion::source_frame(source, source_overflow, scale)?;
     let flood = image::Rgba(color.to_rgba8());
     let transparent = image::Rgba([0, 0, 0, 0]);
     let source = source.clone().into_straight();
@@ -219,8 +152,8 @@ fn blend_with_flood(
     for (x, y, output_pixel) in output.enumerate_pixels_mut() {
         let global_x = raster_region.left.checked_add(i64::from(x))?;
         let global_y = raster_region.top.checked_add(i64::from(y))?;
-        let local_x = global_x.checked_sub(source_left)?;
-        let local_y = global_y.checked_sub(source_top)?;
+        let local_x = global_x.checked_sub(source_region.left)?;
+        let local_y = global_y.checked_sub(source_region.top)?;
         let source_pixel = u32::try_from(local_x)
             .ok()
             .zip(u32::try_from(local_y).ok())
@@ -231,7 +164,7 @@ fn blend_with_flood(
 
     Some(PremultipliedFilteredSurface {
         pixels: crate::render::raster_pixels::PremultipliedRgba8::from_straight(&output),
-        overflow: raster_region.paint_overflow(source_size, scale),
+        overflow: raster_region.paint_overflow(geometry, scale),
     })
 }
 
@@ -249,8 +182,18 @@ fn apply_color_operations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::computed::{BlendMode, DropShadow};
-    use crate::types::{Color, Rect};
+    use crate::style::computed::{BlendMode, DropShadow, NormalizedFilterRegion};
+    use crate::types::{Color, Rect, Size};
+
+    fn source_geometry(size: Size) -> FilterSourceGeometry {
+        FilterSourceGeometry::new(size, Rect::new(Default::default(), size))
+            .expect("the test source has finite positive geometry")
+    }
+
+    fn region(x: f32, y: f32, width: f32, height: f32) -> NormalizedFilterRegion {
+        NormalizedFilterRegion::new(x, y, width, height)
+            .expect("the test filter region has finite positive geometry")
+    }
 
     #[test]
     fn flood_blend_preserves_the_flood_only_region() {
@@ -260,59 +203,29 @@ mod tests {
         let flood = Color::rgb(21, 101, 192);
         let filtered = apply_operations_to_surface(
             &source,
-            Size::new(10.0, 6.0),
+            source_geometry(Size::new(10.0, 6.0)),
             &[FilterOperation::BlendWithFlood {
                 color: flood,
                 mode: BlendMode::Multiply,
-                region: Rect::from_xywh(-0.2, -0.5, 1.4, 2.0),
+                region: region(-0.2, -0.5, 1.4, 2.0),
             }],
             true,
+            None,
             72.0,
         )
         .expect("a finite flood and source produce one blended surface");
 
         assert_eq!(filtered.pixels.dimensions(), (14, 12));
         for (actual, expected) in [
-            (filtered.overflow.top, 3.0),
-            (filtered.overflow.right, 2.0),
-            (filtered.overflow.bottom, 3.0),
-            (filtered.overflow.left, 2.0),
+            (filtered.bounds.raster_overflow.top, 3.0),
+            (filtered.bounds.raster_overflow.right, 2.0),
+            (filtered.bounds.raster_overflow.bottom, 3.0),
+            (filtered.bounds.raster_overflow.left, 2.0),
         ] {
             assert!((actual - expected).abs() < 0.000_01);
         }
         assert_eq!(filtered.pixels.get_pixel(0, 0).0, [22, 101, 192, 255]);
         assert_eq!(filtered.pixels.get_pixel(2, 3).0, [13, 0, 0, 255]);
-    }
-
-    #[test]
-    fn fractional_filter_region_uses_outward_device_bounds() {
-        let source_size = Size::new(10.0, 6.0);
-        let scale = RasterScale {
-            horizontal: 3.125,
-            vertical: 3.125,
-        };
-        let region =
-            RasterRegion::resolve(Rect::from_xywh(-0.2, -0.5, 1.4, 2.0), source_size, scale)
-                .expect("a finite positive filter region has device bounds");
-
-        assert_eq!(region.dimensions(), Some((45, 39)));
-        let overflow = region.paint_overflow(source_size, scale);
-        for (actual, expected) in [
-            (overflow.top, 3.2),
-            (overflow.right, 2.16),
-            (overflow.bottom, 3.28),
-            (overflow.left, 2.24),
-        ] {
-            assert!((actual - expected).abs() < 0.000_01);
-        }
-    }
-
-    #[test]
-    fn device_edge_stabilization_does_not_grow_integral_bounds() {
-        assert_eq!(floored_coordinate(11.999_999), Some(12));
-        assert_eq!(ceiled_coordinate(12.000_001), Some(12));
-        assert_eq!(floored_coordinate(11.99), Some(11));
-        assert_eq!(ceiled_coordinate(12.01), Some(13));
     }
 
     #[test]
@@ -322,7 +235,7 @@ mod tests {
         );
         let filtered = apply_operations_to_surface(
             &source,
-            Size::new(108.0, 64.5),
+            source_geometry(Size::new(108.0, 64.5)),
             &[FilterOperation::DropShadow(DropShadow {
                 dx: 1.5,
                 dy: 0.75,
@@ -330,13 +243,14 @@ mod tests {
                 color: Color::from_srgb(0.56, 0.64, 0.68, 1.0),
             })],
             false,
+            None,
             300.0,
         )
         .expect("a finite painted source and shadow produce one surface");
 
         assert!(filtered.pixels.width() > source.width());
         assert!(filtered.pixels.height() > source.height());
-        assert!(!filtered.overflow.is_zero());
+        assert!(!filtered.bounds.raster_overflow.is_zero());
     }
 
     #[test]
@@ -346,9 +260,10 @@ mod tests {
         );
         let filtered = apply_operations_to_surface(
             &source,
-            Size::new(0.75, 0.75),
+            source_geometry(Size::new(0.75, 0.75)),
             &[FilterOperation::Opacity(0.25)],
             false,
+            None,
             96.0,
         )
         .expect("opacity is a surface color operation");
@@ -363,16 +278,39 @@ mod tests {
         );
         let filtered = apply_operations_to_surface(
             &source,
-            Size::new(0.75, 0.75),
+            source_geometry(Size::new(0.75, 0.75)),
             &[
                 FilterOperation::Grayscale(0.18),
                 FilterOperation::Contrast(1.08),
             ],
             false,
+            None,
             96.0,
         )
         .expect("finite colour functions produce a surface");
 
         assert_eq!(filtered.pixels.get_pixel(0, 0).0, [242, 254, 255, 255]);
+    }
+
+    #[test]
+    fn explicit_svg_region_pads_and_hard_clips_the_output() {
+        let source = crate::render::raster_pixels::PremultipliedRgba8::from_straight(
+            &image::RgbaImage::from_pixel(10, 6, image::Rgba([213, 0, 0, 255])),
+        );
+        let filtered = apply_operations_to_surface(
+            &source,
+            source_geometry(Size::new(10.0, 6.0)),
+            &[FilterOperation::Opacity(1.0)],
+            false,
+            Some(region(0.2, -0.5, 0.6, 2.0)),
+            72.0,
+        )
+        .expect("a valid SVG region produces a finite clipped surface");
+
+        assert_eq!(filtered.pixels.dimensions(), (6, 12));
+        assert_eq!(filtered.pixels.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(filtered.pixels.get_pixel(0, 3).0, [213, 0, 0, 255]);
+        assert_eq!(filtered.pixels.get_pixel(5, 8).0, [213, 0, 0, 255]);
+        assert_eq!(filtered.pixels.get_pixel(5, 9).0, [0, 0, 0, 0]);
     }
 }

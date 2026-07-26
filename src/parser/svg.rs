@@ -1109,10 +1109,16 @@ fn parse_svg_clip_rule(raw: &str) -> SvgClipRule {
     }
 }
 
-/// Resolve a CSS `filter: url(#id)` reference (css-filter-effects-1 §3) against
-/// an SVG `<filter>` `ElementNode`, reading its `feColorMatrix` primitives and
-/// mapping each to the equivalent [`FilterOperation`] so the existing color-math
-/// (src/layout/images.rs `apply_one_filter`) can apply it.
+/// One parsed SVG filter whose region and color space remain attached to its
+/// ordered primitive list.
+#[derive(Debug, Clone)]
+pub(crate) struct SvgFilterDefinition {
+    pub(crate) operations: Vec<crate::style::computed::FilterOperation>,
+    pub(crate) linear_rgb: bool,
+    pub(crate) region: crate::style::computed::NormalizedFilterRegion,
+}
+
+/// Parse a CSS `filter: url(#id)` target into one semantic SVG filter.
 ///
 /// Supported primitives (SVG filter-effects §15.9 feColorMatrix):
 /// - `type="saturate"`  → `Saturate(values)`   (default amount 1)
@@ -1122,21 +1128,16 @@ fn parse_svg_clip_rule(raw: &str) -> SvgClipRule {
 ///   is skipped.
 /// - `type="luminanceToAlpha"` is skipped (alpha-only; no RGB color change).
 ///
-/// Returns `(ordered color ops, use_linear_rgb)`. `use_linear_rgb` reflects the
-/// `color-interpolation-filters` property (SVG filter-effects §13.5), whose
-/// initial value is `linearRGB` — so SVG `<filter>` color math runs in linear
-/// light by default (unlike CSS `filter` *functions*, which operate in sRGB).
-/// An explicit `color-interpolation-filters="sRGB"` on the `<filter>` (or a
-/// primitive) switches it off. The ops list is empty when the element is not a
-/// `<filter>` or contains no understood primitive.
-pub fn filter_element_color_ops(
-    filter_el: &ElementNode,
-) -> (Vec<crate::style::computed::FilterOperation>, bool) {
+/// `linear_rgb` reflects `color-interpolation-filters`, whose SVG initial value
+/// is `linearRGB`. The returned region is the hard filter clip in normalized
+/// object-bounding-box coordinates.
+pub(crate) fn filter_element_definition(filter_el: &ElementNode) -> Option<SvgFilterDefinition> {
     use crate::style::computed::FilterOperation;
-    let mut ops = Vec::new();
     if !filter_el.raw_tag_name.eq_ignore_ascii_case("filter") {
-        return (ops, true);
+        return None;
     }
+    let region = filter_region(filter_el);
+    let mut operations = Vec::new();
     // Default linearRGB; honor `color-interpolation-filters` on the <filter>
     // (presentation attribute or inline style). A per-primitive override is read
     // below too; the most specific wins for the primitive that supplies the op.
@@ -1170,13 +1171,13 @@ pub fn filter_element_color_ops(
         if el.raw_tag_name.eq_ignore_ascii_case("feGaussianBlur") {
             let std_dev = attr_f32(el, "stdDeviation");
             if std_dev > 0.0 {
-                ops.push(FilterOperation::Blur(std_dev * 0.75));
+                operations.push(FilterOperation::Blur(std_dev * 0.75));
             }
             continue;
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feDropShadow") {
             let color = svg_flood_color(el, current_color);
-            ops.push(FilterOperation::DropShadow(
+            operations.push(FilterOperation::DropShadow(
                 crate::style::computed::DropShadow {
                     dx: attr_f32(el, "dx") * 0.75,
                     dy: attr_f32(el, "dy") * 0.75,
@@ -1190,11 +1191,11 @@ pub fn filter_element_color_ops(
             let keep_source = element_children
                 .get(idx + 1)
                 .is_some_and(|next| next.raw_tag_name.eq_ignore_ascii_case("feMerge"));
-            ops.push(FilterOperation::Offset {
+            operations.push(FilterOperation::Offset {
                 dx: attr_f32(el, "dx") * 0.75,
                 dy: attr_f32(el, "dy") * 0.75,
                 keep_source,
-                region: filter_region(filter_el),
+                region,
             });
             continue;
         }
@@ -1211,7 +1212,7 @@ pub fn filter_element_color_ops(
                 .and_then(|v| v.parse::<f32>().ok())
                 .unwrap_or(0.0);
             if radius > 0.0 {
-                ops.push(FilterOperation::MorphologyDilate(radius * 0.75));
+                operations.push(FilterOperation::MorphologyDilate(radius * 0.75));
             }
             continue;
         }
@@ -1222,10 +1223,10 @@ pub fn filter_element_color_ops(
                 .is_some_and(|v| v.eq_ignore_ascii_case("multiply"))
             && let Some(color) = flood_color
         {
-            ops.push(FilterOperation::BlendWithFlood {
+            operations.push(FilterOperation::BlendWithFlood {
                 color,
                 mode: crate::style::computed::BlendMode::Multiply,
-                region: filter_region(filter_el),
+                region,
             });
             continue;
         }
@@ -1238,7 +1239,7 @@ pub fn filter_element_color_ops(
         {
             let (r, g, b, a) = color.to_f32_rgba();
             let (r, g, b) = filter_rgb_constants(r, g, b, use_linear_rgb);
-            ops.push(FilterOperation::Matrix([
+            operations.push(FilterOperation::Matrix([
                 0.0, 0.0, 0.0, 0.0, r, 0.0, 0.0, 0.0, 0.0, g, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0,
                 a, 0.0,
             ]));
@@ -1246,7 +1247,7 @@ pub fn filter_element_color_ops(
         }
         if el.raw_tag_name.eq_ignore_ascii_case("feComponentTransfer") {
             if let Some(matrix) = component_transfer_matrix(el) {
-                ops.push(FilterOperation::Matrix(matrix));
+                operations.push(FilterOperation::Matrix(matrix));
             }
             continue;
         }
@@ -1267,7 +1268,7 @@ pub fn filter_element_color_ops(
                     .and_then(|t| t.parse::<f32>().ok())
                     .unwrap_or(1.0)
                     .max(0.0);
-                ops.push(FilterOperation::Saturate(amount));
+                operations.push(FilterOperation::Saturate(amount));
             }
             // hueRotate: a single value in degrees (default 0).
             "huerotate" => {
@@ -1275,7 +1276,7 @@ pub fn filter_element_color_ops(
                     .and_then(|v| v.split_whitespace().next())
                     .and_then(|t| t.parse::<f32>().ok())
                     .unwrap_or(0.0);
-                ops.push(FilterOperation::HueRotate(deg));
+                operations.push(FilterOperation::HueRotate(deg));
             }
             // matrix: 20 values. Recognize the common saturate/grayscale form
             // so we can route it through the existing FilterOperation math.
@@ -1283,11 +1284,11 @@ pub fn filter_element_color_ops(
                 if let Some(v) = values
                     && let Some(op) = color_matrix_to_op(v)
                 {
-                    ops.push(op);
+                    operations.push(op);
                 }
             }
             "luminancetoalpha" => {
-                ops.push(FilterOperation::Matrix([
+                operations.push(FilterOperation::Matrix([
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.2125, 0.7154, 0.0721, 0.0, 0.0,
                 ]));
@@ -1295,7 +1296,11 @@ pub fn filter_element_color_ops(
             _ => {}
         }
     }
-    (ops, use_linear_rgb)
+    Some(SvgFilterDefinition {
+        operations,
+        linear_rgb: use_linear_rgb,
+        region,
+    })
 }
 
 /// True when `color-interpolation-filters` resolves to `sRGB` on this element
@@ -1621,13 +1626,14 @@ fn filter_region_attr(el: &ElementNode, name: &str, default: f32) -> f32 {
     })
 }
 
-fn filter_region(el: &ElementNode) -> crate::types::Rect {
-    crate::types::Rect::from_xywh(
+fn filter_region(el: &ElementNode) -> crate::style::computed::NormalizedFilterRegion {
+    crate::style::computed::NormalizedFilterRegion::new(
         filter_region_attr(el, "x", -0.10),
         filter_region_attr(el, "y", -0.10),
         filter_region_attr(el, "width", 1.20),
         filter_region_attr(el, "height", 1.20),
     )
+    .unwrap_or_default()
 }
 
 fn resolve_text_position(el: &ElementNode, viewport: Option<(f32, f32)>) -> (f32, f32) {
@@ -2939,6 +2945,10 @@ mod tests {
         f
     }
 
+    fn parsed_filter(filter: &ElementNode) -> SvgFilterDefinition {
+        filter_element_definition(filter).expect("the test node is an SVG filter")
+    }
+
     #[test]
     fn fecolormatrix_saturate_maps_to_op_and_defaults_to_linear_rgb() {
         use crate::style::computed::FilterOperation;
@@ -2946,10 +2956,10 @@ mod tests {
             "feColorMatrix",
             vec![("type", "saturate"), ("values", "0")],
         ));
-        let (ops, linear) = filter_element_color_ops(&f);
-        assert_eq!(ops, vec![FilterOperation::Saturate(0.0)]);
+        let definition = parsed_filter(&f);
+        assert_eq!(definition.operations, vec![FilterOperation::Saturate(0.0)]);
         // SVG <filter> default color space is linearRGB.
-        assert!(linear);
+        assert!(definition.linear_rgb);
     }
 
     #[test]
@@ -2957,8 +2967,7 @@ mod tests {
         let mut prim = make_el("feColorMatrix", vec![("type", "saturate"), ("values", "0")]);
         prim.attributes
             .insert("color-interpolation-filters".into(), "sRGB".into());
-        let (_, linear) = filter_element_color_ops(&filter_with(prim));
-        assert!(!linear);
+        assert!(!parsed_filter(&filter_with(prim)).linear_rgb);
     }
 
     #[test]
@@ -2970,9 +2979,9 @@ mod tests {
         ));
         filter.attributes.insert("color".into(), "red".into());
 
-        let (ops, _) = filter_element_color_ops(&filter);
+        let definition = parsed_filter(&filter);
         assert!(matches!(
-            ops.as_slice(),
+            definition.operations.as_slice(),
             [FilterOperation::DropShadow(shadow)]
                 if shadow.color == crate::types::Color::from_srgb(1.0, 0.0, 0.0, 0.5)
         ));
@@ -2993,8 +3002,8 @@ mod tests {
 
     #[test]
     fn feblend_retains_its_flood_input_and_filter_region() {
-        use crate::style::computed::{BlendMode, FilterOperation};
-        use crate::types::{Color, Rect};
+        use crate::style::computed::{BlendMode, FilterOperation, NormalizedFilterRegion};
+        use crate::types::Color;
 
         let mut filter = make_el(
             "filter",
@@ -3018,16 +3027,47 @@ mod tests {
             )),
         ];
 
-        let (operations, linear_rgb) = filter_element_color_ops(&filter);
+        let definition = parsed_filter(&filter);
+        let expected_region = NormalizedFilterRegion::new(-0.2, -0.3, 1.4, 1.6)
+            .expect("the expected region is valid");
 
-        assert!(linear_rgb);
+        assert!(definition.linear_rgb);
+        assert_eq!(definition.region, expected_region);
         assert_eq!(
-            operations,
+            definition.operations,
             vec![FilterOperation::BlendWithFlood {
                 color: Color::rgb(21, 101, 192),
                 mode: BlendMode::Multiply,
-                region: Rect::from_xywh(-0.2, -0.3, 1.4, 1.6),
+                region: expected_region,
             }]
+        );
+    }
+
+    #[test]
+    fn gaussian_blur_retains_the_filter_hard_clip() {
+        use crate::style::computed::{FilterOperation, NormalizedFilterRegion};
+
+        let mut filter = make_el(
+            "filter",
+            vec![
+                ("x", "-30%"),
+                ("y", "-40%"),
+                ("width", "160%"),
+                ("height", "180%"),
+            ],
+        );
+        filter.children = vec![DomNode::Element(make_el(
+            "feGaussianBlur",
+            vec![("stdDeviation", "6")],
+        ))];
+
+        let definition = parsed_filter(&filter);
+
+        assert_eq!(definition.operations, vec![FilterOperation::Blur(4.5)]);
+        assert_eq!(
+            definition.region,
+            NormalizedFilterRegion::new(-0.3, -0.4, 1.6, 1.8)
+                .expect("the expected normalized region is valid")
         );
     }
 
@@ -3043,14 +3083,16 @@ mod tests {
             "feColorMatrix",
             vec![("type", "matrix"), ("values", m)],
         ));
-        let (ops, _) = filter_element_color_ops(&f);
-        assert!(matches!(ops.as_slice(), [FilterOperation::Saturate(s)] if s.abs() < 1e-3));
+        let definition = parsed_filter(&f);
+        assert!(matches!(
+            definition.operations.as_slice(),
+            [FilterOperation::Saturate(s)] if s.abs() < 1e-3
+        ));
     }
 
     #[test]
     fn non_filter_element_yields_no_ops() {
-        let (ops, _) = filter_element_color_ops(&make_el("g", vec![]));
-        assert!(ops.is_empty());
+        assert!(filter_element_definition(&make_el("g", vec![])).is_none());
     }
 
     // ── parse_length edge cases ────────────────────────────────────────

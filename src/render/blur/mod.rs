@@ -33,7 +33,7 @@ pub(crate) use box_shadows::{
 };
 pub(crate) use boxes::blur_box;
 use discrete::{DiscreteGaussianPlan, box_blur_axes};
-pub(crate) use drop_shadow::drop_shadow_image;
+pub(crate) use drop_shadow::drop_shadow_surface;
 pub(crate) use glyphs::{
     GlyphBaselineOrigin, GlyphRasterRequest, GlyphRasterStyle, RasterBaselineAdvance,
     RasterBaselineCursor, rasterize_run_alpha,
@@ -85,11 +85,6 @@ fn quantize_filter_raster_pixels(pixels: f64) -> Option<u32> {
 
 fn filter_raster_pixels(points: f32, scale: f32) -> Option<u32> {
     Some(filter_raster_axis(points, scale)?.pixels)
-}
-
-/// Raster pixels for a point extent at the configured filter sampling density.
-pub(crate) fn filter_raster_pixels_at_dpi(points: f32, filter_dpi: f32) -> Option<u32> {
-    filter_raster_pixels(points, filter_dpi_scale(filter_dpi))
 }
 
 /// A blurred raster ready for embedding plus the overflow it adds outside the

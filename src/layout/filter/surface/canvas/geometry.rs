@@ -64,6 +64,39 @@ impl CoverageSamples {
     }
 }
 
+/// Union of semantic paint primitives emitted into one SourceGraphic.
+///
+/// This records authored geometry rather than scanning raster alpha. Filter
+/// subsets can therefore retain line boxes, transparent colors, and kernel
+/// support without keeping an entire mostly-empty element allocation.
+#[derive(Clone, Copy, Default)]
+pub(in crate::layout::filter::surface) struct PaintBounds(Option<Rect>);
+
+impl PaintBounds {
+    pub(in crate::layout::filter::surface) fn include(&mut self, rect: Rect) {
+        if rect.size.width <= 0.0
+            || rect.size.height <= 0.0
+            || !rect.origin.x.is_finite()
+            || !rect.origin.y.is_finite()
+            || !rect.size.width.is_finite()
+            || !rect.size.height.is_finite()
+        {
+            return;
+        }
+        self.0 = Some(self.0.map_or(rect, |bounds| bounds.union(rect)));
+    }
+
+    pub(in crate::layout::filter::surface) fn include_clipped(&mut self, bounds: Self, clip: Rect) {
+        if let Some(bounds) = bounds.0.and_then(|bounds| bounds.intersection(clip)) {
+            self.include(bounds);
+        }
+    }
+
+    pub(in crate::layout::filter::surface) const fn resolve(self) -> Option<Rect> {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct DeviceRect {
     left: f32,

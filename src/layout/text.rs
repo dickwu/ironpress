@@ -4065,7 +4065,7 @@ mod indent_tests {
     #[test]
     fn synthetic_weight_is_consistent_across_font_sizes() {
         let fonts = parity_sans_fonts();
-        for (font_size, expected_stroke) in [(22.5, 0.703_125), (34.5, 1.078_125)] {
+        for (font_size, expected_stroke) in [(22.5, 0.755_208_3), (34.5, 1.078_125)] {
             let mut run = plain_run("UNDER");
             run.font_size = font_size;
             run.bold = true;

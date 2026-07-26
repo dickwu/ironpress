@@ -12,7 +12,7 @@ use crate::style::font_metrics::FontMetrics;
 use crate::style::html_cascade::html_cascade_layers;
 use crate::style::raster_quality::{RasterQuality, background_raster_dimensions};
 use crate::types::{
-    Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Rect, Size,
+    Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges, PhysicalSide, Point, Size,
 };
 use crate::util::{MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};
 
@@ -20,8 +20,11 @@ use crate::util::{MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};
 use crate::util::{AxisRepeatMode, AxisRepeatPattern};
 
 mod borders;
+mod filter;
 mod gradient_geometry;
 mod text_decoration;
+pub(crate) use filter::NormalizedFilterRegion;
+pub use filter::{DropShadow, FilterEffects, FilterOperation};
 pub use gradient_geometry::{
     ConicGradient, RadialExtent, RadialGradient, RadialPoint, RadialPos, RadialShape, RadialVector,
 };
@@ -3630,109 +3633,6 @@ impl Default for ObjectPosition {
             y: ObjectPositionComponent::Fraction(0.5),
         }
     }
-}
-
-/// CSS `filter: drop-shadow(<offset-x> <offset-y> <blur>? <color>?)`
-/// (css-filter-effects-1 §4.4). Offsets and blur radius are in points; `color`
-/// is straight-alpha RGBA in 0..1.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DropShadow {
-    pub dx: f32,
-    pub dy: f32,
-    pub blur: f32,
-    pub color: Color,
-}
-
-/// A single CSS `filter` color function. Amounts are resolved fractions
-/// (`100%`/`1.0` -> 1.0); hue-rotate is in degrees.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FilterOperation {
-    Grayscale(f32),
-    Sepia(f32),
-    Invert(f32),
-    Brightness(f32),
-    Contrast(f32),
-    Saturate(f32),
-    HueRotate(f32),
-    Opacity(f32),
-    Matrix([f32; 20]),
-    /// SVG `feBlend` with an `feFlood` input. Keeping the two-input primitive
-    /// intact is essential: a colour matrix cannot represent the flood-only
-    /// part of the primitive subregion.
-    BlendWithFlood {
-        color: Color,
-        mode: BlendMode,
-        region: Rect,
-    },
-    Blur(f32),
-    Offset {
-        dx: f32,
-        dy: f32,
-        keep_source: bool,
-        region: Rect,
-    },
-    DropShadow(DropShadow),
-    MorphologyDilate(f32),
-}
-
-impl FilterOperation {
-    /// Whether this operation leaves every input pixel unchanged.
-    ///
-    /// This deliberately says nothing about CSS stacking semantics: a
-    /// non-`none` filter still establishes a stacking context even when every
-    /// operation in its list is visually an identity.
-    pub(crate) fn is_visual_identity(&self) -> bool {
-        const EPSILON: f32 = 1e-6;
-        match self {
-            Self::Grayscale(amount)
-            | Self::Sepia(amount)
-            | Self::Invert(amount)
-            | Self::Blur(amount)
-            | Self::MorphologyDilate(amount) => amount.abs() <= EPSILON,
-            Self::Brightness(amount)
-            | Self::Contrast(amount)
-            | Self::Saturate(amount)
-            | Self::Opacity(amount) => (*amount - 1.0).abs() <= EPSILON,
-            Self::HueRotate(degrees) => degrees.rem_euclid(360.0).abs() <= EPSILON,
-            Self::Matrix(values) => {
-                const IDENTITY: [f32; 20] = [
-                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 1.0, 0.0,
-                ];
-                values
-                    .iter()
-                    .zip(IDENTITY)
-                    .all(|(value, identity)| (*value - identity).abs() <= EPSILON)
-            }
-            Self::BlendWithFlood { .. } | Self::Offset { .. } | Self::DropShadow(_) => false,
-        }
-    }
-
-    /// Whether this operation needs the already-composited filter source rather
-    /// than independently recoloured paint primitives. CSS filter functions and
-    /// SVG colour matrices operate on `SourceGraphic`, including the alpha
-    /// coverage created where descendants overlap.
-    pub(crate) fn requires_group_rasterization(&self) -> bool {
-        !self.is_visual_identity()
-    }
-}
-
-/// The computed effect of the CSS `filter` property.
-///
-/// A non-`none` filter establishes a stacking context even when every function
-/// is visually an identity (for example `brightness(1)`). Keep that semantic
-/// fact with the filter operations so an optimization cannot accidentally
-/// discard the required compositing boundary.
-#[derive(Debug, Clone, Default)]
-pub struct FilterEffects {
-    /// True exactly when the computed `filter` value is not `none`.
-    pub establishes_stacking_context: bool,
-    /// Filter operations in CSS source order. Geometry and colour functions
-    /// intentionally share this one representation: a second blur or shadow
-    /// slot would lose ordering and could be applied twice.
-    pub operations: Vec<FilterOperation>,
-    /// Fragment identifier from `url(#filter)` pending SVG filter resolution.
-    pub url_id: Option<String>,
 }
 
 impl Default for ComputedStyle {
@@ -14387,7 +14287,7 @@ mod tests {
     }
 
     #[test]
-    fn non_identity_color_matrix_requires_a_composited_filter_source() {
+    fn color_matrix_identity_is_detected_without_losing_the_filter_boundary() {
         let identity = FilterOperation::Matrix([
             1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 1.0, 0.0,
@@ -14397,8 +14297,8 @@ mod tests {
             0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
         ]);
 
-        assert!(!identity.requires_group_rasterization());
-        assert!(desaturate.requires_group_rasterization());
+        assert!(identity.is_visual_identity());
+        assert!(!desaturate.is_visual_identity());
     }
 
     fn gradient_stop(position: f32, color: Color) -> GradientStop {

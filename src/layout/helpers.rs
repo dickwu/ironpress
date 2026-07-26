@@ -2164,7 +2164,7 @@ pub(crate) fn build_pseudo_block(
         visible: pseudo_style.visibility == Visibility::Visible,
         ..BoxPaint::default()
     };
-    if filter.has_composited_output() {
+    if filter.requires_source_surface() {
         paint.filter = Some(filter);
     }
 

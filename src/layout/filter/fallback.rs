@@ -10,7 +10,7 @@ use crate::layout::elements::{
     Positioning, TextBlock, visit_layout_tree_mut,
 };
 use crate::layout::engine::{FlexCell, LayoutBorder, TextRun, estimate_element_height};
-use crate::style::computed::{BoxShadow, ColorSource, FilterOperation};
+use crate::style::computed::{BoxShadow, ColorSource, FilterOperation, NormalizedFilterRegion};
 
 use super::ResolvedFilter;
 
@@ -212,12 +212,12 @@ fn apply_offset_to_element(
     element: &mut dyn LayoutElement,
     dx: f32,
     keep_source: bool,
-    region: crate::types::Rect,
+    region: NormalizedFilterRegion,
 ) {
     struct OffsetFallback {
         dx: f32,
         keep_source: bool,
-        region: crate::types::Rect,
+        region: NormalizedFilterRegion,
     }
 
     impl OffsetFallback {
@@ -264,11 +264,12 @@ fn clipped_offset_bounds(
     width: f32,
     dx: f32,
     keep_source: bool,
-    region: crate::types::Rect,
+    region: NormalizedFilterRegion,
 ) -> Option<(f32, f32)> {
     if width <= 0.0 {
         return None;
     }
+    let region = region.as_rect();
     let region_left = region.origin.x * width;
     let region_right = region.right() * width;
     let shifted_left = dx.max(region_left);
@@ -286,11 +287,11 @@ fn clipped_offset_bounds(
 fn apply_flood_to_element(
     element: &mut dyn LayoutElement,
     color: crate::types::Color,
-    region: crate::types::Rect,
+    region: NormalizedFilterRegion,
 ) {
     struct FloodFallback {
         color: crate::types::Color,
-        region: crate::types::Rect,
+        region: NormalizedFilterRegion,
     }
 
     impl FloodFallback {
@@ -332,8 +333,9 @@ fn flood_shadows(
     width: f32,
     height: f32,
     color: crate::types::Color,
-    region: crate::types::Rect,
+    region: NormalizedFilterRegion,
 ) -> Vec<BoxShadow> {
+    let region = region.as_rect();
     let left = (-region.origin.x * width).max(0.0);
     let right = ((region.right() - 1.0) * width).max(0.0);
     let top = (-region.origin.y * height).max(0.0);
@@ -542,7 +544,7 @@ mod tests {
     fn ordered_filter(operations: Vec<FilterOperation>) -> ResolvedFilter {
         ResolvedFilter {
             operations,
-            linear_rgb: false,
+            ..Default::default()
         }
     }
 

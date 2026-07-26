@@ -309,7 +309,13 @@ fn pdf_text_uses_typed_synthetic_weight_stroke() {
     use crate::layout::engine::SyntheticFontWeight;
 
     let content = render_synthetic_weight(SyntheticFontWeight::Auto);
-    assert!(content.contains(&format!("{} w\n2 Tr\n", format_pdf_number(0.625))));
+    let expected = SyntheticFontWeight::Auto
+        .stroke_width(20.0)
+        .expect("automatic synthetic weight has a finite stroke");
+    assert!(content.contains(&format!(
+        "{} w\n2 Tr\n",
+        format_pdf_number(expected)
+    )));
     assert!(content.contains("0 Tr\n"));
 
     let suppressed = render_synthetic_weight(SyntheticFontWeight::Suppressed);

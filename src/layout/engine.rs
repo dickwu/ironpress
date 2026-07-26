@@ -732,11 +732,25 @@ pub enum SyntheticFontWeight {
 }
 
 impl SyntheticFontWeight {
-    pub(crate) fn stroke_ratio(self) -> Option<f32> {
-        match self {
-            Self::Auto => Some(0.03125),
-            Self::Suppressed => None,
+    /// Resolve Skia's size-dependent fake-bold stroke in point-space.
+    ///
+    /// Blink supplies the CSS-pixel font size to Skia. Skia uses 1/24 em at
+    /// 9px and below, 1/32 em at 36px and above, and linearly interpolates the
+    /// ratio between those limits.
+    pub(crate) fn stroke_width(self, font_size: f32) -> Option<f32> {
+        if self == Self::Suppressed || !font_size.is_finite() || font_size <= 0.0 {
+            return None;
         }
+        let css_pixels = font_size / crate::fonts::PT_PER_CSS_PX;
+        let ratio = if css_pixels <= 9.0 {
+            1.0 / 24.0
+        } else if css_pixels >= 36.0 {
+            1.0 / 32.0
+        } else {
+            let progress = (css_pixels - 9.0) / (36.0 - 9.0);
+            (1.0 / 24.0) + progress * ((1.0 / 32.0) - (1.0 / 24.0))
+        };
+        Some(font_size * ratio)
     }
 }
 
@@ -977,9 +991,8 @@ impl TextRun {
                 self.bold,
                 self.font_style.is_slanted(),
             ))
-        .then(|| self.font_synthesis.weight.stroke_ratio())
+        .then(|| self.font_synthesis.weight.stroke_width(self.font_size))
         .flatten()
-        .map(|ratio| self.font_size * ratio)
     }
 
     pub(crate) fn synthetic_italic_shear(&self, fonts: &HashMap<String, TtfFont>) -> Option<f32> {
@@ -2170,7 +2183,12 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         footnote_area,
         custom_fonts,
     );
-    super::filter::materialize_page_filters(&mut pages, custom_fonts, raster_quality.filter_dpi);
+    super::filter::materialize_page_filters(
+        &mut pages,
+        margin,
+        custom_fonts,
+        raster_quality.filter_dpi,
+    );
     super::fragmentation::transfer_page_spanning_graphical_effects(&mut pages, page_size, margin);
     pages[0].document_svg_defs = document_svg_defs;
     let mut dom_targets = HashMap::new();
@@ -2739,7 +2757,7 @@ fn prepare_filtered_output(
         .as_ref()
         .and_then(|id| env.filter_defs.get(id));
     let has_displacement = filter_el.is_some_and(svg_filter_has_turbulence_displacement);
-    if !filter.has_composited_output() && !has_displacement {
+    if !filter.requires_source_surface() && !has_displacement {
         return false;
     }
 
@@ -2796,8 +2814,14 @@ fn prepare_filtered_output(
             });
         raster
     } else {
-        super::filter::composite_source(element.as_ref(), filter, env.fonts, env.filter_dpi)
-            .map(|graphic| graphic.into_layout_node())
+        super::filter::composite_source(
+            element.as_ref(),
+            filter,
+            env.fonts,
+            env.filter_dpi,
+            Default::default(),
+        )
+        .map(|graphic| graphic.into_layout_node())
     };
     let Some(replacement) = replacement else {
         output.push(element);
@@ -12414,7 +12438,7 @@ line 3</pre>
     }
 
     #[test]
-    fn zero_overflow_filter_raster_keeps_zero_pdf_padding() {
+    fn local_filter_raster_keeps_only_device_grid_overflow() {
         let html =
             r#"<div style="width:20pt;height:20pt;background:red;filter:brightness(50%)"></div>"#;
         let result = parse_html_with_styles(html).unwrap();
@@ -12428,7 +12452,11 @@ line 3</pre>
             .iter()
             .find_map(|(_, element)| element.inspect_image(|image| image.paint.raster_overflow))
             .expect("brightness filter raster");
-        assert_eq!(overflow, EdgeSizes::ZERO);
+        let one_filter_pixel = crate::fonts::PT_PER_CSS_PX * 96.0 / 300.0;
+        assert!(
+            overflow.all(|edge| edge >= 0.0 && edge <= one_filter_pixel + 0.000_01),
+            "a local color filter may retain only outward device-grid coverage: {overflow:?}"
+        );
     }
 
     #[test]
@@ -12595,7 +12623,7 @@ line 3</pre>
     }
 
     #[test]
-    fn identity_filter_keeps_a_container_stacking_context_without_a_raster() {
+    fn identity_filter_materializes_and_keeps_its_stacking_context() {
         let html = r#"
             <style>
                 .filtered { width: 20pt; height: 20pt; filter: brightness(1); }
@@ -12611,17 +12639,14 @@ line 3</pre>
             .collect::<Vec<_>>();
         let pages = layout_with_rules(&result.nodes, PageSize::A4, Margin::default(), &rules);
 
-        fn contains_filter_context(element: &dyn LayoutElement) -> bool {
-            if element
-                .inspect_container(|container| {
-                    container.paint.group.effects.stacking_context == StackingContext::Filter
-                })
-                .unwrap_or(false)
-            {
+        fn contains_materialized_filter(element: &dyn LayoutElement) -> bool {
+            if element.paint_group_owner().is_some_and(|owner| {
+                owner.paint_group().effects.stacking_context == StackingContext::FilteredOutput
+            }) {
                 return true;
             }
             let mut found = false;
-            element.visit_children(&mut |child| found |= contains_filter_context(child));
+            element.visit_children(&mut |child| found |= contains_materialized_filter(child));
             found
         }
 
@@ -12629,11 +12654,11 @@ line 3</pre>
             pages[0]
                 .elements
                 .iter()
-                .any(|(_, element)| contains_filter_context(element)),
-            "identity filter must retain its CSS stacking context"
+                .any(|(_, element)| contains_materialized_filter(element)),
+            "identity filter output must retain its CSS stacking context"
         );
         assert!(
-            pages[0].elements.iter().all(|(_, element)| {
+            pages[0].elements.iter().any(|(_, element)| {
                 struct ImageSearch(bool);
                 impl LayoutVisitor for ImageSearch {
                     fn visit_image(&mut self, _: &Image) {
@@ -12642,9 +12667,9 @@ line 3</pre>
                 }
                 let mut search = ImageSearch(false);
                 visit_layout_tree(element.as_ref(), &mut search);
-                !search.0
+                search.0
             }),
-            "identity filter must not rasterize otherwise-vector content"
+            "Chromium-compatible identity filters isolate one raster SourceGraphic"
         );
     }
 

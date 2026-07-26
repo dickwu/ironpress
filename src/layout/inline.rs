@@ -518,6 +518,7 @@ fn inline_atomic_cell(
                 &filter,
                 env.fonts,
                 env.filter_dpi,
+                Default::default(),
             )
         {
             replaced = graphic.into_layout_node();

@@ -1,4 +1,4 @@
-use super::{ImageRef, PageRenderContext, PaintBoxGeometry};
+use super::{ImageRef, PageRenderContext, PaintBoxGeometry, push_raster_xobject};
 use crate::layout::cells::{CellBox, CellPaint};
 
 /// Paint a cell's already-composited filter surface over its source border box.
@@ -22,13 +22,13 @@ pub(super) fn paint_cell_filter_output(
     let image_name = format!("Im{image_id}");
     let overflow = output.raster_overflow;
     let source_box = source_geometry.border_box;
-    content.push_str(&format!(
-        "q\n{width} 0 0 {height} {x} {y} cm\n/{image_name} Do\nQ\n",
-        width = source_box.width + overflow.horizontal(),
-        height = source_box.height + overflow.vertical(),
-        x = source_box.left - overflow.left,
-        y = source_box.bottom - overflow.bottom,
-    ));
+    push_raster_xobject(
+        content,
+        &image_name,
+        source_box.outset(overflow),
+        &output.asset,
+        ctx.text.pdf_writer,
+    );
     ctx.text.page_images.push(ImageRef {
         name: image_name,
         obj_id: image_id,

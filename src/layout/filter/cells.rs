@@ -19,15 +19,23 @@ use super::ResolvedFilter;
 /// established the concrete cell fragment sizes.
 pub(crate) fn materialize_flex_row(
     flex: &mut FlexRow,
+    anchor: super::surface::SourceRasterAnchor,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) {
-    let sizes = super::surface::flex_cell_source_sizes(flex, fonts);
-    for (cell, size) in flex.content.cells.iter_mut().zip(sizes) {
+    let frames = super::surface::flex_cell_source_frames(flex, fonts);
+    for (cell, frame) in flex.content.cells.iter_mut().zip(frames) {
         let Some(filter) = cell.cell_paint_mut().take_filter() else {
             continue;
         };
-        if composite_flex_cell(cell, size, &filter, fonts, filter_dpi) {
+        if composite_flex_cell(
+            cell,
+            frame.size,
+            frame.anchor_in(anchor),
+            &filter,
+            fonts,
+            filter_dpi,
+        ) {
             continue;
         }
         filter.apply_flex_cell_fallback(cell);
@@ -37,18 +45,22 @@ pub(crate) fn materialize_flex_row(
 fn composite_flex_cell(
     cell: &mut FlexCell,
     size: Size,
+    anchor: super::surface::SourceRasterAnchor,
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) -> bool {
-    if !filter.has_composited_output() {
+    if !filter.requires_source_surface() {
         return false;
     }
-    let Some(source) = super::surface::paint_flex_cell_source(cell, size, fonts, filter_dpi) else {
+    let compositing = super::FilterCompositing::from_group(&cell.cell_paint_mut().group);
+    let Some(source) =
+        super::surface::paint_flex_cell_source(cell, size, fonts, filter_dpi, anchor)
+    else {
         return false;
     };
     let Some((output, _)) =
-        super::composite_source_graphic(source, filter, Default::default(), filter_dpi)
+        super::composite_source_graphic(source, filter, compositing, filter_dpi)
     else {
         return false;
     };
@@ -59,18 +71,22 @@ fn composite_flex_cell(
 pub(crate) fn composite_grid_cell(
     cell: &mut GridCell,
     size: Size,
+    anchor: super::surface::SourceRasterAnchor,
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) -> bool {
-    if !filter.has_composited_output() {
+    if !filter.requires_source_surface() {
         return false;
     }
-    let Some(source) = super::surface::paint_grid_cell_source(cell, size, fonts, filter_dpi) else {
+    let compositing = super::FilterCompositing::from_group(&cell.cell_paint_mut().group);
+    let Some(source) =
+        super::surface::paint_grid_cell_source(cell, size, fonts, filter_dpi, anchor)
+    else {
         return false;
     };
     let Some((output, _)) =
-        super::composite_source_graphic(source, filter, Default::default(), filter_dpi)
+        super::composite_source_graphic(source, filter, compositing, filter_dpi)
     else {
         return false;
     };

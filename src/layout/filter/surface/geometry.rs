@@ -7,6 +7,87 @@ use crate::layout::elements::{
 use crate::layout::flow_metrics::BlockMargins;
 use crate::types::{EdgeSizes, Point, Size};
 
+/// Absolute top-down page position of a filter source's border box.
+///
+/// Skia rasterizes a filtered layer in device space. Retaining this anchor
+/// makes the subpixel phase part of SourceGraphic construction, so the
+/// resulting PDF image can be placed on integral device bounds without being
+/// resampled a second time.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct SourceRasterAnchor {
+    border_origin: Point,
+}
+
+impl SourceRasterAnchor {
+    pub(crate) const fn at_border_origin(border_origin: Point) -> Self {
+        Self { border_origin }
+    }
+
+    pub(crate) const fn border_origin(self) -> Point {
+        self.border_origin
+    }
+}
+
+/// Integral device bounds enclosing one authored point-space rectangle.
+#[derive(Clone, Copy)]
+struct DeviceRasterBounds {
+    left: i64,
+    top: i64,
+    right: i64,
+    bottom: i64,
+}
+
+impl DeviceRasterBounds {
+    fn enclosing(
+        anchor: SourceRasterAnchor,
+        size: Size,
+        authored_overflow: EdgeSizes,
+        pixels_per_point: f32,
+    ) -> Option<Self> {
+        let origin = anchor.border_origin();
+        Some(Self {
+            left: device_floor(origin.x - authored_overflow.left, pixels_per_point)?,
+            top: device_floor(origin.y - authored_overflow.top, pixels_per_point)?,
+            right: device_ceil(
+                origin.x + size.width + authored_overflow.right,
+                pixels_per_point,
+            )?,
+            bottom: device_ceil(
+                origin.y + size.height + authored_overflow.bottom,
+                pixels_per_point,
+            )?,
+        })
+    }
+
+    fn dimensions(self) -> Option<crate::util::RasterDimensions> {
+        Some(crate::util::RasterDimensions {
+            width: u32::try_from(self.right.checked_sub(self.left)?).ok()?,
+            height: u32::try_from(self.bottom.checked_sub(self.top)?).ok()?,
+        })
+    }
+
+    fn border_origin(self, anchor: SourceRasterAnchor, pixels_per_point: f32) -> Point {
+        let origin = anchor.border_origin();
+        Point::new(
+            origin.x - self.left as f32 / pixels_per_point,
+            origin.y - self.top as f32 / pixels_per_point,
+        )
+    }
+}
+
+fn device_floor(points: f32, pixels_per_point: f32) -> Option<i64> {
+    finite_device_coordinate(points, pixels_per_point).map(|value| value.floor() as i64)
+}
+
+fn device_ceil(points: f32, pixels_per_point: f32) -> Option<i64> {
+    finite_device_coordinate(points, pixels_per_point).map(|value| value.ceil() as i64)
+}
+
+fn finite_device_coordinate(points: f32, pixels_per_point: f32) -> Option<f64> {
+    let value = f64::from(points) * f64::from(pixels_per_point);
+    (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64).then_some(value)
+}
+
 /// Border-box geometry retained when a painted filter source becomes an image.
 #[derive(Debug, Clone)]
 pub(crate) struct SourceGeometry {
@@ -24,18 +105,30 @@ struct RasterSurfaceFrame {
 }
 
 impl RasterSurfaceFrame {
-    fn resolve(size: Size, authored_overflow: EdgeSizes, dpi: f32) -> Option<Self> {
+    fn resolve(
+        size: Size,
+        authored_overflow: EdgeSizes,
+        dpi: f32,
+        anchor: SourceRasterAnchor,
+    ) -> Option<Self> {
+        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
+        let bounds =
+            DeviceRasterBounds::enclosing(anchor, size, authored_overflow, pixels_per_point)?;
+        let dimensions = bounds.dimensions()?;
+        let border_origin = bounds.border_origin(anchor, pixels_per_point);
         let surface_size = Size::new(
-            size.width + authored_overflow.horizontal(),
-            size.height + authored_overflow.vertical(),
+            dimensions.width as f32 / pixels_per_point,
+            dimensions.height as f32 / pixels_per_point,
         );
         Some(Self {
-            dimensions: crate::util::RasterDimensions {
-                width: crate::render::blur::filter_raster_pixels_at_dpi(surface_size.width, dpi)?,
-                height: crate::render::blur::filter_raster_pixels_at_dpi(surface_size.height, dpi)?,
-            },
-            border_origin: Point::new(authored_overflow.left, authored_overflow.top),
-            paint_overflow: authored_overflow,
+            dimensions,
+            border_origin,
+            paint_overflow: EdgeSizes::new(
+                border_origin.y,
+                surface_size.width - border_origin.x - size.width,
+                surface_size.height - border_origin.y - size.height,
+                border_origin.x,
+            ),
         })
     }
 }
@@ -44,6 +137,7 @@ impl RasterSurfaceFrame {
 pub(crate) struct SourceGraphic {
     pub(crate) pixels: crate::render::raster_pixels::PremultipliedRgba8,
     pub(crate) geometry: SourceRasterGeometry,
+    pub(crate) paint_bounds: Option<crate::types::Rect>,
 }
 
 /// Relationship between the layout border box and its offscreen paint surface.
@@ -61,8 +155,9 @@ impl SourceRasterGeometry {
         layout: SourceGeometry,
         authored_overflow: EdgeSizes,
         dpi: f32,
+        anchor: SourceRasterAnchor,
     ) -> Option<Self> {
-        let surface = RasterSurfaceFrame::resolve(layout.size, authored_overflow, dpi)?;
+        let surface = RasterSurfaceFrame::resolve(layout.size, authored_overflow, dpi, anchor)?;
         Some(Self { layout, surface })
     }
 
@@ -83,6 +178,23 @@ impl SourceRasterGeometry {
 
     pub(crate) fn paint_overflow(&self) -> EdgeSizes {
         self.surface.paint_overflow
+    }
+
+    pub(super) fn required_overflow_for(&self, paint_bounds: crate::types::Rect) -> EdgeSizes {
+        let border_box = crate::types::Rect::new(self.surface.border_origin, self.layout.size);
+        EdgeSizes::new(
+            (border_box.origin.y - paint_bounds.origin.y).max(0.0),
+            (paint_bounds.right() - border_box.right()).max(0.0),
+            (paint_bounds.bottom() - border_box.bottom()).max(0.0),
+            (border_box.origin.x - paint_bounds.origin.x).max(0.0),
+        )
+    }
+
+    pub(crate) fn filter_geometry(&self) -> Option<crate::render::filter::FilterSourceGeometry> {
+        crate::render::filter::FilterSourceGeometry::new(
+            self.surface_size(),
+            crate::types::Rect::new(self.surface.border_origin, self.layout.size),
+        )
     }
 }
 
@@ -238,14 +350,14 @@ fn source_geometry_in_content(
 
 /// Resolved border box of one child in a block formatting context.
 #[derive(Clone, Copy)]
-pub(super) struct BlockChildFrame {
-    pub(super) border_box: crate::types::Rect,
+pub(crate) struct BlockChildFrame {
+    pub(crate) border_box: crate::types::Rect,
 }
 
 /// Resolve block children once for every SourceGraphic paint path. Sharing
 /// this sequence prevents nested boxes from acquiring different device phases
 /// based on which concrete parent type owns them.
-pub(super) fn block_child_frames(
+pub(crate) fn block_child_frames(
     children: &[crate::layout::elements::LayoutNode],
     content_box: crate::types::Rect,
     absolute_containing_block: Option<crate::types::Rect>,

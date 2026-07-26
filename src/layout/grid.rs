@@ -3471,6 +3471,7 @@ fn layout_grid_container_inner(
             super::filter::cells::composite_grid_cell(
                 &mut cell,
                 painted_size,
+                Default::default(),
                 &filter,
                 env.fonts,
                 env.filter_dpi,

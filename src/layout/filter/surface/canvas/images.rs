@@ -31,9 +31,19 @@ impl RasterCanvas<'_> {
             sampling.rendering,
             self.pixels_per_point * 72.0,
         )?;
+        let painted_box = SurfaceRect::new(
+            Point::new(
+                content_box.origin.x + placement.offset_x,
+                content_box.origin.y + placement.offset_y,
+            ),
+            Size::new(placement.width, placement.height),
+        );
+        if let Some(clipped) = painted_box.intersection(content_box) {
+            self.include_paint_bounds(clipped);
+        }
         let destination = DevicePixelPoint::new(
-            ((content_box.origin.x + placement.offset_x) * self.pixels_per_point).round() as i32,
-            ((content_box.origin.y + placement.offset_y) * self.pixels_per_point).round() as i32,
+            (painted_box.origin.x * self.pixels_per_point).round() as i32,
+            (painted_box.origin.y * self.pixels_per_point).round() as i32,
         );
         let clip =
             DeviceClip::from_rect(content_box, self.pixels_per_point, self.pixels.dimensions());
@@ -76,6 +86,13 @@ impl RasterCanvas<'_> {
 
     pub(super) fn paint_asset_at(&mut self, asset: &RasterImageAsset, origin: Point) -> Option<()> {
         let decoded = crate::layout::images::decode_asset_to_rgba(asset)?;
+        self.include_paint_bounds(SurfaceRect::new(
+            origin,
+            Size::new(
+                decoded.width() as f32 / self.pixels_per_point,
+                decoded.height() as f32 / self.pixels_per_point,
+            ),
+        ));
         let destination = DevicePixelPoint::new(
             (origin.x * self.pixels_per_point).round() as i32,
             (origin.y * self.pixels_per_point).round() as i32,

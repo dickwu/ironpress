@@ -2,10 +2,9 @@
 
 use super::*;
 use crate::render::raster_pixels::{DevicePixelPoint, DevicePixelVector};
-use crate::types::Point;
-use resvg::tiny_skia;
+use crate::types::{Point, Rect};
 
-mod hinting;
+mod outlines;
 
 /// Vertical portions of one laid-out line around its text baseline.
 ///
@@ -57,6 +56,22 @@ impl RasterBaselineCursor {
 pub(crate) struct GlyphRaster {
     pub mask: image::GrayImage,
     pub placement: GlyphRasterPlacement,
+    paint_bounds: GlyphPaintBounds,
+}
+
+impl GlyphRaster {
+    /// Authored outline bounds at one baseline origin.
+    ///
+    /// The mask allocation has private antialiasing safety pixels around this
+    /// rectangle. Keeping those pixels out of semantic paint bounds prevents
+    /// allocation policy from changing a filtered layer's PDF placement.
+    pub(crate) fn paint_bounds_at(
+        &self,
+        origin: GlyphBaselineOrigin,
+        pixels_per_point: f32,
+    ) -> Option<Rect> {
+        self.paint_bounds.at(origin, pixels_per_point)
+    }
 }
 
 /// Integer mask placement and the baseline vector inside the glyph mask.
@@ -91,7 +106,9 @@ impl GlyphRasterPlacement {
         origin: GlyphBaselineOrigin,
         pixels_per_point: f32,
     ) -> Option<DevicePixelPoint> {
-        let origin = origin.in_device_pixels(pixels_per_point);
+        let origin =
+            outlines::FoundationGlyphPositioning::new(origin.in_device_pixels(pixels_per_point))?
+                .origin();
         Some(DevicePixelPoint::new(
             rounded_device_coordinate(origin.x - self.baseline_in_mask.x)?,
             rounded_device_coordinate(origin.y - self.baseline_in_mask.y)?,
@@ -118,6 +135,35 @@ impl GlyphBaselineOrigin {
 
     fn in_device_pixels(self, pixels_per_point: f32) -> DevicePixelVector {
         DevicePixelVector::new(self.0.x * pixels_per_point, self.0.y * pixels_per_point)
+    }
+}
+
+/// Device-space outline bounds relative to a run baseline.
+///
+/// These bounds describe authored glyph paint, including synthetic bold, but
+/// exclude the raster allocation's private safety margin.
+#[derive(Debug, Clone, Copy)]
+struct GlyphPaintBounds(Rect);
+
+impl GlyphPaintBounds {
+    const fn from_outline(bounds: Rect) -> Self {
+        Self(bounds)
+    }
+
+    fn at(self, origin: GlyphBaselineOrigin, pixels_per_point: f32) -> Option<Rect> {
+        if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+            return None;
+        }
+        let baseline =
+            outlines::FoundationGlyphPositioning::new(origin.in_device_pixels(pixels_per_point))?
+                .origin();
+        let bounds = self.0;
+        Some(Rect::from_xywh(
+            (baseline.x + bounds.origin.x) / pixels_per_point,
+            (baseline.y + bounds.origin.y) / pixels_per_point,
+            bounds.size.width / pixels_per_point,
+            bounds.size.height / pixels_per_point,
+        ))
     }
 }
 
@@ -167,9 +213,9 @@ struct GlyphMaskFrame {
 }
 
 impl GlyphMaskFrame {
-    fn resolve(bounds: tiny_skia::Rect, baseline: DevicePixelVector, margin: f32) -> Option<Self> {
-        let left = floored_device_coordinate(baseline.x + bounds.left() - margin)?;
-        let top = floored_device_coordinate(baseline.y + bounds.top() - margin)?;
+    fn resolve(bounds: Rect, baseline: DevicePixelVector, margin: f32) -> Option<Self> {
+        let left = floored_device_coordinate(baseline.x + bounds.origin.x - margin)?;
+        let top = floored_device_coordinate(baseline.y + bounds.origin.y - margin)?;
         let right = ceiled_device_coordinate(baseline.x + bounds.right() + margin)?;
         let bottom = ceiled_device_coordinate(baseline.y + bounds.bottom() + margin)?;
         let width = u32::try_from(right.checked_sub(left)?).ok()?;
@@ -205,47 +251,30 @@ pub(crate) fn rasterize_run_alpha(request: GlyphRasterRequest<'_>) -> Option<Gly
     // Font size and shaped point offsets are resolved in the same device space.
     let s = filter_dpi_scale(request.dpi);
     let pt_to_px = s / PT_PER_PX;
-    let path = hinting::hinted_run_path(
+    let stroke_px = (request.style.embolden * pt_to_px).max(0.0);
+    let positioning =
+        outlines::FoundationGlyphPositioning::new(request.origin.in_device_pixels(pt_to_px))?;
+    let outline = outlines::foundation_run_outline(
         request.font,
         request.font_size / PT_PER_PX * s,
         request.glyphs,
         pt_to_px,
         request.style.shear,
-    )?;
-    let bounds = path.bounds();
+        positioning,
+    )?
+    .embolden(stroke_px)?;
+    let bounds = outline.bounds();
 
     // Margin so the outline anti-aliasing isn't clipped at the buffer edge.
-    let stroke_px = (request.style.embolden * pt_to_px).max(0.0);
-    let margin = 2.0f32 + stroke_px / 2.0;
-    let frame = GlyphMaskFrame::resolve(bounds, request.origin.in_device_pixels(pt_to_px), margin)?;
-    let buf_w = frame.dimensions.width;
-    let buf_h = frame.dimensions.height;
-
-    let mut pixmap = tiny_skia::Pixmap::new(buf_w, buf_h)?;
-    let transform =
-        tiny_skia::Transform::from_translate(frame.baseline_in_mask.x, frame.baseline_in_mask.y);
-    let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::WHITE);
-    paint.anti_alias = true;
-    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, None);
-    if stroke_px > 0.0 {
-        let stroke = tiny_skia::Stroke {
-            width: stroke_px,
-            ..tiny_skia::Stroke::default()
-        };
-        pixmap.stroke_path(&path, &paint, &stroke, transform, None);
-    }
-
-    let mut mask = image::GrayImage::new(buf_w, buf_h);
-    for (i, px) in pixmap.pixels().iter().enumerate() {
-        let x = (i as u32) % buf_w;
-        let y = (i as u32) / buf_w;
-        mask.put_pixel(x, y, image::Luma([px.alpha()]));
-    }
+    let paint_bounds = GlyphPaintBounds::from_outline(bounds);
+    let margin = 2.0;
+    let frame = GlyphMaskFrame::resolve(bounds, positioning.origin(), margin)?;
+    let mask = outline.rasterize(&frame)?;
 
     Some(GlyphRaster {
         mask,
         placement: frame.placement(),
+        paint_bounds,
     })
 }
 
@@ -281,7 +310,7 @@ mod tests {
         )
         .expect("finite test coordinates resolve");
 
-        assert_eq!(placement.mask_origin, DevicePixelPoint::new(11, 20));
+        assert_eq!(placement.mask_origin, DevicePixelPoint::new(11, 19));
         assert_eq!(
             placement
                 .mask_origin_at(GlyphBaselineOrigin::top_down(14.3, 29.0), 1.0)

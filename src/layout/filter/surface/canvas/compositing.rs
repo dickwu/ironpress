@@ -58,6 +58,9 @@ impl RasterCanvas<'_> {
         color: Color,
     ) {
         let [red, green, blue, color_alpha] = color.to_rgba8();
+        if color_alpha == 0 {
+            return;
+        }
         for y in 0..mask.height() {
             for x in 0..mask.width() {
                 let mask_alpha = mask.get_pixel(x, y)[0];

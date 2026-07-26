@@ -118,7 +118,11 @@ impl FilterBackground {
 
     pub(super) fn paint(&self, canvas: &mut RasterCanvas<'_>) {
         if let Some(background) = &self.color {
-            canvas.fill_rounded(background.clip, background.color);
+            if background.clip.radii.is_zero() {
+                canvas.fill(background.clip.rect, background.color);
+            } else {
+                canvas.fill_rounded(background.clip, background.color);
+            }
         }
         if let Some(gradient) = &self.linear_gradient {
             gradient.paint(canvas);
