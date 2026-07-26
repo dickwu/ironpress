@@ -101,6 +101,28 @@ fn mask_image_gradient_emits_luminosity_smask() {
 }
 
 #[test]
+fn initial_radial_mask_uses_native_pdf_shading() {
+    let html = r#"<style>
+            @page { size: 280px 200px; margin: 0; }
+            * { margin: 0; box-sizing: border-box; }
+            .box { width:200px; height:200px; background:#1565c0;
+                mask-image:radial-gradient(circle at 100px 100px,
+                    #000 0%, #000 50%, transparent 75%); }
+            </style><div class="box"></div>"#;
+    let pdf = crate::HtmlConverter::new().convert(html).unwrap();
+    let content = String::from_utf8_lossy(&pdf);
+
+    assert!(
+        content.contains("/ShadingType 3"),
+        "the full-box radial mask must remain a native PDF radial shading"
+    );
+    assert!(
+        !content.contains("/Subtype /Image"),
+        "the initial repeat mode does not require a bitmap when its one tile fills the mask clip"
+    );
+}
+
+#[test]
 fn edge_centered_radial_mask_does_not_add_opaque_edge_strips() {
     let html = r#"<div style="width:180px;height:140px;background:#2e7d32;
             mask-image:radial-gradient(circle 34px at 0 0,#000 0 34px,transparent 35px);

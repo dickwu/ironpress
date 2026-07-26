@@ -74,6 +74,17 @@ impl MaskLayerPaint {
             clip,
         })
     }
+
+    /// Whether one painted tile is the complete repeated result inside the
+    /// mask clip.
+    ///
+    /// `repeat` needs no additional tile when the source tile already covers
+    /// the clip. Other repeat modes can alter sizing or spacing even with one
+    /// visible tile and therefore stay on the general repeat path.
+    pub(super) fn is_complete_single_tile(self, repeat: BackgroundRepeat) -> bool {
+        repeat == BackgroundRepeat::NoRepeat
+            || (repeat == BackgroundRepeat::Repeat && self.tile.covers_with_margin(self.clip, 0.0))
+    }
 }
 
 #[cfg(test)]
@@ -123,6 +134,21 @@ mod geometry_consumer_tests {
         let paint = MaskLayerPaint::resolve(&layer, asymmetric_geometry()).unwrap();
         assert_eq!(paint.tile, PdfRect::new(49.5, 170.0, 22.0, 10.0));
         assert_eq!(paint.clip, PdfRect::new(21.0, 127.0, 84.0, 70.0));
+    }
+
+    #[test]
+    pub(super) fn full_clip_repeat_is_one_complete_tile() {
+        let geometry = asymmetric_geometry();
+        let mut layer = solid_svg_layer();
+        layer.layer_box.repeat = Some(BackgroundRepeat::Repeat);
+        layer.origin = crate::style::computed::ShapeBox::Border;
+        layer.clip = crate::style::computed::ShapeBox::Border;
+
+        let paint = MaskLayerPaint::resolve(&layer, geometry).unwrap();
+
+        assert!(paint.is_complete_single_tile(BackgroundRepeat::Repeat));
+        assert!(paint.is_complete_single_tile(BackgroundRepeat::NoRepeat));
+        assert!(!paint.is_complete_single_tile(BackgroundRepeat::Round));
     }
 
     #[test]
