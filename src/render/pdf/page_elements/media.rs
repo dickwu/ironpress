@@ -1,5 +1,103 @@
 use super::*;
 use crate::layout::elements::{Image, Svg};
+use std::borrow::Cow;
+
+/// Final source and destination used to paint one replaced raster.
+///
+/// Edge-preserving images can discard an exactly aligned invisible source
+/// region. This is both smaller and avoids antialiasing an otherwise redundant
+/// PDF clip across hard source-pixel boundaries.
+struct ReplacedRasterPaint<'a> {
+    source: Cow<'a, crate::layout::engine::RasterImageAsset>,
+    bounds: PdfRect,
+    clip: bool,
+}
+
+impl<'a> ReplacedRasterPaint<'a> {
+    fn resolve(
+        source: &'a crate::layout::engine::RasterImageAsset,
+        content: PdfRect,
+        sampling: crate::layout::elements::ImageSampling,
+    ) -> Self {
+        let source_content_size = sampling.replaced.fragment.map_or(
+            crate::types::Size::new(content.width, content.height),
+            |fragment| fragment.source_content_size,
+        );
+        let placement = crate::layout::images::compute_image_placement(
+            source_content_size.width,
+            source_content_size.height,
+            source.source_width,
+            source.source_height,
+            sampling.replaced.object_fit,
+            sampling.replaced.object_position,
+        );
+        if sampling.replaced.fragment.is_none()
+            && sampling.rendering.preserves_source_edges()
+            && placement.clip
+            && let Some(paint) = Self::cropped_to_visible_pixels(source, content, placement)
+        {
+            return paint;
+        }
+
+        let fragment_offset = sampling
+            .replaced
+            .fragment
+            .map_or(crate::types::Vector::ZERO, |fragment| {
+                fragment.content_offset
+            });
+        Self {
+            source: Cow::Borrowed(source),
+            bounds: PdfRect::new(
+                content.left + placement.offset_x - fragment_offset.x,
+                content.top() - placement.offset_y - placement.height + fragment_offset.y,
+                placement.width,
+                placement.height,
+            ),
+            clip: placement.clip || sampling.replaced.fragment.is_some(),
+        }
+    }
+
+    fn cropped_to_visible_pixels(
+        source: &crate::layout::engine::RasterImageAsset,
+        content: PdfRect,
+        placement: crate::layout::images::ImagePlacement,
+    ) -> Option<Self> {
+        let visible_left = placement.offset_x.max(0.0);
+        let visible_top = placement.offset_y.max(0.0);
+        let visible_right = (placement.offset_x + placement.width).min(content.width);
+        let visible_bottom = (placement.offset_y + placement.height).min(content.height);
+        let visible_width = visible_right - visible_left;
+        let visible_height = visible_bottom - visible_top;
+        if visible_width <= 0.0 || visible_height <= 0.0 {
+            return None;
+        }
+
+        let source_rect = crate::types::Rect::from_xywh(
+            (visible_left - placement.offset_x) * source.source_width as f32 / placement.width,
+            (visible_top - placement.offset_y) * source.source_height as f32 / placement.height,
+            visible_width * source.source_width as f32 / placement.width,
+            visible_height * source.source_height as f32 / placement.height,
+        );
+        let crop = crate::layout::images::RasterCrop::aligned(
+            source_rect,
+            crate::util::RasterDimensions {
+                width: source.source_width,
+                height: source.source_height,
+            },
+        )?;
+        let source = crate::layout::images::crop_raster_asset(source, crop)?;
+        Some(Self {
+            source: Cow::Owned(source),
+            bounds: PdfRect::new(
+                content.left + visible_left,
+                content.top() - visible_top - visible_height,
+                visible_width,
+                visible_height,
+            ),
+            clip: false,
+        })
+    }
+}
 
 fn paint_image_effect_raster(
     content: &mut String,
@@ -121,50 +219,26 @@ pub(in crate::render::pdf) fn paint_image_box(
     }
 
     let image_content = paint_geometry.padding_box();
-    let source_content_size = element.sampling.replaced.fragment.map_or(
-        crate::types::Size::new(image_content.width, image_content.height),
-        |fragment| fragment.source_content_size,
-    );
-    let placement = crate::layout::images::compute_image_placement(
-        source_content_size.width,
-        source_content_size.height,
-        image.source_width,
-        image.source_height,
-        element.sampling.replaced.object_fit,
-        element.sampling.replaced.object_position,
-    );
+    let paint = ReplacedRasterPaint::resolve(image, image_content, element.sampling);
     let image_id = ctx.text.pdf_writer.add_layout_image_object(
-        image,
-        placement.width,
-        placement.height,
+        paint.source.as_ref(),
+        paint.bounds.width,
+        paint.bounds.height,
         element.sampling.rendering,
     );
     let image_name = format!("Im{image_id}");
-    let fragment_offset = element
-        .sampling
-        .replaced
-        .fragment
-        .map_or(crate::types::Vector::ZERO, |fragment| {
-            fragment.content_offset
-        });
-    let clipped = placement.clip || element.sampling.replaced.fragment.is_some();
-    if clipped {
+    if paint.clip {
         content.push_str("q\n");
         content.push_str(&format!("{}W n\n", image_content.rect_path()));
     }
     push_raster_xobject(
         content,
         &image_name,
-        PdfRect::new(
-            image_content.left + placement.offset_x - fragment_offset.x,
-            image_content.top() - placement.offset_y - placement.height + fragment_offset.y,
-            placement.width,
-            placement.height,
-        ),
-        image,
+        paint.bounds,
+        paint.source.as_ref(),
         ctx.text.pdf_writer,
     );
-    if clipped {
+    if paint.clip {
         content.push_str("Q\n");
     }
     ctx.text.page_images.push(ImageRef {

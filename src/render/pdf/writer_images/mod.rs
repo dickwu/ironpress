@@ -1,9 +1,11 @@
 use super::*;
 
 mod cache;
+mod scale;
 mod streams;
 
 pub(super) use cache::LayoutImageCacheKey;
+use scale::CssRasterScale;
 
 #[derive(Clone, Copy)]
 pub(super) enum PdfImageInterpolation {
@@ -174,6 +176,10 @@ impl PdfWriter {
         display_h_pt: f32,
     ) -> Option<usize> {
         if width == 0 || height == 0 || display_w_pt <= 0.0 || display_h_pt <= 0.0 {
+            return None;
+        }
+        let scale = CssRasterScale::parse(width, height, display_w_pt, display_h_pt)?;
+        if scale.is_integral_multiple() {
             return None;
         }
         let raster = crate::render::blur::pixelated_image_at_css_size(

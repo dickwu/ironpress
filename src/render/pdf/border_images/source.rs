@@ -244,31 +244,22 @@ fn register_raster_border_image_slice(
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) -> Option<ImageRef> {
-    let integral = |value: f32| (value - value.round()).abs() <= 1e-5;
-    if ![
-        source_region.left,
-        source_region.bottom,
-        source_region.width,
-        source_region.height,
-    ]
-    .into_iter()
-    .all(integral)
-    {
-        return None;
-    }
-
     // Raster rows are top-down while border-image source coordinates are
     // bottom-up PDF coordinates.
     let crop_y = asset.source_height as f32 - source_region.top();
-    let cropped = crate::layout::images::crop_raster_asset(
-        asset,
-        [
+    let crop = crate::layout::images::RasterCrop::aligned(
+        crate::types::Rect::from_xywh(
             source_region.left,
             crop_y,
             source_region.width,
             source_region.height,
-        ],
+        ),
+        crate::util::RasterDimensions {
+            width: asset.source_width,
+            height: asset.source_height,
+        },
     )?;
+    let cropped = crate::layout::images::crop_raster_asset(asset, crop)?;
     let object_id = pdf_writer.add_layout_image_object(
         &cropped,
         source_region.width * crate::fonts::PT_PER_CSS_PX,

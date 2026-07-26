@@ -156,6 +156,38 @@
     }
 
     #[test]
+    fn integral_pixelated_cover_embeds_only_visible_source_pixels() {
+        let source = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII=";
+        let html = format!(
+            r#"<style>
+                @page {{ size: 384px 224px; margin: 0 }}
+                * {{ margin: 0; box-sizing: border-box }}
+                img {{
+                    display: block;
+                    width: 160px;
+                    height: 160px;
+                    object-fit: cover;
+                    image-rendering: pixelated;
+                }}
+            </style><img alt="" src="{source}">"#,
+        );
+        let pdf = crate::HtmlConverter::new()
+            .compress(false)
+            .sanitize(false)
+            .convert(&html)
+            .expect("pixelated cover should render");
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert_eq!(content.matches("/Subtype /Image").count(), 1);
+        assert!(
+            content.contains("/Width 4 /Height 4"),
+            "the exact visible source crop should remain at source resolution"
+        );
+        assert!(!content.contains("/Width 320 /Height 160"));
+        assert!(content.contains("/Interpolate false"));
+    }
+
+    #[test]
     fn render_no_image_no_xobject() {
         let html = "<p>No images here</p>";
         let nodes = parse_html(html).unwrap();
