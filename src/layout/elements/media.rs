@@ -3,12 +3,10 @@ use super::{
     LayoutNode, LayoutVisitor, LayoutVisitorMut, PaintGroup, PaintGroupOwner, Positioning,
     PositioningOwner, ReplacedElement,
 };
-use crate::layout::engine::{
-    ImageEffectRaster, LayoutBorder, RasterImageAsset, SvgReplacedContent,
-};
+use crate::layout::engine::{ImageEffectRaster, LayoutBorder, RasterImageAsset};
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
-use crate::style::computed::{ImageRendering, ObjectFit, ObjectPosition};
-use crate::types::{Color, CornerRadii, EdgeSizes, Size};
+use crate::style::computed::ImageRendering;
+use crate::types::{Color, CornerRadii, EdgeSizes, Size, Vector};
 
 /// Geometry shared by replaced raster and vector content.
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,15 +27,57 @@ impl ReplacedGeometry {
             border,
         }
     }
+
+    pub(crate) fn content_size(self) -> Size {
+        Size::new(
+            (self.size.width - self.border.horizontal_width()).max(0.0),
+            (self.size.height - self.border.vertical_width()).max(0.0),
+        )
+    }
+}
+
+/// The part of replaced content that belongs to one fragment.
+///
+/// The source stays unchanged: a fragment clips and translates the original
+/// rendering instead of creating a new raster or SVG viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ReplacedFragment {
+    pub(crate) source_content_size: Size,
+    pub(crate) content_offset: Vector,
+}
+
+impl ReplacedFragment {
+    pub(crate) const fn initial(source_content_size: Size) -> Self {
+        Self {
+            source_content_size,
+            content_offset: Vector::ZERO,
+        }
+    }
+
+    pub(crate) const fn following_block(self, consumed_content_height: f32) -> Self {
+        Self {
+            content_offset: Vector::new(
+                self.content_offset.x,
+                self.content_offset.y + consumed_content_height,
+            ),
+            ..self
+        }
+    }
+}
+
+/// CSS fitting and fragmentation state shared by raster and SVG content.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct ReplacedContent {
+    pub(crate) object_fit: crate::style::computed::ObjectFit,
+    pub(crate) object_position: crate::style::computed::ObjectPosition,
+    pub(crate) fragment: Option<ReplacedFragment>,
 }
 
 /// Sampling, fitting, and source-region behavior of a raster image.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ImageSampling {
-    pub(crate) object_fit: ObjectFit,
-    pub(crate) object_position: ObjectPosition,
+    pub(crate) replaced: ReplacedContent,
     pub(crate) rendering: ImageRendering,
-    pub(crate) source_crop: Option<[f32; 4]>,
 }
 
 /// Paint produced around or instead of the source image.
@@ -201,7 +241,7 @@ pub(crate) struct Svg {
     pub(crate) geometry: ReplacedGeometry,
     pub(crate) positioning: Positioning,
     pub(crate) paint: SvgPaint,
-    pub(crate) replaced: SvgReplacedContent,
+    pub(crate) replaced: ReplacedContent,
 }
 
 impl MarginHolder for Svg {

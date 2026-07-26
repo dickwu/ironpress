@@ -1,5 +1,5 @@
 use super::engine::{
-    FootnoteItem, GridCell, Page, PageBreakSide, SvgFragment, TextLine, TextRun,
+    FootnoteItem, GridCell, Page, PageBreakSide, ReplacedFragment, TextLine, TextRun,
     decode_footnote_link_data, table_cell_content_height, target_anchor_id,
 };
 use super::flow_metrics::BlockMargins;
@@ -1000,9 +1000,9 @@ fn split_fixed_height_text_block_node(
 /// this page with the TOP slice of the source raster (its `flow_extra_bottom` and
 /// `margin_bottom` dropped), and the continuation displays the remainder on the
 /// next page (its `margin_top` dropped, the original bottom decoration kept so the
-/// FINAL fragment closes the box). Each fragment records the source-pixel
-/// sub-rectangle it shows in `src_crop`, so the renderer emits only that slice as
-/// the page's image XObject instead of a full copy behind a clip.
+/// FINAL fragment closes the box). Each fragment records its offset into the
+/// original replaced-content box, so the renderer reuses and clips the source
+/// instead of decoding and resampling a new raster.
 ///
 /// Returns `None` (caller places the image whole, the pre-existing overflow
 /// behavior) when the image cannot be sliced cleanly: a non-`fill` `object-fit`
@@ -1037,7 +1037,7 @@ fn split_image_block_node(
     avail_below_box_top: f32,
 ) -> Option<(LayoutNode, LayoutNode)> {
     let height = element.geometry.size.height;
-    if element.sampling.object_fit != ObjectFit::Fill
+    if element.sampling.replaced.object_fit != ObjectFit::Fill
         || element.geometry.border.vertical_width() != 0.0
         || !element.paint.raster_overflow.is_zero()
         || element.paint.filter_effect.is_some()
@@ -1050,27 +1050,34 @@ fn split_image_block_node(
     let first_h = avail_below_box_top.min(height);
     let rest_h = split_remainder(height, first_h)?;
 
-    // The source sub-rectangle this element currently displays (the whole source
-    // if it has not been sliced yet), mapped linearly onto `height` under
-    // object-fit: fill. Slicing composes with any inherited crop.
-    let [bx, by, bw, bh] = element.sampling.source_crop.unwrap_or([
-        0.0,
-        0.0,
-        element.source.source_width as f32,
-        element.source.source_height as f32,
-    ]);
-    let slice_src_h = bh * (first_h / height);
+    let source_content_size = element
+        .sampling
+        .replaced
+        .fragment
+        .map_or(element.geometry.content_size(), |fragment| {
+            fragment.source_content_size
+        });
+    if !is_positive_with_roundoff(source_content_size.width)
+        || !is_positive_with_roundoff(source_content_size.height)
+    {
+        return None;
+    }
+    let fragment = element
+        .sampling
+        .replaced
+        .fragment
+        .unwrap_or_else(|| ReplacedFragment::initial(source_content_size));
 
     let mut first = element.clone();
     first.geometry.size.height = first_h;
     first.geometry.flow.extra_end = 0.0;
     first.geometry.flow.margins.end = 0.0;
-    first.sampling.source_crop = Some([bx, by, bw, slice_src_h]);
+    first.sampling.replaced.fragment = Some(fragment);
 
     let mut rest = element.clone();
     rest.geometry.size.height = rest_h;
     rest.geometry.flow.margins.start = 0.0;
-    rest.sampling.source_crop = Some([bx, by + slice_src_h, bw, bh - slice_src_h]);
+    rest.sampling.replaced.fragment = Some(fragment.following_block(first_h));
 
     Some((Box::new(first), Box::new(rest)))
 }
@@ -1123,12 +1130,7 @@ fn split_svg_block_node(
         return None;
     }
     let source_content_size = element.replaced.fragment.map_or_else(
-        || {
-            Size::new(
-                element.geometry.size.width - border.horizontal_width(),
-                total_content_h,
-            )
-        },
+        || Size::new(element.geometry.content_size().width, total_content_h),
         |fragment| fragment.source_content_size,
     );
     if !is_positive_with_roundoff(source_content_size.width)
@@ -1139,7 +1141,7 @@ fn split_svg_block_node(
     let fragment = element
         .replaced
         .fragment
-        .unwrap_or_else(|| SvgFragment::initial(source_content_size));
+        .unwrap_or_else(|| ReplacedFragment::initial(source_content_size));
 
     let mut first = element.clone();
     first.geometry.size.height = first_h;
@@ -1152,7 +1154,7 @@ fn split_svg_block_node(
     rest.geometry.size.height = rest_h;
     rest.geometry.flow.margins.start = 0.0;
     rest.geometry.border.top.width = 0.0;
-    rest.replaced.fragment = Some(fragment.following(first_content_h));
+    rest.replaced.fragment = Some(fragment.following_block(first_content_h));
 
     Some((Box::new(first), Box::new(rest)))
 }
@@ -4037,7 +4039,10 @@ mod break_tests {
             ),
             positioning: Default::default(),
             sampling: ImageSampling {
-                object_fit: ObjectFit::Fill,
+                replaced: crate::layout::engine::ReplacedContent {
+                    object_fit: ObjectFit::Fill,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             paint: ImagePaint::default(),
@@ -4306,16 +4311,19 @@ mod break_tests {
             split_image_block(&raster_image(100.5), 100.0).expect("positive slices must survive");
 
         let (first_height, first_crop) = first
-            .inspect_image(|image| (image.geometry.size.height, image.sampling.source_crop))
-            .and_then(|(height, crop)| crop.map(|crop| (height, crop)))
+            .inspect_image(|image| (image.geometry.size.height, image.sampling.replaced.fragment))
+            .and_then(|(height, fragment)| fragment.map(|fragment| (height, fragment)))
             .expect("expected an image fragment");
         let (rest_height, rest_crop) = rest
-            .inspect_image(|image| (image.geometry.size.height, image.sampling.source_crop))
-            .and_then(|(height, crop)| crop.map(|crop| (height, crop)))
+            .inspect_image(|image| (image.geometry.size.height, image.sampling.replaced.fragment))
+            .and_then(|(height, fragment)| fragment.map(|fragment| (height, fragment)))
             .expect("expected an image continuation");
         assert_eq!(first_height, 100.0);
         assert_eq!(rest_height, 0.5);
-        assert_eq!(first_crop[3] + rest_crop[3], 4.0);
+        assert_eq!(first_crop.source_content_size.height, 100.5);
+        assert_eq!(first_crop.content_offset.y, 0.0);
+        assert_eq!(rest_crop.source_content_size.height, 100.5);
+        assert_eq!(rest_crop.content_offset.y, 100.0);
     }
 
     #[test]
@@ -4330,7 +4338,7 @@ mod break_tests {
                     svg.tree.view_box.map(|view_box| view_box.height),
                     svg.replaced
                         .fragment
-                        .map(|fragment| fragment.content_offset_top),
+                        .map(|fragment| fragment.content_offset.y),
                 )
             })
             .expect("expected an SVG fragment");
@@ -4341,7 +4349,7 @@ mod break_tests {
                     svg.tree.view_box.map(|view_box| view_box.height),
                     svg.replaced
                         .fragment
-                        .map(|fragment| fragment.content_offset_top),
+                        .map(|fragment| fragment.content_offset.y),
                 )
             })
             .expect("expected an SVG continuation");

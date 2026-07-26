@@ -1,4 +1,4 @@
-use crate::layout::engine::SvgReplacedContent;
+use crate::layout::engine::ReplacedContent;
 use crate::parser::svg::{SvgAlign, SvgMeetOrSlice, SvgPreserveAspectRatio, SvgTree};
 use crate::types::Size;
 
@@ -232,7 +232,7 @@ pub(crate) fn compute_svg_placement(
 pub(crate) fn compute_replaced_svg_placement(
     tree: &SvgTree,
     content_size: Size,
-    replaced: SvgReplacedContent,
+    replaced: ReplacedContent,
 ) -> Option<SvgPlacement> {
     let source_content_size = replaced
         .fragment
@@ -257,7 +257,8 @@ pub(crate) fn compute_replaced_svg_placement(
         ),
     )?;
     if let Some(fragment) = replaced.fragment {
-        placement.translate_y -= fragment.content_offset_top;
+        placement.translate_x -= fragment.content_offset.x;
+        placement.translate_y -= fragment.content_offset.y;
     }
     Some(placement)
 }

@@ -52,7 +52,7 @@ pub(in crate::render::pdf) fn render_image(
         } else {
             image_box.outset(element.paint.raster_overflow)
         };
-        if raster_is_occluded(&frame.occlusion_coverers, raster, frame.element_index) {
+        if raster_is_occluded(frame.occlusion_coverers, raster, frame.element_index) {
             return;
         }
     }
@@ -121,27 +121,34 @@ pub(in crate::render::pdf) fn paint_image_box(
     }
 
     let image_content = paint_geometry.padding_box();
-    let sliced = element
-        .sampling
-        .source_crop
-        .and_then(|crop| crate::layout::images::crop_raster_asset(image, crop));
-    let source = sliced.as_ref().unwrap_or(image);
+    let source_content_size = element.sampling.replaced.fragment.map_or(
+        crate::types::Size::new(image_content.width, image_content.height),
+        |fragment| fragment.source_content_size,
+    );
     let placement = crate::layout::images::compute_image_placement(
-        image_content.width,
-        image_content.height,
-        source.source_width,
-        source.source_height,
-        element.sampling.object_fit,
-        element.sampling.object_position,
+        source_content_size.width,
+        source_content_size.height,
+        image.source_width,
+        image.source_height,
+        element.sampling.replaced.object_fit,
+        element.sampling.replaced.object_position,
     );
     let image_id = ctx.text.pdf_writer.add_layout_image_object(
-        source,
+        image,
         placement.width,
         placement.height,
         element.sampling.rendering,
     );
     let image_name = format!("Im{image_id}");
-    if placement.clip {
+    let fragment_offset = element
+        .sampling
+        .replaced
+        .fragment
+        .map_or(crate::types::Vector::ZERO, |fragment| {
+            fragment.content_offset
+        });
+    let clipped = placement.clip || element.sampling.replaced.fragment.is_some();
+    if clipped {
         content.push_str("q\n");
         content.push_str(&format!("{}W n\n", image_content.rect_path()));
     }
@@ -149,15 +156,15 @@ pub(in crate::render::pdf) fn paint_image_box(
         content,
         &image_name,
         PdfRect::new(
-            image_content.left + placement.offset_x,
-            image_content.top() - placement.offset_y - placement.height,
+            image_content.left + placement.offset_x - fragment_offset.x,
+            image_content.top() - placement.offset_y - placement.height + fragment_offset.y,
             placement.width,
             placement.height,
         ),
-        source,
+        image,
         ctx.text.pdf_writer,
     );
-    if placement.clip {
+    if clipped {
         content.push_str("Q\n");
     }
     ctx.text.page_images.push(ImageRef {
@@ -199,7 +206,7 @@ pub(in crate::render::pdf) fn render_svg(
     // fully hides its box.
     if ctx.text.pdf_writer.opts.occlusion_cull {
         let raster = PdfRect::new(svg_x, svg_y, *width, *height);
-        if raster_is_occluded(&occlusion_coverers, raster, elem_idx) {
+        if raster_is_occluded(occlusion_coverers, raster, elem_idx) {
             return;
         }
     }

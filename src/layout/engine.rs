@@ -30,9 +30,10 @@ pub(crate) use super::elements::{
     AvoidPageBreak, BackgroundBoxGeometry, BoxFragmentation, BoxModel, BoxPaint, Container,
     FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
     LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, LineFragmentation,
-    MathBlock, NamedString, PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedGeometry,
-    RunningElement, Svg, SvgPaint, TableRow, TextBlock, TextBlockStyle, TextFragmentation,
-    TextSemantics, TextSpacing, visit_layout_tree, visit_layout_tree_mut,
+    MathBlock, NamedString, PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedContent,
+    ReplacedFragment, ReplacedGeometry, RunningElement, Svg, SvgPaint, TableRow, TextBlock,
+    TextBlockStyle, TextFragmentation, TextSemantics, TextSpacing, visit_layout_tree,
+    visit_layout_tree_mut,
 };
 use super::flex::layout_flex_container;
 pub(crate) use super::flow_metrics::BlockMargins;
@@ -95,41 +96,6 @@ impl LayoutBorderSide {
     pub fn same_paint(&self, other: &Self) -> bool {
         self.width == other.width && self.color == other.color && self.style == other.style
     }
-}
-
-/// The part of an SVG content viewport that belongs to one fragment.
-///
-/// The SVG tree stays unchanged: a fragment clips the original rendering
-/// instead of turning a source crop into a new root `viewBox`, which would
-/// change the root SVG's `preserveAspectRatio` behavior.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SvgFragment {
-    pub source_content_size: Size,
-    pub content_offset_top: f32,
-}
-
-impl SvgFragment {
-    pub const fn initial(source_content_size: Size) -> Self {
-        Self {
-            source_content_size,
-            content_offset_top: 0.0,
-        }
-    }
-
-    pub const fn following(self, consumed_content_height: f32) -> Self {
-        Self {
-            content_offset_top: self.content_offset_top + consumed_content_height,
-            ..self
-        }
-    }
-}
-
-/// CSS replaced-content state shared by every SVG fragment.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct SvgReplacedContent {
-    pub object_fit: crate::style::computed::ObjectFit,
-    pub object_position: crate::style::computed::ObjectPosition,
-    pub fragment: Option<SvgFragment>,
 }
 
 /// Per-side border for layout rendering.
@@ -2787,7 +2753,7 @@ fn prepare_filtered_output(
         .cloned()
         .unwrap_or_default();
     let replacement = if has_displacement {
-        let raster = filter_el
+        filter_el
             .and_then(|definition| {
                 rasterize_svg_displacement_rect(&element, definition, env.filter_dpi)
             })
@@ -2801,7 +2767,10 @@ fn prepare_filtered_output(
                     ),
                     positioning: raster.geometry.positioning,
                     sampling: ImageSampling {
-                        object_fit: crate::style::computed::ObjectFit::Fill,
+                        replaced: ReplacedContent {
+                            object_fit: crate::style::computed::ObjectFit::Fill,
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                     paint: ImagePaint {
@@ -2811,8 +2780,7 @@ fn prepare_filtered_output(
                     },
                 }
                 .boxed()
-            });
-        raster
+            })
     } else {
         None
     };
@@ -3615,7 +3583,7 @@ pub(crate) fn flatten_element(
                             border_radii: style.resolve_corner_radii(svg_width, svg_height),
                             group: super::elements::PaintGroup::from_style(&style),
                         },
-                        replaced: SvgReplacedContent {
+                        replaced: ReplacedContent {
                             object_fit: style.object_fit,
                             object_position: style.object_position,
                             ..Default::default()

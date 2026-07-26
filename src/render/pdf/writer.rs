@@ -31,6 +31,9 @@ pub(crate) struct PdfWriter {
     pub(super) objects: Vec<String>,
     /// Raw binary objects stored separately (index corresponds to objects slot).
     pub(super) binary_objects: std::collections::HashMap<usize, Vec<u8>>,
+    /// Document images keyed by source identity and final display sampling.
+    pub(super) layout_image_objects:
+        std::collections::HashMap<super::writer_images::LayoutImageCacheKey, usize>,
     pub(super) page_ids: Vec<usize>,
     /// Annotation object IDs grouped by page index.
     pub(super) page_annotations: Vec<Vec<usize>>,

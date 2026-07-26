@@ -21,8 +21,8 @@ impl RasterCanvas<'_> {
             content_box.size.height,
             decoded.width(),
             decoded.height(),
-            sampling.object_fit,
-            sampling.object_position,
+            sampling.replaced.object_fit,
+            sampling.replaced.object_position,
         );
         let resized = crate::render::blur::rasterize_image_buffer(
             &decoded,
@@ -78,7 +78,10 @@ impl RasterCanvas<'_> {
                 ),
             ),
             crate::layout::elements::ImageSampling {
-                object_fit: crate::style::computed::ObjectFit::Fill,
+                replaced: crate::layout::engine::ReplacedContent {
+                    object_fit: crate::style::computed::ObjectFit::Fill,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         )

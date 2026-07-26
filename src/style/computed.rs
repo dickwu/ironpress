@@ -3560,7 +3560,7 @@ pub enum ObjectFit {
 }
 
 /// Sampling preference for replaced raster content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ImageRendering {
     /// UA-default interpolation behaviour.
     #[default]

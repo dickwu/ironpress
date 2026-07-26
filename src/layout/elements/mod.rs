@@ -24,7 +24,10 @@ pub(crate) use container::Container;
 pub(crate) use flex::{FlexContent, FlexRow};
 pub(crate) use fragmentation::*;
 pub(crate) use grid::{GridContent, GridRow, GridRowStartSpace};
-pub(crate) use media::{Image, ImagePaint, ImageSampling, ReplacedGeometry, Svg, SvgPaint};
+pub(crate) use media::{
+    Image, ImagePaint, ImageSampling, ReplacedContent, ReplacedFragment, ReplacedGeometry, Svg,
+    SvgPaint,
+};
 pub(crate) use metadata::{AvoidPageBreak, NamedString, PageBreak, RunningElement};
 pub(crate) use misc::{ColumnRule, HorizontalRule, MathBlock, ProgressBar, ProgressColors};
 pub(crate) use multicol::{MulticolColumn, MulticolContainer};

@@ -131,7 +131,10 @@ impl FilteredGraphic {
             ),
             positioning: self.geometry.positioning,
             sampling: ImageSampling {
-                object_fit: ObjectFit::Fill,
+                replaced: crate::layout::engine::ReplacedContent {
+                    object_fit: ObjectFit::Fill,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             paint: ImagePaint {

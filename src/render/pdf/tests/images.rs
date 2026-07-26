@@ -37,6 +37,42 @@
     }
 
     #[test]
+    fn fragmented_raster_reuses_one_complete_source_image() {
+        let source = rgb_png_data_uri(8, 20);
+        let html = format!(
+            r#"<style>
+                @page {{ size: 16px 8px; margin: 0 }}
+                * {{ margin: 0; box-sizing: border-box }}
+                img {{ display: block; width: 8px; height: 20px }}
+            </style><img alt="" src="{source}">"#,
+        );
+        let pdf = crate::HtmlConverter::new()
+            .compress(false)
+            .sanitize(false)
+            .convert(&html)
+            .expect("fragmented raster should render");
+        let content = String::from_utf8_lossy(&pdf);
+        let image_draws = content
+            .lines()
+            .filter(|line| line.starts_with("/Im") && line.ends_with(" Do"))
+            .count();
+
+        assert_eq!(
+            content.matches("/Subtype /Image").count(),
+            1,
+            "every fragment must reference one document-level image XObject"
+        );
+        assert!(
+            content.contains("/Width 8 /Height 20"),
+            "fragmentation must preserve the complete source raster"
+        );
+        assert_eq!(
+            image_draws, 3,
+            "the complete source must be clipped and translated once per page"
+        );
+    }
+
+    #[test]
     fn nested_filtered_replaced_output_paints_once_across_parent_phases() {
         let pdf = crate::HtmlConverter::new()
             .compress(false)
@@ -89,6 +125,34 @@
             String::from_utf8_lossy(&smooth_pdf).contains("/Interpolate true"),
             "smooth source images must request PDF interpolation"
         );
+    }
+
+    #[test]
+    fn image_cache_keeps_distinct_sampling_modes() {
+        let source = rgb_png_data_uri(2, 2);
+        let html = format!(
+            r#"<style>
+                img {{ width: 4px; height: 4px }}
+                .pixelated {{ image-rendering: pixelated }}
+                .smooth {{ image-rendering: smooth }}
+            </style>
+            <img class="pixelated" alt="" src="{source}">
+            <img class="smooth" alt="" src="{source}">"#,
+        );
+        let pdf = crate::HtmlConverter::new()
+            .compress(false)
+            .sanitize(false)
+            .convert(&html)
+            .expect("sampling variants should render");
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert_eq!(
+            content.matches("/Subtype /Image").count(),
+            2,
+            "sampling modes with different PDF behavior must not share an XObject"
+        );
+        assert!(content.contains("/Interpolate false"));
+        assert!(content.contains("/Interpolate true"));
     }
 
     #[test]

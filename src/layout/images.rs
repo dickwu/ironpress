@@ -226,7 +226,7 @@ pub(crate) fn load_image_from_element(
                     border_radii: style.resolve_corner_radii(width, height),
                     group: crate::layout::elements::PaintGroup::from_style(style),
                 },
-                replaced: crate::layout::engine::SvgReplacedContent {
+                replaced: crate::layout::engine::ReplacedContent {
                     object_fit: style.object_fit,
                     object_position: style.object_position,
                     ..Default::default()
@@ -287,10 +287,12 @@ pub(crate) fn load_image_from_element(
             ),
             positioning: Positioning::from_style(style),
             sampling: ImageSampling {
-                object_fit: style.object_fit,
-                object_position: style.object_position,
+                replaced: crate::layout::engine::ReplacedContent {
+                    object_fit: style.object_fit,
+                    object_position: style.object_position,
+                    ..Default::default()
+                },
                 rendering: style.image_rendering,
-                source_crop: None,
             },
             paint: ImagePaint {
                 background_color: style.background_color,
