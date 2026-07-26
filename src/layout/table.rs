@@ -6,7 +6,8 @@ use crate::layout::elements::{
     BoxModel, BoxPaint, Container, Image, InlineOffset, IntoLayoutNode, LayoutElement, LayoutNode,
     LayoutSize, LayoutVisitor, LayoutVisitorMut, PageBreak, PaintGroup, Positioning,
     SizeConstraints, Svg, Table, TableBoxDecoration, TableCells, TableFormatting,
-    TableFragmentGroup, TableFragmentation, TableInlineGeometry, TableRow, TableRowFlow, TextBlock,
+    TableFragmentGroup, TableFragmentation, TableGridIdentity, TableInlineGeometry, TableRow,
+    TableRowFlow, TextBlock,
 };
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext};
@@ -165,6 +166,7 @@ fn update_table_row(element: &mut dyn LayoutElement, update: impl FnOnce(&mut Ta
 }
 
 fn table_row_node(
+    grid: TableGridIdentity,
     content: TableCells,
     flow: TableRowFlow,
     formatting: TableFormatting,
@@ -172,6 +174,7 @@ fn table_row_node(
     inline: TableInlineGeometry,
 ) -> LayoutNode {
     TableRow {
+        grid,
         content,
         flow,
         formatting,
@@ -1975,6 +1978,13 @@ pub(crate) fn flatten_table(
     let ancestors = context.ancestors;
     let table_child_index = context.source_index;
     let table_sibling_count = context.sibling_count;
+    let table_grid = TableGridIdentity::from_source_path(
+        context
+            .ancestors
+            .iter()
+            .map(|ancestor| ancestor.child_index)
+            .chain(std::iter::once(table_child_index)),
+    );
     let descendant_layout = TableDescendantLayout::for_table(context, style);
     let rules = env.rules;
     let fonts = env.fonts;
@@ -3085,6 +3095,7 @@ pub(crate) fn flatten_table(
                         row_col_widths.reverse();
                     }
                     output.push(table_row_node(
+                        table_grid.clone(),
                         TableCells {
                             cells: row_cells,
                             column_widths: row_col_widths,
@@ -3124,6 +3135,7 @@ pub(crate) fn flatten_table(
                     row_col_widths.reverse();
                 }
                 output.push(table_row_node(
+                    table_grid.clone(),
                     TableCells {
                         cells: Vec::new(),
                         column_widths: row_col_widths,
@@ -3470,6 +3482,7 @@ pub(crate) fn flatten_table(
                 row_col_widths.reverse();
             }
             output.push(table_row_node(
+                table_grid.clone(),
                 TableCells {
                     cells: row_cells,
                     column_widths: row_col_widths,

@@ -33,7 +33,8 @@ pub(crate) use properties::*;
 pub(crate) use stacking::{Stacking, StackingLevel, StackingParticipant, StackingRole};
 pub(crate) use table::{
     Table, TableBoxDecoration, TableBoxDecorationOwner, TableCells, TableFormatting,
-    TableFragmentGroup, TableFragmentation, TableInlineGeometry, TableRow, TableRowFlow,
+    TableFragmentGroup, TableFragmentation, TableGridIdentity, TableGridOwner, TableInlineGeometry,
+    TableRow, TableRowFlow,
 };
 #[cfg(test)]
 pub(crate) use test_support::{LayoutElementTestExt, LayoutElementTestMutExt};
@@ -176,6 +177,12 @@ pub(crate) trait LayoutElement: Debug {
     }
 
     fn table_box_decoration_owner(&self) -> Option<&dyn TableBoxDecorationOwner> {
+        None
+    }
+
+    /// Identity of the table grid whose rows participate in one coordinated
+    /// background/border/content paint schedule.
+    fn table_grid_owner(&self) -> Option<&dyn TableGridOwner> {
         None
     }
 

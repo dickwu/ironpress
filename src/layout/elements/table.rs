@@ -255,6 +255,16 @@ mod tests {
             authored
         );
     }
+
+    #[test]
+    fn table_grid_identity_survives_cloning_and_separates_siblings() {
+        let first = TableGridIdentity::from_source_path([3]);
+        let first_clone = first.clone();
+        let sibling = TableGridIdentity::from_source_path([4]);
+
+        assert_eq!(first, first_clone);
+        assert_ne!(first, sibling);
+    }
 }
 
 /// Inline-axis geometry shared by every flattened row of one table.
@@ -360,13 +370,44 @@ impl TableRowFlow {
     }
 }
 
+/// Stable source-tree identity shared by every row of one table grid.
+///
+/// Rows are flattened so pagination can fragment them independently, but table
+/// backgrounds and borders still require one coordinated paint schedule. The
+/// source path preserves that relationship across cloning and fragmentation
+/// without reference counting or renderer-side guesses based on geometry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TableGridIdentity {
+    source_path: Box<[usize]>,
+}
+
+impl TableGridIdentity {
+    pub(crate) fn from_source_path(path: impl IntoIterator<Item = usize>) -> Self {
+        let source_path = path.into_iter().collect::<Vec<_>>().into_boxed_slice();
+        Self { source_path }
+    }
+}
+
+/// Capability used by painters that coordinate all rows belonging to one
+/// table grid without depending on the concrete row representation.
+pub(crate) trait TableGridOwner {
+    fn table_grid_identity(&self) -> &TableGridIdentity;
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TableRow {
+    pub(crate) grid: TableGridIdentity,
     pub(crate) content: TableCells,
     pub(crate) flow: TableRowFlow,
     pub(crate) formatting: TableFormatting,
     pub(crate) fragmentation: TableFragmentation,
     pub(crate) inline: TableInlineGeometry,
+}
+
+impl TableGridOwner for TableRow {
+    fn table_grid_identity(&self) -> &TableGridIdentity {
+        &self.grid
+    }
 }
 
 impl TableRow {
@@ -479,6 +520,10 @@ impl LayoutElement for TableRow {
     }
 
     fn block_flow_participant_mut(&mut self) -> Option<&mut dyn BlockFlowParticipant> {
+        Some(self)
+    }
+
+    fn table_grid_owner(&self) -> Option<&dyn TableGridOwner> {
         Some(self)
     }
 
