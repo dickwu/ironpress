@@ -109,23 +109,15 @@ pub(in crate::render::pdf) fn paint_image_box(
     if let Some(background) = element.paint.background_color
         && background.alpha() > 0.0
     {
-        let (r, g, b, a) = background.to_f32_rgba();
-        let needs_alpha = a < 1.0;
-        if needs_alpha {
-            let state = format!("GSimage{}", ctx.bg_alpha_counter);
-            *ctx.bg_alpha_counter += 1;
-            ctx.page_ext_gstates.push((state.clone(), a));
-            content.push_str(&format!("/{state} gs\n"));
-        }
-        content.push_str(&format!(
-            "{r} {g} {b} rg\n{}f\n",
-            paint_geometry
-                .rounded_border_box(element.paint.border_radii)
-                .path_or_rect()
-        ));
-        if needs_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
+        let background_box =
+            paint_geometry.background_clip_box(BackgroundClip::Border, element.paint.border_radii);
+        paint_solid_background(
+            content,
+            background,
+            background_box,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+        );
     }
 
     let image_content = paint_geometry.padding_box();
@@ -238,23 +230,15 @@ pub(in crate::render::pdf) fn paint_svg_box(
     if let Some(background) = element.paint.background_color
         && background.alpha() > 0.0
     {
-        let (r, g, b, a) = background.to_f32_rgba();
-        let needs_alpha = a < 1.0;
-        if needs_alpha {
-            let state = format!("GSsvg{}", ctx.bg_alpha_counter);
-            *ctx.bg_alpha_counter += 1;
-            ctx.page_ext_gstates.push((state.clone(), a));
-            content.push_str(&format!("/{state} gs\n"));
-        }
-        content.push_str(&format!(
-            "{r} {g} {b} rg\n{}f\n",
-            paint_geometry
-                .rounded_border_box(element.paint.border_radii)
-                .path_or_rect()
-        ));
-        if needs_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
+        let background_box =
+            paint_geometry.background_clip_box(BackgroundClip::Border, element.paint.border_radii);
+        paint_solid_background(
+            content,
+            background,
+            background_box,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+        );
     }
 
     let svg_content = paint_geometry.padding_box();

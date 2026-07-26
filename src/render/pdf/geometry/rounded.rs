@@ -1,5 +1,9 @@
 use super::PdfRect;
-use crate::types::{CornerRadii, EdgeSizes};
+use super::{PdfPoint, PdfVector};
+use crate::render::curves::{
+    CurveSink, CurveTolerance, EllipsePath, QuadraticBezier, RoundedRectPath,
+};
+use crate::types::{CornerRadii, EdgeSizes, Point, Rect, Vector};
 
 /// A rectangle and its resolved corner geometry. Keeping the two together
 /// prevents callers from insetting one without the other.
@@ -23,11 +27,19 @@ impl RoundedRect {
         if radii.is_zero() {
             return None;
         }
-        Some(if let Some(radius) = radii.uniform_radius() {
-            rounded_rect_path(self.rect, radius)
-        } else {
-            rounded_rect_path_per_corner(self.rect, radii)
-        })
+        let mut content = String::new();
+        let mut sink = PdfCurveSink::new(&mut content);
+        RoundedRectPath::new(
+            Rect::from_xywh(
+                self.rect.left,
+                -self.rect.top(),
+                self.rect.width,
+                self.rect.height,
+            ),
+            radii,
+        )
+        .write_to(&mut sink, CurveTolerance::PDF);
+        Some(content)
     }
 
     pub(in crate::render::pdf) fn path_or_rect(self) -> String {
@@ -54,68 +66,56 @@ impl RoundedRect {
     }
 }
 
-fn rounded_rect_path_per_corner(rect: PdfRect, radii: CornerRadii) -> String {
-    let radii = radii.fit_to(rect.width, rect.height);
-    let kf = 0.552_284_8;
-    let xl = rect.left;
-    let xr = rect.right();
-    let yt = rect.top();
-    let yb = rect.bottom;
-    let (tlx, tly) = (radii.top_left.x, radii.top_left.y);
-    let (trx, try_) = (radii.top_right.x, radii.top_right.y);
-    let (brx, bry) = (radii.bottom_right.x, radii.bottom_right.y);
-    let (blx, bly) = (radii.bottom_left.x, radii.bottom_left.y);
-    format!(
-        "{a} {yt} m\n\
-         {b} {yt} l {b2} {yt} {xr} {tr_y2} {xr} {tr_y} c\n\
-         {xr} {br_y} l {xr} {br_y2} {br_x2} {yb} {br_x} {yb} c\n\
-         {bl_x} {yb} l {bl_x2} {yb} {xl} {bl_y2} {xl} {bl_y} c\n\
-         {xl} {tl_y} l {xl} {tl_y2} {tl_x2} {yt} {a} {yt} c\n\
-         h\n",
-        a = xl + tlx,
-        b = xr - trx,
-        b2 = xr - trx + trx * kf,
-        tr_y = yt - try_,
-        tr_y2 = yt - try_ + try_ * kf,
-        br_y = yb + bry,
-        br_y2 = yb + bry - bry * kf,
-        br_x = xr - brx,
-        br_x2 = xr - brx + brx * kf,
-        bl_x = xl + blx,
-        bl_x2 = xl + blx - blx * kf,
-        bl_y = yb + bly,
-        bl_y2 = yb + bly - bly * kf,
-        tl_y = yt - tly,
-        tl_y2 = yt - tly + tly * kf,
-        tl_x2 = xl + tlx - tlx * kf,
-    )
+pub(super) fn push_ellipse_path(content: &mut String, center: PdfPoint, radii: PdfVector) {
+    let Some(path) = EllipsePath::new(
+        Point::new(center.x, -center.y),
+        Vector::new(radii.x, radii.y),
+    ) else {
+        return;
+    };
+    path.write_to(&mut PdfCurveSink::new(content), CurveTolerance::PDF);
 }
 
-fn rounded_rect_path(rect: PdfRect, radius: f32) -> String {
-    let radius = radius.min(rect.width / 2.0).min(rect.height / 2.0);
-    let k = radius * 0.552_284_8;
-    let x = rect.left;
-    let y = rect.bottom;
-    let width = rect.width;
-    let height = rect.height;
-    format!(
-        "{x0} {y0} m\n\
-         {x1} {y0} l {x2} {y0} {x3} {y3} {x3} {y4} c\n\
-         {x3} {y5} l {x3} {y6} {x2} {y7} {x1} {y7} c\n\
-         {x0} {y7} l {x8} {y7} {x9} {y6} {x9} {y5} c\n\
-         {x9} {y4} l {x9} {y3} {x8} {y0} {x0} {y0} c\n\
-         h\n",
-        x0 = x + radius,
-        x1 = x + width - radius,
-        x2 = x + width - radius + k,
-        x3 = x + width,
-        x8 = x + radius - k,
-        x9 = x,
-        y0 = y + height,
-        y3 = y + height - radius + k,
-        y4 = y + height - radius,
-        y5 = y + radius,
-        y6 = y + radius - k,
-        y7 = y,
-    )
+struct PdfCurveSink<'a> {
+    content: &'a mut String,
+}
+
+impl<'a> PdfCurveSink<'a> {
+    fn new(content: &'a mut String) -> Self {
+        Self { content }
+    }
+
+    fn point(point: Point) -> PdfPoint {
+        PdfPoint::new(point.x, -point.y)
+    }
+}
+
+impl CurveSink for PdfCurveSink<'_> {
+    fn move_to(&mut self, point: Point) {
+        let point = Self::point(point);
+        self.content
+            .push_str(&format!("{} {} m\n", point.x, point.y));
+    }
+
+    fn line_to(&mut self, point: Point) {
+        let point = Self::point(point);
+        self.content
+            .push_str(&format!("{} {} l\n", point.x, point.y));
+    }
+
+    fn quadratic_to(&mut self, curve: QuadraticBezier) {
+        let control_1 = curve.start + (curve.control - curve.start) * (2.0 / 3.0);
+        let control_2 = curve.end + (curve.control - curve.end) * (2.0 / 3.0);
+        let control_1 = Self::point(control_1);
+        let control_2 = Self::point(control_2);
+        let end = Self::point(curve.end);
+        self.content.push_str(&format!(
+            "{} {} {} {} {} {} c\n",
+            control_1.x, control_1.y, control_2.x, control_2.y, end.x, end.y
+        ));
+    }
+
+    fn close(&mut self) {
+        self.content.push_str("h\n");
+    }
 }

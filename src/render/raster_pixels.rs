@@ -167,6 +167,14 @@ pub(crate) fn pixmap_to_premultiplied_rgba(pixmap: &tiny_skia::Pixmap) -> image:
     })
 }
 
+/// Extract coverage without introducing meaningless RGB channels.
+pub(crate) fn pixmap_to_alpha_mask(pixmap: &tiny_skia::Pixmap) -> image::GrayImage {
+    image::GrayImage::from_fn(pixmap.width(), pixmap.height(), |x, y| {
+        let index = y as usize * pixmap.width() as usize + x as usize;
+        image::Luma([pixmap.pixels()[index].alpha()])
+    })
+}
+
 /// Convert straight-alpha RGBA bytes to the premultiplied representation used
 /// by Chromium's Skia raster pipeline.
 ///

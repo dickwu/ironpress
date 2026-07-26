@@ -11,7 +11,6 @@ pub(in crate::render::pdf) fn render_flex_row(
     let page_size = frame.page_size;
     let margin = frame.margin;
     let y_pos = &frame.y_pos;
-    let elem_idx = frame.element_index;
     let cells = &element.content.cells;
     let row_height = &element.content.row_height;
     let flex_offset_left = element.inline_offset.value();
@@ -30,6 +29,7 @@ pub(in crate::render::pdf) fn render_flex_row(
     let flex_bg_pos = &element.paint.background.layers.position;
     let flex_bg_repeat = &element.paint.background.layers.repeat;
     let flex_bg_origin = &element.paint.background.layers.origin;
+    let flex_bg_clip = &element.paint.background.layers.clip;
     let align_items = &element.content.alignment;
     let row_y = page_size.height - margin.top - y_pos;
     let flow_height = element.box_model.size.height.resolve(*row_height);
@@ -57,7 +57,10 @@ pub(in crate::render::pdf) fn render_flex_row(
     let flex_paint_geometry = flex_box_geometry.painting();
     let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
     let flex_paint_box = flex_paint_geometry.border_box;
-    let flex_box = flex_paint_geometry.rounded_border_box(*flex_radii);
+    let flex_background_geometry =
+        flex_box_geometry.background(*flex_bg_origin, *flex_bg_clip, *flex_radii);
+    let flex_background_reference = flex_background_geometry.positioning_box;
+    let flex_background_clip = flex_background_geometry.painting_box;
     let flex_group = PaintGroupScope::begin(content, element, flex_fragment_geometry, ctx);
 
     if phase.paints_decoration() {
@@ -70,24 +73,17 @@ pub(in crate::render::pdf) fn render_flex_row(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // Draw container background
         if let Some(background) = background_color {
-            let (r, g, b, a) = background.to_f32_rgba();
-            let needs_flex_bg_alpha = a < 1.0;
-            if needs_flex_bg_alpha {
-                let gs_name = format!("GSfbg{elem_idx}");
-                ctx.page_ext_gstates.push((gs_name.clone(), a));
-                content.push_str(&format!("/{gs_name} gs\n"));
-            }
-            content.push_str(&format!("{r} {g} {b} rg\n"));
-            content.push_str(&flex_box.path_or_rect());
-            content.push_str("f\n");
-            if needs_flex_bg_alpha {
-                content.push_str("/GSDefault gs\n");
-            }
+            paint_solid_background(
+                content,
+                *background,
+                flex_background_clip,
+                ctx.page_ext_gstates,
+                ctx.bg_alpha_counter,
+            );
         }
 
         // Draw container linear gradient
@@ -96,7 +92,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            flex_box.push_clip(content);
+            flex_background_clip.push_clip(content);
             render_linear_gradient(
                 content,
                 &gradient,
@@ -107,10 +103,10 @@ pub(in crate::render::pdf) fn render_flex_row(
                         || background_svg.is_some(),
                     element.paint.background.blend_mode.background_layer(0),
                 ),
-                flex_box.rect.left,
-                flex_box.rect.bottom,
-                flex_box.rect.width,
-                flex_box.rect.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -125,14 +121,14 @@ pub(in crate::render::pdf) fn render_flex_row(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            let clipped = flex_box.push_rounded_clip(content);
+            let clipped = flex_background_clip.push_rounded_clip(content);
             render_radial_gradient(
                 content,
                 &gradient,
-                flex_box.rect.left,
-                flex_box.rect.bottom,
-                flex_box.rect.width,
-                flex_box.rect.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -149,14 +145,14 @@ pub(in crate::render::pdf) fn render_flex_row(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            let clipped = flex_box.push_rounded_clip(content);
+            let clipped = flex_background_clip.push_rounded_clip(content);
             render_conic_gradient(
                 content,
                 &gradient,
-                flex_box.rect.left,
-                flex_box.rect.bottom,
-                flex_box.rect.width,
-                flex_box.rect.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -174,14 +170,10 @@ pub(in crate::render::pdf) fn render_flex_row(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // Draw SVG background image for flex container
         if let Some(svg_tree) = background_svg {
-            let reference = flex_box_geometry
-                .layout()
-                .background_origin_box(*flex_bg_origin);
             render_svg_background(
                 content,
                 svg_tree,
@@ -193,9 +185,9 @@ pub(in crate::render::pdf) fn render_flex_row(
                     Some(ctx.page_ext_gstates),
                 ),
                 PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                    reference.into(),
-                    flex_box.rect.into(),
-                    flex_box.radii,
+                    flex_background_reference.into(),
+                    flex_background_clip.rect.into(),
+                    flex_background_clip.radii,
                     *background_blur_radius,
                     *flex_bg_size,
                     *flex_bg_pos,
@@ -301,7 +293,12 @@ pub(in crate::render::pdf) fn render_flex_row(
             let cell_fragment_geometry =
                 cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
             let cell_paint_box = cell_paint_geometry.border_box;
-            let cell_box = cell_paint_geometry.rounded_border_box(cell.paint.border_radii);
+            let cell_background = cell_box_geometry.background(
+                cell.paint.background.layers.origin,
+                cell.paint.background.layers.clip,
+                cell.paint.border_radii,
+            );
+            let cell_background_clip = cell_background.painting_box;
             let cell_shadows = FlexCellShadows::new(cell, cell_fragment_geometry);
             let cell_inner_w = cell_geometry.content_box().width;
             let cell_group = PaintGroupScope::begin(content, cell, cell_fragment_geometry, ctx);
@@ -355,20 +352,13 @@ pub(in crate::render::pdf) fn render_flex_row(
 
             // Draw cell background
             if let Some(background) = cell.paint.background.color {
-                let (r, g, b, a) = background.to_f32_rgba();
-                let needs_fcell_bg_alpha = a < 1.0;
-                if needs_fcell_bg_alpha {
-                    let gs_name = format!("GSfcbg{}", ctx.bg_alpha_counter);
-                    *ctx.bg_alpha_counter += 1;
-                    ctx.page_ext_gstates.push((gs_name.clone(), a));
-                    content.push_str(&format!("/{gs_name} gs\n"));
-                }
-                content.push_str(&format!("{r} {g} {b} rg\n"));
-                content.push_str(&cell_box.path_or_rect());
-                content.push_str("f\n");
-                if needs_fcell_bg_alpha {
-                    content.push_str("/GSDefault gs\n");
-                }
+                paint_solid_background(
+                    content,
+                    background,
+                    cell_background_clip,
+                    ctx.page_ext_gstates,
+                    ctx.bg_alpha_counter,
+                );
             }
 
             paint_box_gradient_backgrounds(content, &cell.paint, cell_box_geometry, ctx);
@@ -388,9 +378,6 @@ pub(in crate::render::pdf) fn render_flex_row(
             }
 
             if let Some(svg_tree) = &cell.paint.background.layers.svg {
-                let reference = cell_box_geometry
-                    .layout()
-                    .background_origin_box(cell.paint.background.layers.origin);
                 render_svg_background(
                     content,
                     svg_tree,
@@ -402,9 +389,9 @@ pub(in crate::render::pdf) fn render_flex_row(
                         Some(ctx.page_ext_gstates),
                     ),
                     PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                        reference.into(),
-                        cell_box.rect.into(),
-                        cell_box.radii,
+                        cell_background.positioning_box.into(),
+                        cell_background_clip.rect.into(),
+                        cell_background_clip.radii,
                         cell.paint.background.layers.blur_radius,
                         cell.paint.background.layers.size,
                         cell.paint.background.layers.position,

@@ -26,6 +26,52 @@ pub(crate) const DEFAULT_MASK_RASTER_DPI: f32 = 300.0;
 /// backgrounds within the visibility policy while avoiding needless image growth.
 pub(crate) const DEFAULT_BACKGROUND_RASTER_DPI: f32 = 192.0;
 
+/// Bounded JPEG quality used by renderer-owned smooth coverage masks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JpegCompression {
+    quality: u8,
+}
+
+impl JpegCompression {
+    /// Construct a JPEG policy from the conventional 0..=100 quality scale.
+    pub const fn new(quality: u8) -> Self {
+        Self {
+            quality: if quality > 100 { 100 } else { quality },
+        }
+    }
+
+    pub(crate) const fn quality(self) -> u8 {
+        self.quality
+    }
+}
+
+impl Default for JpegCompression {
+    fn default() -> Self {
+        // Chromium's Skia PDF backend uses this quantization for blurred
+        // grayscale masks. Smooth low-frequency coverage remains visually
+        // indistinguishable while compressing far better than lossless Flate.
+        Self::new(50)
+    }
+}
+
+/// Storage policy for renderer-owned smooth grayscale coverage.
+///
+/// This is distinct from source-image compression: callers can retain
+/// lossless masks without changing authored PNG/JPEG handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverageCompression {
+    /// Preserve every generated coverage byte.
+    Lossless,
+    /// Use visually indistinguishable grayscale JPEG quantization.
+    Jpeg(JpegCompression),
+}
+
+impl Default for CoverageCompression {
+    fn default() -> Self {
+        Self::Jpeg(JpegCompression::default())
+    }
+}
+
 /// One conversion's raster-resolution contract. Grouping these related knobs
 /// keeps PPI policy explicit instead of scattering independent scalar defaults
 /// through the converter.
@@ -39,6 +85,8 @@ pub struct RasterQuality {
     pub mask_dpi: f32,
     /// Target physical resolution for flattened synthetic backgrounds.
     pub background_dpi: f32,
+    /// Compression for smooth renderer-owned blur coverage masks.
+    pub blurred_coverage_compression: CoverageCompression,
 }
 
 impl Default for RasterQuality {
@@ -48,6 +96,7 @@ impl Default for RasterQuality {
             filter_dpi: DEFAULT_FILTER_RASTER_DPI,
             mask_dpi: DEFAULT_MASK_RASTER_DPI,
             background_dpi: DEFAULT_BACKGROUND_RASTER_DPI,
+            blurred_coverage_compression: CoverageCompression::default(),
         }
     }
 }
@@ -59,6 +108,7 @@ impl RasterQuality {
             filter_dpi: raster_dpi_at_least(self.filter_dpi, 1.0),
             mask_dpi: raster_dpi_at_least(self.mask_dpi, 72.0),
             background_dpi: raster_dpi_at_least(self.background_dpi, CSS_REFERENCE_DPI),
+            blurred_coverage_compression: self.blurred_coverage_compression,
         }
     }
 }
@@ -157,6 +207,10 @@ mod tests {
         assert_eq!(quality.filter_dpi, DEFAULT_FILTER_RASTER_DPI);
         assert_eq!(quality.mask_dpi, DEFAULT_MASK_RASTER_DPI);
         assert_eq!(quality.background_dpi, DEFAULT_BACKGROUND_RASTER_DPI);
+        assert_eq!(
+            quality.blurred_coverage_compression,
+            CoverageCompression::Jpeg(JpegCompression::new(50))
+        );
     }
 
     #[test]

@@ -182,6 +182,24 @@ impl PdfDeviceRasterPlacement {
         )
     }
 
+    pub(super) fn enter_device_operator(self) -> String {
+        self.device.enter_operator()
+    }
+
+    pub(super) fn image_operator(self) -> String {
+        self.image_matrix.cm_operator()
+    }
+
+    /// Top-down device-space bounds occupied by the generated raster.
+    pub(super) fn device_bounds(self) -> PdfRect {
+        PdfRect::new(
+            self.image_matrix.translation.x,
+            self.image_matrix.translation.y + self.image_matrix.y_axis.y,
+            self.image_matrix.x_axis.x,
+            -self.image_matrix.y_axis.y,
+        )
+    }
+
     #[cfg(test)]
     const fn image_matrix(self) -> PdfMatrix {
         self.image_matrix

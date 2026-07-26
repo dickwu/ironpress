@@ -33,7 +33,6 @@ impl<'a> FlexCellShadows<'a> {
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
     }
 
@@ -46,7 +45,6 @@ impl<'a> FlexCellShadows<'a> {
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
     }
 }

@@ -126,46 +126,9 @@ impl PdfEllipse {
         Self::new(center, PdfVector::new(radius, radius))
     }
 
-    /// Append four cubic Bezier arcs, starting at the right-hand vertex.
+    /// Append the shared conic approximation, starting at the right-hand vertex.
     pub(super) fn push_path(self, content: &mut String) {
-        const K: f32 = 0.552_284_8;
-        let PdfPoint { x, y } = self.center;
-        let PdfVector { x: rx, y: ry } = self.radii;
-        let control = self.radii * K;
-
-        content.push_str(&format!("{} {y} m\n", x + rx));
-        content.push_str(&format!(
-            "{} {} {} {} {x} {} c\n",
-            x + rx,
-            y + control.y,
-            x + control.x,
-            y + ry,
-            y + ry
-        ));
-        content.push_str(&format!(
-            "{} {} {} {} {} {y} c\n",
-            x - control.x,
-            y + ry,
-            x - rx,
-            y + control.y,
-            x - rx
-        ));
-        content.push_str(&format!(
-            "{} {} {} {} {x} {} c\n",
-            x - rx,
-            y - control.y,
-            x - control.x,
-            y - ry,
-            y - ry
-        ));
-        content.push_str(&format!(
-            "{} {} {} {} {} {y} c\n",
-            x + control.x,
-            y - ry,
-            x + rx,
-            y - control.y,
-            x + rx
-        ));
+        rounded::push_ellipse_path(content, self.center, self.radii);
     }
 }
 
@@ -407,6 +370,25 @@ impl PdfRect {
 
     pub(super) const fn translate(self, dx: f32, dy: f32) -> Self {
         Self::new(self.left + dx, self.bottom + dy, self.width, self.height)
+    }
+
+    /// Place a top-down raster whose origin is an equal outset from this
+    /// rectangle's top-left corner.
+    ///
+    /// Raster dimensions are already device-quantized. Retaining the top-left
+    /// anchor while using their physical size avoids rescaling a finite blur
+    /// kernel over the source rectangle's fractional device-pixel remainder.
+    pub(super) fn top_left_raster_outset(
+        self,
+        outset: f32,
+        raster_size: crate::types::Size,
+    ) -> Self {
+        Self::from_top(
+            self.left - outset,
+            self.top() + outset,
+            raster_size.width,
+            raster_size.height,
+        )
     }
 
     /// Inset physical edges. The authored origin shift is retained even when

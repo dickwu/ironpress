@@ -79,31 +79,24 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         return;
     }
 
-    let background_clip =
-        paint_geometry.background_clip_box(block.background_clip, block.border_radii);
+    let background_geometry = box_geometry.background(
+        block.background_origin,
+        block.background_clip,
+        block.border_radii,
+    );
+    let background_clip = background_geometry.painting_box;
 
     if let Some(color) = block.background_color {
-        let (r, g, b) = color.to_f32_rgb();
-        let a = color.alpha();
-        let needs_bg_alpha = a < 1.0;
-        if needs_bg_alpha {
-            let gs_name = format!("GSba{}", ctx.bg_alpha_counter);
-            *ctx.bg_alpha_counter += 1;
-            ctx.page_ext_gstates.push((gs_name.clone(), a));
-            content.push_str(&format!("/{gs_name} gs\n"));
-        }
-        content.push_str(&format!("{r} {g} {b} rg\n"));
-        content.push_str(&background_clip.path_or_rect());
-        content.push_str("f\n");
-        if needs_bg_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
+        paint_solid_background(
+            content,
+            color,
+            background_clip,
+            ctx.page_ext_gstates,
+            ctx.bg_alpha_counter,
+        );
     }
 
     if let Some(svg_tree) = block.background_svg {
-        let origin_box = box_geometry
-            .layout()
-            .background_origin_box(block.background_origin);
         render_svg_background(
             content,
             svg_tree,
@@ -116,7 +109,7 @@ pub(in crate::render::pdf) fn render_nested_text_block(
             ),
             PdfBackgroundPaintContext::local(
                 BackgroundPaintContext::new(
-                    origin_box.into(),
+                    background_geometry.positioning_box.into(),
                     background_clip.rect.into(),
                     background_clip.radii,
                     block.background_blur_radius,

@@ -1334,7 +1334,7 @@ fn golden_canvas_edge_coverage_uses_direct_ramp_proof() {
 }
 
 #[test]
-fn golden_canvas_edge_chromatic_recolor_is_not_a_coverage_ramp() {
+fn golden_one_device_pixel_canvas_edge_chromatic_frontier_is_sub_visible() {
     let mut reference = canvas(100, 100);
     fill(&mut reference, 80, 20, 99, 79, BLACK);
     let mut candidate = reference.clone();
@@ -1345,6 +1345,24 @@ fn golden_canvas_edge_chromatic_recolor_is_not_a_coverage_ramp() {
 
     let outcome = run(&candidate, &reference);
     assert!(!outcome.regions.only_shared_coverage_color_residues());
+    assert!(outcome.regions.only_one_device_pixel_color_frontiers());
+    assert_eq!(outcome.status, Status::Pass);
+}
+
+#[test]
+fn golden_one_css_pixel_canvas_edge_chromatic_frontier_remains_visible() {
+    let mut reference = canvas(100, 100);
+    fill(&mut reference, 80, 20, 99, 79, BLACK);
+    let mut candidate = reference.clone();
+    for y in 20..=79 {
+        for x in 96..=99 {
+            reference.put_pixel(x, y, Rgba([198, 40, 40, 255]));
+            candidate.put_pixel(x, y, Rgba([25, 118, 210, 255]));
+        }
+    }
+
+    let outcome = run(&candidate, &reference);
+    assert!(!outcome.regions.only_one_device_pixel_color_frontiers());
     assert_eq!(outcome.status, Status::Fail);
 }
 
@@ -1364,6 +1382,50 @@ fn golden_stacked_border_edge_uses_one_shared_foreground() {
     let outcome = run(&candidate, &reference);
     assert!(outcome.regions.only_shared_coverage_color_residues());
     assert_eq!(outcome.status, Status::Pass);
+}
+
+#[test]
+fn golden_long_layered_inset_shadow_frontier_is_sub_visible() {
+    let stage = Rgba([247, 250, 252, 255]);
+    let background = Rgba([231, 245, 255, 255]);
+    let border = Rgba([87, 117, 144, 255]);
+    let shadow = Rgba([255, 209, 102, 255]);
+    let blended_shadow = Rgba([246, 221, 155, 255]);
+    let mut reference = ImageBuffer::from_pixel(520, 200, stage);
+    let mut candidate = reference.clone();
+    fill(&mut reference, 60, 60, 459, 65, border);
+    fill(&mut candidate, 60, 60, 459, 65, border);
+    fill(&mut reference, 60, 66, 459, 66, blended_shadow);
+    fill(&mut candidate, 60, 66, 459, 66, shadow);
+    fill(&mut reference, 60, 67, 459, 72, shadow);
+    fill(&mut candidate, 60, 67, 459, 72, shadow);
+    fill(&mut reference, 60, 73, 459, 160, background);
+    fill(&mut candidate, 60, 73, 459, 160, background);
+
+    let outcome = run(&candidate, &reference);
+
+    assert!(outcome.regions.only_shared_coverage_color_residues());
+    assert_eq!(outcome.status, Status::Pass);
+}
+
+#[test]
+fn golden_one_css_pixel_layered_frontier_error_remains_visible() {
+    let stage = Rgba([247, 250, 252, 255]);
+    let background = Rgba([231, 245, 255, 255]);
+    let border = Rgba([87, 117, 144, 255]);
+    let shadow = Rgba([255, 209, 102, 255]);
+    let mut reference = ImageBuffer::from_pixel(520, 200, stage);
+    let mut candidate = reference.clone();
+    fill(&mut reference, 60, 60, 459, 65, border);
+    fill(&mut candidate, 60, 60, 459, 65, border);
+    fill(&mut reference, 60, 66, 459, 160, background);
+    fill(&mut candidate, 60, 66, 459, 69, shadow);
+    fill(&mut candidate, 60, 70, 459, 160, background);
+
+    let outcome = run(&candidate, &reference);
+
+    assert!(!outcome.regions.only_shared_coverage_color_residues());
+    assert_eq!(outcome.status, Status::Fail);
 }
 
 #[test]

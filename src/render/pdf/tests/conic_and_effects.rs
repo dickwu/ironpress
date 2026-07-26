@@ -213,7 +213,7 @@
     }
 
     #[test]
-    fn blurred_inset_shadow_uses_raster_model_without_ring_layers() {
+    fn blurred_inset_shadow_uses_grayscale_coverage_and_native_alpha() {
         let pdf = crate::HtmlConverter::new()
             .compress(false)
             .filter_dpi(96.0)
@@ -227,9 +227,35 @@
             "blurred shadow should be an image XObject"
         );
         assert!(
-            !content.contains("/GSbs"),
-            "blurred inset shadow must not use empirical alpha ring layers"
+            content.contains("/ColorSpace /DeviceGray")
+                && content.contains("/Filter /DCTDecode")
+                && content.contains("/SMask << /Type /Mask /S /Luminosity"),
+            "blurred shadow coverage should be a grayscale soft mask"
         );
+        assert!(
+            content.contains("/ca 0.501961 /CA 0.501961"),
+            "authored shadow alpha should remain native graphics state"
+        );
+    }
+
+    #[test]
+    fn blurred_shadow_coverage_can_be_kept_lossless() {
+        let pdf = crate::HtmlConverter::new()
+            .compress(false)
+            .raster_quality(crate::RasterQuality {
+                filter_dpi: 96.0,
+                blurred_coverage_compression: crate::CoverageCompression::Lossless,
+                ..Default::default()
+            })
+            .convert(
+                r#"<div style="width:40pt;height:30pt;background:white;box-shadow:inset 0 0 8pt black"></div>"#,
+            )
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(content.contains("/ColorSpace /DeviceGray"));
+        assert!(content.contains("/Filter /FlateDecode"));
+        assert!(!content.contains("/Filter /DCTDecode"));
     }
 
     fn first_td_y(content: &str) -> Option<f32> {

@@ -210,3 +210,18 @@ fn clip_rectangle_and_radii_share_the_same_asymmetric_inset() {
         geometry.border_box
     );
 }
+
+#[test]
+fn border_box_background_uses_the_outer_border_shape() {
+    let geometry = PaintBoxGeometry::new(
+        PdfRect::new(10.0, 20.0, 100.0, 80.0),
+        EdgeSizes::uniform(6.0),
+        EdgeSizes::ZERO,
+    );
+    let radii = CornerRadii::uniform(CornerRadius::new(20.0, 12.0));
+
+    assert_eq!(
+        geometry.background_clip_box(BackgroundClip::Border, radii),
+        geometry.rounded_border_box(radii)
+    );
+}

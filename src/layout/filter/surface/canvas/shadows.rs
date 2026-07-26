@@ -18,13 +18,14 @@ impl RasterCanvas<'_> {
                 self.fill(shadow_rect, shadow.color);
                 continue;
             }
-            let blurred = crate::render::blur::blur_shadow_rect(
+            let blurred = crate::render::blur::blur_shadow_mask(
                 shadow_rect.size.width,
                 shadow_rect.size.height,
                 crate::types::CornerRadii::ZERO,
                 shadow,
                 filter_dpi,
-            )?;
+            )?
+            .tinted_raster(shadow.color.to_f32_rgba())?;
             self.paint_asset_at(
                 &blurred.asset,
                 Point::new(
@@ -55,13 +56,14 @@ impl RasterCanvas<'_> {
                 self.fill_ring(rect, hole, shadow.color);
                 continue;
             }
-            let blurred = crate::render::blur::blur_inset_shadow_rect(
+            let blurred = crate::render::blur::blur_inset_shadow_mask(
                 rect.size.width,
                 rect.size.height,
                 crate::types::CornerRadii::ZERO,
                 shadow,
                 filter_dpi,
-            )?;
+            )?
+            .tinted_raster(shadow.color.to_f32_rgba())?;
             self.paint_asset_at(
                 &blurred.asset,
                 Point::new(

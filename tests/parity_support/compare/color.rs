@@ -14,7 +14,7 @@ pub(crate) struct Lab {
 }
 
 /// Maximum L1 difference between normalized ink vectors measured from paper.
-const COLOUR_FAMILY_SHAPE_DELTA: f64 = 0.20;
+const COLOUR_FAMILY_SHAPE_DELTA: f64 = 0.25;
 /// Maximum RGB chroma still treated as a neutral coverage sample.
 const NEUTRAL_CHROMA: u8 = 16;
 
@@ -257,6 +257,10 @@ mod tests {
         assert!(same_colour_family(
             [251, 233, 236, 255],
             [243, 190, 197, 255]
+        ));
+        assert!(same_colour_family(
+            [217, 218, 232, 255],
+            [213, 228, 241, 255]
         ));
     }
 

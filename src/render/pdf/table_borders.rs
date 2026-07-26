@@ -426,7 +426,6 @@ fn paint_dotted_border_areas(
             PdfPoint::new(x1, y1 + direction * offset)
         };
         PdfEllipse::circle(center, width / 2.0).push_path(content);
-        content.push_str("h\n");
         offset += step;
     }
     content.push_str("f\n");

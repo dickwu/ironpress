@@ -143,15 +143,19 @@ pub(super) fn paint_uniform_border(
     let color = PdfRgb::from(side.color);
     match side.style {
         BorderStyle::Solid => {
-            content.push_str(&color.fill_operator());
-            paint_ring(
-                content,
-                BorderRingGeometry::new(
-                    border_box.rect,
-                    border_box.radii,
-                    EdgeSizes::uniform(side.width),
-                ),
-            );
+            if border_box.radii.is_circular() {
+                paint_uniform_solid_border(content, border_box, side.width, color);
+            } else {
+                content.push_str(&color.fill_operator());
+                paint_ring(
+                    content,
+                    BorderRingGeometry::new(
+                        border_box.rect,
+                        border_box.radii,
+                        EdgeSizes::uniform(side.width),
+                    ),
+                );
+            }
         }
         BorderStyle::Double => {
             paint_double_border(content, border_box, side.width, color);
@@ -178,6 +182,22 @@ pub(super) fn paint_uniform_border(
     }
     end_border_alpha(content, alpha);
     true
+}
+
+fn paint_uniform_solid_border(
+    content: &mut String,
+    border_box: RoundedRect,
+    width: f32,
+    color: PdfRgb,
+) {
+    let centerline =
+        BorderStrokeGeometry::new(border_box.rect, border_box.radii, EdgeSizes::uniform(width))
+            .centerline;
+    content.push_str(&color.stroke_operator());
+    content.push_str("0 J\n0 j\n4 M\n");
+    content.push_str(&format!("{width} w\n"));
+    content.push_str(&centerline.path_or_rect());
+    content.push_str("S\n");
 }
 
 fn paint_ring(content: &mut String, ring: BorderRingGeometry) {
@@ -299,74 +319,16 @@ fn paint_square_dots(content: &mut String, rect: PdfRect, width: f32) {
         let x = rect.left + radius + index as f32 * horizontal_span / horizontal_intervals as f32;
         for y in [rect.bottom + radius, rect.top() - radius] {
             PdfEllipse::circle(PdfPoint::new(x, y), radius).push_path(content);
-            content.push_str("h\n");
         }
     }
     for index in 0..=vertical_intervals {
         let y = rect.top() - radius - index as f32 * vertical_span / vertical_intervals as f32;
         for x in [rect.left + radius, rect.right() - radius] {
             PdfEllipse::circle(PdfPoint::new(x, y), radius).push_path(content);
-            content.push_str("h\n");
         }
     }
     content.push_str("f\n");
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn solid(width: f32, color: crate::types::Color) -> crate::layout::engine::LayoutBorderSide {
-        crate::layout::engine::LayoutBorderSide {
-            width,
-            color,
-            style: BorderStyle::Solid,
-        }
-    }
-
-    #[test]
-    fn square_single_color_fragment_uses_non_overlapping_rectangular_bands() {
-        let color = crate::types::Color::from_srgb(0.2, 0.3, 0.4, 1.0);
-        let border = crate::layout::engine::LayoutBorder {
-            top: solid(1.0, color),
-            right: solid(2.0, color),
-            bottom: Default::default(),
-            left: solid(3.0, color),
-        };
-        let square = SquareSolidBorder::from_layout(
-            PdfRect::new(10.0, 20.0, 100.0, 50.0),
-            &border,
-            CornerRadii::ZERO,
-        )
-        .expect("single-color square border");
-
-        assert_eq!(
-            square.bands(),
-            [
-                PdfRect::new(10.0, 69.0, 100.0, 1.0),
-                PdfRect::new(108.0, 20.0, 2.0, 49.0),
-                PdfRect::new(10.0, 20.0, 100.0, 0.0),
-                PdfRect::new(10.0, 20.0, 3.0, 49.0),
-            ]
-        );
-    }
-
-    #[test]
-    fn mixed_solid_colors_require_diagonal_corner_ownership() {
-        let border = crate::layout::engine::LayoutBorder {
-            top: solid(1.0, crate::types::Color::BLACK),
-            right: solid(1.0, crate::types::Color::WHITE),
-            bottom: Default::default(),
-            left: solid(1.0, crate::types::Color::BLACK),
-        };
-
-        assert!(
-            SquareSolidBorder::from_layout(
-                PdfRect::new(0.0, 0.0, 100.0, 50.0),
-                &border,
-                CornerRadii::ZERO,
-            )
-            .is_none()
-        );
-    }
-}
+mod tests;

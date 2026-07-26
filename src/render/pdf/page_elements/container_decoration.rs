@@ -51,7 +51,6 @@ pub(super) fn paint_container_decoration(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // The box `background-clip` confines the painted fill to.
@@ -316,7 +315,6 @@ pub(super) fn paint_container_decoration(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // Missing fragment edges are zero-width sides in the same border ring

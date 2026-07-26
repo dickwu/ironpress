@@ -1,7 +1,7 @@
-use super::geometry::{FragmentPaintGeometry, RoundedRect};
-use super::{ImageRef, PdfWriter};
+use super::PdfWriter;
+use super::geometry::{FragmentPaintGeometry, PdfRect, RoundedRect};
 use crate::style::computed::BoxShadow;
-use crate::types::{EdgeSizes, Size};
+use crate::types::EdgeSizes;
 
 /// Render every outset shadow in a `box-shadow` list. CSS paints shadows
 /// back-to-front: the FIRST listed shadow ends up on top, so the list is
@@ -16,7 +16,6 @@ pub(super) fn render_box_shadows(
     page_ext_gstates: &mut Vec<(String, f32)>,
     gs_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
 ) {
     let rounded_box = geometry.positioning().rounded_border_box(radii);
     let clip = geometry.decoration_clip(shadow_paint_outsets(shadows));
@@ -33,7 +32,6 @@ pub(super) fn render_box_shadows(
             page_ext_gstates,
             gs_counter,
             pdf_writer,
-            page_images,
         );
     }
     if clip.is_some() {
@@ -51,7 +49,6 @@ pub(super) fn render_box_shadows_inset(
     page_ext_gstates: &mut Vec<(String, f32)>,
     gs_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
 ) {
     let positioning = geometry.positioning();
     let rounded_box = positioning.rounded_padding_box(radii);
@@ -69,7 +66,6 @@ pub(super) fn render_box_shadows_inset(
             page_ext_gstates,
             gs_counter,
             pdf_writer,
-            page_images,
         );
     }
     if clip.is_some() {
@@ -107,7 +103,6 @@ fn render_box_shadow(
     page_ext_gstates: &mut Vec<(String, f32)>,
     gs_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
 ) {
     let spread = shadow.spread;
     // CSS: positive offset_y = shadow below element.
@@ -117,10 +112,7 @@ fn render_box_shadow(
         .rect
         .translate(shadow.offset_x, -shadow.offset_y)
         .outset_uniform(spread)
-        .rounded(rounded_box.radii.outset_shadow(
-            Size::new(rounded_box.rect.width, rounded_box.rect.height),
-            spread,
-        ));
+        .rounded(rounded_box.radii.outset_shadow(spread));
 
     if shadow.blur <= 0.0 {
         paint_solid_box_shadow(content, shadow, shadow_box, page_ext_gstates, gs_counter);
@@ -130,36 +122,27 @@ fn render_box_shadow(
     // True gaussian blur: rasterize the (rounded) shadow rect, gaussian-blur it
     // (σ = blur/2), and embed as an image XObject. The shadow's corner radius
     // tracks the box radius grown by spread (the spread expands the radius too).
-    if let Some(blurred) = crate::render::blur::blur_shadow_rect(
+    if let Some(blurred) = crate::render::blur::blur_shadow_mask(
         shadow_box.rect.width,
         shadow_box.rect.height,
         shadow_box.radii,
         shadow,
         pdf_writer.opts.raster_quality.filter_dpi,
     ) {
-        let img_obj_id = pdf_writer.add_image_object(
-            &blurred.asset.data,
-            blurred.asset.source_width,
-            blurred.asset.source_height,
-            blurred.asset.format,
-            blurred.asset.png_metadata.as_ref(),
-        );
-        let img_name = format!("Im{img_obj_id}");
         let ov = blurred.overflow_pt;
-        let image_box = shadow_box.rect.outset_uniform(ov);
-        content.push_str(&format!(
-            "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-            w = image_box.width,
-            h = image_box.height,
-            ix = image_box.left,
-            iy = image_box.bottom,
-            name = img_name,
-        ));
-        page_images.push(ImageRef {
-            name: img_name,
-            obj_id: img_obj_id,
-        });
-        return;
+        let image_box = shadow_box
+            .rect
+            .top_left_raster_outset(ov, blurred.raster_size_pt());
+        if pdf_writer.paint_blurred_shadow(
+            content,
+            shadow,
+            &blurred,
+            image_box,
+            page_ext_gstates,
+            gs_counter,
+        ) {
+            return;
+        }
     }
 
     // Fallback (raster unavailable): solid shadow at authored alpha.
@@ -203,42 +186,32 @@ fn render_box_shadow_inset(
     page_ext_gstates: &mut Vec<(String, f32)>,
     gs_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
 ) {
     let spread = shadow.spread;
     if shadow.blur > 0.0 {
-        if let Some(blurred) = crate::render::blur::blur_inset_shadow_rect(
+        if let Some(blurred) = crate::render::blur::blur_inset_shadow_mask(
             rounded_box.rect.width,
             rounded_box.rect.height,
             rounded_box.radii,
             shadow,
             pdf_writer.opts.raster_quality.filter_dpi,
         ) {
-            let img_obj_id = pdf_writer.add_image_object(
-                &blurred.asset.data,
-                blurred.asset.source_width,
-                blurred.asset.source_height,
-                blurred.asset.format,
-                blurred.asset.png_metadata.as_ref(),
-            );
-            let img_name = format!("Im{img_obj_id}");
             let ov = blurred.overflow_pt;
-            let image_box = rounded_box.rect.outset_uniform(ov);
+            let image_box = rounded_box
+                .rect
+                .top_left_raster_outset(ov, blurred.raster_size_pt());
             content.push_str("q\n");
             content.push_str(&rounded_box.path_or_rect());
             content.push_str("W n\n");
-            content.push_str(&format!(
-                "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\nQ\n",
-                w = image_box.width,
-                h = image_box.height,
-                ix = image_box.left,
-                iy = image_box.bottom,
-                name = img_name,
-            ));
-            page_images.push(ImageRef {
-                name: img_name,
-                obj_id: img_obj_id,
-            });
+            pdf_writer.paint_blurred_shadow(
+                content,
+                shadow,
+                &blurred,
+                image_box,
+                page_ext_gstates,
+                gs_counter,
+            );
+            content.push_str("Q\n");
         }
         // A blurred inset shadow requires raster compositing. If allocation or
         // encoding fails, do not substitute a differently-shaped ring model.
@@ -277,5 +250,34 @@ fn render_box_shadow_inset(
     content.push_str("Q\n");
     if base_alpha < 1.0 {
         content.push_str("/GSDefault gs\n");
+    }
+}
+
+impl PdfWriter {
+    fn paint_blurred_shadow(
+        &mut self,
+        content: &mut String,
+        shadow: &BoxShadow,
+        mask: &crate::render::blur::BlurredCoverageMask,
+        bounds: PdfRect,
+        page_ext_gstates: &mut Vec<(String, f32)>,
+        gs_counter: &mut usize,
+    ) -> bool {
+        let Some(mask_state) = self.add_coverage_soft_mask(mask, bounds) else {
+            return false;
+        };
+        let (red, green, blue, alpha) = shadow.color.to_f32_rgba();
+        content.push_str("q\n");
+        if alpha < 1.0 {
+            let opacity_state = format!("GSbs{}", *gs_counter);
+            *gs_counter += 1;
+            page_ext_gstates.push((opacity_state.clone(), alpha));
+            content.push_str(&format!("/{opacity_state} gs\n"));
+        }
+        mask_state.apply(content);
+        content.push_str(&format!("{red} {green} {blue} rg\n"));
+        content.push_str(&mask_state.paint_bounds().rect_path());
+        content.push_str("f\nQ\n");
+        true
     }
 }

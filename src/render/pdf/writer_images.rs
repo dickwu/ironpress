@@ -576,6 +576,24 @@ impl PdfWriter {
         id
     }
 
+    pub(super) fn add_dct_image_stream(
+        &mut self,
+        stream: Vec<u8>,
+        width: u32,
+        height: u32,
+        color_space: &str,
+        interpolation: PdfImageInterpolation,
+    ) -> usize {
+        let id = self.next_id();
+        let interpolation = interpolation.pdf_dictionary_entry();
+        self.objects.push(format!(
+            "{id} 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {color_space} /BitsPerComponent 8 /Filter /DCTDecode{interpolation} /Length {len} >>\nstream\n",
+            len = stream.len(),
+        ));
+        self.binary_objects.insert(id, stream);
+        id
+    }
+
     pub(crate) fn add_raw_png_image_object(&mut self, raw_png: &[u8]) -> Option<usize> {
         self.add_raw_png_image_object_with_interpolation(raw_png, PdfImageInterpolation::Default)
     }

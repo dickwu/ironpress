@@ -1,4 +1,4 @@
-use super::geometry::PdfRect;
+use super::geometry::{PdfRect, RoundedRect};
 use super::transforms::{PageContentTransform, PdfPaintSpace};
 use super::{ImageRef, PdfWriter};
 use crate::render::background::BackgroundPaintContext;
@@ -54,6 +54,36 @@ impl<'a> PdfBackgroundResources<'a> {
             shading_counter,
             ext_gstates,
         }
+    }
+}
+
+/// Paint one resolved solid background through its final vector clip.
+///
+/// Callers resolve background-origin, background-clip, rounded corners, and
+/// opaque-border coverage before reaching this homogeneous paint operation.
+pub(super) fn paint_solid_background(
+    content: &mut String,
+    color: crate::types::Color,
+    painting_box: RoundedRect,
+    ext_gstates: &mut Vec<(String, f32)>,
+    alpha_counter: &mut usize,
+) {
+    let alpha = color.alpha();
+    if alpha <= 0.0 || painting_box.rect.is_empty() {
+        return;
+    }
+    let needs_alpha = alpha < 1.0;
+    if needs_alpha {
+        let name = format!("GSbackground{alpha_counter}");
+        *alpha_counter += 1;
+        ext_gstates.push((name.clone(), alpha));
+        content.push_str(&format!("/{name} gs\n"));
+    }
+    content.push_str(&PdfRgb::from(color).fill_operator());
+    content.push_str(&painting_box.path_or_rect());
+    content.push_str("f\n");
+    if needs_alpha {
+        content.push_str("/GSDefault gs\n");
     }
 }
 

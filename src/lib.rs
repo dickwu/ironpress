@@ -140,7 +140,7 @@ fn parse_page_descriptor_length(value: &str) -> Option<f32> {
 }
 
 pub use error::IronpressError;
-pub use style::raster_quality::RasterQuality;
+pub use style::raster_quality::{CoverageCompression, JpegCompression, RasterQuality};
 pub use types::{CornerRadii, CornerRadius, EdgeSizes, Margin, PageSize};
 
 /// Convert an HTML string to PDF bytes using default settings (A4, 1-inch margins).
@@ -1263,6 +1263,7 @@ mod tests {
             filter_dpi: f32::NAN,
             mask_dpi: f32::NAN,
             background_dpi: 48.0,
+            blurred_coverage_compression: CoverageCompression::Lossless,
         });
 
         assert_eq!(
@@ -1272,6 +1273,7 @@ mod tests {
                 filter_dpi: 1.0,
                 mask_dpi: 72.0,
                 background_dpi: 96.0,
+                blurred_coverage_compression: CoverageCompression::Lossless,
             }
         );
     }
@@ -4716,10 +4718,10 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(pdf_has_text(&pdf, "Header"), "th text should appear in PDF");
-        // #2c3e50 = (44/255, 62/255, 80/255) ≈ (0.172549, 0.243137, 0.313725)
-        // Check for any non-zero background color operator (not 0 0 0)
+        // #2c3e50 is serialized through the canonical four-decimal PDF color
+        // operator shared by every solid background path.
         assert!(
-            content.contains("0.17254902 0.24313726 0.3137255 rg"),
+            content.contains("0.1725 0.2431 0.3137 rg"),
             "background color from stylesheet should produce rg operator"
         );
     }

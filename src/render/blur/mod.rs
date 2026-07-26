@@ -28,7 +28,9 @@ mod images;
 mod surface;
 mod svg;
 
-pub(crate) use box_shadows::{blur_inset_shadow_rect, blur_shadow_alpha_mask, blur_shadow_rect};
+pub(crate) use box_shadows::{
+    BlurredCoverageMask, blur_inset_shadow_mask, blur_shadow_alpha_mask, blur_shadow_mask,
+};
 pub(crate) use boxes::blur_box;
 use discrete::{DiscreteGaussianPlan, box_blur_axes};
 pub(crate) use drop_shadow::drop_shadow_image;
@@ -123,6 +125,52 @@ fn pad_pixels(sigma: f32) -> Option<u32> {
     (pixels <= f64::from(u32::MAX)).then_some(pixels as u32)
 }
 
+/// A blur kernel and the exact backing-image support needed for antialiased
+/// coverage masks.
+///
+/// CSS layout overflow remains conservative at three sigma. The embedded mask
+/// itself instead uses the finite support of the selected discrete kernel plus
+/// one source-coverage pixel for vector antialiasing. Keeping those quantities
+/// distinct avoids scaling a larger transparent bitmap into the same PDF
+/// placement and thereby changing the mask's sampling phase.
+#[derive(Clone, Copy)]
+struct CoverageBlurKernel {
+    support_px: u32,
+    padding_px: u32,
+    sampling: FilterBlurSampling,
+}
+
+impl CoverageBlurKernel {
+    fn from_sigma(sigma_px: f32) -> Option<Self> {
+        if !sigma_px.is_normal() || sigma_px <= 0.0 {
+            return None;
+        }
+        let sampling = match DiscreteGaussianPlan::from_sigma(sigma_px) {
+            Some(plan) => FilterBlurSampling::ThreeBox(plan),
+            None => FilterBlurSampling::SmallGaussian { sigma_px },
+        };
+        let support_px = match sampling {
+            FilterBlurSampling::ThreeBox(plan) => plan.support_radius(),
+            FilterBlurSampling::SmallGaussian { sigma_px } => pad_pixels(sigma_px)?,
+        };
+        let padding_px = support_px.checked_add(1)?;
+        Some(Self {
+            support_px,
+            padding_px,
+            sampling,
+        })
+    }
+
+    fn blur(self, premultiplied: &image::RgbaImage) -> Option<image::RgbaImage> {
+        match self.sampling {
+            FilterBlurSampling::SmallGaussian { sigma_px } => {
+                Some(image::imageops::blur(premultiplied, sigma_px))
+            }
+            FilterBlurSampling::ThreeBox(plan) => box_blur_axes(premultiplied, plan),
+        }
+    }
+}
+
 fn padded_pixels(content_pixels: u32, padding_pixels: u32) -> Option<u32> {
     content_pixels.checked_add(padding_pixels.checked_mul(2)?)
 }
@@ -190,38 +238,6 @@ fn blur_css_filter_premultiplied(
             Some(image::imageops::blur(premultiplied, sigma_px))
         }
         FilterBlurSampling::ThreeBox(plan) => box_blur_axes(premultiplied, plan),
-    }
-}
-
-/// Gaussian-blur a straight-alpha RGBA buffer correctly: `image::imageops::blur`
-/// blurs each channel independently, so transparent (0,0,0,0) padding would
-/// bleed black into the feathered edge. Premultiply first, blur, then
-/// un-premultiply so only visible colour contributes.
-fn gaussian_blur_premultiplied(img: &image::RgbaImage, sigma: f32) -> Option<image::RgbaImage> {
-    if !sigma.is_normal() || sigma <= 0.0 {
-        return None;
-    }
-    let premultiplied = crate::render::raster_pixels::premultiply_rgba8(img);
-    let blurred = blur_premultiplied_at_sigma(&premultiplied, sigma)?;
-    Some(crate::render::raster_pixels::unpremultiply_rgba8(&blurred))
-}
-
-/// Apply the discrete Gaussian sampling Chromium uses for sufficiently broad
-/// mask blurs, retaining a direct Gaussian for the small-radius case.
-///
-/// Shadow and filter sources arrive through different paint paths, but their
-/// CSS blur radii describe the same visual kernel. Keeping the choice here
-/// prevents those paths from drifting apart at high raster resolutions.
-fn blur_premultiplied_at_sigma(
-    premultiplied: &image::RgbaImage,
-    sigma: f32,
-) -> Option<image::RgbaImage> {
-    if !sigma.is_normal() || sigma <= 0.0 {
-        return None;
-    }
-    match DiscreteGaussianPlan::from_sigma(sigma) {
-        Some(plan) => box_blur_axes(premultiplied, plan),
-        None => Some(image::imageops::blur(premultiplied, sigma)),
     }
 }
 
@@ -361,6 +377,19 @@ mod tests {
     fn css_filter_kernel_rejects_non_finite_input() {
         assert!(FilterBlurKernel::new(f32::INFINITY, 300.0).is_none());
         assert!(FilterBlurKernel::new(4.5, f32::NAN).is_some());
+    }
+
+    #[test]
+    fn broad_antialiased_mask_uses_finite_kernel_support_plus_source_fringe() {
+        let kernel =
+            CoverageBlurKernel::from_sigma(28.125).expect("finite broad sigma has a kernel");
+        let FilterBlurSampling::ThreeBox(plan) = kernel.sampling else {
+            panic!("broad mask blur should use the bounded integer plan");
+        };
+
+        assert_eq!(plan.pass_widths(), [53, 53, 53]);
+        assert_eq!(plan.support_radius(), 78);
+        assert_eq!(kernel.padding_px, 79);
     }
 
     #[test]

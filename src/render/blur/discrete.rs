@@ -53,6 +53,15 @@ impl DiscreteGaussianPlan {
         ]
     }
 
+    /// Farthest destination sample reached by the finite three-box kernel.
+    ///
+    /// This is a raster support radius, not a conservative CSS paint overflow.
+    /// Callers rasterizing antialiased vector coverage must additionally retain
+    /// the one-pixel source fringe.
+    pub(super) const fn support_radius(self) -> u32 {
+        self.border
+    }
+
     fn pass_buffer_len(self) -> Option<usize> {
         usize::try_from(self.window.checked_sub(1)?).ok()
     }

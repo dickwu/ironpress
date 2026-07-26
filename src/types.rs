@@ -118,6 +118,30 @@ impl Rect {
         )
     }
 
+    /// Expand the rectangle by physical edges.
+    pub fn outset(self, edges: EdgeSizes) -> Self {
+        Self::from_xywh(
+            self.origin.x - edges.left,
+            self.origin.y - edges.top,
+            self.size.width + edges.horizontal(),
+            self.size.height + edges.vertical(),
+        )
+    }
+
+    /// Translate the rectangle without changing its extent.
+    pub fn translate(self, displacement: Vector) -> Self {
+        Self::new(self.origin + displacement, self.size)
+    }
+
+    /// Smallest axis-aligned rectangle enclosing both inputs.
+    pub fn union(self, other: Self) -> Self {
+        let left = self.origin.x.min(other.origin.x);
+        let top = self.origin.y.min(other.origin.y);
+        let right = self.right().max(other.right());
+        let bottom = self.bottom().max(other.bottom());
+        Self::from_xywh(left, top, right - left, bottom - top)
+    }
+
     /// Geometric intersection of two non-empty rectangles.
     pub fn intersection(self, other: Self) -> Option<Self> {
         let left = self.origin.x.max(other.origin.x);
@@ -146,6 +170,11 @@ impl Vector {
     /// Create a vector from horizontal and vertical components.
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
+    }
+
+    /// Euclidean magnitude of this displacement.
+    pub fn length(self) -> f32 {
+        self.x.hypot(self.y)
     }
 }
 
@@ -196,6 +225,14 @@ impl Sub for Vector {
 impl SubAssign for Vector {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
+    }
+}
+
+impl std::ops::Mul<f32> for Vector {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self::new(self.x * rhs, self.y * rhs)
     }
 }
 
@@ -635,21 +672,17 @@ impl CornerRadii {
         })
     }
 
-    /// Resolve an outset `box-shadow` radius for a border box and positive
-    /// spread. CSS Backgrounds 3 §6.1.1 preserves the sharpness of small
-    /// corners instead of simply adding the spread to both axes.
-    pub fn outset_shadow(self, border_box: Size, spread: f32) -> Self {
-        if spread <= 0.0
-            || !spread.is_finite()
-            || border_box.width <= 0.0
-            || border_box.height <= 0.0
-            || !border_box.width.is_finite()
-            || !border_box.height.is_finite()
-        {
+    /// Resolve an outset `box-shadow` radius for positive spread.
+    ///
+    /// CSS Backgrounds 3 §6.1.1 adjusts each radius axis independently. The
+    /// result depends only on that axis and the spread; the containing box
+    /// dimensions do not participate in the shadow-radius formula.
+    pub fn outset_shadow(self, spread: f32) -> Self {
+        if spread <= 0.0 || !spread.is_finite() {
             return self.grow(spread);
         }
 
-        self.map(|radius| outset_shadow_radius(radius, border_box, spread))
+        self.map(|radius| radius.map_axes(|axis| outset_shadow_axis(axis, spread)))
     }
 
     /// Apply the CSS radius-overlap scale for a box of this size.
@@ -690,24 +723,16 @@ impl CornerRadii {
     }
 }
 
-fn outset_shadow_radius(radius: CornerRadius, border_box: Size, spread: f32) -> CornerRadius {
-    if radius.is_zero() {
-        return CornerRadius::ZERO;
+fn outset_shadow_axis(radius: f32, spread: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    if radius >= spread {
+        return radius + spread;
     }
 
-    let coverage = (2.0 * radius.x / border_box.width)
-        .min(2.0 * radius.y / border_box.height)
-        .max(0.0);
-    let adjust_axis = |axis: f32| {
-        if axis > spread || coverage > 1.0 {
-            axis + spread
-        } else {
-            let remaining_axis = 1.0 - axis / spread;
-            axis + spread * (1.0 - remaining_axis.powi(3) * (1.0 - coverage.powi(3)))
-        }
-    };
-
-    CornerRadius::new(adjust_axis(radius.x), adjust_axis(radius.y))
+    let ratio = radius / spread;
+    radius + spread * (1.0 + (ratio - 1.0).powi(3))
 }
 
 impl std::ops::Mul<f32> for CornerRadii {
@@ -720,7 +745,7 @@ impl std::ops::Mul<f32> for CornerRadii {
 
 #[cfg(test)]
 mod box_geometry_tests {
-    use super::{CornerRadii, CornerRadius, EdgeSizes, Size};
+    use super::{CornerRadii, CornerRadius, EdgeSizes};
 
     #[test]
     fn edge_sizes_arithmetic_is_component_wise() {
@@ -778,14 +803,26 @@ mod box_geometry_tests {
             CornerRadius::circular(22.5),
             CornerRadius::circular(9.0),
         );
-        let shadow = radii.outset_shadow(Size::new(120.0, 67.5), 13.5);
+        let shadow = radii.outset_shadow(13.5);
 
         assert_eq!(shadow.top_left, CornerRadius::circular(45.0));
-        assert!((shadow.top_right.x - 14.001_687).abs() < 1e-5);
-        assert!((shadow.top_right.y - 14.001_687).abs() < 1e-5);
+        assert!((shadow.top_right.x - 14.0).abs() < 1e-5);
+        assert!((shadow.top_right.y - 14.0).abs() < 1e-5);
         assert_eq!(shadow.bottom_right, CornerRadius::circular(36.0));
-        assert!((shadow.bottom_left.x - 22.001_688).abs() < 1e-5);
-        assert!((shadow.bottom_left.y - 22.001_688).abs() < 1e-5);
+        assert!((shadow.bottom_left.x - 22.0).abs() < 1e-5);
+        assert!((shadow.bottom_left.y - 22.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn outset_shadow_adjusts_elliptical_axes_independently() {
+        let radii = CornerRadii::uniform(CornerRadius::new(4.5, 18.0));
+
+        let shadow = radii.outset_shadow(13.5);
+        assert!(
+            shadow
+                .iter()
+                .all(|radius| (radius.x - 14.0).abs() < 1e-5 && radius.y == 31.5)
+        );
     }
 
     #[test]

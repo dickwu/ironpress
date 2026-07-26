@@ -2,6 +2,7 @@ pub(crate) mod background;
 pub(crate) mod blend;
 pub(crate) mod blur;
 pub(crate) mod borders;
+pub(crate) mod curves;
 pub(crate) mod filter;
 pub(crate) mod gradient_sampling;
 pub mod pdf;

@@ -99,7 +99,7 @@ use affine_solids::{render_affine_solid_box, render_affine_solid_group};
 use background_images::{BlockBackground, render_block_svg_background, render_svg_background};
 use backgrounds::{
     PdfBackgroundPaintContext, PdfBackgroundResources, is_device_clippable_box_background,
-    paint_device_clipped_css_solid,
+    paint_device_clipped_css_solid, paint_solid_background,
 };
 use border_geometry::*;
 use border_images::render_border_image;
@@ -125,8 +125,8 @@ use gradient_rasters::*;
 use gradient_support::*;
 pub(crate) use images::{DEFAULT_JPEG_QUALITY, ImageRef};
 use images::{
-    ResizedImage, SvgPageImageSink, decode_png_for_pdf, encode_rgb_as_jpeg, flate_compress,
-    should_try_lossy_png_reencode, try_decode_png_as_opaque_rgb,
+    ResizedImage, SvgPageImageSink, decode_png_for_pdf, encode_gray_as_jpeg, encode_rgb_as_jpeg,
+    flate_compress, should_try_lossy_png_reencode, try_decode_png_as_opaque_rgb,
 };
 #[cfg(test)]
 use layout_elements::NestedLayoutFrame;

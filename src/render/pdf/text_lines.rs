@@ -154,24 +154,18 @@ pub(super) fn render_inline_box(
     let box_geometry = geometry.for_paint(page_content);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
-    let border_box = paint_geometry.rounded_border_box(inline.border_radii);
+    let background_box =
+        paint_geometry.background_clip_box(BackgroundClip::Border, inline.border_radii);
 
     // Background fill.
     if let Some(background) = inline.background_color {
-        let (r, g, b, a) = background.to_f32_rgba();
-        let needs_alpha = a < 1.0;
-        if needs_alpha {
-            let gs_name = format!("GSib{bg_alpha_counter}");
-            *bg_alpha_counter += 1;
-            page_ext_gstates.push((gs_name.clone(), a));
-            content.push_str(&format!("/{gs_name} gs\n"));
-        }
-        content.push_str(&PdfRgb::from((r, g, b)).fill_operator());
-        content.push_str(&border_box.path_or_rect());
-        content.push_str("f\n");
-        if needs_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
+        paint_solid_background(
+            content,
+            background,
+            background_box,
+            page_ext_gstates,
+            bg_alpha_counter,
+        );
     }
 
     // Replaced-element image (pseudo `content: url(...)`): fill the content box

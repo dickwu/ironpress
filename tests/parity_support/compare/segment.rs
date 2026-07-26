@@ -69,6 +69,8 @@ pub(crate) struct CoverageEvidence {
     pub(crate) long_device_edge_residue: bool,
     /// A whole component is a narrow colour ramp between shared endpoints.
     pub(crate) shared_color_ramp: bool,
+    /// Exactly one device pixel wide between two unchanged local colours.
+    pub(crate) one_device_pixel_color_frontier: bool,
     pub(crate) color_ramp_proven_px: u32,
     pub(crate) color_ramp_total_px: u32,
     pub(crate) compact_color_ramp_remainder: bool,
@@ -117,6 +119,7 @@ pub(crate) struct CoverageAggregate {
     pub(crate) all_sub_css_presence_residues: bool,
     pub(crate) all_one_device_pixel_presence_residues: bool,
     pub(crate) all_shared_color_ramps: bool,
+    pub(crate) all_one_device_pixel_color_frontiers: bool,
 }
 
 /// Direct-presence census after long one-device shared edges are removed.
@@ -265,6 +268,13 @@ impl RegionSet {
             .iter()
             .find(|aggregate| aggregate.class == PixelClass::ColorErr)
             .is_some_and(|aggregate| aggregate.coverage.all_shared_color_ramps)
+    }
+
+    pub(crate) fn only_one_device_pixel_color_frontiers(&self) -> bool {
+        self.aggregates
+            .iter()
+            .find(|aggregate| aggregate.class == PixelClass::ColorErr)
+            .is_some_and(|aggregate| aggregate.coverage.all_one_device_pixel_color_frontiers)
     }
 
     /// Whether shared-endpoint ramps cover the complete colour residual except
@@ -461,6 +471,7 @@ impl CoverageAggregate {
             all_sub_css_presence_residues: coverage.sub_css_presence_residue,
             all_one_device_pixel_presence_residues: coverage.one_device_pixel_presence_residue,
             all_shared_color_ramps: coverage.shared_color_ramp,
+            all_one_device_pixel_color_frontiers: coverage.one_device_pixel_color_frontier,
         }
     }
 
@@ -469,6 +480,7 @@ impl CoverageAggregate {
         self.all_sub_css_presence_residues &= coverage.sub_css_presence_residue;
         self.all_one_device_pixel_presence_residues &= coverage.one_device_pixel_presence_residue;
         self.all_shared_color_ramps &= coverage.shared_color_ramp;
+        self.all_one_device_pixel_color_frontiers &= coverage.one_device_pixel_color_frontier;
     }
 }
 
@@ -620,8 +632,72 @@ impl SharedColorSet {
         self.iter().any(|existing| existing == color)
     }
 
+    fn encloses(&self, sample: image::Rgba<u8>) -> bool {
+        self.len != 0
+            && (0..3).all(|channel| {
+                let minimum = self
+                    .iter()
+                    .map(|color| color[channel])
+                    .min()
+                    .unwrap_or_default();
+                let maximum = self
+                    .iter()
+                    .map(|color| color[channel])
+                    .max()
+                    .unwrap_or_default();
+                sample[channel] >= minimum && sample[channel] <= maximum
+            })
+    }
+
     fn iter(&self) -> impl Iterator<Item = image::Rgba<u8>> + '_ {
         self.colors[..self.len].iter().copied()
+    }
+
+    /// Collect authored solid layers on one exact shared-raster ray.
+    ///
+    /// A rasterized boundary can contain several one-device-pixel antialias
+    /// colours between two real paints. Treating every such transient sample as
+    /// a layer both loses the bounded palette and mistakes coverage values for
+    /// authored colours. A solid layer must persist for at least one authored
+    /// CSS pixel before it can become an endpoint in the layered-coverage proof.
+    fn collect_solid_ray(
+        &mut self,
+        cand: &RgbaImage,
+        reference: &RgbaImage,
+        (x, y, dx, dy): (usize, usize, isize, isize),
+        maximum_distance: usize,
+    ) -> bool {
+        let minimum_run = CSS_PX.floor().max(1.0) as usize;
+        let mut run_color = None;
+        let mut run_length = 0;
+        for distance in 1..=maximum_distance {
+            let next_x = x as isize + dx * distance as isize;
+            let next_y = y as isize + dy * distance as isize;
+            if next_x < 0
+                || next_y < 0
+                || next_x >= cand.width() as isize
+                || next_y >= cand.height() as isize
+            {
+                return self.insert(image::Rgba([255; 4]));
+            }
+            let candidate = *cand.get_pixel(next_x as u32, next_y as u32);
+            let oracle = *reference.get_pixel(next_x as u32, next_y as u32);
+            if candidate != oracle {
+                run_color = None;
+                run_length = 0;
+                continue;
+            }
+            if run_color == Some(candidate) {
+                run_length += 1;
+            } else {
+                run_color = Some(candidate);
+                run_length = 1;
+            }
+            if run_length == minimum_run && !self.insert(candidate) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -886,6 +962,18 @@ fn diagnose_region(
                 && proof.has_direct_sample()
                 && is_sub_visibility_same_family_edge(members, cand, reference, w))
     });
+    let one_device_pixel_color_frontier = class == PixelClass::ColorErr
+        && is_one_device_pixel_color_frontier(
+            members,
+            cand,
+            reference,
+            w,
+            x0,
+            y0,
+            x1,
+            y1,
+            &mut diagnostics.component_pixels,
+        );
     let compact_color_ramp_remainder = class == PixelClass::ColorErr
         && !shared_color_ramp
         && interior_color_px == 0
@@ -924,6 +1012,7 @@ fn diagnose_region(
             one_device_pixel_presence_residue,
             long_device_edge_residue,
             shared_color_ramp,
+            one_device_pixel_color_frontier,
             color_ramp_proven_px: color_ramp_proof.map_or(0, |proof| proof.proven() as u32),
             color_ramp_total_px: color_ramp_proof.map_or(0, |proof| proof.total as u32),
             compact_color_ramp_remainder,
@@ -1013,6 +1102,50 @@ fn is_one_device_pixel_shared_coverage_residue(
         && is_one_device_pixel_shared_contour_band(
             members, cand, reference, width, x0, y0, x1, y1, component,
         )
+}
+
+fn is_one_device_pixel_color_frontier(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> bool {
+    if !component.reset(members, width, x0, y0, x1, y1) {
+        return false;
+    }
+    members.iter().all(|&index| {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
+            component.is_one_device_pixel_run(x, y, dx, dy)
+                && shared_color_frontier(cand, reference, x, y, dx, dy)
+        })
+    })
+}
+
+fn shared_color_frontier(
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    x: isize,
+    y: isize,
+    dx: isize,
+    dy: isize,
+) -> bool {
+    let origin = (x as usize, y as usize);
+    let before = (origin.0, origin.1, -dx, -dy);
+    let after = (origin.0, origin.1, dx, dy);
+    matches!(
+        (
+            nearest_exact_color(cand, reference, before),
+            nearest_exact_color(cand, reference, after),
+        ),
+        (Some(before), Some(after)) if before != after
+    )
 }
 
 /// A direct-presence band may be up to one authored CSS pixel wide, but every
@@ -1199,6 +1332,16 @@ impl ComponentPixels {
             }
         }
         None
+    }
+
+    fn is_one_device_pixel_run(&self, x: isize, y: isize, dx: isize, dy: isize) -> bool {
+        matches!(
+            (
+                self.run_length(x, y, -dx, -dy, 1),
+                self.run_length(x, y, dx, dy, 1),
+            ),
+            (Some(before), Some(after)) if before + after + 1 == 1
+        )
     }
 }
 
@@ -1412,6 +1555,7 @@ fn shared_layered_coverage_color_normal(
         (x as usize, y as usize),
         (before_x, before_y, -dx, -dy),
         (after_x, after_y, dx, dy),
+        component.is_one_device_pixel_run(x, y, dx, dy),
     )
 }
 
@@ -1513,19 +1657,20 @@ fn shared_layered_coverage_color_transition(
     pixel: (usize, usize),
     before: (usize, usize, isize, isize),
     after: (usize, usize, isize, isize),
+    one_device_component: bool,
 ) -> bool {
     let mut nearby = SharedColorSet::default();
     let near_distance = CSS_PX.ceil() as usize;
-    if !collect_shared_colors_on_ray(cand, reference, before, near_distance, &mut nearby)
-        || !collect_shared_colors_on_ray(cand, reference, after, near_distance, &mut nearby)
+    if !nearby.collect_solid_ray(cand, reference, before, near_distance)
+        || !nearby.collect_solid_ray(cand, reference, after, near_distance)
     {
         return false;
     }
 
     let mut palette = SharedColorSet::default();
     let maximum_distance = (VISUAL_LAYERED_COVERAGE_MAX_DEPTH_CSS_PX * CSS_PX).ceil() as usize;
-    if !collect_shared_colors_on_ray(cand, reference, before, maximum_distance, &mut palette)
-        || !collect_shared_colors_on_ray(cand, reference, after, maximum_distance, &mut palette)
+    if !palette.collect_solid_ray(cand, reference, before, maximum_distance)
+        || !palette.collect_solid_ray(cand, reference, after, maximum_distance)
     {
         return false;
     }
@@ -1536,7 +1681,7 @@ fn shared_layered_coverage_color_transition(
         return false;
     }
 
-    nearby.iter().filter(is_content).any(|paint| {
+    let shared_foreground = nearby.iter().filter(is_content).any(|paint| {
         if !nearby.iter().any(|substrate| substrate != paint) {
             return false;
         }
@@ -1547,33 +1692,13 @@ fn shared_layered_coverage_color_transition(
             substrate != paint && is_coverage_ramp_color(&oracle, paint, substrate)
         });
         candidate_is_coverage && oracle_is_coverage
-    })
-}
-
-fn collect_shared_colors_on_ray(
-    cand: &RgbaImage,
-    reference: &RgbaImage,
-    (x, y, dx, dy): (usize, usize, isize, isize),
-    maximum_distance: usize,
-    colors: &mut SharedColorSet,
-) -> bool {
-    for distance in 1..=maximum_distance {
-        let next_x = x as isize + dx * distance as isize;
-        let next_y = y as isize + dy * distance as isize;
-        if next_x < 0
-            || next_y < 0
-            || next_x >= cand.width() as isize
-            || next_y >= cand.height() as isize
-        {
-            return colors.insert(image::Rgba([255; 4]));
-        }
-        let candidate = cand.get_pixel(next_x as u32, next_y as u32);
-        let oracle = reference.get_pixel(next_x as u32, next_y as u32);
-        if candidate == oracle && !colors.insert(*candidate) {
-            return false;
-        }
-    }
-    true
+    });
+    shared_foreground
+        || (one_device_component
+            && nearby.iter().count() >= 2
+            && same_colour_family(candidate.0, oracle.0)
+            && palette.encloses(candidate)
+            && palette.encloses(oracle))
 }
 
 /// Find the first byte-identical colour on a direct ray no longer than one CSS
@@ -1829,7 +1954,9 @@ mod tests {
     use super::{
         ColorRampProof, ComponentPixels, CoverageRamp, is_coverage_ramp_color,
         is_predominantly_shared_coverage, reaches_discrete_ratio,
+        shared_layered_coverage_color_transition,
     };
+    use image::{ImageBuffer, Rgba};
 
     #[test]
     fn aggregate_shared_coverage_keeps_partial_component_evidence() {
@@ -1859,6 +1986,41 @@ mod tests {
         ));
         assert!(ramp.encloses(&encoded_linear_light_sample));
         assert!(!ramp.encloses(&image::Rgba([198, 40, 40, 255])));
+    }
+
+    #[test]
+    fn layered_inset_shadow_edge_accepts_shared_foreground_over_shared_background() {
+        let background = Rgba([231, 245, 255, 255]);
+        let border = Rgba([87, 117, 144, 255]);
+        let shadow = Rgba([255, 209, 102, 255]);
+        let blended_shadow = Rgba([246, 221, 155, 255]);
+        let mut candidate = ImageBuffer::from_pixel(21, 21, background);
+        let mut reference = candidate.clone();
+        for y in 0..=9 {
+            for x in 0..=20 {
+                candidate.put_pixel(x, y, border);
+                reference.put_pixel(x, y, border);
+            }
+        }
+        for y in 11..=15 {
+            for x in 0..=20 {
+                candidate.put_pixel(x, y, shadow);
+                reference.put_pixel(x, y, shadow);
+            }
+        }
+        for x in 0..=20 {
+            candidate.put_pixel(x, 10, shadow);
+            reference.put_pixel(x, 10, blended_shadow);
+        }
+
+        assert!(shared_layered_coverage_color_transition(
+            &candidate,
+            &reference,
+            (10, 10),
+            (10, 10, 0, -1),
+            (10, 10, 0, 1),
+            true,
+        ));
     }
 
     #[test]

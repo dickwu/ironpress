@@ -86,6 +86,9 @@ fn visible_color_difference(
     if visibility_regions.shared_coverage_color_with_compact_remainder() {
         return false;
     }
+    if visibility_regions.only_one_device_pixel_color_frontiers() {
+        return false;
+    }
 
     // A solid semantic recolour remains visible regardless of any larger field
     // of tolerated rounding. A direct shared-endpoint ramp is checked first

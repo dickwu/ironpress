@@ -136,6 +136,24 @@ pub(super) fn encode_rgb_as_jpeg(
     Some(buf)
 }
 
+pub(super) fn encode_gray_as_jpeg(
+    gray: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+
+    if gray.len() != width.checked_mul(height)? as usize {
+        return None;
+    }
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality.clamp(0, 100))
+        .write_image(gray, width, height, image::ExtendedColorType::L8)
+        .ok()?;
+    Some(buf)
+}
+
 pub(super) fn try_decode_png_as_opaque_rgb(raw_png: &[u8]) -> Option<DecodedPngImage> {
     let decoded = decode_png_for_pdf(raw_png)?;
     if decoded.color_space != "/DeviceRGB" {

@@ -1,7 +1,6 @@
 use super::super::transforms::PageContentTransform;
 use super::{PdfPoint, PdfRect, PdfVector, RoundedRect};
 use crate::layout::elements::{BoxFragmentation, BoxTransform};
-use crate::layout::engine::LayoutBorder;
 use crate::style::computed::{
     BackgroundClip, BackgroundOrigin, ShapeBox, TransformBox, TransformOrigin,
 };
@@ -44,10 +43,6 @@ pub(in crate::render::pdf) struct BoxPaintGeometry {
 }
 
 impl BoxPaintGeometry {
-    pub(in crate::render::pdf) const fn layout(self) -> LayoutBoxGeometry {
-        self.layout
-    }
-
     pub(in crate::render::pdf) const fn painting(self) -> PaintBoxGeometry {
         self.painting
     }
@@ -207,7 +202,7 @@ impl LayoutBoxGeometry {
 
     pub(in crate::render::pdf) fn from_layout(
         border_box: PdfRect,
-        border: &LayoutBorder,
+        border: &crate::layout::engine::LayoutBorder,
         padding: EdgeSizes,
     ) -> Self {
         Self::new(border_box, border.widths(), padding)

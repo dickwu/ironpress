@@ -1,18 +1,132 @@
 //! Raster source construction for CSS box and text shadows.
 
 use super::*;
+use crate::render::curves::{CurveSink, CurveTolerance, QuadraticBezier, RoundedRectPath};
+use crate::types::{Point, Rect, Size, Vector};
 
-/// Rasterize a (rounded) `box-shadow` rectangle into a transparent, padded RGBA
-/// buffer and return the embeddable result.
-pub(crate) fn blur_shadow_rect(
+/// A blurred shape's coverage, independent of the color painted through it.
+///
+/// Chromium's PDF backend preserves this separation for box shadows: a
+/// DeviceGray soft mask carries geometric coverage while the authored color
+/// and alpha remain native graphics state. Keeping the same representation
+/// prevents low-alpha RGBA8 unpremultiplication from inventing color shifts.
+pub(crate) struct BlurredCoverageMask {
+    coverage: image::GrayImage,
+    raster_clip: Option<RoundedCoverageClip>,
+    pub(crate) overflow_pt: f32,
+    filter_dpi: f32,
+}
+
+impl BlurredCoverageMask {
+    pub(crate) const fn coverage(&self) -> &image::GrayImage {
+        &self.coverage
+    }
+
+    pub(crate) fn raster_dimensions(&self) -> crate::util::RasterDimensions {
+        crate::util::RasterDimensions {
+            width: self.coverage.width(),
+            height: self.coverage.height(),
+        }
+    }
+
+    pub(crate) fn pixel_density(&self) -> crate::layout::engine::RasterPixelDensity {
+        crate::layout::engine::RasterPixelDensity::from_dpi(self.filter_dpi)
+    }
+
+    /// Physical size of the quantized mask backing image.
+    ///
+    /// This deliberately comes from the raster dimensions rather than the
+    /// unquantized source rectangle. PDF placement must preserve one device
+    /// pixel per mask sample; stretching the mask back over an authored
+    /// quarter-pixel remainder changes every blur sample's phase.
+    pub(crate) fn raster_size_pt(&self) -> Size {
+        let pt_per_pixel = 72.0 / self.filter_dpi;
+        Size::new(
+            self.coverage.width() as f32 * pt_per_pixel,
+            self.coverage.height() as f32 * pt_per_pixel,
+        )
+    }
+
+    pub(crate) fn tinted_raster(&self, color: (f32, f32, f32, f32)) -> Option<BlurredRaster> {
+        let (red, green, blue, alpha) = color;
+        if alpha <= 0.0 {
+            return None;
+        }
+        let color = [
+            quantize_color(red),
+            quantize_color(green),
+            quantize_color(blue),
+        ];
+        let alpha = quantize_color(alpha);
+        let clipped_coverage = match self.raster_clip {
+            Some(clip) => Some(clip.apply(self.coverage.clone())?),
+            None => None,
+        };
+        let coverage = clipped_coverage.as_ref().unwrap_or(&self.coverage);
+        let rgba = image::RgbaImage::from_fn(coverage.width(), coverage.height(), |x, y| {
+            let coverage = coverage.get_pixel(x, y)[0];
+            image::Rgba([
+                color[0],
+                color[1],
+                color[2],
+                multiply_coverage(coverage, alpha),
+            ])
+        });
+        Some(BlurredRaster {
+            asset: rgba_to_png_alpha_asset(rgba, self.filter_dpi)?,
+            overflow_pt: self.overflow_pt,
+        })
+    }
+}
+
+fn quantize_color(component: f32) -> u8 {
+    (component.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn multiply_coverage(coverage: u8, alpha: u8) -> u8 {
+    ((u16::from(coverage) * u16::from(alpha) + 127) / 255) as u8
+}
+
+/// The two distinct margins used by Skia's PDF mask-filter path.
+///
+/// Skia first bounds the unblurred device-space caster using the mask
+/// filter's untransformed sigma. It then applies the CTM-aware blur and grows
+/// that source mask by the discrete kernel's device-space support. Collapsing
+/// these into one generous source rectangle makes inset rings too opaque.
+#[derive(Clone, Copy)]
+struct InsetMaskBounds {
+    source_margin_px: u32,
+    blur_support_px: u32,
+}
+
+impl InsetMaskBounds {
+    fn for_shadow(shadow: &BoxShadow, blur: CoverageBlurKernel) -> Option<Self> {
+        let authored_sigma_px = shadow.blur / PT_PER_PX / 2.0;
+        let source_margin_px = CoverageBlurKernel::from_sigma(authored_sigma_px)?.support_px;
+        Some(Self {
+            source_margin_px,
+            blur_support_px: blur.support_px,
+        })
+    }
+
+    fn raster_padding_px(self) -> Option<u32> {
+        self.source_margin_px.checked_add(self.blur_support_px)
+    }
+
+    fn source_bounds(self, box_rect: Rect) -> Rect {
+        box_rect.outset(EdgeSizes::uniform(self.source_margin_px as f32))
+    }
+}
+
+/// Rasterize and blur a rounded `box-shadow` coverage mask.
+pub(crate) fn blur_shadow_mask(
     width_pt: f32,
     height_pt: f32,
     radii: CornerRadii,
     shadow: &BoxShadow,
     filter_dpi: f32,
-) -> Option<BlurredRaster> {
-    let (r, g, b, a) = shadow.color.to_f32_rgba();
-    if width_pt <= 0.0 || height_pt <= 0.0 || a <= 0.0 {
+) -> Option<BlurredCoverageMask> {
+    if width_pt <= 0.0 || height_pt <= 0.0 || shadow.color.alpha() <= 0.0 {
         return None;
     }
 
@@ -20,7 +134,8 @@ pub(crate) fn blur_shadow_rect(
 
     let s = filter_dpi_scale(filter_dpi);
     let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
-    let pad = pad_pixels(sigma)?;
+    let kernel = CoverageBlurKernel::from_sigma(sigma)?;
+    let pad = kernel.padding_px;
     let box_x = filter_raster_axis(width_pt, s)?;
     let box_y = filter_raster_axis(height_pt, s)?;
     let buf_w = padded_pixels(box_x.pixels, pad)?;
@@ -31,7 +146,7 @@ pub(crate) fn blur_shadow_rect(
     let oy = pad as f32;
 
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(color8(r, g, b, a));
+    paint.set_color(tiny_skia::Color::WHITE);
     paint.anti_alias = true;
 
     let radii_px = radii.fit_to(width_pt, height_pt) * (s / PT_PER_PX);
@@ -51,27 +166,25 @@ pub(crate) fn blur_shadow_rect(
         pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
 
-    let rgba = crate::render::raster_pixels::pixmap_to_rgba(&pixmap);
-    let rgba = if sigma > 0.0 {
-        gaussian_blur_premultiplied(&rgba, sigma)?
-    } else {
-        rgba
-    };
-
-    let overflow_pt = box_shadow_blur_overflow(shadow.blur, filter_dpi)?;
-    let asset = rgba_to_png_alpha_asset(rgba, filter_dpi)?;
-    Some(BlurredRaster { asset, overflow_pt })
+    let coverage = crate::render::raster_pixels::pixmap_to_alpha_mask(&pixmap);
+    let coverage = blur_coverage(coverage, kernel)?;
+    let overflow_pt = pad as f32 / s * PT_PER_PX;
+    Some(BlurredCoverageMask {
+        coverage,
+        raster_clip: None,
+        overflow_pt,
+        filter_dpi,
+    })
 }
 
-pub(crate) fn blur_inset_shadow_rect(
+pub(crate) fn blur_inset_shadow_mask(
     width_pt: f32,
     height_pt: f32,
     radii: CornerRadii,
     shadow: &BoxShadow,
     filter_dpi: f32,
-) -> Option<BlurredRaster> {
-    let (r, g, b, a) = shadow.color.to_f32_rgba();
-    if width_pt <= 0.0 || height_pt <= 0.0 || a <= 0.0 {
+) -> Option<BlurredCoverageMask> {
+    if width_pt <= 0.0 || height_pt <= 0.0 || shadow.color.alpha() <= 0.0 {
         return None;
     }
 
@@ -79,7 +192,9 @@ pub(crate) fn blur_inset_shadow_rect(
 
     let s = filter_dpi_scale(filter_dpi);
     let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
-    let pad = pad_pixels(sigma)?;
+    let kernel = CoverageBlurKernel::from_sigma(sigma)?;
+    let bounds = InsetMaskBounds::for_shadow(shadow, kernel)?;
+    let pad = bounds.raster_padding_px()?;
     let box_x = filter_raster_axis(width_pt, s)?;
     let box_y = filter_raster_axis(height_pt, s)?;
     let buf_w = padded_pixels(box_x.pixels, pad)?;
@@ -87,25 +202,37 @@ pub(crate) fn blur_inset_shadow_rect(
 
     let mut pixmap = tiny_skia::Pixmap::new(buf_w, buf_h)?;
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(color8(r, g, b, a));
+    paint.set_color(tiny_skia::Color::WHITE);
     paint.anti_alias = true;
 
     let pt_to_px = s / PT_PER_PX;
     let spread_px = shadow.spread * pt_to_px;
-    let hole_x = pad as f32 + shadow.offset_x * pt_to_px + spread_px;
-    let hole_y = pad as f32 + shadow.offset_y * pt_to_px + spread_px;
-    let hole_w = box_x.paint_px - 2.0 * spread_px;
-    let hole_h = box_y.paint_px - 2.0 * spread_px;
-
+    let offset = Vector::new(shadow.offset_x * pt_to_px, shadow.offset_y * pt_to_px);
+    let box_rect = Rect::from_xywh(pad as f32, pad as f32, box_x.paint_px, box_y.paint_px);
+    let source_bounds = bounds.source_bounds(box_rect);
+    let caster_outset = shadow.blur * pt_to_px + (-shadow.spread).max(0.0) * pt_to_px;
+    let caster = box_rect
+        .outset(EdgeSizes::uniform(caster_outset))
+        .union(
+            box_rect
+                .outset(EdgeSizes::uniform(caster_outset))
+                .translate(offset),
+        )
+        .intersection(source_bounds)?;
+    let hole = box_rect
+        .translate(offset)
+        .inset(EdgeSizes::uniform(spread_px));
     let mut path = tiny_skia::PathBuilder::new();
-    path.move_to(0.0, 0.0);
-    path.line_to(buf_w as f32, 0.0);
-    path.line_to(buf_w as f32, buf_h as f32);
-    path.line_to(0.0, buf_h as f32);
-    path.close();
-    if hole_w > 0.0 && hole_h > 0.0 {
+    RoundedRectPath::new(caster, CornerRadii::ZERO).write_to(
+        &mut TinySkiaCurveSink(&mut path),
+        CurveTolerance::RASTER_PIXEL,
+    );
+    if hole.size.width > 0.0 && hole.size.height > 0.0 {
         let hole_radii = radii.grow(-shadow.spread) * pt_to_px;
-        append_rounded_box_path(&mut path, hole_x, hole_y, hole_w, hole_h, hole_radii);
+        RoundedRectPath::new(hole, hole_radii).write_to(
+            &mut TinySkiaCurveSink(&mut path),
+            CurveTolerance::RASTER_PIXEL,
+        );
     }
     if let Some(path) = path.finish() {
         pixmap.fill_path(
@@ -117,54 +244,69 @@ pub(crate) fn blur_inset_shadow_rect(
         );
     }
 
-    let rgba = crate::render::raster_pixels::pixmap_to_rgba(&pixmap);
-    let mut rgba = if sigma > 0.0 {
-        gaussian_blur_premultiplied(&rgba, sigma)?
-    } else {
-        rgba
-    };
-    clip_alpha_to_rounded_box(
-        &mut rgba,
-        pad as f32,
-        pad as f32,
-        box_x.paint_px,
-        box_y.paint_px,
-        radii * pt_to_px,
-    )?;
+    let coverage = crate::render::raster_pixels::pixmap_to_alpha_mask(&pixmap);
+    let coverage = blur_coverage(coverage, kernel)?;
     let overflow_pt = pad as f32 / s * PT_PER_PX;
-    let asset = rgba_to_png_alpha_asset(rgba, filter_dpi)?;
-    Some(BlurredRaster { asset, overflow_pt })
+    Some(BlurredCoverageMask {
+        coverage,
+        raster_clip: Some(RoundedCoverageClip {
+            rect: box_rect,
+            radii: radii * pt_to_px,
+        }),
+        overflow_pt,
+        filter_dpi,
+    })
 }
 
-fn clip_alpha_to_rounded_box(
-    image: &mut image::RgbaImage,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: CornerRadii,
-) -> Option<()> {
-    use resvg::tiny_skia;
+fn blur_coverage(
+    coverage: image::GrayImage,
+    kernel: CoverageBlurKernel,
+) -> Option<image::GrayImage> {
+    let encoded = image::RgbaImage::from_fn(coverage.width(), coverage.height(), |x, y| {
+        let value = coverage.get_pixel(x, y)[0];
+        image::Rgba([value, value, value, value])
+    });
+    let blurred = kernel.blur(&encoded)?;
+    Some(image::GrayImage::from_fn(
+        blurred.width(),
+        blurred.height(),
+        |x, y| image::Luma([blurred.get_pixel(x, y)[3]]),
+    ))
+}
 
-    let mut mask = tiny_skia::Pixmap::new(image.width(), image.height())?;
-    let mut path = tiny_skia::PathBuilder::new();
-    append_rounded_box_path(&mut path, x, y, width, height, radii);
-    let path = path.finish()?;
-    let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::WHITE);
-    paint.anti_alias = true;
-    mask.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        tiny_skia::Transform::identity(),
-        None,
-    );
-    for (index, pixel) in image.pixels_mut().enumerate() {
-        let mask_alpha = u16::from(mask.pixels()[index].alpha());
-        pixel[3] = (u16::from(pixel[3]) * mask_alpha / 255) as u8;
+#[derive(Clone, Copy)]
+struct RoundedCoverageClip {
+    rect: Rect,
+    radii: CornerRadii,
+}
+
+impl RoundedCoverageClip {
+    fn apply(self, mut coverage: image::GrayImage) -> Option<image::GrayImage> {
+        use resvg::tiny_skia;
+
+        let mut mask = tiny_skia::Pixmap::new(coverage.width(), coverage.height())?;
+        let mut path = tiny_skia::PathBuilder::new();
+        RoundedRectPath::new(self.rect, self.radii).write_to(
+            &mut TinySkiaCurveSink(&mut path),
+            CurveTolerance::RASTER_PIXEL,
+        );
+        let path = path.finish()?;
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::WHITE);
+        paint.anti_alias = true;
+        mask.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        for (index, pixel) in coverage.pixels_mut().enumerate() {
+            let mask_alpha = u16::from(mask.pixels()[index].alpha());
+            pixel[0] = multiply_coverage(pixel[0], mask_alpha as u8);
+        }
+        Some(coverage)
     }
-    Some(())
 }
 
 fn append_rounded_box_path(
@@ -175,70 +317,29 @@ fn append_rounded_box_path(
     height: f32,
     radii: CornerRadii,
 ) {
-    let radii = radii.fit_to(width, height);
-    if radii.is_zero() {
-        append_rounded_path(path, x, y, width, height, 0.0, 0.0);
-        return;
-    }
-
-    let k = 0.552_284_8;
-    let (x0, y0) = (x, y);
-    let (x1, y1) = (x + width, y + height);
-    let (tlx, tly) = (radii.top_left.x, radii.top_left.y);
-    let (trx, try_) = (radii.top_right.x, radii.top_right.y);
-    let (brx, bry) = (radii.bottom_right.x, radii.bottom_right.y);
-    let (blx, bly) = (radii.bottom_left.x, radii.bottom_left.y);
-
-    path.move_to(x0 + tlx, y0);
-    path.line_to(x1 - trx, y0);
-    path.cubic_to(
-        x1 - trx + trx * k,
-        y0,
-        x1,
-        y0 + try_ - try_ * k,
-        x1,
-        y0 + try_,
-    );
-    path.line_to(x1, y1 - bry);
-    path.cubic_to(x1, y1 - bry + bry * k, x1 - brx + brx * k, y1, x1 - brx, y1);
-    path.line_to(x0 + blx, y1);
-    path.cubic_to(x0 + blx - blx * k, y1, x0, y1 - bly + bly * k, x0, y1 - bly);
-    path.line_to(x0, y0 + tly);
-    path.cubic_to(x0, y0 + tly - tly * k, x0 + tlx - tlx * k, y0, x0 + tlx, y0);
-    path.close();
+    RoundedRectPath::new(Rect::from_xywh(x, y, width, height), radii)
+        .write_to(&mut TinySkiaCurveSink(path), CurveTolerance::RASTER_PIXEL);
 }
 
-fn append_rounded_path(
-    path: &mut resvg::tiny_skia::PathBuilder,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radius_x: f32,
-    radius_y: f32,
-) {
-    if radius_x <= 0.0 && radius_y <= 0.0 {
-        path.move_to(x, y);
-        path.line_to(x + width, y);
-        path.line_to(x + width, y + height);
-        path.line_to(x, y + height);
-        path.close();
-        return;
+struct TinySkiaCurveSink<'a>(&'a mut resvg::tiny_skia::PathBuilder);
+
+impl CurveSink for TinySkiaCurveSink<'_> {
+    fn move_to(&mut self, point: Point) {
+        self.0.move_to(point.x, point.y);
     }
-    let radius_x = radius_x.min(width / 2.0);
-    let radius_y = radius_y.min(height / 2.0);
-    let (x0, y0) = (x, y);
-    let (x1, y1) = (x + width, y + height);
-    path.move_to(x0 + radius_x, y0);
-    path.line_to(x1 - radius_x, y0);
-    path.quad_to(x1, y0, x1, y0 + radius_y);
-    path.line_to(x1, y1 - radius_y);
-    path.quad_to(x1, y1, x1 - radius_x, y1);
-    path.line_to(x0 + radius_x, y1);
-    path.quad_to(x0, y1, x0, y1 - radius_y);
-    path.line_to(x0, y0 + radius_y);
-    path.quad_to(x0, y0, x0 + radius_x, y0);
-    path.close();
+
+    fn line_to(&mut self, point: Point) {
+        self.0.line_to(point.x, point.y);
+    }
+
+    fn quadratic_to(&mut self, curve: QuadraticBezier) {
+        self.0
+            .quad_to(curve.control.x, curve.control.y, curve.end.x, curve.end.y);
+    }
+
+    fn close(&mut self) {
+        self.0.close();
+    }
 }
 
 /// Blur a pre-rasterized straight-alpha glyph coverage mask and tint it.
@@ -256,15 +357,11 @@ pub(crate) fn blur_shadow_alpha_mask(
 
     let scale = filter_dpi_scale(filter_dpi);
     let sigma = (blur_pt / PT_PER_PX) * scale / 2.0;
-    let padding = pad_pixels(sigma)?;
+    let kernel = CoverageBlurKernel::from_sigma(sigma)?;
+    let padding = kernel.padding_px;
     let buffer_width = padded_pixels(width, padding)?;
     let buffer_height = padded_pixels(height, padding)?;
-    let color = [
-        (red.clamp(0.0, 1.0) * 255.0).round() as u8,
-        (green.clamp(0.0, 1.0) * 255.0).round() as u8,
-        (blue.clamp(0.0, 1.0) * 255.0).round() as u8,
-    ];
-    let mut tinted = image::RgbaImage::new(buffer_width, buffer_height);
+    let mut padded = image::GrayImage::new(buffer_width, buffer_height);
     let mut painted = false;
     for y in 0..height {
         for x in 0..width {
@@ -273,78 +370,23 @@ pub(crate) fn blur_shadow_alpha_mask(
                 continue;
             }
             painted = true;
-            let output_alpha = (f32::from(coverage) * alpha).round().clamp(0.0, 255.0) as u8;
-            tinted.put_pixel(
-                x + padding,
-                y + padding,
-                image::Rgba([color[0], color[1], color[2], output_alpha]),
-            );
+            padded.put_pixel(x + padding, y + padding, image::Luma([coverage]));
         }
     }
     if !painted {
         return None;
     }
-    let blurred = if sigma > 0.0 {
-        gaussian_blur_premultiplied(&tinted, sigma)?
-    } else {
-        tinted
-    };
-
+    let coverage = blur_coverage(padded, kernel)?;
     let overflow_pt = padding as f32 / scale * PT_PER_PX;
-    let asset = rgba_to_png_alpha_asset(blurred, filter_dpi)?;
-    Some((BlurredRaster { asset, overflow_pt }, padding))
+    let blurred = BlurredCoverageMask {
+        coverage,
+        raster_clip: None,
+        overflow_pt,
+        filter_dpi,
+    }
+    .tinted_raster((red, green, blue, alpha))?;
+    Some((blurred, padding))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{CornerRadii, CornerRadius};
-
-    fn rounded_box_pixels(radii: CornerRadii) -> Vec<u8> {
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(8, 8).unwrap();
-        let mut path = resvg::tiny_skia::PathBuilder::new();
-        append_rounded_box_path(&mut path, 1.0, 1.0, 6.0, 6.0, radii);
-        let path = path.finish().unwrap();
-        let mut paint = resvg::tiny_skia::Paint::default();
-        paint.set_color_rgba8(0, 0, 0, 255);
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &path,
-            &paint,
-            resvg::tiny_skia::FillRule::Winding,
-            resvg::tiny_skia::Transform::identity(),
-            None,
-        );
-        pixmap.data().to_vec()
-    }
-
-    #[test]
-    fn positive_subpixel_corner_radius_is_not_squared_off() {
-        assert_ne!(
-            rounded_box_pixels(CornerRadii::circular(0.49)),
-            rounded_box_pixels(CornerRadii::ZERO)
-        );
-    }
-
-    #[test]
-    fn zero_radius_axis_makes_the_corner_square() {
-        assert_eq!(
-            rounded_box_pixels(CornerRadii::uniform(CornerRadius::new(2.0, 0.0))),
-            rounded_box_pixels(CornerRadii::ZERO)
-        );
-    }
-
-    #[test]
-    fn rounded_box_path_preserves_per_corner_ellipses() {
-        let radii = CornerRadii::new(
-            CornerRadius::new(1.0, 2.0),
-            CornerRadius::new(2.0, 1.0),
-            CornerRadius::new(3.0, 1.0),
-            CornerRadius::new(1.0, 3.0),
-        );
-        assert_ne!(
-            rounded_box_pixels(radii),
-            rounded_box_pixels(CornerRadii::circular(1.0))
-        );
-    }
-}
+mod tests;

@@ -130,7 +130,6 @@ pub(super) fn render_text_child(
                 ctx.page_ext_gstates,
                 ctx.bg_alpha_counter,
                 ctx.text.pdf_writer,
-                ctx.text.page_images,
             );
         }
 
@@ -188,7 +187,6 @@ pub(super) fn render_text_child(
                 ctx.page_ext_gstates,
                 ctx.bg_alpha_counter,
                 ctx.text.pdf_writer,
-                ctx.text.page_images,
             );
             paint_box_decoration(
                 content,
@@ -398,7 +396,6 @@ pub(super) fn render_text_child(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // Draw child background
@@ -559,7 +556,6 @@ pub(super) fn render_text_child(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
         paint_box_decoration(
             content,

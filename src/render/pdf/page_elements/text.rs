@@ -217,7 +217,6 @@ pub(in crate::render::pdf) fn render_text_block(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
     }
 
@@ -543,7 +542,6 @@ pub(in crate::render::pdf) fn render_text_block(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
     }
 

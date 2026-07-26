@@ -363,7 +363,6 @@ pub(super) fn render_nested_container(
                 ctx.page_ext_gstates,
                 ctx.bg_alpha_counter,
                 ctx.text.pdf_writer,
-                ctx.text.page_images,
             );
 
             // Draw background with proper alpha support
@@ -524,7 +523,6 @@ pub(super) fn render_nested_container(
                 ctx.page_ext_gstates,
                 ctx.bg_alpha_counter,
                 ctx.text.pdf_writer,
-                ctx.text.page_images,
             );
 
             if border.has_visible() || child.paint.border_image.is_some() {

@@ -10256,9 +10256,9 @@
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-effects-x-overflow-clipping.pdf",
-        "sha256": "61783c2d5c3c94f7731e7cf04deb03e5f6850668277af84225ca5d8df26f57a6"
+        "sha256": "3817e7ee875de06a604e57925883bd21e32eb564e40779deb7bffb9b5875c2c4"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
       "reference_file": "cases/interactions/interactions-cartesian-effects-x-overflow-clipping.html",
       "reference_html_sha256": "1a0cc23bc5403434d1ecfd5dcfb824696758424f70c556fbbcd4891024e99183"
     },
@@ -22917,6 +22917,27 @@
       "pagedjs": false,
       "renderer": "chromium",
       "renderer_version": "Chromium 150.0.7871.114 snap",
+      "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
+    },
+    "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b": {
+      "font_backend": {
+        "features": [
+          "FontationsFontBackend",
+          "FontationsLinuxSystemFonts"
+        ],
+        "launcher": {
+          "file": "scripts/chromium-fontations.sh",
+          "sha256": "512064356160e631cef2f1eda128f6815d5329dd16671af8fcbe6a6daaf20ece"
+        },
+        "name": "fontations"
+      },
+      "font_bundle_sha256": "14e0dabd41048ffc7d0ba142a3c166656b4d14dabba93dd9185fb9aa4d9e5542",
+      "generator": "scripts/parity-gen-refs.sh",
+      "generator_sha256": "58edd23b0dfe07611bbf291af7a0b1aa6e6a457891d23a316210f46d75f8c192",
+      "oracle": "chrome",
+      "pagedjs": false,
+      "renderer": "chromium",
+      "renderer_version": "Chromium 150.0.7871.128 snap",
       "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
     }
   },

@@ -1,5 +1,7 @@
 use super::*;
 
+mod coverage;
+
 #[derive(Debug, Clone)]
 struct RadialMaskShading {
     geometry: RadialGradientGeometry,

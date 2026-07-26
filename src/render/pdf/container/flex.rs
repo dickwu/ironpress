@@ -34,6 +34,7 @@ pub(super) fn render_flex_child(
     let flex_bg_pos = &child.paint.background.layers.position;
     let flex_bg_repeat = &child.paint.background.layers.repeat;
     let flex_bg_origin = &child.paint.background.layers.origin;
+    let flex_bg_clip = &child.paint.background.layers.clip;
     let flex_padding = &child.box_model.padding;
     let flex_row_h = &child.content.row_height;
     let align_items = &child.content.alignment;
@@ -67,9 +68,11 @@ pub(super) fn render_flex_child(
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let flex_box_geometry = flex_geometry.for_paint(page_content);
-    let flex_paint_geometry = flex_box_geometry.painting();
     let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
-    let flex_border_box = flex_paint_geometry.rounded_border_box(*flex_border_radii);
+    let flex_background =
+        flex_box_geometry.background(*flex_bg_origin, *flex_bg_clip, *flex_border_radii);
+    let flex_background_reference = flex_background.positioning_box;
+    let flex_background_clip = flex_background.painting_box;
     let flex_group = PaintGroupScope::begin(content, child, flex_fragment_geometry, ctx);
 
     // A flex container that establishes a containing block records its
@@ -91,25 +94,17 @@ pub(super) fn render_flex_child(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         // Draw flex row background
         if let Some(color) = background_color {
-            let (r, g, b, a) = color.to_f32_rgba();
-            let needs_alpha = a < 1.0;
-            if needs_alpha {
-                let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
-                *ctx.bg_alpha_counter += 1;
-                ctx.page_ext_gstates.push((gs_name.clone(), a));
-                content.push_str(&format!("/{gs_name} gs\n"));
-            }
-            content.push_str(&format!("{r} {g} {b} rg\n"));
-            content.push_str(&flex_border_box.path_or_rect());
-            content.push_str("f\n");
-            if needs_alpha {
-                content.push_str("/GSDefault gs\n");
-            }
+            paint_solid_background(
+                content,
+                *color,
+                flex_background_clip,
+                ctx.page_ext_gstates,
+                ctx.bg_alpha_counter,
+            );
         }
 
         if let Some(gradient) = background_gradient {
@@ -117,7 +112,7 @@ pub(super) fn render_flex_child(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            flex_border_box.push_clip(content);
+            flex_background_clip.push_clip(content);
             render_linear_gradient(
                 content,
                 &gradient,
@@ -128,10 +123,10 @@ pub(super) fn render_flex_child(
                         || background_svg.is_some(),
                     child.paint.background.blend_mode.background_layer(0),
                 ),
-                flex_paint_geometry.border_box.left,
-                flex_paint_geometry.border_box.bottom,
-                flex_paint_geometry.border_box.width,
-                flex_paint_geometry.border_box.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -145,14 +140,14 @@ pub(super) fn render_flex_child(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            let rounded_clip = flex_border_box.push_rounded_clip(content);
+            let rounded_clip = flex_background_clip.push_rounded_clip(content);
             render_radial_gradient(
                 content,
                 &gradient,
-                flex_paint_geometry.border_box.left,
-                flex_paint_geometry.border_box.bottom,
-                flex_paint_geometry.border_box.width,
-                flex_paint_geometry.border_box.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -168,14 +163,14 @@ pub(super) fn render_flex_child(
                 gradient,
                 background_layer_box(*flex_bg_size, *flex_bg_pos, *flex_bg_repeat),
             );
-            let rounded_clip = flex_border_box.push_rounded_clip(content);
+            let rounded_clip = flex_background_clip.push_rounded_clip(content);
             render_conic_gradient(
                 content,
                 &gradient,
-                flex_paint_geometry.border_box.left,
-                flex_paint_geometry.border_box.bottom,
-                flex_paint_geometry.border_box.width,
-                flex_paint_geometry.border_box.height,
+                flex_background_reference.left,
+                flex_background_reference.bottom,
+                flex_background_reference.width,
+                flex_background_reference.height,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -192,13 +187,9 @@ pub(super) fn render_flex_child(
             ctx.page_ext_gstates,
             ctx.bg_alpha_counter,
             ctx.text.pdf_writer,
-            ctx.text.page_images,
         );
 
         if let Some(svg_tree) = background_svg {
-            let origin_box = flex_box_geometry
-                .layout()
-                .background_origin_box(*flex_bg_origin);
             render_svg_background(
                 content,
                 svg_tree,
@@ -210,9 +201,9 @@ pub(super) fn render_flex_child(
                     Some(&mut *ctx.page_ext_gstates),
                 ),
                 PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                    origin_box.into(),
-                    flex_paint_geometry.border_box.into(),
-                    *flex_border_radii,
+                    flex_background_reference.into(),
+                    flex_background_clip.rect.into(),
+                    flex_background_clip.radii,
                     *background_blur_radius,
                     *flex_bg_size,
                     *flex_bg_pos,
@@ -301,7 +292,11 @@ pub(super) fn render_flex_child(
             let cell_paint_geometry = cell_box_geometry.painting();
             let cell_fragment_geometry =
                 cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
-            let cell_border_box = cell_paint_geometry.rounded_border_box(cell.paint.border_radii);
+            let cell_background = cell_box_geometry.background(
+                cell.paint.background.layers.origin,
+                cell.paint.background.layers.clip,
+                cell.paint.border_radii,
+            );
             let cell_shadows = FlexCellShadows::new(cell, cell_fragment_geometry);
             let cell_group = PaintGroupScope::begin(content, cell, cell_fragment_geometry, ctx);
             if cell_phase == ElementPaintPhase::All
@@ -314,20 +309,13 @@ pub(super) fn render_flex_child(
                 cell_shadows.paint_outset(content, ctx);
                 // Draw cell background
                 if let Some(color) = cell.paint.background.color {
-                    let (cr, cg, cb, ca) = color.to_f32_rgba();
-                    let needs_alpha = ca < 1.0;
-                    if needs_alpha {
-                        let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
-                        *ctx.bg_alpha_counter += 1;
-                        ctx.page_ext_gstates.push((gs_name.clone(), ca));
-                        content.push_str(&format!("/{gs_name} gs\n"));
-                    }
-                    content.push_str(&format!("{cr} {cg} {cb} rg\n"));
-                    content.push_str(&cell_border_box.path_or_rect());
-                    content.push_str("f\n");
-                    if needs_alpha {
-                        content.push_str("/GSDefault gs\n");
-                    }
+                    paint_solid_background(
+                        content,
+                        color,
+                        cell_background.painting_box,
+                        ctx.page_ext_gstates,
+                        ctx.bg_alpha_counter,
+                    );
                 }
                 paint_box_gradient_backgrounds(content, &cell.paint, cell_box_geometry, ctx);
                 cell_shadows.paint_inset(content, ctx);

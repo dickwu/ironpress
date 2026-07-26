@@ -170,8 +170,11 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 let cell_box_geometry = cell_geometry.for_paint(page_content);
                 let cell_paint_geometry = cell_box_geometry.painting();
                 let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
-                let cell_border_box =
-                    cell_paint_geometry.rounded_border_box(cell.layout.paint.border_radii);
+                let cell_background = cell_box_geometry.background(
+                    cell.layout.paint.background.layers.origin,
+                    cell.layout.paint.background.layers.clip,
+                    cell.layout.paint.border_radii,
+                );
                 let cell_group = {
                     let mut cell_ctx = PageRenderContext::new(
                         pdf_writer,
@@ -243,7 +246,6 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         page_ext_gstates,
                         bg_alpha_counter,
                         pdf_writer,
-                        page_images,
                     );
                 }
                 // Draw cell background
@@ -254,20 +256,13 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     .color
                     .filter(|_| !cell.table.hide_if_empty)
                 {
-                    let (r, g, b, a) = background.to_f32_rgba();
-                    let needs_alpha = a < 1.0;
-                    if needs_alpha {
-                        let gs_name = format!("GScca{bg_alpha_counter}");
-                        *bg_alpha_counter += 1;
-                        page_ext_gstates.push((gs_name.clone(), a));
-                        content.push_str(&format!("/{gs_name} gs\n"));
-                    }
-                    content.push_str(&format!("{r} {g} {b} rg\n"));
-                    content.push_str(&cell_border_box.path_or_rect());
-                    content.push_str("f\n");
-                    if needs_alpha {
-                        content.push_str("/GSDefault gs\n");
-                    }
+                    paint_solid_background(
+                        content,
+                        background,
+                        cell_background.painting_box,
+                        page_ext_gstates,
+                        bg_alpha_counter,
+                    );
                 }
                 if !cell.table.hide_if_empty {
                     let mut cell_ctx = PageRenderContext::new(
@@ -298,7 +293,6 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         cell_ctx.page_ext_gstates,
                         cell_ctx.bg_alpha_counter,
                         cell_ctx.text.pdf_writer,
-                        cell_ctx.text.page_images,
                     );
                 }
 
@@ -589,9 +583,11 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                 let cell_box_geometry = cell_geometry.for_paint(pdf_writer.page_content_transform);
                 let cell_paint_geometry = cell_box_geometry.painting();
                 let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
-                let cell_border_box = cell_paint_geometry
-                    .border_box
-                    .rounded(cell.layout.paint.border_radii);
+                let cell_background = cell_box_geometry.background(
+                    cell.layout.paint.background.layers.origin,
+                    cell.layout.paint.background.layers.clip,
+                    cell.layout.paint.border_radii,
+                );
                 let cell_content_box = cell_geometry.content_box();
                 let cell_group = {
                     let mut cell_ctx = PageRenderContext::new(
@@ -664,25 +660,17 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                     page_ext_gstates,
                     bg_alpha_counter,
                     pdf_writer,
-                    page_images,
                 );
 
                 // Draw cell background
                 if let Some(background) = cell.layout.paint.background.color {
-                    let (r, g, b, a) = background.to_f32_rgba();
-                    let needs_alpha = a < 1.0;
-                    if needs_alpha {
-                        let gs_name = format!("GScca{bg_alpha_counter}");
-                        *bg_alpha_counter += 1;
-                        page_ext_gstates.push((gs_name.clone(), a));
-                        content.push_str(&format!("/{gs_name} gs\n"));
-                    }
-                    content.push_str(&format!("{r} {g} {b} rg\n"));
-                    content.push_str(&cell_border_box.path_or_rect());
-                    content.push_str("f\n");
-                    if needs_alpha {
-                        content.push_str("/GSDefault gs\n");
-                    }
+                    paint_solid_background(
+                        content,
+                        background,
+                        cell_background.painting_box,
+                        page_ext_gstates,
+                        bg_alpha_counter,
+                    );
                 }
 
                 // Draw cell gradient backgrounds. A grid item is a block
@@ -718,7 +706,6 @@ impl LayoutVisitor for NestedRowsRenderer<'_, '_> {
                         cell_ctx.page_ext_gstates,
                         cell_ctx.bg_alpha_counter,
                         cell_ctx.text.pdf_writer,
-                        cell_ctx.text.page_images,
                     );
                 }
 
