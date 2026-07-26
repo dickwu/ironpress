@@ -1,30 +1,30 @@
 {
   "schema_version": 12,
-  "invocation_id": "84a991a079592959b36a991187cc19a2",
+  "invocation_id": "2acf06be1d67b187ef1bc98473ee251f",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3349485-1785086648658036900-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3756698-1785094033474440097-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 96.48,
-    "pass": 1562,
-    "fail": 57,
+    "score_pct": 96.54,
+    "pass": 1563,
+    "fail": 56,
     "reference_disputed": 16,
     "total": 1635
   },
   "categories": [
     {
       "category": "backgrounds-borders",
-      "score_pct": 98.78,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 81,
-        "fail": 1,
+        "pass": 82,
+        "fail": 0,
         "reference_disputed": 1
       },
       "features": [
@@ -5665,10 +5665,10 @@
         },
         {
           "feature": "background-repeat",
-          "score_pct": 66.67,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 2,
-            "fail": 1,
+            "pass": 3,
+            "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
@@ -5924,9 +5924,9 @@
               "subfeature": "space-round",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 7.222222222222222,
-              "semantic_diff_pct": 4.444444444444445,
+              "status": "PASS",
+              "diff_pct": 3.611111111111111,
+              "semantic_diff_pct": 0.0,
               "description": "background-repeat: space distributes four 40px columns with 8px gaps while round scales 24px images into three 26.666px rows.",
               "note": "",
               "kind": "feature",
@@ -5947,7 +5947,7 @@
                   {
                     "width": 600,
                     "height": 300,
-                    "rgba_sha256": "6df23ab2f5f6a925695bc31c71766bcdc32260d6f50fbe2b2c52fbbe1a64d089",
+                    "rgba_sha256": "5f2eb0e3f904307dd173319ad9da9c278d4ccb6d000366dce9669dd2f07aa114",
                     "painted_pixels": 143750
                   }
                 ],
@@ -5963,36 +5963,36 @@
               "diagnosis": {
                 "primary_class": "ColorValue",
                 "secondary": [],
-                "headline": "above-floor complete-page mismatch 4.444444% exceeds 1.0% PASS ceiling; fill recolour ΔRGB(+0,+1,+0) (ΔE 0.6)",
+                "headline": "fill recolour ΔRGB(+0,-1,+0) (ΔE 0.2)",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
                   "modal_drgba": [
                     0,
-                    1,
+                    -1,
                     0,
                     0
                   ],
-                  "delta_e": 0.6381770101596501,
+                  "delta_e": 0.2116004783765977,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 24,
+                "region_count": 12,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 24,
-                    "total_pixels": 13000,
-                    "total_area_pct": 9.043478260869565,
+                    "region_count": 12,
+                    "total_pixels": 6500,
+                    "total_area_pct": 4.521739130434783,
                     "union_bbox_css": [
                       0.0,
                       17.28,
                       183.68,
-                      79.68
+                      71.68
                     ],
                     "largest_region_pixels": 625,
                     "largest_region_area_pct": 0.43478260869565216,
-                    "max_delta_e": 1.2247327635409304
+                    "max_delta_e": 0.3017918274337361
                   }
                 ],
                 "region_examples": [
@@ -6006,14 +6006,14 @@
                     ],
                     "area_pct": 0.43478260869565216,
                     "modal_drgba": [
+                      0,
                       -1,
-                      -4,
-                      -1,
+                      0,
                       0
                     ],
-                    "delta_e": 0.6714029116442279,
+                    "delta_e": 0.17642268639328126,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-4,-1) (ΔE 0.7)"
+                    "headline": "fill recolour ΔRGB(+0,-1,+0) (ΔE 0.2)"
                   },
                   {
                     "class": "ColorValue",
@@ -6025,14 +6025,14 @@
                     ],
                     "area_pct": 0.43478260869565216,
                     "modal_drgba": [
+                      0,
                       -1,
-                      -4,
-                      -1,
+                      0,
                       0
                     ],
-                    "delta_e": 0.6714029116442279,
+                    "delta_e": 0.17642268639328126,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-4,-1) (ΔE 0.7)"
+                    "headline": "fill recolour ΔRGB(+0,-1,+0) (ΔE 0.2)"
                   },
                   {
                     "class": "ColorValue",
@@ -6044,14 +6044,14 @@
                     ],
                     "area_pct": 0.43478260869565216,
                     "modal_drgba": [
+                      0,
                       -1,
-                      -4,
-                      -1,
+                      0,
                       0
                     ],
-                    "delta_e": 0.6714029116442279,
+                    "delta_e": 0.17642268639328126,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-4,-1) (ΔE 0.7)"
+                    "headline": "fill recolour ΔRGB(+0,-1,+0) (ΔE 0.2)"
                   },
                   {
                     "class": "ColorValue",
@@ -6063,90 +6063,14 @@
                     ],
                     "area_pct": 0.43478260869565216,
                     "modal_drgba": [
+                      0,
                       -1,
-                      -4,
-                      -1,
+                      0,
                       0
                     ],
-                    "delta_e": 0.6714029116442279,
+                    "delta_e": 0.17642268639328126,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-4,-1) (ΔE 0.7)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      0.0,
-                      78.4,
-                      39.68,
-                      79.68
-                    ],
-                    "area_pct": 0.43478260869565216,
-                    "modal_drgba": [
-                      1,
-                      4,
-                      1,
-                      0
-                    ],
-                    "delta_e": 1.2247327635409304,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+4,+1) (ΔE 1.2)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      48.0,
-                      78.4,
-                      87.68,
-                      79.68
-                    ],
-                    "area_pct": 0.43478260869565216,
-                    "modal_drgba": [
-                      1,
-                      4,
-                      1,
-                      0
-                    ],
-                    "delta_e": 1.2247327635409304,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+4,+1) (ΔE 1.2)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      96.0,
-                      78.4,
-                      135.68,
-                      79.68
-                    ],
-                    "area_pct": 0.43478260869565216,
-                    "modal_drgba": [
-                      1,
-                      4,
-                      1,
-                      0
-                    ],
-                    "delta_e": 1.2247327635409304,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+4,+1) (ΔE 1.2)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      144.0,
-                      78.4,
-                      183.68,
-                      79.68
-                    ],
-                    "area_pct": 0.43478260869565216,
-                    "modal_drgba": [
-                      1,
-                      4,
-                      1,
-                      0
-                    ],
-                    "delta_e": 1.2247327635409304,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+4,+1) (ΔE 1.2)"
+                    "headline": "fill recolour ΔRGB(+0,-1,+0) (ΔE 0.2)"
                   },
                   {
                     "class": "ColorValue",
@@ -6228,82 +6152,6 @@
                     "class": "ColorValue",
                     "bbox_css": [
                       0.0,
-                      25.28,
-                      39.68,
-                      26.24
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      0,
-                      1,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.359313673877563,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+0,+1,+0) (ΔE 0.4)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      48.0,
-                      25.28,
-                      87.68,
-                      26.24
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      0,
-                      1,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.359313673877563,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+0,+1,+0) (ΔE 0.4)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      96.0,
-                      25.28,
-                      135.68,
-                      26.24
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      0,
-                      1,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.359313673877563,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+0,+1,+0) (ΔE 0.4)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      144.0,
-                      25.28,
-                      183.68,
-                      26.24
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      0,
-                      1,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.359313673877563,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+0,+1,+0) (ΔE 0.4)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      0.0,
                       43.84,
                       39.68,
                       44.8
@@ -6311,13 +6159,13 @@
                     "area_pct": 0.34782608695652173,
                     "modal_drgba": [
                       -1,
-                      -2,
+                      -1,
                       -1,
                       0
                     ],
-                    "delta_e": 0.3860735316368367,
+                    "delta_e": 0.3017918274337361,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-2,-1) (ΔE 0.4)"
+                    "headline": "fill recolour ΔRGB(-1,-1,-1) (ΔE 0.3)"
                   },
                   {
                     "class": "ColorValue",
@@ -6330,13 +6178,13 @@
                     "area_pct": 0.34782608695652173,
                     "modal_drgba": [
                       -1,
-                      -2,
+                      -1,
                       -1,
                       0
                     ],
-                    "delta_e": 0.3860735316368367,
+                    "delta_e": 0.3017918274337361,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-2,-1) (ΔE 0.4)"
+                    "headline": "fill recolour ΔRGB(-1,-1,-1) (ΔE 0.3)"
                   },
                   {
                     "class": "ColorValue",
@@ -6349,13 +6197,13 @@
                     "area_pct": 0.34782608695652173,
                     "modal_drgba": [
                       -1,
-                      -2,
+                      -1,
                       -1,
                       0
                     ],
-                    "delta_e": 0.3860735316368367,
+                    "delta_e": 0.3017918274337361,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-2,-1) (ΔE 0.4)"
+                    "headline": "fill recolour ΔRGB(-1,-1,-1) (ΔE 0.3)"
                   },
                   {
                     "class": "ColorValue",
@@ -6368,93 +6216,18 @@
                     "area_pct": 0.34782608695652173,
                     "modal_drgba": [
                       -1,
-                      -2,
+                      -1,
                       -1,
                       0
                     ],
-                    "delta_e": 0.3860735316368367,
+                    "delta_e": 0.3017918274337361,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-1,-2,-1) (ΔE 0.4)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      0.0,
-                      51.84,
-                      39.68,
-                      52.8
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      1,
-                      3,
-                      1,
-                      0
-                    ],
-                    "delta_e": 0.8672123972432727,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+3,+1) (ΔE 0.9)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      48.0,
-                      51.84,
-                      87.68,
-                      52.8
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      1,
-                      3,
-                      1,
-                      0
-                    ],
-                    "delta_e": 0.8672123972432727,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+3,+1) (ΔE 0.9)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      96.0,
-                      51.84,
-                      135.68,
-                      52.8
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      1,
-                      3,
-                      1,
-                      0
-                    ],
-                    "delta_e": 0.8672123972432727,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+3,+1) (ΔE 0.9)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      144.0,
-                      51.84,
-                      183.68,
-                      52.8
-                    ],
-                    "area_pct": 0.34782608695652173,
-                    "modal_drgba": [
-                      1,
-                      3,
-                      1,
-                      0
-                    ],
-                    "delta_e": 0.8672123972432727,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+3,+1) (ΔE 0.9)"
+                    "headline": "fill recolour ΔRGB(-1,-1,-1) (ΔE 0.3)"
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 13000
+                "different_pixels": 6500,
+                "visual_pass_basis": "raw same-coordinate visibility policy"
               }
             }
           ]
@@ -448652,8 +448425,8 @@
               ],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.010898550724637681,
-              "semantic_diff_pct": 0.010898550724637681,
+              "diff_pct": 0.011130434782608696,
+              "semantic_diff_pct": 0.011130434782608696,
               "description": "A rotated and non-uniformly scaled box keeps its repeating image cell in the element's transformed coordinate space; catches page-space pattern resources that ignore the element CTM.",
               "note": "",
               "kind": "interaction",
@@ -448675,7 +448448,7 @@
                   {
                     "width": 750,
                     "height": 575,
-                    "rgba_sha256": "22ea627bf412fb6c52797e5ee8b336af94958e5473cce292f57ecb6bb27af752",
+                    "rgba_sha256": "e5fd21e83ab01de82c1779a57fe2ad03d047f2bbc46984ea181344525c0b97a8",
                     "painted_pixels": 431250
                   }
                 ],
@@ -448703,17 +448476,17 @@
                     26,
                     0
                   ],
-                  "delta_e": 9.291439314347759,
+                  "delta_e": 9.134801734420087,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 23,
+                "region_count": 24,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 23,
-                    "total_pixels": 47,
-                    "total_area_pct": 0.01089855072463768,
+                    "region_count": 24,
+                    "total_pixels": 48,
+                    "total_area_pct": 0.011130434782608693,
                     "union_bbox_css": [
                       45.44,
                       45.76,
@@ -449128,6 +448901,25 @@
                   {
                     "class": "AntialiasCoverage",
                     "bbox_css": [
+                      115.52,
+                      99.2,
+                      115.52,
+                      99.2
+                    ],
+                    "area_pct": 0.00023188405797101448,
+                    "modal_drgba": [
+                      8,
+                      0,
+                      -1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
                       45.44,
                       110.72,
                       45.44,
@@ -449165,7 +448957,7 @@
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 47,
+                "different_pixels": 48,
                 "visual_pass_basis": "raw same-coordinate visibility policy"
               }
             },
@@ -458633,5 +458425,5 @@
   "refs_lock_present": true,
   "refs_lock_sha256": "15af5fcd975c55c3935cb009fdd244a0f6ded9d4a15bd35a7b682b92d22e63e2",
   "baseline_present": false,
-  "gate_failure": "parity integrity gate FAILED (57 issue(s)):\n  - fixture is FAIL: background-repeat-space-round [backgrounds-borders/background-repeat] expected_support=implemented \n  - fixture is FAIL: repeating-linear-gradient-px-stops [backgrounds-gradients/repeating-linear-gradient] expected_support=implemented \n  - fixture is FAIL: mask-image-radial-gradient [clip-mask/mask-image: radial-gradient()] expected_support=implemented \n  - fixture is FAIL: r2-background-blend-mode-list-matching [effects/background-blend-mode comma-separated list] expected_support=implemented \n  - fixture is FAIL: flexbox-display-inline-flex [flexbox/display] expected_support=implemented \n  - fixture is FAIL: img-taller-than-page-sliced [images-replaced/fragmentation] expected_support=implemented page 2: above-floor complete-page mismatch 4.789474% exceeds 1.0% PASS ceiling; fill colour differs (ΔE 0.2)\n  - fixture is FAIL: img-object-fit-cover [images-replaced/object-fit] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-default-center [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-position [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-color-opacity [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-selectors-cascade-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-transforms-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: list-style-type-circle [lists-counters/list-style-type] expected_support=implemented \n  - fixture is FAIL: paged-bleed-crop-background [paged-media/bleed] expected_support=implemented \n  - fixture is FAIL: paged-marks-crop-cross [paged-media/marks] expected_support=implemented \n  - fixture is FAIL: paged-running-named-page-margin-box [paged-media/running-element] expected_support=implemented page 2: above-floor complete-page mismatch 1.170397% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%)\n  - fixture is FAIL: paged-string-set-attr-start [paged-media/running-header] expected_support=implemented \n  - fixture is FAIL: tables-collapse-origin-groups [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-span-origin-conflicts [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-border-attribute [tables/html-table-attributes] expected_support=implemented \n  - fixture is FAIL: tables-fixed-overflow-clip [tables/table-layout] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
+  "gate_failure": "parity integrity gate FAILED (56 issue(s)):\n  - fixture is FAIL: repeating-linear-gradient-px-stops [backgrounds-gradients/repeating-linear-gradient] expected_support=implemented \n  - fixture is FAIL: mask-image-radial-gradient [clip-mask/mask-image: radial-gradient()] expected_support=implemented \n  - fixture is FAIL: r2-background-blend-mode-list-matching [effects/background-blend-mode comma-separated list] expected_support=implemented \n  - fixture is FAIL: flexbox-display-inline-flex [flexbox/display] expected_support=implemented \n  - fixture is FAIL: img-taller-than-page-sliced [images-replaced/fragmentation] expected_support=implemented page 2: above-floor complete-page mismatch 4.789474% exceeds 1.0% PASS ceiling; fill colour differs (ΔE 0.2)\n  - fixture is FAIL: img-object-fit-cover [images-replaced/object-fit] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-default-center [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: img-object-fit-cover-position [images-replaced/object-position] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-block-box-model-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-color-opacity [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-filters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-effects [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-images-replaced [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-color-opacity-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-effects-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-filters-x-transforms [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-generated-content [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-flexbox-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-lists-counters [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-lists-counters-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-selectors-cascade [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-selectors-cascade-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-transforms-x-units-values [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: list-style-type-circle [lists-counters/list-style-type] expected_support=implemented \n  - fixture is FAIL: paged-bleed-crop-background [paged-media/bleed] expected_support=implemented \n  - fixture is FAIL: paged-marks-crop-cross [paged-media/marks] expected_support=implemented \n  - fixture is FAIL: paged-running-named-page-margin-box [paged-media/running-element] expected_support=implemented page 2: above-floor complete-page mismatch 1.170397% exceeds 1.0% PASS ceiling; visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%)\n  - fixture is FAIL: paged-string-set-attr-start [paged-media/running-header] expected_support=implemented \n  - fixture is FAIL: tables-collapse-origin-groups [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-collapse-span-origin-conflicts [tables/border-collapse] expected_support=implemented \n  - fixture is FAIL: tables-border-attribute [tables/html-table-attributes] expected_support=implemented \n  - fixture is FAIL: tables-fixed-overflow-clip [tables/table-layout] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
 }

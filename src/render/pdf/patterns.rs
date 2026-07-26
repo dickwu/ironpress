@@ -70,10 +70,26 @@ impl LayerTilePattern {
         self.paint_box
     }
 
+    #[cfg(test)]
     pub(super) fn sample(self, point: PdfPoint) -> Option<PdfPoint> {
         Some(PdfPoint::new(
             self.x.sample(point.x)?,
             self.y.sample(point.y)?,
+        ))
+    }
+
+    /// Sample the renderer's repeated shader lattice before the CSS paint clip.
+    ///
+    /// Fixed-point `round` sizing can leave a subpixel remainder after the
+    /// finite logical count. Browser paint backends materialize the shader
+    /// across their fallback surface, then apply the authored clip while
+    /// painting that surface. Keeping those stages separate also prevents
+    /// transparent source pixels from leaking into the clipped edge during PDF
+    /// image interpolation.
+    pub(super) fn sample_shader_lattice(self, point: PdfPoint) -> Option<PdfPoint> {
+        Some(PdfPoint::new(
+            self.x.unbounded_lattice().sample(point.x)?,
+            self.y.unbounded_lattice().sample(point.y)?,
         ))
     }
 
@@ -253,6 +269,19 @@ pub(super) struct PdfTilingPattern {
     pub(super) paint_box: PdfRect,
     pub(super) step: PdfVector,
     pub(super) transform: PdfMatrix,
+}
+
+impl PdfTilingPattern {
+    fn matrix_dictionary_entry(self) -> String {
+        if self.transform == PdfMatrix::IDENTITY {
+            return String::new();
+        }
+        let components = self
+            .transform
+            .components()
+            .map(|value| format_pdf_number_fixed(f64::from(value), 9));
+        format!(" /Matrix [{}]", components.join(" "))
+    }
 }
 
 #[derive(Debug)]
@@ -688,10 +717,7 @@ dup abs 0.00001 lt{{ pop pop pop pop 0 0 0 }}{{ dup 3 1 roll div 4 1 roll dup 3 
             x: step_x,
             y: step_y,
         } = pattern.step;
-        let [a, b, c, d, e, f] = pattern.transform.components();
-        let matrix = (pattern.transform != PdfMatrix::IDENTITY)
-            .then(|| format!(" /Matrix [{a} {b} {c} {d} {e} {f}]"))
-            .unwrap_or_default();
+        let matrix = pattern.matrix_dictionary_entry();
         let resources = PdfResourceUsage::from_stream(&stream);
         let pattern_id = self.next_id();
         let bytes = stream.into_bytes();
@@ -792,5 +818,50 @@ mod tests {
         .with_distributed_repeat(true);
 
         assert!(!pattern.has_at_most_direct_tiles());
+    }
+
+    #[test]
+    fn shader_lattice_precedes_the_eventual_paint_clip() {
+        let paint_box = PdfRect::new(0.0, 0.0, 138.0, 60.0);
+        let pattern = LayerTilePattern::new(
+            paint_box,
+            AxisRepeatPattern::new_layout(AxisRepeatMode::Repeat, 0.0, 30.0, paint_box.width)
+                .unwrap(),
+            AxisRepeatPattern::new_layout(AxisRepeatMode::Round, 0.0, 18.0, paint_box.height)
+                .unwrap(),
+        );
+
+        assert!(
+            pattern
+                .sample(PdfPoint::new(10.0, paint_box.height - 0.001))
+                .is_none()
+        );
+        assert!(
+            pattern
+                .sample_shader_lattice(PdfPoint::new(10.0, paint_box.height - 0.001))
+                .is_some()
+        );
+        assert!(
+            pattern
+                .sample_shader_lattice(PdfPoint::new(10.0, paint_box.height + 0.001))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn tiling_pattern_matrix_preserves_retained_f32_geometry() {
+        let pattern = PdfTilingPattern {
+            transform: PdfMatrix::new(
+                PdfVector::new(1.0, 0.0),
+                PdfVector::new(0.0, f32::from_bits((-1.0_f32).to_bits() - 2)),
+                PdfPoint::new(0.0, f32::from_bits(72.0_f32.to_bits() - 1)),
+            ),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            pattern.matrix_dictionary_entry(),
+            " /Matrix [1 0 0 -0.999999881 0 71.999992371]"
+        );
     }
 }
