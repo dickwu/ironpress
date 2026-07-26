@@ -406,7 +406,7 @@ fn local_form_resources_are_exact_and_acyclic() {
     writer.add_page(
         100.0,
         100.0,
-        &content,
+        PagePaintStreams::document_only(&content),
         Vec::new(),
         vec![form, group],
         Vec::new(),
@@ -479,7 +479,9 @@ fn alpha_conic_mask_uses_a_vector_luminosity_shading() {
     writer.add_page(
         200.0,
         200.0,
-        &format!("q\n/{state} gs\n0 0 200 200 re f\nQ\n"),
+        PagePaintStreams::document_only(&format!(
+            "q\n/{state} gs\n0 0 200 200 re f\nQ\n"
+        )),
         Vec::new(),
         Vec::new(),
         Vec::new(),

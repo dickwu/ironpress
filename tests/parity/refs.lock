@@ -15400,6 +15400,20 @@
       "reference_file": "cases/paged-media/paged-grid-fragmentation-rows.html",
       "reference_html_sha256": "91d85aa43a19ffbe170dd46a9c2b02ad340d33462f8b528cab34cbbb54a6981c"
     },
+    "paged-margin-box-after-synthetic-weight": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-margin-box-after-synthetic-weight.html",
+      "html_sha256": "010aa7ff82ffd9fe255798957e434195552d60afec7bdb800e0f51bf9e186b14",
+      "manifest_sha256": "fcce6410abe0fba0575b30607d917a13aad169ed004f9ff54c73355614cb34ab",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-margin-box-after-synthetic-weight.pdf",
+        "sha256": "e00c9cecf41994ee3dce5c5d34548ea92ad99a85060616039ad4a00555e5219b"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-margin-box-after-synthetic-weight.html",
+      "reference_html_sha256": "ba60e8c8e7b9fd8bd937031784b1b0808f2f6ecfe8bbd4d1cb12d992ca3f39c5"
+    },
     "paged-margin-box-page-context-text": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-margin-box-page-context-text.html",

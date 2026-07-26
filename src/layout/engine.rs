@@ -9458,6 +9458,20 @@ mod tests {
     }
 
     #[test]
+    fn string_set_attr_is_available_as_the_first_assignment_on_its_page() {
+        let rules = parse_stylesheet("h2 { string-set: section attr(data-title) }");
+        let nodes =
+            parse_html(r#"<h2 data-title="ALPHA">ignored text</h2><p>Body text</p>"#).unwrap();
+        let pages = layout_with_rules(&nodes, PageSize::A4, Margin::default(), &rules);
+
+        assert_eq!(pages[0].named_strings.get("section"), Some(&"ALPHA".into()));
+        assert_eq!(
+            pages[0].named_strings_first.get("section"),
+            Some(&"ALPHA".into())
+        );
+    }
+
+    #[test]
     fn running_element_keeps_a_sized_painted_box_without_text() {
         let rules = parse_stylesheet(
             ".runhead { position: running(runhead); width: 160px; height: 24px; background: #11305f; }",

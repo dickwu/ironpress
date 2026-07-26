@@ -1,5 +1,27 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct PagePaintStreams<'a> {
+    document: &'a str,
+    decorations: Option<&'a str>,
+}
+
+impl<'a> PagePaintStreams<'a> {
+    pub(super) fn document_only(document: &'a str) -> Self {
+        Self {
+            document,
+            decorations: None,
+        }
+    }
+
+    pub(super) fn with_decorations(document: &'a str, decorations: &'a str) -> Self {
+        Self {
+            document,
+            decorations: (!decorations.is_empty()).then_some(decorations),
+        }
+    }
+}
+
 impl PdfWriter {
     /// Embed a TrueType font and return the PDF resource name to reference it.
     pub(super) fn add_ttf_font(
@@ -117,39 +139,20 @@ impl PdfWriter {
         &mut self,
         width: f32,
         height: f32,
-        content: &str,
+        paint: PagePaintStreams<'_>,
         annotations: Vec<LinkAnnotation>,
         images: Vec<ImageRef>,
         ext_gstates: Vec<(String, f32)>,
         shadings: Vec<ShadingEntry>,
     ) {
-        // Content stream — FlateDecode-compressed when enabled (lossless and
-        // transparent to rasterization; PDF content streams are uncompressed
-        // PostScript-like operators that shrink ~5-8x). Falls back to raw if
-        // compression is disabled or fails.
-        let content_id = self.next_id();
-        match self
-            .opts
-            .compress
-            .then(|| flate_compress(content.as_bytes()))
-            .flatten()
-        {
-            Some(comp) => {
-                // Binary stream: header ends at "stream\n"; the writer appends the
-                // bytes then "\nendstream\nendobj" (see finish_to_writer).
-                self.objects.push(format!(
-                    "{content_id} 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
-                    comp.len(),
-                ));
-                self.binary_objects.insert(content_id, comp);
+        let document_id = self.add_page_content_stream(paint.document);
+        let page_contents = match paint.decorations {
+            Some(decorations) => {
+                let decorations_id = self.add_page_content_stream(decorations);
+                format!("[{document_id} 0 R {decorations_id} 0 R]")
             }
-            None => {
-                self.objects.push(format!(
-                    "{content_id} 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj",
-                    content.len(),
-                ));
-            }
-        }
+            None => format!("{document_id} 0 R"),
+        };
         let page_id = self.objects.len() + annotations.len() + 1;
 
         // Annotation objects
@@ -170,7 +173,7 @@ impl PdfWriter {
 
         // Page object (placeholder — will be updated in finish())
         self.objects.push(format!(
-            "{page_id} 0 obj\n<< /Type /Page /MediaBox [0 0 {width} {height}] /Contents {content_id} 0 R >>\nendobj",
+            "{page_id} 0 obj\n<< /Type /Page /MediaBox [0 0 {width} {height}] /Contents {page_contents} >>\nendobj",
         ));
 
         self.page_ids.push(page_id);
@@ -178,6 +181,31 @@ impl PdfWriter {
         self.page_images.push(images);
         self.page_ext_gstates.push(ext_gstates);
         self.page_shadings.push(shadings);
+    }
+
+    fn add_page_content_stream(&mut self, content: &str) -> usize {
+        let content_id = self.next_id();
+        match self
+            .opts
+            .compress
+            .then(|| flate_compress(content.as_bytes()))
+            .flatten()
+        {
+            Some(compressed) => {
+                self.objects.push(format!(
+                    "{content_id} 0 obj\n<< /Length {} /Filter /FlateDecode >>\nstream\n",
+                    compressed.len(),
+                ));
+                self.binary_objects.insert(content_id, compressed);
+            }
+            None => {
+                self.objects.push(format!(
+                    "{content_id} 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj",
+                    content.len(),
+                ));
+            }
+        }
+        content_id
     }
 
     pub(super) fn finish_to_writer<W: std::io::Write>(
@@ -593,7 +621,8 @@ fn serialize_cid_widths(widths: &[f32]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::serialize_cid_widths;
+    use super::{PagePaintStreams, serialize_cid_widths};
+    use crate::render::pdf::PdfWriter;
 
     #[test]
     fn cid_widths_preserve_fractional_text_space_units() {
@@ -601,5 +630,26 @@ mod tests {
             serialize_cid_widths(&[0.0, 333.25, 666.75, 1_000.0]),
             "0 333.25 666.75 1000"
         );
+    }
+
+    #[test]
+    fn page_decorations_are_a_separate_final_content_stream() {
+        let mut writer = PdfWriter::new();
+        writer.add_page(
+            100.0,
+            100.0,
+            PagePaintStreams::with_decorations("document", "margin boxes"),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let page = writer
+            .objects
+            .iter()
+            .find(|object| object.contains("/Type /Page "))
+            .expect("page object");
+        assert!(page.contains("/Contents [1 0 R 2 0 R]"), "{page}");
     }
 }

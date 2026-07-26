@@ -83,14 +83,14 @@ fn type3_char_proc(ttf: &TtfFont, glyph_id: u16, glyph_style: Type3GlyphStyle) -
     };
 
     let glyph = rustybuzz::ttf_parser::GlyphId(glyph_id);
+    let Some(source) = glyph_path(&face, glyph) else {
+        return format!("{width} 0 d0\n");
+    };
     let bounds = face.glyph_bounding_box(glyph).map_or(ttf.bbox, |bbox| {
         [bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max]
     });
     let [left, bottom, right, top] = expanded_type3_bbox(bounds, ttf, glyph_style);
     let mut content = format!("{width} 0 {left} {bottom} {right} {top} d1\n");
-    let Some(source) = glyph_path(&face, glyph) else {
-        return content;
-    };
     if glyph_style == Type3GlyphStyle::SyntheticWeight
         && let Some(expanded) = synthetic_weight_glyph_path(&source, ttf.units_per_em)
     {
@@ -328,5 +328,21 @@ mod tests {
         assert!(synthetic.matches(" m\n").count() > plain.matches(" m\n").count());
         assert!(!synthetic.contains(" w\n"));
         assert!(synthetic.ends_with("f\n"));
+    }
+
+    #[test]
+    fn outline_less_glyph_uses_width_only_type3_metrics() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans font");
+        let glyph_id = *font.cmap.get(&(' ' as u32)).expect("space glyph");
+
+        let char_proc = type3_char_proc(&font, glyph_id, Type3GlyphStyle::SyntheticWeight);
+
+        assert!(char_proc.ends_with("0 d0\n"), "{char_proc}");
+        assert!(!char_proc.contains(" d1\n"), "{char_proc}");
     }
 }

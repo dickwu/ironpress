@@ -182,6 +182,7 @@ use transforms::{
 };
 pub(crate) use writer::{PdfWriter, RenderOpts};
 use writer_images::PdfImageInterpolation;
+use writer_output::PagePaintStreams;
 
 #[cfg(test)]
 use layout_elements::{
@@ -725,33 +726,20 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 if margin_runs.is_empty() {
                     continue;
                 }
-                let mut cursor_x = text_x;
-                for (run_index, margin_run) in margin_runs.iter().enumerate() {
-                    let run_width = estimate_run_width_with_fonts(margin_run, custom_fonts);
-                    let previous = margin_runs[..run_index].iter().rev().find(|previous| {
-                        previous.inline_box.is_none() && !previous.text.is_empty()
-                    });
-                    let decoration = HorizontalRunDecorations::new(
-                        margin_run,
-                        cursor_x,
-                        run_width,
-                        text_y,
-                        custom_fonts,
-                    )
-                    .continuing_after(previous);
-                    decoration.paint_text(
-                        &mut decoration_content,
-                        mb_font_size,
-                        &prepared_custom_fonts,
-                        0.0,
-                        &mut pdf_writer,
-                        &mut page_images,
-                    );
-                    cursor_x = crate::layout::units::LayoutUnit::from_points_ceil(
-                        cursor_x + estimate_run_width_with_fonts(margin_run, custom_fonts),
-                    )
-                    .to_points();
-                }
+                paint_horizontal_line_text(
+                    &mut decoration_content,
+                    &margin_runs,
+                    HorizontalLinePaint {
+                        origin: PdfPoint::new(text_x, text_y),
+                        line_ascender: line_box.baseline_from_top,
+                        word_spacing: 0.0,
+                        text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
+                    },
+                    custom_fonts,
+                    &prepared_custom_fonts,
+                    &mut pdf_writer,
+                    &mut page_images,
+                );
             }
         }
 
@@ -765,41 +753,49 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
             );
         }
 
-        // Layout retains Chromium's printed-page content transform. Page
-        // decorations stay in direct page coordinates (see above).
-        content = format!(
-            "q {}{content}Q\n{decoration_content}",
-            page_content_transform.operator()
-        );
-
         let page_matrix = match page_orientation {
             PageOrientation::Upright => (1.0, 0.0, 0.0, 1.0, bleed, bleed),
             PageOrientation::RotateLeft => (0.0, 1.0, -1.0, 0.0, page_size.height + bleed, bleed),
             PageOrientation::RotateRight => (0.0, -1.0, 1.0, 0.0, bleed, page_size.width + bleed),
         };
-        content = format!(
-            "q {} {} {} {} {} {} cm\n{content}Q\n",
+
+        // CSS Page paints document content before page-margin boxes. Preserve
+        // those semantic layers as separate PDF streams with independently
+        // balanced graphics states.
+        let document_content = format!(
+            "q 1 0 0 1 0 0 cm\nq {} {} {} {} {} {} cm\nq {}{content}Q\nQ\nQ\n",
             page_matrix.0,
             page_matrix.1,
             page_matrix.2,
             page_matrix.3,
             page_matrix.4,
             page_matrix.5,
+            page_content_transform.operator(),
         );
-
-        // CSS Paged Media clips inline overflow at the page boundary; it does not
-        // shrink the entire page to fit an overflowing descendant. Keep the
-        // outer wrapper for one balanced page-level graphics-state scope.
-        content = format!("q 1 0 0 1 0 0 cm\n{content}Q\n");
+        let decoration_stream = (!decoration_content.is_empty()).then(|| {
+            format!(
+                "q 1 0 0 1 0 0 cm\nq {} {} {} {} {} {} cm\n{decoration_content}Q\nQ\n",
+                page_matrix.0,
+                page_matrix.1,
+                page_matrix.2,
+                page_matrix.3,
+                page_matrix.4,
+                page_matrix.5,
+            )
+        });
 
         for annotation in &mut annotations {
             annotation.rect = page_content_transform.transform_rect(annotation.rect);
         }
 
+        let paint_streams = match decoration_stream.as_deref() {
+            Some(decorations) => PagePaintStreams::with_decorations(&document_content, decorations),
+            None => PagePaintStreams::document_only(&document_content),
+        };
         pdf_writer.add_page(
             media_width,
             media_height,
-            &content,
+            paint_streams,
             annotations,
             page_images,
             page_ext_gstates,

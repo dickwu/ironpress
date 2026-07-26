@@ -1219,6 +1219,26 @@
     ]
   },
   {
+    "id": "paged-margin-box-after-synthetic-weight",
+    "category": "paged-media",
+    "feature": "page-margin-box",
+    "subfeature": "font-carrier-transition",
+    "description": "A large plain-weight top-center header remains visible after synthetic-bold document text. Chromium lacks page-margin generated content, so the verified standards-derived Foundation reference materializes CSS Page 3's fixed top-margin geometry and document-before-margin-box paint order. Catches PDF font-carrier state leaking from document content into later page decorations.",
+    "file": "cases/paged-media/paged-margin-box-after-synthetic-weight.html",
+    "reference_file": "references/paged-media/paged-margin-box-after-synthetic-weight.html",
+    "oracle": "chrome",
+    "reference": {
+      "status": "verified"
+    },
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline",
+      "typography-font-weight-bold"
+    ]
+  },
+  {
     "id": "paged-element-first-except",
     "category": "paged-media",
     "feature": "running-element",

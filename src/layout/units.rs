@@ -39,6 +39,7 @@ impl<const FRACTIONAL_BITS: u32, const RAW_MIN: i64, const RAW_MAX: i64>
         Self::from_scaled(f64::from(css_pixels), f64::floor)
     }
 
+    #[cfg(test)]
     pub(crate) fn from_css_pixels_ceil(css_pixels: f32) -> Self {
         Self::from_scaled(f64::from(css_pixels), f64::ceil)
     }
@@ -56,6 +57,7 @@ impl<const FRACTIONAL_BITS: u32, const RAW_MIN: i64, const RAW_MAX: i64>
         Self::from_css_pixels_floor(points / PT_PER_CSS_PX)
     }
 
+    #[cfg(test)]
     pub(crate) fn from_points_ceil(points: f32) -> Self {
         Self::from_css_pixels_ceil(points / PT_PER_CSS_PX)
     }
