@@ -5,20 +5,7 @@ use crate::layout::elements::{
 use crate::layout::engine::{LayoutBorder, TextLine};
 use crate::layout::filter::FilterRasterOutput;
 use crate::style::computed::{TextAlign, VerticalAlign};
-use crate::types::{EdgeSizes, PhysicalEdgeFlags, PhysicalEdges, Point, Size};
-
-/// A resolved portion of one cell edge, expressed in table tracks relative to
-/// the cell's first row or column. Track coordinates survive pagination and do
-/// not duplicate physical point geometry in layout state.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CollapsedBorderSegment {
-    pub(crate) track_offset: usize,
-    pub(crate) track_span: usize,
-    pub(crate) side: crate::layout::engine::LayoutBorderSide,
-}
-
-/// Conflict-resolved paint sections for all four edges of one table cell.
-pub(crate) type CollapsedBorderSegments = PhysicalEdges<Vec<CollapsedBorderSegment>>;
+use crate::types::{EdgeSizes, Point, Size};
 
 /// Text and child layout owned by one table or grid cell.
 #[derive(Debug, Clone, Default)]
@@ -284,18 +271,8 @@ impl TableCellHeightConstraint {
 /// Table-only border and visibility state.
 #[derive(Debug, Clone, Default)]
 pub struct TableCellState {
-    /// Physical edges that form the outside of the collapsed table grid.
-    pub collapsed_outer_edges: PhysicalEdgeFlags,
-    pub(crate) collapsed_segments: CollapsedBorderSegments,
-    pub(crate) collapsed_resolution_complete: bool,
     pub hide_if_empty: bool,
     pub clips: bool,
-}
-
-impl TableCellState {
-    pub(crate) fn has_resolved_collapsed_borders(&self) -> bool {
-        self.collapsed_resolution_complete
-    }
 }
 
 /// A concrete table cell.

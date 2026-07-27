@@ -412,7 +412,7 @@ impl PageContentTransform {
     /// absolute box edge in top-down page coordinates before applying CSS
     /// transforms. Rounding a width or height instead would move the far edge
     /// independently and create seams between adjacent boxes.
-    pub(super) fn snap_layout_box(self, rect: PdfRect) -> PdfRect {
+    pub(in crate::render::pdf) fn snap_layout_box(self, rect: PdfRect) -> PdfRect {
         let Some(page_size) = self.page_size else {
             return rect;
         };

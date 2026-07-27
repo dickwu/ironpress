@@ -37,9 +37,10 @@ pub(crate) use principal::{PrincipalBox, impl_principal_layout_element};
 pub(crate) use properties::*;
 pub(crate) use stacking::{Stacking, StackingLevel, StackingParticipant, StackingRole};
 pub(crate) use table::{
-    Table, TableBoxDecoration, TableBoxDecorationOwner, TableCells, TableFormatting,
-    TableFragmentGroup, TableFragmentation, TableGridIdentity, TableGridOwner, TableInlineGeometry,
-    TableRow,
+    CollapsedBorderEdge, CollapsedBorderJoint, CollapsedBorderJoints, CollapsedBorderLine,
+    CollapsedTableBorders, Table, TableBoxDecoration, TableBoxDecorationOwner, TableCells,
+    TableFormatting, TableFragmentGroup, TableFragmentation, TableGridIdentity, TableGridOwner,
+    TableInlineGeometry, TableRow,
 };
 #[cfg(test)]
 pub(crate) use test_support::{LayoutElementTestExt, LayoutElementTestMutExt};

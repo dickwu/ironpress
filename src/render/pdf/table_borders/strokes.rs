@@ -1,31 +1,6 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::render::pdf) fn paint_collapsed_outer_right_border(
-    content: &mut String,
-    side: &crate::layout::engine::LayoutBorderSide,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    page_ext_gstates: &mut Vec<(String, f32)>,
-    bg_alpha_counter: &mut usize,
-) {
-    if !side.paints() || width <= 0.0 || height <= 0.0 {
-        return;
-    }
-    let alpha = begin_border_alpha(
-        content,
-        page_ext_gstates,
-        bg_alpha_counter,
-        side.color.alpha(),
-    );
-    let (r, g, b) = side.color.to_f32_rgb();
-    content.push_str(&format!("{r} {g} {b} rg\n{x} {y} {width} {height} re\nf\n"));
-    end_border_alpha(content, alpha);
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(in crate::render::pdf) fn paint_table_cell_border_line(
     content: &mut String,
     side: &crate::layout::engine::LayoutBorderSide,

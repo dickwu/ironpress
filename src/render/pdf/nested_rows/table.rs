@@ -41,6 +41,28 @@ impl NestedRowsRenderer<'_, '_> {
             self.previous_margin_bottom = outer_margins.end;
             return;
         }
+        let collapsed = border_collapse == BorderCollapse::Collapse;
+        if collapsed && self.table_cell_phase.paints_borders() {
+            paint_resolved_collapsed_row_borders(
+                content,
+                &element.collapsed_borders,
+                CollapsedRowBorderGeometry::new(
+                    col_widths,
+                    origin_x + element.grid_inline_offset(),
+                    row_y,
+                    row_height,
+                    pdf_writer.page_content_transform,
+                ),
+                page_ext_gstates,
+                bg_alpha_counter,
+            );
+        }
+        if collapsed && self.table_cell_phase == TableCellPaintPhase::Borders {
+            cursor_y -= row_height + internal_spacing.end + flow_extra_bottom + outer_margins.end;
+            self.cursor_y = cursor_y;
+            self.previous_margin_bottom = outer_margins.end;
+            return;
+        }
         let baseline_shifts = row_baseline_shifts(cells, custom_fonts);
         let stacking_scope = StackingScope::for_element(element);
         let mut stacking_plan = StackingPaintPlan::default();
@@ -48,7 +70,6 @@ impl NestedRowsRenderer<'_, '_> {
             let Some(cell_frame) = cell_frames.get(cell_idx).copied().flatten() else {
                 continue;
             };
-            let col_pos = cell_frame.column_start();
             let phaseable = cell.layout.stacking_level().is_in_flow()
                 && crate::layout::elements::BoxPaintOwner::supports_phased_paint(&cell.layout);
             let cell_phase = match (self.table_cell_phase, phaseable) {
@@ -63,14 +84,6 @@ impl NestedRowsRenderer<'_, '_> {
                 let content = &mut cell_content;
                 let cell_x = origin_x + cell_frame.offset();
                 let cell_w = cell_frame.extent();
-                let (horizontal_border_left, horizontal_border_right) =
-                    collapsed_table_horizontal_border_span(
-                        cell,
-                        border_collapse,
-                        col_pos == 0,
-                        cell_x,
-                        cell_x + cell_w,
-                    );
                 let cell_height = row_height
                     + self
                         .row_heights
@@ -220,10 +233,9 @@ impl NestedRowsRenderer<'_, '_> {
                     CollapsedCellBackgroundBoundary::finish(content, background_clipped);
                 }
 
-                let separate = border_collapse == BorderCollapse::Separate;
                 let border = &cell.layout.box_model.border;
                 if cell_phase.paints_borders()
-                    && separate
+                    && !collapsed
                     && (border.has_any() || cell.layout.paint.border_image.is_some())
                     && !cell.table.hide_if_empty
                 {
@@ -242,116 +254,6 @@ impl NestedRowsRenderer<'_, '_> {
                             page_images,
                         },
                     );
-                } else if cell_phase.paints_borders()
-                    && (border.has_any() || cell.table.has_resolved_collapsed_borders())
-                    && !cell.table.hide_if_empty
-                {
-                    if !separate && cell.table.has_resolved_collapsed_borders() {
-                        paint_resolved_collapsed_cell_borders(
-                            content,
-                            cell,
-                            CollapsedCellTrackGeometry::new(
-                                cell_geometry,
-                                CollapsedColumnTracks::new(col_widths, col_pos),
-                                CollapsedRowTracks::new(
-                                    &self.row_heights,
-                                    self.element_index,
-                                    row_height,
-                                ),
-                            ),
-                            page_ext_gstates,
-                            bg_alpha_counter,
-                        );
-                    } else {
-                        let inset = |width: f32| if separate { width / 2.0 } else { 0.0 };
-                        let x1 = cell_x;
-                        let x2 = cell_x + cell_w;
-                        let y_top = row_y;
-                        let y_bottom = row_y - cell_height;
-                        let (vertical_top, vertical_bottom) = collapsed_table_vertical_border_span(
-                            cell,
-                            border_collapse,
-                            y_top,
-                            y_bottom,
-                        );
-                        if border.top.width > 0.0 {
-                            let side = border.top;
-                            let y = y_top - inset(side.width);
-                            paint_table_cell_border_line(
-                                content,
-                                &side,
-                                PhysicalSide::Top,
-                                horizontal_border_left,
-                                y,
-                                horizontal_border_right,
-                                y,
-                                page_ext_gstates,
-                                bg_alpha_counter,
-                            );
-                        }
-                        if border.right.width > 0.0 {
-                            let collapsed_right = !separate
-                                && cell.table.collapsed_outer_edges.right
-                                && border.right.paints();
-                            let side = border.right;
-                            if collapsed_right {
-                                let width = side.width;
-                                paint_collapsed_outer_right_border(
-                                    content,
-                                    &side,
-                                    x2 - width / 2.0,
-                                    vertical_bottom,
-                                    width,
-                                    vertical_top - vertical_bottom,
-                                    page_ext_gstates,
-                                    bg_alpha_counter,
-                                );
-                            } else {
-                                let x = x2 - inset(side.width);
-                                paint_table_cell_border_line(
-                                    content,
-                                    &side,
-                                    PhysicalSide::Right,
-                                    x,
-                                    vertical_top,
-                                    x,
-                                    vertical_bottom,
-                                    page_ext_gstates,
-                                    bg_alpha_counter,
-                                );
-                            }
-                        }
-                        if border.bottom.width > 0.0 {
-                            let side = border.bottom;
-                            let y = y_bottom + inset(side.width);
-                            paint_table_cell_border_line(
-                                content,
-                                &side,
-                                PhysicalSide::Bottom,
-                                horizontal_border_left,
-                                y,
-                                horizontal_border_right,
-                                y,
-                                page_ext_gstates,
-                                bg_alpha_counter,
-                            );
-                        }
-                        if border.left.width > 0.0 {
-                            let side = border.left;
-                            let x = x1 + inset(side.width);
-                            paint_table_cell_border_line(
-                                content,
-                                &side,
-                                PhysicalSide::Left,
-                                x,
-                                vertical_top,
-                                x,
-                                vertical_bottom,
-                                page_ext_gstates,
-                                bg_alpha_counter,
-                            );
-                        }
-                    }
                 }
 
                 if cell_phase.paints_contents() {

@@ -896,8 +896,8 @@ fn split_table_row(
             cell.layout.box_model.border_insets.bottom = 0.0;
             cell.layout.box_model.content_insets.bottom = 0.0;
             cell.layout.box_model.minimum_block_size = space.remaining;
-            cell.table.collapsed_outer_edges.bottom = false;
         }
+        before.collapsed_borders.open_fragment_end();
         before.content.cells[index].layout.content.children = split.before;
         after.flow.margins.start = 0.0;
         after.flow.internal.start = 0.0;
@@ -908,8 +908,8 @@ fn split_table_row(
             cell.layout.box_model.border_insets.top = 0.0;
             cell.layout.box_model.content_insets.top = 0.0;
             cell.layout.box_model.minimum_block_size = 0.0;
-            cell.table.collapsed_outer_edges.top = false;
         }
+        after.collapsed_borders.open_fragment_start();
         after.content.cells[index].layout.content.children = split.after;
         return Some(ForcedBreak {
             before: before.boxed(),

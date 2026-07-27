@@ -32,8 +32,8 @@ impl CollapsedCellBackgroundBoundary {
         Self {
             trailing_border: EdgeSizes::new(
                 0.0,
-                resolved_edge_paint_width(cell, PhysicalSide::Right),
-                resolved_edge_paint_width(cell, PhysicalSide::Bottom),
+                used_edge_paint_width(cell, PhysicalSide::Right),
+                used_edge_paint_width(cell, PhysicalSide::Bottom),
                 0.0,
             ),
         }
@@ -57,26 +57,13 @@ impl CollapsedCellBackgroundBoundary {
     }
 }
 
-fn resolved_edge_paint_width(cell: &TableCell, side: PhysicalSide) -> f32 {
-    let owned_segment_width = cell
-        .table
-        .collapsed_segments
-        .get(side)
-        .iter()
-        .filter(|segment| segment.side.paints())
-        .map(|segment| segment.side.width)
-        .fold(0.0, f32::max);
+fn used_edge_paint_width(cell: &TableCell, side: PhysicalSide) -> f32 {
     let representative = cell.layout.box_model.border.get(side);
-    let shared_edge_width = if representative.paints() {
+    if representative.paints() {
         representative.width
     } else {
         0.0
-    };
-    // Conflict resolution stores one painted segment owner but harmonizes the
-    // representative used border on every cell touching that edge. A late
-    // background must exclude the edge even when the neighboring cell owns the
-    // one emitted border segment.
-    owned_segment_width.max(shared_edge_width)
+    }
 }
 
 #[cfg(test)]

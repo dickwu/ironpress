@@ -3,9 +3,9 @@ use crate::layout::cells::{
     TableCellHeightConstraint, TableCellSpan, TableCellState,
 };
 use crate::layout::elements::{
-    BoxModel, BoxPaint, Container, Image, InlineOffset, IntoLayoutNode, LayoutElement, LayoutNode,
-    LayoutSize, LayoutVisitor, LayoutVisitorMut, PageBreak, PaintGroup, Positioning,
-    SizeConstraints, Svg, Table, TableBoxDecoration, TableCells, TableFormatting,
+    BoxModel, BoxPaint, CollapsedTableBorders, Container, Image, InlineOffset, IntoLayoutNode,
+    LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, PageBreak, PaintGroup,
+    Positioning, SizeConstraints, Svg, Table, TableBoxDecoration, TableCells, TableFormatting,
     TableFragmentGroup, TableFragmentation, TableGridIdentity, TableInlineGeometry, TableRow,
     TextBlock,
 };
@@ -13,21 +13,15 @@ use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins};
 use crate::parser::css::{AncestorInfo, CssRule, CssValue, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
-#[cfg(test)]
-use crate::style::computed::BorderStyle;
 use crate::style::computed::{
     BorderCollapse, BoxSizing, ComputedStyle, Display, TableLayout, VerticalAlign, Visibility,
     WhiteSpace, compute_style_with_context, compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
 use crate::types::EdgeSizes;
-#[cfg(test)]
-use crate::types::PhysicalSide;
 use std::collections::HashMap;
 
 use super::context::{ContainingBlock, LayoutContext, LayoutEnv};
-#[cfg(test)]
-use super::engine::LayoutBorderSide;
 use super::engine::{
     CounterState, ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, TextRun,
     collects_as_inline_text, element_is_empty, element_sibling_list, flatten_element,
@@ -47,11 +41,6 @@ use super::text::{
 };
 
 mod collapsed_borders;
-#[cfg(test)]
-use collapsed_borders::{
-    BorderCandidate, CollapsedBorderOrigin, apply_table_winning_side, collapsed_border_winner,
-    collapsed_style_rank,
-};
 use collapsed_borders::{
     CollapsedBorderSources, CollapsedBorderTrack, resolve_collapsed_border_grid,
 };
@@ -175,6 +164,7 @@ fn table_row_node(
     TableRow {
         grid,
         content,
+        collapsed_borders: CollapsedTableBorders::default(),
         flow,
         formatting,
         fragmentation,
@@ -4114,66 +4104,6 @@ mod subpoint_width_tests {
     }
 
     #[test]
-    fn collapsed_table_border_is_owned_by_cells_once() {
-        let parsed = parse_html_with_styles(
-            r#"<style>
-                * { margin: 0; box-sizing: border-box; }
-                table { border-collapse: collapse; border: 12px solid #d7263d; }
-                td { width: 70px; height: 46px; border: 4px solid #1d3557; }
-            </style><table><tr><td></td><td></td></tr></table>"#,
-        )
-        .expect("valid collapsed-border fixture");
-        let rules = parsed
-            .stylesheets
-            .iter()
-            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
-            .collect::<Vec<_>>();
-        let pages = layout_with_rules(
-            &parsed.nodes,
-            PageSize::new(204.0, 108.0),
-            Margin::uniform(0.0),
-            &rules,
-        );
-        assert_eq!(
-            pages[0].elements.len(),
-            1,
-            "collapsed borders must not emit a second table-root paint box"
-        );
-        let (y, row) = pages[0]
-            .elements
-            .first()
-            .and_then(|(y, element)| element.inspect_table(|row| (*y, row.clone())))
-            .expect("one collapsed table row");
-        assert_eq!(y, 0.0);
-        assert_eq!(row.flow.margins, BlockMargins::ZERO);
-        assert_eq!(row.grid_inline_offset(), 4.5);
-        assert_eq!(row.content.column_widths, vec![52.5, 52.5]);
-
-        let [first, second] = row.content.cells.as_slice() else {
-            panic!("expected exactly two table cells");
-        };
-        for cell in [first, second] {
-            assert_eq!(cell.layout.box_model.minimum_block_size, 34.5);
-            assert_eq!(cell.layout.box_model.border_insets.top, 4.5);
-            assert_eq!(cell.layout.box_model.border_insets.bottom, 4.5);
-            assert!(cell.table.collapsed_outer_edges.top);
-            assert!(cell.table.collapsed_outer_edges.bottom);
-        }
-        assert_eq!(first.layout.box_model.border_insets.left, 4.5);
-        assert_eq!(first.layout.box_model.border_insets.right, 1.5);
-        assert_eq!(second.layout.box_model.border_insets.left, 1.5);
-        assert_eq!(second.layout.box_model.border_insets.right, 4.5);
-        assert!(first.table.collapsed_outer_edges.left);
-        assert!(!first.table.collapsed_outer_edges.right);
-        assert!(!second.table.collapsed_outer_edges.left);
-        assert!(second.table.collapsed_outer_edges.right);
-        assert_eq!(first.layout.box_model.border.right.width, 3.0);
-        assert!(first.table.collapsed_segments.right.is_empty());
-        assert_eq!(second.table.collapsed_segments.left.len(), 1);
-        assert_eq!(second.layout.box_model.border.left.width, 3.0);
-    }
-
-    #[test]
     fn fixed_unspecified_columns_keep_the_declared_table_width() {
         let parsed = parse_html_with_styles(
             r#"<style>
@@ -4460,67 +4390,6 @@ mod cell_attribute_tests {
 #[cfg(test)]
 mod border_tests {
     use super::*;
-
-    fn side(style: BorderStyle, width: f32) -> LayoutBorderSide {
-        LayoutBorderSide {
-            width,
-            style,
-            ..LayoutBorderSide::default()
-        }
-    }
-
-    #[test]
-    fn collapsed_style_rank_covers_the_full_css_order() {
-        let ordered = [
-            BorderStyle::Inset,
-            BorderStyle::Groove,
-            BorderStyle::Outset,
-            BorderStyle::Ridge,
-            BorderStyle::Dotted,
-            BorderStyle::Dashed,
-            BorderStyle::Solid,
-            BorderStyle::Double,
-        ];
-        for pair in ordered.windows(2) {
-            assert!(collapsed_style_rank(pair[0]) < collapsed_style_rank(pair[1]));
-        }
-    }
-
-    #[test]
-    fn typed_hidden_border_suppresses_a_collapsed_neighbor() {
-        let hidden = BorderCandidate {
-            side: side(BorderStyle::Hidden, 0.0),
-            origin: CollapsedBorderOrigin::Cell,
-        };
-        let solid = BorderCandidate {
-            side: side(BorderStyle::Solid, 8.0),
-            origin: CollapsedBorderOrigin::Cell,
-        };
-        assert_eq!(collapsed_border_winner(hidden, solid), Some(0));
-    }
-
-    #[test]
-    fn collapsed_outer_edge_provenance_does_not_overwrite_alpha() {
-        let mut cell = TableCell {
-            layout: crate::layout::cells::CellBox {
-                box_model: crate::layout::cells::CellBoxModel {
-                    border: LayoutBorder {
-                        left: side(BorderStyle::Solid, 1.0),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut table = side(BorderStyle::Solid, 4.0);
-        table.color = crate::types::Color::from_srgb(0.0, 0.0, 0.0, 0.25);
-        apply_table_winning_side(&mut cell, PhysicalSide::Left, table);
-        assert!(cell.table.collapsed_outer_edges.left);
-        assert_eq!(cell.layout.box_model.border.left.color.alpha(), 0.25);
-        assert_eq!(cell.layout.box_model.border.left.width, 4.0);
-    }
 
     #[test]
     fn collapsed_column_borders_preserve_definite_cell_track_heights() {

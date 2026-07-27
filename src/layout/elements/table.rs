@@ -5,6 +5,7 @@ use super::{
     TextBlock, impl_principal_layout_element,
 };
 use crate::layout::cells::TableCell;
+use crate::layout::engine::LayoutBorderSide;
 use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins, MarginHolder};
 use crate::style::computed::BorderCollapse;
 use crate::types::{CornerRadii, EdgeSizes};
@@ -180,21 +181,14 @@ pub(crate) struct TableCells {
 
 /// Resolved inline track geometry of one retained table cell.
 ///
-/// The frame is relative to the table row's formatting-context origin. It
-/// carries the logical track index because collapsed-border ownership and
-/// painting must use the same track placement as the cell border box.
+/// The frame is relative to the table row's formatting-context origin.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TableCellInlineFrame {
-    column_start: usize,
     offset: f32,
     extent: f32,
 }
 
 impl TableCellInlineFrame {
-    pub(crate) const fn column_start(self) -> usize {
-        self.column_start
-    }
-
     pub(crate) const fn offset(self) -> f32 {
         self.offset
     }
@@ -400,10 +394,133 @@ pub(crate) trait TableGridOwner {
     fn table_grid_identity(&self) -> &TableGridIdentity;
 }
 
+/// Signed inset contributed by the perpendicular winner at one collapsed
+/// table-border joint.
+///
+/// Positive values shorten this edge; negative values extend it through the
+/// joint. Keeping that decision in layout state prevents each renderer from
+/// reconstructing table-edge precedence from unrelated cell boxes.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CollapsedBorderJoint {
+    inset: f32,
+}
+
+impl CollapsedBorderJoint {
+    pub(crate) fn resolve(perpendicular_width: f32, edge_owns_joint: bool) -> Self {
+        let half_width = perpendicular_width.max(0.0) / 2.0;
+        Self {
+            inset: if edge_owns_joint {
+                -half_width
+            } else {
+                half_width
+            },
+        }
+    }
+
+    pub(crate) const fn inset(self) -> f32 {
+        self.inset
+    }
+}
+
+/// Joint decisions at the start and end of one resolved grid edge.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CollapsedBorderJoints {
+    pub(crate) start: CollapsedBorderJoint,
+    pub(crate) end: CollapsedBorderJoint,
+}
+
+/// One conflict-resolved unit edge on a collapsed table grid.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CollapsedBorderEdge {
+    pub(crate) side: LayoutBorderSide,
+    pub(crate) joints: CollapsedBorderJoints,
+}
+
+impl CollapsedBorderEdge {
+    pub(crate) const fn new(side: LayoutBorderSide, joints: CollapsedBorderJoints) -> Self {
+        Self { side, joints }
+    }
+
+    fn open_start(&mut self) {
+        self.joints.start = CollapsedBorderJoint::default();
+    }
+
+    fn open_end(&mut self) {
+        self.joints.end = CollapsedBorderJoint::default();
+    }
+}
+
+/// Ordered unit edges along one table-grid line.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CollapsedBorderLine {
+    edges: Vec<CollapsedBorderEdge>,
+}
+
+impl CollapsedBorderLine {
+    pub(crate) fn new(edges: Vec<CollapsedBorderEdge>) -> Self {
+        Self { edges }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &CollapsedBorderEdge> {
+        self.edges.iter()
+    }
+
+    fn clear(&mut self) {
+        self.edges.clear();
+    }
+}
+
+/// The non-overlapping slice of a resolved collapsed-border grid painted with
+/// one table row.
+///
+/// `block_start` owns the horizontal grid line before the row, `block_axis`
+/// owns the vertical unit edges through it, and only the final row has a
+/// non-empty `block_end` line. This paints every grid edge once without
+/// attaching table-wide geometry to arbitrary cells.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CollapsedTableBorders {
+    pub(crate) block_start: CollapsedBorderLine,
+    pub(crate) block_axis: CollapsedBorderLine,
+    pub(crate) block_end: CollapsedBorderLine,
+}
+
+impl CollapsedTableBorders {
+    pub(crate) fn new(
+        block_start: CollapsedBorderLine,
+        block_axis: CollapsedBorderLine,
+        block_end: CollapsedBorderLine,
+    ) -> Self {
+        Self {
+            block_start,
+            block_axis,
+            block_end,
+        }
+    }
+
+    /// Open a row fragment at its block end. No synthetic collapsed edge exists
+    /// at a fragmentainer cut, and vertical edges continue to the cut itself.
+    pub(crate) fn open_fragment_end(&mut self) {
+        self.block_end.clear();
+        for edge in &mut self.block_axis.edges {
+            edge.open_end();
+        }
+    }
+
+    /// Open a continuation at its block start while preserving the original
+    /// table-grid edges on the unbroken sides.
+    pub(crate) fn open_fragment_start(&mut self) {
+        self.block_start.clear();
+        for edge in &mut self.block_axis.edges {
+            edge.open_start();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TableRow {
     pub(crate) grid: TableGridIdentity,
     pub(crate) content: TableCells,
+    pub(crate) collapsed_borders: CollapsedTableBorders,
     pub(crate) flow: BlockFlowSpacing,
     pub(crate) formatting: TableFormatting,
     pub(crate) fragmentation: TableFragmentation,
@@ -461,11 +578,7 @@ impl TableRow {
                     .take(cell.span.columns)
                     .sum::<f32>()
                     + spacing * cell.span.columns.saturating_sub(1) as f32;
-                Some(TableCellInlineFrame {
-                    column_start: start,
-                    offset,
-                    extent,
-                })
+                Some(TableCellInlineFrame { offset, extent })
             })
             .collect()
     }

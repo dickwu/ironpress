@@ -1625,8 +1625,8 @@ fn split_table_row_node(
         cell.layout.box_model.border_insets.bottom = 0.0;
         cell.layout.box_model.content_insets.bottom = 0.0;
         cell.layout.box_model.minimum_block_size = first_painted_h;
-        cell.table.collapsed_outer_edges.bottom = false;
     }
+    first.collapsed_borders.open_fragment_end();
 
     let mut rest = element.clone();
     rest.flow.margins.start = 0.0;
@@ -1637,8 +1637,8 @@ fn split_table_row_node(
         cell.layout.box_model.border_insets.top = 0.0;
         cell.layout.box_model.content_insets.top = 0.0;
         cell.layout.box_model.minimum_block_size = rest_h;
-        cell.table.collapsed_outer_edges.top = false;
     }
+    rest.collapsed_borders.open_fragment_start();
 
     Some((Box::new(first), Box::new(rest)))
 }
