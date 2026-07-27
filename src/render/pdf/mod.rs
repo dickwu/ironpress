@@ -31,7 +31,7 @@ use crate::style::computed::{
     MaskMode, MaskSource, Overflow, Position, RadialExtent, RadialGradient, RadialShape,
     ResolvedGradientHint, ResolvedGradientRamp, TextAlign, VerticalAlign,
 };
-use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalSide, Rect};
+use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalEdges, PhysicalSide, Rect};
 use crate::util::{AxisRepeatPattern, MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -178,7 +178,7 @@ pub(crate) use text_support::emphasis_mark_run;
 pub(crate) use text_support::encode_pdf_hex_glyph;
 use text_support::*;
 use transforms::{
-    PageContentTransform, PdfPaintSpace, PdfTextSpace, push_resolved_transform_cm,
+    PageContentTransform, PdfContentSpace, PdfPaintSpace, push_resolved_transform_cm,
     resolve_css_transform,
 };
 pub(crate) use writer::{PdfWriter, RenderOpts};
@@ -734,7 +734,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                         origin: PdfPoint::new(text_x, text_y),
                         line_ascender: line_box.baseline_from_top,
                         justification_word_spacing: 0.0,
-                        text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
+                        text_space: PdfContentSpace::page_css(pdf_writer.page_content_transform),
                     },
                     custom_fonts,
                     &prepared_custom_fonts,

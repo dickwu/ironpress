@@ -33,7 +33,7 @@ pub(super) fn opaque_block_coverer_rect(
                 return;
             };
             if !element.paint.visible
-                || background.alpha() < 1.0
+                || !background.is_opaque()
                 || element.paint.group.effects.opacity < 1.0
                 || element.paint.group.effects.mix_blend_mode
                     != crate::style::computed::BlendMode::Normal
@@ -81,7 +81,7 @@ pub(super) fn opaque_block_coverer_rect(
                 return;
             };
             if !element.paint.visible
-                || background.alpha() < 1.0
+                || !background.is_opaque()
                 || element.paint.group.effects.opacity < 1.0
                 || element.paint.group.effects.mix_blend_mode
                     != crate::style::computed::BlendMode::Normal

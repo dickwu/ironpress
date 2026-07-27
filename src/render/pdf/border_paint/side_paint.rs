@@ -1,26 +1,35 @@
 use super::*;
 
-/// Paint equal-colour solid sides as compound regions of one border ring.
+/// Paint connected equal-colour solid sides as compound border-ring regions.
 ///
 /// Side ownership stays exclusive—the regions only share their frontier—but
 /// one fill operation prevents a PDF rasterizer from antialiasing that shared
 /// frontier twice and exposing a hairline between visually continuous sides.
-pub(super) fn paint_solid_side_groups(
+/// Disconnected sides remain separate paint operations, matching their
+/// independent CSS regions instead of coupling their raster coverage.
+pub(super) fn paint_solid_side_components(
     content: &mut String,
     ring: BorderRingGeometry,
-    sides: &[(PhysicalSide, &crate::layout::engine::LayoutBorderSide); 4],
+    sides: PhysicalEdges<&crate::layout::engine::LayoutBorderSide>,
     page_ext_gstates: &mut Vec<(String, f32)>,
     alpha_counter: &mut usize,
 ) {
-    let mut painted_colors = Vec::with_capacity(sides.len());
-    for (_, side) in sides {
+    let closed_component = PhysicalSide::ALL.into_iter().all(|edge| {
+        sides
+            .get(edge)
+            .shares_solid_region_with(sides.get(edge.counter_clockwise()))
+    });
+    for start in PhysicalSide::ALL {
+        let side = sides.get(start);
+        let joins_previous_component =
+            side.shares_solid_region_with(sides.get(start.counter_clockwise()));
         if !side.paints()
             || side.style != BorderStyle::Solid
-            || painted_colors.contains(&side.color)
+            || (closed_component && start != PhysicalSide::Top)
+            || (!closed_component && joins_previous_component)
         {
             continue;
         }
-        painted_colors.push(side.color);
         let alpha =
             begin_border_alpha(content, page_ext_gstates, alpha_counter, side.color.alpha());
         content.push_str(&PdfRgb::from(side.color).fill_operator());
@@ -29,12 +38,12 @@ pub(super) fn paint_solid_side_groups(
             content.push_str("q\n");
             ring.push_clip(content);
         }
-        for (edge, candidate) in sides {
-            if candidate.paints()
-                && candidate.style == BorderStyle::Solid
-                && candidate.color == side.color
-            {
-                ring.side_region(*edge).push_path(content);
+        let mut edge = start;
+        loop {
+            ring.side_region(edge).push_path(content);
+            edge = edge.clockwise();
+            if edge == start || !side.shares_solid_region_with(sides.get(edge)) {
+                break;
             }
         }
         content.push_str("f\n");
@@ -44,6 +53,9 @@ pub(super) fn paint_solid_side_groups(
         end_border_alpha(content, alpha);
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn paint_rounded_patterned_side(
     content: &mut String,

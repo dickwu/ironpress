@@ -9,6 +9,7 @@
 - Production code must never panic. Tests may panic when an assertion fails.
 - Keep code simple. Long or complicated code indicates a missing abstraction; use the type system to represent prevalidated states instead of propagating `Result` or `Option` without semantic need.
 - Do not reinvent functionality that an appropriate, well-maintained crate already provides.
+- Establish every test expectation from an independent requirement, applicable specification, verified oracle, or reproduced regression before changing implementation. Never rewrite a test merely to match the code's new output; delete a test with no independently known behavioral contract instead of using it to bless the implementation.
 - Diagnostics for parsed languages must explain what went wrong, why, and how to fix it when a useful hint exists.
 - Avoid noisy code and keep each function at a homogeneous abstraction level. Every statement should contribute to understanding the computation.
 - Avoid bare helper functions when the behavior belongs on a type or is shared through a trait.

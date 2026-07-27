@@ -295,6 +295,31 @@ pub enum PhysicalSide {
     Left,
 }
 
+impl PhysicalSide {
+    /// All physical sides in clockwise CSS order.
+    pub const ALL: [Self; 4] = [Self::Top, Self::Right, Self::Bottom, Self::Left];
+
+    /// The adjoining side in clockwise order.
+    pub const fn clockwise(self) -> Self {
+        match self {
+            Self::Top => Self::Right,
+            Self::Right => Self::Bottom,
+            Self::Bottom => Self::Left,
+            Self::Left => Self::Top,
+        }
+    }
+
+    /// The adjoining side in counter-clockwise order.
+    pub const fn counter_clockwise(self) -> Self {
+        match self {
+            Self::Top => Self::Left,
+            Self::Right => Self::Top,
+            Self::Bottom => Self::Right,
+            Self::Left => Self::Bottom,
+        }
+    }
+}
+
 /// One value for every physical side of a rectangular box.
 ///
 /// The field and constructor order follows CSS: top, right, bottom, left.
@@ -951,6 +976,11 @@ impl Color {
     /// Alpha normalized to the PDF/raster 0..=1 scale.
     pub fn alpha(self) -> f32 {
         self.a / 255.0
+    }
+
+    /// Whether the color fully covers its backdrop.
+    pub fn is_opaque(self) -> bool {
+        self.a >= 255.0
     }
 
     /// Quantize only at an explicitly 8-bit raster boundary.

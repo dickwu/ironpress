@@ -86,6 +86,16 @@ impl PdfWriter {
         self.graphics_state.local_to_layout != PdfMatrix::IDENTITY
     }
 
+    /// Select the browser-like serialization space for the current page.
+    ///
+    /// CSS transforms operate on the same top-down CSS coordinates as the
+    /// content they transform. Keep that coordinate system inside an active
+    /// transform as well; falling back to bottom-up points would reverse the
+    /// box's block axis before the transform is applied.
+    pub(super) fn current_content_space(&self) -> PdfContentSpace {
+        PdfContentSpace::page_css(self.page_content_transform)
+    }
+
     pub(super) fn transformed_paint_space(&self, page_bounds: PdfRect) -> Option<PdfPaintSpace> {
         let local_to_layout = self.graphics_state.local_to_layout;
         (local_to_layout != PdfMatrix::IDENTITY)

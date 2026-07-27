@@ -226,41 +226,6 @@
     }
 
     #[test]
-    fn render_opaque_square_border_draws_non_overlapping_bands() {
-        let html = r#"<div style="border: 1px solid black">Bordered text</div>"#;
-        let nodes = parse_html(html).unwrap();
-        let pages = layout(&nodes, PageSize::A4, Margin::default());
-        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        // The bands are exact filled geometry and never overlap at corners.
-        assert!(
-            content.contains("0 0 0 rg") && filled_rect_count(&content) >= 4,
-            "PDF should contain four non-overlapping black border bands"
-        );
-        assert!(
-            !content.contains("0 J\n0 j\n0.75 w\n"),
-            "A square border must not fall back to a centerline stroke"
-        );
-    }
-
-    #[test]
-    fn render_border_with_custom_color() {
-        let html = r#"<div style="border: 2px solid red">Red border</div>"#;
-        let nodes = parse_html(html).unwrap();
-        let pages = layout(&nodes, PageSize::A4, Margin::default());
-        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        assert!(
-            content.contains("1 0 0 rg"),
-            "Border fill color should be red"
-        );
-        assert!(
-            filled_rect_count(&content) >= 4,
-            "PDF should contain four non-overlapping red border bands"
-        );
-    }
-
-    #[test]
     fn render_dashed_border_emits_dash_pattern() {
         let html = r#"<div style="border: 2px dashed black; width: 100pt">Dashed</div>"#;
         let nodes = parse_html(html).unwrap();

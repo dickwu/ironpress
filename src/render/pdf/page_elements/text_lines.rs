@@ -7,7 +7,7 @@ pub(super) fn render_text_block_lines(
     geometry: LayoutBoxGeometry,
     frame: PageElementFrame<'_>,
     opacity_active: bool,
-    text_space: PdfTextSpace,
+    text_space: PdfContentSpace,
     ctx: &mut PageRenderContext<'_>,
 ) {
     let lines = &element.lines;

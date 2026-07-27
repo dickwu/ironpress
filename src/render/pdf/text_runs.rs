@@ -116,7 +116,7 @@ pub(super) fn render_run_glyphs(
         word_spacing,
         pdf_writer,
         page_images,
-        PdfTextSpace::Points,
+        PdfContentSpace::Points,
         TextShadowPaint::Include,
     )
 }
@@ -145,7 +145,7 @@ pub(super) fn render_run_glyphs_without_shadows(
         word_spacing,
         pdf_writer,
         page_images,
-        PdfTextSpace::Points,
+        PdfContentSpace::Points,
         TextShadowPaint::Skip,
     )
 }
@@ -174,7 +174,7 @@ pub(super) fn render_run_text_shadows(
         word_spacing,
         pdf_writer,
         page_images,
-        PdfTextSpace::Points,
+        PdfContentSpace::Points,
     );
 }
 
@@ -190,7 +190,7 @@ pub(super) fn render_run_text_shadows_in_space(
     word_spacing: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
-    text_space: PdfTextSpace,
+    text_space: PdfContentSpace,
 ) {
     let baseline = run_paint_baseline(run, text_y, parent_font_size);
     paint_run_text_shadows_at_baseline(
@@ -227,7 +227,7 @@ pub(super) fn render_run_glyph_layers_in_space(
     justification_word_spacing: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
-    text_space: PdfTextSpace,
+    text_space: PdfContentSpace,
     shadow_paint: TextShadowPaint,
 ) -> f32 {
     let (r, g, b) = run.color.to_f32_rgb();
@@ -474,7 +474,7 @@ fn paint_run_text_shadows_at_baseline(
     justification_word_spacing: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
-    text_space: PdfTextSpace,
+    text_space: PdfContentSpace,
 ) {
     if !run.text_shadow.is_empty() {
         for shadow in run.text_shadow.iter().rev() {

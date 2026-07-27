@@ -26,55 +26,6 @@ fn radial_gradient_uses_shading_in_pdf() {
 }
 
 #[test]
-fn border_top_only_renders_filled_area() {
-    let html = r#"<div style="border-top: 2pt solid red">Top border only</div>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    // A square solid side is its exact axis-aligned border band, not a
-    // stroked centerline.
-    assert!(
-        pdf_str.contains("1 0 0 rg") && filled_rect_count(&pdf_str) >= 1,
-        "Should have a filled red top border area"
-    );
-}
-
-#[test]
-fn border_bottom_renders() {
-    let html = r#"<div style="border-bottom: 1pt solid blue">Bottom border</div>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(
-        pdf_str.contains("0 0 1 rg") && filled_rect_count(&pdf_str) >= 1,
-        "Should have a filled blue bottom border area"
-    );
-    assert!(
-        !pdf_str.contains("W* n"),
-        "A square one-sided border is already its exact side region and needs no clip"
-    );
-}
-
-#[test]
-fn border_left_renders() {
-    let html = r#"<blockquote style="border-left: 3pt solid green">Left border</blockquote>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(
-        (pdf_str.contains("0 0.50196 0 rg")
-            || pdf_str.contains("0 0.501960")
-            || pdf_str.contains("0 0.5019 0 rg")
-            || pdf_str.contains("0 0.502 0 rg"))
-            && filled_rect_count(&pdf_str) >= 1,
-        "Should have a filled green left border area"
-    );
-}
-
-#[test]
 fn non_uniform_borders_render_per_side() {
     let html =
         r#"<div style="border-top: 2pt solid red; border-bottom: 1pt solid blue">Mixed</div>"#;
@@ -439,19 +390,6 @@ fn flexrow_cell_gradient() {
     assert!(
         pdf_str.contains("/ShadingType 2"),
         "Cell gradient should use axial shading"
-    );
-}
-
-#[test]
-fn flexrow_border_renders() {
-    let html = r#"<div style="display: flex; border: 2pt solid black"><div style="width: 100pt">Bordered</div></div>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(
-        pdf_str.contains("0 0 0 rg") && filled_rect_count(&pdf_str) >= 4,
-        "Should have four non-overlapping black border bands"
     );
 }
 

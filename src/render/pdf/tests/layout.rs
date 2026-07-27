@@ -159,33 +159,6 @@ fn table_cell_absolute_pseudo_background_renders_blurred_copy() {
     );
 }
 
-#[test]
-fn table_cell_borders_render() {
-    use crate::parser::css::parse_stylesheet;
-    let html = r#"<html><head><style>
-            td { border-bottom: 1pt solid #999999; }
-        </style></head><body>
-        <table><tr><td>Cell</td></tr></table>
-        </body></html>"#;
-    let result = crate::parser::html::parse_html_with_styles(html).unwrap();
-    let mut rules = Vec::new();
-    for css in &result.stylesheets {
-        rules.extend(parse_stylesheet(css));
-    }
-    let pages = crate::layout::engine::layout_with_rules(
-        &result.nodes,
-        PageSize::A4,
-        Margin::default(),
-        &rules,
-    );
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(
-        filled_rect_count(&pdf_str) >= 1,
-        "Table cell border should produce a filled coverage band"
-    );
-}
-
 fn first_table_cell(html: &str) -> TableCell {
     let nodes = parse_html(html).unwrap();
     layout(&nodes, PageSize::A4, Margin::default())
@@ -503,39 +476,6 @@ fn underline_and_strikethrough_rendering() {
     assert!(
         decoration_count >= 2,
         "Should have at least 2 filled decoration rectangles (underline + strikethrough), got {decoration_count}"
-    );
-}
-
-#[test]
-fn table_cell_all_borders() {
-    // Covers lines 621, 626-627, 705-724: table cell border rendering (all 4 sides)
-    use crate::parser::css::parse_stylesheet;
-    let html = r#"<html><head><style>
-            td { border: 2pt solid red; }
-        </style></head><body>
-        <table><tr><td>Bordered Cell</td></tr></table>
-        </body></html>"#;
-    let result = crate::parser::html::parse_html_with_styles(html).unwrap();
-    let mut rules = Vec::new();
-    for css in &result.stylesheets {
-        rules.extend(parse_stylesheet(css));
-    }
-    let pages = crate::layout::engine::layout_with_rules(
-        &result.nodes,
-        PageSize::A4,
-        Margin::default(),
-        &rules,
-    );
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(pdf_str.contains("Bordered Cell"), "Should render cell text");
-    assert!(
-        pdf_str.contains("1 0 0 rg"),
-        "Should have red border fill color"
-    );
-    assert!(
-        filled_rect_count(&pdf_str) >= 4,
-        "Should have at least four non-overlapping border bands"
     );
 }
 

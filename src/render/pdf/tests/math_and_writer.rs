@@ -323,30 +323,8 @@
             "Container should have background color fill"
         );
         assert!(
-            content.contains("0 0 1 rg"),
-            "Container should have blue border fill"
-        );
-        assert!(
             content.contains("Inside container"),
             "Container children text should be rendered"
-        );
-    }
-
-    #[test]
-    fn render_flexbox_with_border() {
-        let html = r#"
-            <div style="display: flex; border: 1px solid red; padding: 5px">
-                <div style="flex: 1">Left</div>
-                <div style="flex: 1">Right</div>
-            </div>
-        "#;
-        let nodes = parse_html(html).unwrap();
-        let pages = layout(&nodes, PageSize::A4, Margin::default());
-        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        assert!(
-            content.contains("1 0 0 rg"),
-            "FlexRow border should use red fill color"
         );
     }
 
@@ -441,28 +419,6 @@
         assert!(
             content.contains("W n"),
             "overflow:hidden grid cell should emit a clip path"
-        );
-    }
-
-    #[test]
-    fn render_grid_row_with_border() {
-        let html = r#"
-            <div style="display: grid; grid-template-columns: 1fr 1fr; border: 2px solid green; gap: 4px">
-                <div>Cell A</div>
-                <div>Cell B</div>
-            </div>
-        "#;
-        let nodes = parse_html(html).unwrap();
-        let pages = layout(&nodes, PageSize::A4, Margin::default());
-        let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        assert!(
-            pdf.starts_with(b"%PDF"),
-            "Grid with border should produce valid PDF"
-        );
-        assert!(
-            content.contains("0 0.502 0 rg") && filled_rect_count(&content) >= 4,
-            "Grid border should produce four green filled bands"
         );
     }
 

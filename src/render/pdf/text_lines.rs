@@ -262,7 +262,7 @@ pub(super) fn render_line_glyphs_without_shadows_in_space(
     line_ascender: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
-    text_space: PdfTextSpace,
+    text_space: PdfContentSpace,
 ) {
     // Keep text runs plus any atomic inline boxes (empty text but real advance).
     let non_empty: Vec<&TextRun> = runs
@@ -670,7 +670,7 @@ pub(super) fn push_line_text_clip(
                         font,
                         shaped,
                         prepared_font,
-                        PdfTextSpace::Points,
+                        PdfContentSpace::Points,
                     )
                     .with_word_spacing(word_spacing)
                     .with_shear(shear);

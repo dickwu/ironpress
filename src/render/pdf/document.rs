@@ -827,7 +827,7 @@ pub(super) fn render_page_footnotes(
                 origin: PdfPoint::new(margin.left + area.padding.left, baseline_y),
                 line_ascender: metrics.ascender,
                 justification_word_spacing: 0.0,
-                text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
+                text_space: PdfContentSpace::page_css(pdf_writer.page_content_transform),
             },
             custom_fonts,
             prepared_custom_fonts,

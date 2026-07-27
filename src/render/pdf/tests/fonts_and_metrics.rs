@@ -229,7 +229,7 @@ fn append_tj_shaped_text_uses_single_text_matrix() {
             &font,
             &shaped,
             None,
-            PdfTextSpace::Points,
+            PdfContentSpace::Points,
         ),
     );
 
@@ -277,7 +277,7 @@ fn append_tj_shaped_text_keeps_repeated_subthreshold_adjustments() {
             &font,
             &shaped,
             None,
-            PdfTextSpace::Points,
+            PdfContentSpace::Points,
         )
         .with_letter_spacing(letter_spacing),
     );
@@ -333,9 +333,9 @@ fn synthetic_italic_shear_keeps_its_visual_direction_in_each_text_space() {
         content
     };
 
-    assert!(render(PdfTextSpace::Points).contains("1 0 0.25 1 10 20 Tm"));
+    assert!(render(PdfContentSpace::Points).contains("1 0 0.25 1 10 20 Tm"));
     assert!(
-        render(PdfTextSpace::PageCss { page_height: 100.0 }).contains("1 0 0.25 -1"),
+        render(PdfContentSpace::PageCss { page_height: 100.0 }).contains("1 0 0.25 -1"),
         "the PageCss Y reflection must not reverse the horizontal italic shear"
     );
 }

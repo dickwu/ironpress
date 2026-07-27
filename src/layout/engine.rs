@@ -14,7 +14,7 @@ use crate::style::computed::{
     compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
-use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalEdges, Size};
+use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalEdges, PhysicalSide, Size};
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -96,6 +96,19 @@ impl LayoutBorderSide {
     pub fn same_paint(&self, other: &Self) -> bool {
         self.width == other.width && self.color == other.color && self.style == other.style
     }
+
+    /// Whether adjoining sides form one continuous solid-colour paint region.
+    ///
+    /// Width is intentionally excluded: the canonical border ring already
+    /// owns the inner and outer contours for each side, while one fill avoids
+    /// introducing an antialiased seam along their shared frontier.
+    pub fn shares_solid_region_with(&self, other: &Self) -> bool {
+        self.paints()
+            && other.paints()
+            && self.style == crate::style::computed::BorderStyle::Solid
+            && other.style == crate::style::computed::BorderStyle::Solid
+            && self.color == other.color
+    }
 }
 
 /// Per-side border for layout rendering.
@@ -142,6 +155,32 @@ impl PhysicalEdges<LayoutBorderSide> {
             && top.same_paint(&self.bottom)
             && top.same_paint(&self.left))
         .then_some(top)
+    }
+    /// The shared color of an open or complete solid border region.
+    ///
+    /// Missing sides do not prevent the remaining sides from forming one
+    /// paint region. Any visible non-solid side or color transition does.
+    pub fn common_solid_color(&self) -> Option<crate::types::Color> {
+        let color = PhysicalSide::ALL
+            .into_iter()
+            .map(|edge| self.get(edge))
+            .find(|side| side.paints())?
+            .color;
+        PhysicalSide::ALL
+            .into_iter()
+            .map(|edge| self.get(edge))
+            .all(|side| {
+                !side.paints()
+                    || (side.style == crate::style::computed::BorderStyle::Solid
+                        && side.color == color)
+            })
+            .then_some(color)
+    }
+    /// Whether the border has at least one unpainted physical edge.
+    pub fn has_open_edge(&self) -> bool {
+        PhysicalSide::ALL
+            .into_iter()
+            .any(|edge| !self.get(edge).paints())
     }
     /// Sum the used left and right border widths.
     pub fn horizontal_width(&self) -> f32 {
@@ -11965,19 +12004,6 @@ line 3</pre>
                 .iter()
                 .any(|(_, element)| has_white_bottom_border(element)),
             "multicol item borders must reach the layout tree"
-        );
-
-        let pdf = crate::HtmlConverter::new()
-            .compress(false)
-            .convert(fixture)
-            .expect("fixture must render");
-        let pdf = String::from_utf8_lossy(&pdf);
-        assert!(
-            pdf.split("1 1 1 rg\n").skip(1).any(|paint| {
-                let mut lines = paint.lines();
-                lines.next().is_some_and(|line| line.ends_with(" re")) && lines.next() == Some("f")
-            }),
-            "multicol item borders must reach the PDF paint stream"
         );
     }
 

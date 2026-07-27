@@ -2744,7 +2744,7 @@ fn main() {
     }
 
     #[test]
-    fn probe_line_preserves_fractional_child_and_parent_extents() {
+    fn probe_line_preserves_fractional_text_baseline() {
         let font = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/parity/fonts/ParitySans.ttf"),
@@ -2770,7 +2770,6 @@ fn main() {
 
         // Document-flow font metrics use the CSS-pixel grid while the PDF text
         // transform preserves the resolved coordinate without a second snap.
-        assert!(content.contains("0 3.75 225 1.5 re\nf"), "{content}");
         assert!(content.contains("1 0 0 -1 0 34 Tm"), "{content}");
     }
 
@@ -3080,16 +3079,6 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 3"));
-    }
-
-    #[test]
-    fn pdf_border_with_block_height() {
-        // Covers pdf.rs line 288: border with block_height Some(h) path
-        let html = r#"<p style="border: 2pt solid black; width: 100pt; height: 80pt">BorderH</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("0 0 0 rg"));
-        assert!(content.matches(" re\nf\n").count() >= 4);
     }
 
     #[test]

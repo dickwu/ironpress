@@ -45,6 +45,7 @@ pub(super) fn paint_box_decoration(
     border_image: Option<&crate::style::computed::BorderImagePaint>,
     resources: BorderPaintResources<'_>,
 ) {
+    let content_space = resources.pdf_writer.current_content_space();
     if let Some(border_image) = border_image {
         let positioning = geometry.positioning();
         let clip =
@@ -73,6 +74,7 @@ pub(super) fn paint_box_decoration(
                 geometry.painting().border_box,
                 border,
                 radii,
+                content_space,
                 resources.page_ext_gstates,
                 resources.alpha_counter,
             );
@@ -83,6 +85,7 @@ pub(super) fn paint_box_decoration(
             geometry.painting().border_box,
             border,
             radii,
+            content_space,
             resources.page_ext_gstates,
             resources.alpha_counter,
         );
@@ -92,19 +95,19 @@ pub(super) fn paint_box_decoration(
 /// Paint a layout border around a complete border box.
 ///
 /// A text box can be in normal flow or be positioned absolutely by a
-/// fragmented layout.  Its paint position must not change which border path
-/// is used: use one closed path for a uniform frame, filled areas for flat
-/// non-uniform solid borders, and the per-side painter for the remaining
-/// styles.
+/// fragmented layout. Its paint position must not change which border path is
+/// used: use one closed path for a uniform frame and the canonical border ring
+/// plus side partitions for every non-uniform frame.
 fn paint_css_border(
     content: &mut String,
     border_box: PdfRect,
     border: &crate::layout::engine::LayoutBorder,
     radii: CornerRadii,
+    content_space: PdfContentSpace,
     page_ext_gstates: &mut Vec<(String, f32)>,
     bg_alpha_counter: &mut usize,
 ) {
-    if paint_square_solid_border(
+    if paint_open_square_solid_border(
         content,
         border_box,
         border,
@@ -119,6 +122,7 @@ fn paint_css_border(
             content,
             border_box.rounded(radii),
             side,
+            content_space,
             page_ext_gstates,
             bg_alpha_counter,
         )
@@ -191,19 +195,14 @@ fn paint_partitioned_border(
         );
         return;
     }
-    let sides = [
-        (PhysicalSide::Top, &border.top),
-        (PhysicalSide::Right, &border.right),
-        (PhysicalSide::Bottom, &border.bottom),
-        (PhysicalSide::Left, &border.left),
-    ];
+    let sides = PhysicalEdges::new(&border.top, &border.right, &border.bottom, &border.left);
 
-    // Equal solid sides form one visual region. Emit each colour as one PDF
-    // fill so the exclusive diagonal ownership remains geometric rather than
-    // becoming an antialiased seam between separately rasterized subpaths.
-    paint_solid_side_groups(content, ring, &sides, page_ext_gstates, bg_alpha_counter);
+    // Connected equal-colour solid sides form one visual region. Preserve
+    // disconnected components as independent PDF paints.
+    paint_solid_side_components(content, ring, sides, page_ext_gstates, bg_alpha_counter);
 
-    for (edge, side) in sides {
+    for edge in PhysicalSide::ALL {
+        let side = sides.get(edge);
         if !side.paints() || side.style == BorderStyle::Solid {
             continue;
         }

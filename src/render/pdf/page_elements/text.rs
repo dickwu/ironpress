@@ -641,9 +641,9 @@ pub(in crate::render::pdf) fn render_text_block(
     }
 
     let text_space = if needs_transform {
-        PdfTextSpace::Points
+        PdfContentSpace::Points
     } else {
-        PdfTextSpace::page_css(ctx.text.pdf_writer.page_content_transform)
+        PdfContentSpace::page_css(ctx.text.pdf_writer.page_content_transform)
     };
     if phase.paints_contents() {
         text_lines::render_text_block_lines(

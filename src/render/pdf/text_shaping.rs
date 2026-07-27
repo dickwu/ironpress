@@ -29,7 +29,7 @@ impl<'a> ShapedTextRender<'a> {
         font: &'a TtfFont,
         shaped: &'a crate::text::ShapedRun,
         prepared_font: Option<&'a PreparedCustomFont>,
-        text_space: PdfTextSpace,
+        text_space: PdfContentSpace,
     ) -> Self {
         Self {
             origin: text_space.point(origin),

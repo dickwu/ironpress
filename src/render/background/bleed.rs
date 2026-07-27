@@ -53,7 +53,7 @@ impl BackgroundBleed {
 
 fn edge_obscures_background(side: LayoutBorderSide) -> bool {
     side.paints()
-        && side.color.alpha() >= 1.0
+        && side.color.is_opaque()
         && !matches!(side.style, BorderStyle::Dashed | BorderStyle::Dotted)
 }
 

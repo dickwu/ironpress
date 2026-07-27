@@ -282,15 +282,16 @@ impl PdfDeviceSpace {
     }
 }
 
-/// Text serialization coordinates. Layout stays in PDF points; this type
-/// changes only how a text run is written into its local PDF graphics scope.
+/// Serialization coordinates for vector content. Layout stays in PDF points;
+/// this type changes only how paths and text are written into a local PDF
+/// graphics scope.
 ///
-/// Browser-produced PDFs commonly retain top-down CSS pixels for text and
-/// apply the 0.75pt conversion in the surrounding graphics state. Keeping that
-/// representation explicit avoids losing edge coverage by flattening small text
-/// directly into point-space font sizes and origins.
+/// Browser-produced PDFs commonly retain top-down CSS pixels and apply the
+/// 0.75pt conversion in the surrounding graphics state. Keeping that
+/// representation explicit avoids losing device-edge coverage by flattening
+/// small vector content directly into point-space sizes and origins.
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) enum PdfTextSpace {
+pub(super) enum PdfContentSpace {
     #[default]
     Points,
     PageCss {
@@ -298,7 +299,7 @@ pub(super) enum PdfTextSpace {
     },
 }
 
-impl PdfTextSpace {
+impl PdfContentSpace {
     pub(super) fn page_css(page: PageContentTransform) -> Self {
         if !page.content_scale.is_identity() {
             return Self::Points;
@@ -337,6 +338,17 @@ impl PdfTextSpace {
         }
     }
 
+    /// Convert a bottom-up layout rectangle into this serialization space.
+    pub(super) fn rect(self, rect: PdfRect) -> PdfRect {
+        let top_left = self.point(PdfPoint::new(rect.left, rect.top()));
+        PdfRect::new(
+            top_left.x,
+            top_left.y,
+            self.length(rect.width),
+            self.length(rect.height),
+        )
+    }
+
     pub(super) fn length(self, length: f32) -> f32 {
         match self {
             Self::Points => length,
@@ -344,7 +356,7 @@ impl PdfTextSpace {
         }
     }
 
-    /// Sign of text-space Y relative to layout-space Y.
+    /// Sign of content-space Y relative to layout-space Y.
     pub(super) const fn y_axis(self) -> f32 {
         match self {
             Self::Points => 1.0,
@@ -700,7 +712,9 @@ mod tests {
             PageContentTransform::DEVICE_TO_PAGE_OPERATOR * PageContentTransform::CSS_TO_DEVICE,
         );
 
-        let text_operator = PdfTextSpace::page_css(transform).begin_operator().unwrap();
+        let text_operator = PdfContentSpace::page_css(transform)
+            .begin_operator()
+            .unwrap();
         let text_scale = text_operator
             .lines()
             .nth(1)

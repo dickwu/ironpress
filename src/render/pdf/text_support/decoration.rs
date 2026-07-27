@@ -29,7 +29,7 @@ pub(in crate::render::pdf) struct HorizontalLinePaint {
     pub origin: PdfPoint,
     pub line_ascender: f32,
     pub justification_word_spacing: f32,
-    pub text_space: PdfTextSpace,
+    pub text_space: PdfContentSpace,
 }
 
 /// Paint a complete horizontal line in CSS Text Decoration stacking order.

@@ -1,109 +1,11 @@
 use super::*;
 
-/// A square solid border whose visible sides all share one paint.
+/// Paint a square solid fragment with an omitted physical edge.
 ///
-/// Once constructed, the border can be emitted as non-overlapping,
-/// axis-aligned bands. This is both the exact geometric union of its visible
-/// sides and the PDF representation Chromium uses for square solid borders.
-/// Mixed paints stay on the diagonal corner-partition path.
-#[derive(Debug, Clone, Copy)]
-struct SquareSolidBorder {
-    border_box: PdfRect,
-    widths: EdgeSizes,
-    color: crate::types::Color,
-}
-
-impl SquareSolidBorder {
-    fn from_layout(
-        border_box: PdfRect,
-        border: &crate::layout::engine::LayoutBorder,
-        radii: CornerRadii,
-    ) -> Option<Self> {
-        if !radii.is_zero() {
-            return None;
-        }
-
-        let mut color = None;
-        let mut used_width = |side: &crate::layout::engine::LayoutBorderSide| {
-            if !side.paints() {
-                return Some(0.0);
-            }
-            if side.style != BorderStyle::Solid {
-                return None;
-            }
-            match color {
-                Some(existing) if existing != side.color => return None,
-                Some(_) => {}
-                None => color = Some(side.color),
-            }
-            Some(side.width)
-        };
-        let widths = EdgeSizes::new(
-            used_width(&border.top)?,
-            used_width(&border.right)?,
-            used_width(&border.bottom)?,
-            used_width(&border.left)?,
-        );
-        let color = color?;
-        if widths.horizontal() > border_box.width || widths.vertical() > border_box.height {
-            return None;
-        }
-        Some(Self {
-            border_box,
-            widths,
-            color,
-        })
-    }
-
-    fn bands(self) -> [PdfRect; 4] {
-        let vertical_bottom = self.border_box.bottom + self.widths.bottom;
-        let vertical_height = self.border_box.height - self.widths.top - self.widths.bottom;
-        [
-            PdfRect::new(
-                self.border_box.left,
-                self.border_box.top() - self.widths.top,
-                self.border_box.width,
-                self.widths.top,
-            ),
-            PdfRect::new(
-                self.border_box.right() - self.widths.right,
-                vertical_bottom,
-                self.widths.right,
-                vertical_height,
-            ),
-            PdfRect::new(
-                self.border_box.left,
-                self.border_box.bottom,
-                self.border_box.width,
-                self.widths.bottom,
-            ),
-            PdfRect::new(
-                self.border_box.left,
-                vertical_bottom,
-                self.widths.left,
-                vertical_height,
-            ),
-        ]
-    }
-
-    fn paint(
-        self,
-        content: &mut String,
-        page_ext_gstates: &mut Vec<(String, f32)>,
-        alpha_counter: &mut usize,
-    ) {
-        let alpha =
-            begin_border_alpha(content, page_ext_gstates, alpha_counter, self.color.alpha());
-        content.push_str(&PdfRgb::from(self.color).fill_operator());
-        for band in self.bands().into_iter().filter(|band| !band.is_empty()) {
-            content.push_str(&band.rect_path());
-            content.push_str("f\n");
-        }
-        end_border_alpha(content, alpha);
-    }
-}
-
-pub(super) fn paint_square_solid_border(
+/// CSS fragmentation leaves the omitted edge open. Rectangle bands are the
+/// exact union of the remaining sides, have no shared-area overpaint, and
+/// preserve the top-down CSS coordinate serialization used by browser PDFs.
+pub(super) fn paint_open_square_solid_border(
     content: &mut String,
     border_box: PdfRect,
     border: &crate::layout::engine::LayoutBorder,
@@ -111,10 +13,56 @@ pub(super) fn paint_square_solid_border(
     page_ext_gstates: &mut Vec<(String, f32)>,
     alpha_counter: &mut usize,
 ) -> bool {
-    let Some(border) = SquareSolidBorder::from_layout(border_box, border, radii) else {
+    if !radii.is_zero() || !border.has_open_edge() {
+        return false;
+    }
+    let Some(color) = border.common_solid_color() else {
         return false;
     };
-    border.paint(content, page_ext_gstates, alpha_counter);
+    let widths = border.widths();
+    if widths.horizontal() > border_box.width || widths.vertical() > border_box.height {
+        return false;
+    }
+
+    let vertical_bottom = border_box.bottom + widths.bottom;
+    let vertical_height = border_box.height - widths.vertical();
+    let bands = PhysicalEdges::new(
+        PdfRect::new(
+            border_box.left,
+            border_box.top() - widths.top,
+            border_box.width,
+            widths.top,
+        ),
+        PdfRect::new(
+            border_box.right() - widths.right,
+            vertical_bottom,
+            widths.right,
+            vertical_height,
+        ),
+        PdfRect::new(
+            border_box.left,
+            border_box.bottom,
+            border_box.width,
+            widths.bottom,
+        ),
+        PdfRect::new(
+            border_box.left,
+            vertical_bottom,
+            widths.left,
+            vertical_height,
+        ),
+    );
+
+    let alpha = begin_border_alpha(content, page_ext_gstates, alpha_counter, color.alpha());
+    content.push_str(&PdfRgb::from(color).fill_operator());
+    for edge in PhysicalSide::ALL {
+        let band = *bands.get(edge);
+        if border.get(edge).paints() && !band.is_empty() {
+            content.push_str(&band.rect_path());
+            content.push_str("f\n");
+        }
+    }
+    end_border_alpha(content, alpha);
     true
 }
 
@@ -127,6 +75,7 @@ pub(super) fn paint_uniform_border(
     content: &mut String,
     border_box: RoundedRect,
     side: crate::layout::engine::LayoutBorderSide,
+    content_space: PdfContentSpace,
     page_ext_gstates: &mut Vec<(String, f32)>,
     alpha_counter: &mut usize,
 ) -> bool {
@@ -144,7 +93,7 @@ pub(super) fn paint_uniform_border(
     match side.style {
         BorderStyle::Solid => {
             if border_box.radii.is_circular() {
-                paint_uniform_solid_border(content, border_box, side.width, color);
+                paint_uniform_solid_border(content, border_box, side.width, color, content_space);
             } else {
                 content.push_str(&color.fill_operator());
                 paint_ring(
@@ -189,15 +138,31 @@ fn paint_uniform_solid_border(
     border_box: RoundedRect,
     width: f32,
     color: PdfRgb,
+    content_space: PdfContentSpace,
 ) {
     let centerline =
         BorderStrokeGeometry::new(border_box.rect, border_box.radii, EdgeSizes::uniform(width))
             .centerline;
+    let serialization_space = if border_box.radii.is_zero() {
+        content_space
+    } else {
+        PdfContentSpace::Points
+    };
+    if let Some(operator) = serialization_space.begin_operator() {
+        content.push_str(&operator);
+    }
     content.push_str(&color.stroke_operator());
     content.push_str("0 J\n0 j\n4 M\n");
-    content.push_str(&format!("{width} w\n"));
-    content.push_str(&centerline.path_or_rect());
+    content.push_str(&format!("{} w\n", serialization_space.length(width)));
+    if border_box.radii.is_zero() {
+        content.push_str(&serialization_space.rect(centerline.rect).rect_path());
+    } else {
+        content.push_str(&centerline.path_or_rect());
+    }
     content.push_str("S\n");
+    if let Some(operator) = serialization_space.end_operator() {
+        content.push_str(operator);
+    }
 }
 
 fn paint_ring(content: &mut String, ring: BorderRingGeometry) {

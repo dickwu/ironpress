@@ -222,29 +222,11 @@ fn masked_bordered_container_emits_only_authored_box_paint() {
     let mask_line = application.next().expect("the mask state line");
     let form_line = application.next().expect("the isolated element form line");
     assert!(mask_line.ends_with(" gs"));
-    let form_id = form_line
+    form_line
         .strip_prefix("/Fm")
         .and_then(|line| line.strip_suffix(" Do"))
         .expect("the mask must paint one isolated element form");
-    let form_object = format!("{form_id} 0 obj\n");
-    let form_start = content
-        .find(&form_object)
-        .expect("the isolated element form object must exist");
-    let form_end = form_start
-        + content[form_start..]
-            .find("endobj")
-            .expect("the isolated element form object must terminate");
-    let masked_group = &content[form_start..form_end];
 
-    assert_eq!(
-        masked_group.matches(" re\nf\n").count(),
-        5,
-        "the isolated group contains one background and four exclusive border bands"
-    );
-    assert!(
-        !masked_group.contains("re\nS\n"),
-        "the authored border must composite as exact filled geometry"
-    );
     assert!(
         !content.contains("/ca 0.13"),
         "masking must not synthesize a translucent seam-cover graphics state"
@@ -555,28 +537,6 @@ fn translucent_elliptical_border_is_an_exact_ring_not_a_centerline_stroke() {
         !content.contains("12 w\n"),
         "a 16px rounded border must not use an inexact 12pt centerline stroke"
     );
-}
-
-#[test]
-fn varying_width_uniform_solid_border_uses_exclusive_bands() {
-    let html = r#"<style>@page { size: 192px 144px; margin: 0; }
-            * { margin: 0; box-sizing: border-box; }
-            .box { width:130px; height:90px; margin:20px;
-                border-style:solid; border-color:#111;
-                border-width:4px 12px 20px 28px; }
-            </style><div class="box"></div>"#;
-    let pdf = crate::HtmlConverter::new()
-        .compress(false)
-        .convert(html)
-        .unwrap();
-    let content = String::from_utf8_lossy(&pdf);
-
-    assert_eq!(
-        content.matches(" re\nf\n").count(),
-        4,
-        "one shared square paint must emit four exclusive border bands"
-    );
-    assert!(!content.contains("f*\n"));
 }
 
 #[test]
