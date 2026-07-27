@@ -118,8 +118,8 @@ use flex_cell_shadows::FlexCellShadows;
 use flow_layout::*;
 use function_gradients::*;
 use geometry::{
-    FragmentPaintGeometry, LayoutBoxGeometry, PaintBoxGeometry, PdfEllipse, PdfMatrix, PdfPoint,
-    PdfRect, PdfVector, RoundedRect,
+    BoxPaintGeometry, BoxPaintGrid, FragmentPaintGeometry, LayoutBoxGeometry, PaintBoxGeometry,
+    PdfEllipse, PdfMatrix, PdfPoint, PdfRect, PdfVector, RoundedRect,
 };
 use gradient_rasters::*;
 use gradient_support::*;
@@ -276,8 +276,11 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         );
-        let box_geometry =
-            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let box_geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry);
         let paint_geometry = box_geometry.painting();
         let geometry = box_geometry.fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
@@ -304,8 +307,11 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
             element.size.height,
         );
         let layout_geometry = LayoutBoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO);
-        let box_geometry =
-            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let box_geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry);
         let paint_geometry = box_geometry.painting();
         let geometry = box_geometry.fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
@@ -325,8 +331,11 @@ impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         );
-        let geometry = layout_geometry
-            .for_paint(self.ctx.text.pdf_writer.page_content_transform)
+        let geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry)
             .fragment(Default::default());
         let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);
         paint_math_block(

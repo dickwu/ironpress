@@ -50,8 +50,8 @@ impl NestedRowsRenderer<'_, '_> {
             grid_padding,
             None,
         );
-        let grid_fragment_geometry = grid_geometry
-            .for_paint(pdf_writer.page_content_transform)
+        let grid_fragment_geometry = pdf_writer
+            .resolve_box_geometry(grid_geometry)
             .fragment(Default::default());
         paint_box_decoration(
             content,
@@ -107,7 +107,7 @@ impl NestedRowsRenderer<'_, '_> {
                     cell.layout.box_model.padding(),
                     cell.layout.paint.border_image.as_ref(),
                 );
-                let cell_box_geometry = cell_geometry.for_paint(pdf_writer.page_content_transform);
+                let cell_box_geometry = pdf_writer.resolve_box_geometry(cell_geometry);
                 let cell_paint_geometry = cell_box_geometry.painting();
                 let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
                 let cell_background = cell_box_geometry.background(

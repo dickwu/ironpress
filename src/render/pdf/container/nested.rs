@@ -148,8 +148,7 @@ pub(super) fn render_nested_container(
         *padding,
         child.paint.border_image.as_ref(),
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let nk_box_geometry = nk_geometry.for_paint(page_content);
+    let nk_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(nk_geometry);
     let nk_paint_geometry = nk_box_geometry.painting();
     let nk_fragment_geometry = nk_box_geometry.fragment(child.fragmentation);
     let nk_border_box = nk_paint_geometry.rounded_border_box(*cont_radii);

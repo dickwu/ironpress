@@ -258,8 +258,11 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         );
-        let box_geometry =
-            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let box_geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry);
         let paint_geometry = box_geometry.painting();
         let geometry = box_geometry.fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
@@ -299,8 +302,11 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             element.size.height,
         );
         let layout_geometry = LayoutBoxGeometry::new(rect, EdgeSizes::ZERO, EdgeSizes::ZERO);
-        let box_geometry =
-            layout_geometry.for_paint(self.ctx.text.pdf_writer.page_content_transform);
+        let box_geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry);
         let paint_geometry = box_geometry.painting();
         let geometry = box_geometry.fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
@@ -336,8 +342,11 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
             EdgeSizes::ZERO,
             EdgeSizes::ZERO,
         );
-        let geometry = layout_geometry
-            .for_paint(self.ctx.text.pdf_writer.page_content_transform)
+        let geometry = self
+            .ctx
+            .text
+            .pdf_writer
+            .resolve_box_geometry(layout_geometry)
             .fragment(Default::default());
         if self.flow.paint_phase.paints_contents() {
             let group = PaintGroupScope::begin(self.content, element, geometry, self.ctx);

@@ -625,6 +625,7 @@ fn flex_row_node(
             fragment_role,
             row_height,
             alignment,
+            ..Default::default()
         },
         box_model: crate::layout::elements::BoxModel {
             size,

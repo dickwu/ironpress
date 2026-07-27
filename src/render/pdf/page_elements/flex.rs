@@ -53,8 +53,7 @@ pub(in crate::render::pdf) fn render_flex_row(
         *padding,
         element.paint.border_image.as_ref(),
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let flex_box_geometry = flex_geometry.for_paint(page_content);
+    let flex_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(flex_geometry);
     let flex_paint_geometry = flex_box_geometry.painting();
     let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
     let flex_paint_box = flex_paint_geometry.border_box;
@@ -245,6 +244,7 @@ pub(in crate::render::pdf) fn render_flex_row(
     let stacking_scope = StackingScope::for_element(element);
     let mut stacking_plan = StackingPaintPlan::default();
     for cell in cells {
+        let mut prior_box_paint_grid = None;
         let marker = ctx.stacking.marker();
         let mut cell_content = String::new();
         'paint_cell: {
@@ -290,7 +290,13 @@ pub(in crate::render::pdf) fn render_flex_row(
                 cell.padding,
                 cell.paint.border_image.as_ref(),
             );
-            let cell_box_geometry = cell_geometry.for_paint(page_content);
+            if cell.role.is_atomic_inline() {
+                prior_box_paint_grid = ctx
+                    .text
+                    .pdf_writer
+                    .enter_atomic_inline_paint_grid(cell_geometry.border_box.top_left());
+            }
+            let cell_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(cell_geometry);
             let cell_paint_geometry = cell_box_geometry.painting();
             let cell_fragment_geometry =
                 cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
@@ -589,6 +595,9 @@ pub(in crate::render::pdf) fn render_flex_row(
             cell_group.finish(content, ctx);
         }
         let descendants = ctx.stacking.take_since(marker);
+        if let Some(prior) = prior_box_paint_grid {
+            ctx.text.pdf_writer.restore_box_paint_grid(prior);
+        }
         ctx.stacking.commit(
             stacking_scope,
             content,

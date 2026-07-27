@@ -18,8 +18,9 @@ use super::box_model::ResolvedBoxDimensions;
 use super::cells::CellPaint;
 use super::context::{LayoutContext, LayoutEnv};
 use super::engine::{
-    CounterState, ElementSiblingContext, FlexCell, FlexItemFragmentation, LayoutBorder,
-    LayoutTreeContext, TextLine, apply_direct_flex_item_filters, flatten_element, forward_siblings,
+    CounterState, ElementSiblingContext, FlexCell, FlexItemFragmentation, FlexItemRole,
+    LayoutBorder, LayoutTreeContext, TextLine, apply_direct_flex_item_filters, flatten_element,
+    forward_siblings,
 };
 use super::flex::layout_flex_container;
 use super::grid::layout_grid_container;
@@ -382,6 +383,7 @@ fn inline_atomic_cell(
                 natural_height: height,
                 fragmentation: FlexItemFragmentation::definite(),
                 nested_elements: vec![replaced],
+                role: FlexItemRole::AtomicInline(kind),
                 ..Default::default()
             },
             width,
@@ -614,6 +616,7 @@ fn inline_atomic_cell(
                         ),
                         positioning: Positioning::from_style(child_style),
                         nested_elements,
+                        role: FlexItemRole::AtomicInline(kind),
                         ..Default::default()
                     },
                     total_w + child_style.margin.horizontal(),
@@ -640,6 +643,7 @@ fn inline_atomic_cell(
             positioning: Positioning::from_style(child_style),
             nested_elements,
             y_offset,
+            role: FlexItemRole::AtomicInline(kind),
             ..Default::default()
         },
         width + child_style.margin.horizontal(),
@@ -905,6 +909,7 @@ fn layout_inline_block_group_inner(
 
     // Lay out each inline-block element as a block to measure its size
     struct InlineBlockItem {
+        kind: AtomicInlineKind,
         width: f32,
         height: f32,
         lines: Vec<TextLine>,
@@ -957,6 +962,10 @@ fn layout_inline_block_group_inner(
         if child_style.display == Display::None {
             continue;
         }
+        let InlineFormattingRole::Atomic(kind) = InlineFormattingRole::of(child_el, &child_style)
+        else {
+            continue;
+        };
 
         // Determine the element width
         let has_explicit_width = child_style.width.is_some();
@@ -1036,6 +1045,7 @@ fn layout_inline_block_group_inner(
                 env,
             );
             items.push(InlineBlockItem {
+                kind,
                 width: border_box_w,
                 height: border_box_h,
                 lines: Vec::new(),
@@ -1091,6 +1101,7 @@ fn layout_inline_block_group_inner(
                 env,
             );
             items.push(InlineBlockItem {
+                kind,
                 width: dimensions.border_box.width,
                 height: dimensions.border_box.height,
                 lines: Vec::new(),
@@ -1237,6 +1248,7 @@ fn layout_inline_block_group_inner(
             CellPaint::from_style(&child_style, LayoutSize::fixed(total_w, Some(total_h)));
         paint.box_paint.group.transform.value = rel_transform;
         items.push(InlineBlockItem {
+            kind,
             width: total_w,
             height: total_h,
             lines,
@@ -1331,6 +1343,7 @@ fn layout_inline_block_group_inner(
             positioning: item.positioning.clone(),
             nested_elements: item.nested_elements.clone(),
             y_offset: item.margins.top,
+            role: FlexItemRole::AtomicInline(item.kind),
             ..Default::default()
         });
         x += item.width + item.margins.right;

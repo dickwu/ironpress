@@ -33,6 +33,27 @@ pub(in crate::render::pdf) struct PaintBoxGeometry {
     background_bleed: BackgroundBleed,
 }
 
+/// CSS-pixel grid used when layout geometry crosses into vector paint.
+///
+/// Normal flow uses the page grid. An outer atomic inline box roots a local
+/// grid at its authored position so its descendants move as one coherent paint
+/// unit while retaining the same CSS-pixel quantization.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(in crate::render::pdf) enum BoxPaintGrid {
+    #[default]
+    Page,
+    AtomicInline(PdfPoint),
+}
+
+impl BoxPaintGrid {
+    fn resolve(self, page_content: PageContentTransform, border_box: PdfRect) -> PdfRect {
+        match self {
+            Self::Page => page_content.snap_layout_box(border_box),
+            Self::AtomicInline(origin) => page_content.snap_layout_box_from(border_box, origin),
+        }
+    }
+}
+
 /// The paired layout and paint views of one CSS box at a page boundary.
 ///
 /// Chromium keeps both: authored subpixel geometry remains authoritative for
@@ -43,6 +64,7 @@ pub(in crate::render::pdf) struct BoxPaintGeometry {
     layout: LayoutBoxGeometry,
     painting: PaintBoxGeometry,
     page_content: PageContentTransform,
+    grid: BoxPaintGrid,
 }
 
 impl BoxPaintGeometry {
@@ -71,7 +93,7 @@ impl BoxPaintGeometry {
         FragmentPaintGeometry {
             layout_reassembled,
             painting: self.painting,
-            reassembled: layout_reassembled.snapped(self.page_content),
+            reassembled: layout_reassembled.resolve(self.page_content, self.grid),
         }
     }
 
@@ -221,24 +243,24 @@ impl LayoutBoxGeometry {
         self
     }
 
-    fn snapped(self, page_content: PageContentTransform) -> PaintBoxGeometry {
-        PaintBoxGeometry::new(
-            page_content.snap_layout_box(self.border_box),
-            self.border,
-            self.padding,
-        )
-        .with_background_bleed(self.background_bleed)
-    }
-
     pub(in crate::render::pdf) fn for_paint(
         self,
         page_content: PageContentTransform,
+        grid: BoxPaintGrid,
     ) -> BoxPaintGeometry {
+        let painting = self.resolve(page_content, grid);
         BoxPaintGeometry {
             layout: self,
-            painting: self.snapped(page_content),
+            painting,
             page_content,
+            grid,
         }
+    }
+
+    fn resolve(self, page_content: PageContentTransform, grid: BoxPaintGrid) -> PaintBoxGeometry {
+        let border_box = grid.resolve(page_content, self.border_box);
+        PaintBoxGeometry::new(border_box, self.border, self.padding)
+            .with_background_bleed(self.background_bleed)
     }
 
     pub(in crate::render::pdf) fn padding_box(self) -> PdfRect {

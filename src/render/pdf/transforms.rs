@@ -416,13 +416,28 @@ impl PageContentTransform {
         let Some(page_size) = self.page_size else {
             return rect;
         };
+        self.snap_layout_box_from(rect, PdfPoint::new(0.0, page_size.y))
+    }
+
+    /// Snap absolute box edges to a CSS-pixel grid rooted at `origin`.
+    ///
+    /// Atomic inline boxes participate at a subpixel position in their
+    /// parent's inline formatting context. Their subtree remains a coherent
+    /// paint unit by quantizing descendants relative to that authored origin,
+    /// rather than moving each descendant independently on the page grid.
+    pub(in crate::render::pdf) fn snap_layout_box_from(
+        self,
+        rect: PdfRect,
+        origin: PdfPoint,
+    ) -> PdfRect {
+        if self.page_size.is_none() {
+            return rect;
+        }
         let snap = crate::fonts::round_to_css_pixel;
-        let left = snap(rect.left);
-        let right = snap(rect.right());
-        let top_from_page = snap(page_size.y - rect.top());
-        let bottom_from_page = snap(page_size.y - rect.bottom);
-        let top = page_size.y - top_from_page;
-        let bottom = page_size.y - bottom_from_page;
+        let left = origin.x + snap(rect.left - origin.x);
+        let right = origin.x + snap(rect.right() - origin.x);
+        let top = origin.y - snap(origin.y - rect.top());
+        let bottom = origin.y - snap(origin.y - rect.bottom);
         PdfRect::new(left, bottom, right - left, top - bottom)
     }
 

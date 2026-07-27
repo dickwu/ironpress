@@ -151,8 +151,7 @@ pub(super) fn render_inline_box(
         inline.padding,
         inline.border_image.as_ref(),
     );
-    let page_content = pdf_writer.page_content_transform;
-    let box_geometry = geometry.for_paint(page_content);
+    let box_geometry = pdf_writer.resolve_box_geometry(geometry);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
     let background_box =

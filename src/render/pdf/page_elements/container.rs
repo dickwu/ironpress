@@ -84,7 +84,7 @@ pub(in crate::render::pdf) fn render_container(
         element.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
-    let c_box_geometry = c_geometry.for_paint(page_content);
+    let c_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(c_geometry);
     let c_paint_geometry = c_box_geometry.painting();
     let c_fragment_geometry = c_box_geometry.fragment(element.fragmentation);
     let c_paint_box = c_paint_geometry.border_box;

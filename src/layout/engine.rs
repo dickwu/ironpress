@@ -543,6 +543,24 @@ pub(crate) enum FlexNestedOrigin {
     TableBorderBox,
 }
 
+/// Semantic role of one cell in the formatting context that produced it.
+///
+/// Inline formatting stores atomic boxes in flex-shaped rows, but their
+/// subpixel text advance remains authoritative for the box and all of its
+/// descendants. Ordinary flex items use the browser-compatible paint grid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum FlexItemRole {
+    #[default]
+    FlexItem,
+    AtomicInline(AtomicInlineKind),
+}
+
+impl FlexItemRole {
+    pub(crate) const fn is_atomic_inline(self) -> bool {
+        matches!(self, Self::AtomicInline(_))
+    }
+}
+
 impl FlexItemFragmentation {
     pub(crate) const fn definite() -> Self {
         Self {
@@ -600,6 +618,7 @@ pub struct FlexCell {
     /// Nested layout elements for complex flex items (tables, images, etc.)
     pub nested_elements: Vec<LayoutNode>,
     pub(crate) nested_origin: FlexNestedOrigin,
+    pub(crate) role: FlexItemRole,
     /// The composited output of a `filter: url(#...)` on a simple flex item.
     /// Keeping the bitmap with the cell makes the filter's SourceGraphic an
     /// atomic paint result instead of independently recolouring child vectors.
@@ -720,6 +739,7 @@ impl Default for FlexCell {
             positioning: Default::default(),
             nested_elements: Vec::new(),
             nested_origin: FlexNestedOrigin::default(),
+            role: FlexItemRole::default(),
             y_offset: 0.0,
             line_cross_size: 0.0,
             line_id: FlexLineId::default(),

@@ -133,7 +133,7 @@ fn box_paint_keeps_authored_background_phase_and_snaps_only_the_destination() {
         EdgeSizes::new(3.75, 0.0, 0.0, 5.625),
     );
     let page = super::super::transforms::PageContentTransform::print(PdfVector::new(150.0, 150.0));
-    let geometry = layout.for_paint(page);
+    let geometry = layout.for_paint(page, BoxPaintGrid::Page);
     let background = geometry.background(
         BackgroundOrigin::Padding,
         BackgroundClip::Padding,
@@ -241,7 +241,10 @@ fn semantic_layout_border_carries_bleed_avoidance_to_paint_geometry() {
         None,
     );
     let painting = layout
-        .for_paint(super::super::transforms::PageContentTransform::default())
+        .for_paint(
+            super::super::transforms::PageContentTransform::default(),
+            BoxPaintGrid::Page,
+        )
         .painting();
     let radii = CornerRadii::circular(12.0);
 

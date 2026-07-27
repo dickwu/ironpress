@@ -171,8 +171,7 @@ pub(in crate::render::pdf) fn paint_image_box(
         EdgeSizes::ZERO,
         element.paint.border_image.as_ref(),
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let box_geometry = geometry.for_paint(page_content);
+    let box_geometry = ctx.text.pdf_writer.resolve_box_geometry(geometry);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
     let paint_box = paint_geometry.border_box;
@@ -311,8 +310,7 @@ pub(in crate::render::pdf) fn paint_svg_box(
         EdgeSizes::ZERO,
         element.paint.border_image.as_ref(),
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let box_geometry = geometry.for_paint(page_content);
+    let box_geometry = ctx.text.pdf_writer.resolve_box_geometry(geometry);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
     let group = PaintGroupScope::begin(content, element, fragment_geometry, ctx);

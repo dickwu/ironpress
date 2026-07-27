@@ -86,8 +86,7 @@ pub(super) fn render_text_child(
             *padding,
             child.paint.border_image.as_ref(),
         );
-        let page_content = ctx.text.pdf_writer.page_content_transform;
-        let tb_box_geometry = tb_geometry.for_paint(page_content);
+        let tb_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(tb_geometry);
         let tb_paint_geometry = tb_box_geometry.painting();
         let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
         let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);
@@ -315,8 +314,7 @@ pub(super) fn render_text_child(
         *padding,
         child.paint.border_image.as_ref(),
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let tb_box_geometry = tb_geometry.for_paint(page_content);
+    let tb_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(tb_geometry);
     let tb_paint_geometry = tb_box_geometry.painting();
     let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
     let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);

@@ -292,6 +292,10 @@ impl PdfRect {
         self.bottom + self.height
     }
 
+    pub(super) const fn top_left(self) -> PdfPoint {
+        PdfPoint::new(self.left, self.top())
+    }
+
     /// Resolve a CSS top-left transform origin into the PDF rectangle's
     /// bottom-left coordinate system.
     pub(super) fn css_transform_origin(self, origin: TransformOrigin) -> PdfPoint {

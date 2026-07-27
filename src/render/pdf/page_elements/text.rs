@@ -124,7 +124,7 @@ pub(in crate::render::pdf) fn render_text_block(
         element.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
-    let tb_box_geometry = tb_geometry.for_paint(page_content);
+    let tb_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(tb_geometry);
     let tb_paint_geometry = tb_box_geometry.painting();
     let tb_fragment_geometry = tb_box_geometry.fragment(element.fragmentation.box_fragmentation);
     let tb_paint_box = tb_paint_geometry.border_box;

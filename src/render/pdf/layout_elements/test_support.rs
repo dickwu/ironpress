@@ -30,8 +30,7 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         block.padding,
         None,
     );
-    let page_content = ctx.text.pdf_writer.page_content_transform;
-    let box_geometry = geometry.for_paint(page_content);
+    let box_geometry = ctx.text.pdf_writer.resolve_box_geometry(geometry);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
     // CSS `filter: blur()` on a solid box (css-filter-effects-1 §4.1): rasterize
@@ -207,8 +206,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                         cell.layout.box_model.padding(),
                         cell.layout.paint.border_image.as_ref(),
                     );
-                    let page_content = ctx.text.pdf_writer.page_content_transform;
-                    let cell_box_geometry = cell_geometry.for_paint(page_content);
+                    let cell_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(cell_geometry);
                     let cell_paint_geometry = cell_box_geometry.painting();
                     let cell_fragment_geometry = cell_box_geometry.fragment(Default::default());
 

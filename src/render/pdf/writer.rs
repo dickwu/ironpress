@@ -71,6 +71,7 @@ pub(super) struct PdfGraphicsState {
     /// space. PDF shading-pattern matrices are defined in default user space,
     /// so they must explicitly inherit this matrix from every ancestor.
     local_to_layout: PdfMatrix,
+    box_paint_grid: BoxPaintGrid,
 }
 
 impl PdfWriter {
@@ -94,6 +95,34 @@ impl PdfWriter {
     /// box's block axis before the transform is applied.
     pub(super) fn current_content_space(&self) -> PdfContentSpace {
         PdfContentSpace::page_css(self.page_content_transform)
+    }
+
+    pub(super) fn resolve_box_geometry(&self, layout: LayoutBoxGeometry) -> BoxPaintGeometry {
+        layout.for_paint(
+            self.page_content_transform,
+            self.graphics_state.box_paint_grid,
+        )
+    }
+
+    /// Root an outer atomic inline subtree at its authored layout position.
+    ///
+    /// Nested atomic boxes inherit the existing grid: the subtree is one paint
+    /// unit in the parent inline formatting context, not a sequence of
+    /// independently shifted descendants.
+    pub(super) fn enter_atomic_inline_paint_grid(
+        &mut self,
+        origin: PdfPoint,
+    ) -> Option<BoxPaintGrid> {
+        matches!(self.graphics_state.box_paint_grid, BoxPaintGrid::Page).then(|| {
+            std::mem::replace(
+                &mut self.graphics_state.box_paint_grid,
+                BoxPaintGrid::AtomicInline(origin),
+            )
+        })
+    }
+
+    pub(super) fn restore_box_paint_grid(&mut self, grid: BoxPaintGrid) {
+        self.graphics_state.box_paint_grid = grid;
     }
 
     pub(super) fn transformed_paint_space(&self, page_bounds: PdfRect) -> Option<PdfPaintSpace> {
