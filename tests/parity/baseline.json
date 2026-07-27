@@ -5,15 +5,15 @@
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3377639-1785170875047908475-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3455479-1785174389981888811-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 99.26,
-    "pass": 1605,
-    "fail": 12,
+    "score_pct": 99.32,
+    "pass": 1606,
+    "fail": 11,
     "reference_disputed": 18,
     "total": 1635
   },
@@ -31995,8 +31995,8 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.0,
-              "semantic_diff_pct": 0.0,
+              "diff_pct": 0.054945054945054944,
+              "semantic_diff_pct": 0.054945054945054944,
               "description": "display:inline grid creates inline-level grid containers whose children lay out in columns; catches parsers that support only block-level grid or old single-keyword syntax.",
               "note": "",
               "kind": "feature",
@@ -32017,7 +32017,7 @@
                   {
                     "width": 700,
                     "height": 325,
-                    "rgba_sha256": "a2f3a0d73b3040d2bba0b9d5514f7e7c33d0ea0711d7363d760ce79ba511d1f2",
+                    "rgba_sha256": "13f95fa178079b6d5567cd39b4af582d061a04f0886ac167d4ed47bfea763a77",
                     "painted_pixels": 57750
                   }
                 ],
@@ -32029,6 +32029,66 @@
                     "painted_pixels": 57750
                   }
                 ]
+              },
+              "diagnosis": {
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
+                "magnitude": {
+                  "missing_area_pct": 0.0,
+                  "extra_area_pct": 0.0,
+                  "modal_drgba": [
+                    -177,
+                    61,
+                    152,
+                    0
+                  ],
+                  "delta_e": 44.77078140260677,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 1,
+                "region_classes": [
+                  {
+                    "class": "ColorErr",
+                    "region_count": 1,
+                    "total_pixels": 125,
+                    "total_area_pct": 0.2012072434607646,
+                    "union_bbox_css": [
+                      154.88,
+                      0.0,
+                      154.88,
+                      39.68
+                    ],
+                    "largest_region_pixels": 125,
+                    "largest_region_area_pct": 0.2012072434607646,
+                    "max_delta_e": 0.0
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      154.88,
+                      0.0,
+                      154.88,
+                      39.68
+                    ],
+                    "area_pct": 0.2012072434607646,
+                    "modal_drgba": [
+                      -177,
+                      61,
+                      152,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  }
+                ],
+                "confidence": 1.0,
+                "different_pixels": 125,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             },
             {
@@ -96474,10 +96534,10 @@
     },
     {
       "category": "flexbox",
-      "score_pct": 99.24,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 131,
-        "fail": 1,
+        "pass": 132,
+        "fail": 0,
         "reference_disputed": 0
       },
       "features": [
@@ -98243,10 +98303,10 @@
         },
         {
           "feature": "display",
-          "score_pct": 80.0,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 4,
-            "fail": 1,
+            "pass": 5,
+            "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
@@ -98389,9 +98449,9 @@
               "subfeature": "inline-flex",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.131,
-              "semantic_diff_pct": 0.131,
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
               "description": "display:inline-flex creates an inline-level flex container that shares the line with surrounding text; catches parsers that only recognize block-level display:flex. The standards-derived Chrome reference corrects Chromium print-to-PDF's separate sub-CSS-pixel atomic-inline paint offset after its live DOM has laid out the same box correctly.",
               "note": "",
               "kind": "feature",
@@ -98412,7 +98472,7 @@
                   {
                     "width": 1000,
                     "height": 500,
-                    "rgba_sha256": "aa9a665eb4d1c730082fcd9b4aa0232156ae832da23bb35daa423a9635abb9bb",
+                    "rgba_sha256": "f737aee2573489310851f99a20938190483d6d540c9e5a6dbe86a22e20d09192",
                     "painted_pixels": 50903
                   }
                 ],
@@ -98424,155 +98484,6 @@
                     "painted_pixels": 50903
                   }
                 ]
-              },
-              "diagnosis": {
-                "primary_class": "Extra",
-                "secondary": [
-                  "AntialiasCoverage",
-                  "Missing"
-                ],
-                "headline": "candidate adds paint absent from reference (0.3%)",
-                "magnitude": {
-                  "missing_area_pct": 0.2573977286124101,
-                  "extra_area_pct": 0.2573977286124101,
-                  "modal_drgba": [
-                    22,
-                    164,
-                    183,
-                    0
-                  ],
-                  "delta_e": 42.08644288463375,
-                  "recovered_alpha": null,
-                  "colorspace": null
-                },
-                "region_count": 4,
-                "region_classes": [
-                  {
-                    "class": "Extra",
-                    "region_count": 1,
-                    "total_pixels": 131,
-                    "total_area_pct": 0.21739130434782608,
-                    "union_bbox_css": [
-                      11.2,
-                      0.0,
-                      11.2,
-                      41.6
-                    ],
-                    "largest_region_pixels": 131,
-                    "largest_region_area_pct": 0.21739130434782608,
-                    "max_delta_e": 0.0
-                  },
-                  {
-                    "class": "ColorErr",
-                    "region_count": 2,
-                    "total_pixels": 393,
-                    "total_area_pct": 0.6521739130434783,
-                    "union_bbox_css": [
-                      65.92,
-                      0.0,
-                      76.16,
-                      41.6
-                    ],
-                    "largest_region_pixels": 262,
-                    "largest_region_area_pct": 0.43478260869565216,
-                    "max_delta_e": 0.0
-                  },
-                  {
-                    "class": "Missing",
-                    "region_count": 1,
-                    "total_pixels": 131,
-                    "total_area_pct": 0.21739130434782608,
-                    "union_bbox_css": [
-                      131.2,
-                      0.0,
-                      131.2,
-                      41.6
-                    ],
-                    "largest_region_pixels": 131,
-                    "largest_region_area_pct": 0.21739130434782608,
-                    "max_delta_e": 0.0
-                  }
-                ],
-                "region_examples": [
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      65.92,
-                      0.0,
-                      66.24,
-                      41.6
-                    ],
-                    "area_pct": 0.43478260869565216,
-                    "modal_drgba": [
-                      22,
-                      164,
-                      183,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "Missing",
-                    "bbox_css": [
-                      131.2,
-                      0.0,
-                      131.2,
-                      41.6
-                    ],
-                    "area_pct": 0.21739130434782608,
-                    "modal_drgba": [
-                      0,
-                      0,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "candidate lacks paint present in reference (0.2%)"
-                  },
-                  {
-                    "class": "Extra",
-                    "bbox_css": [
-                      11.2,
-                      0.0,
-                      11.2,
-                      41.6
-                    ],
-                    "area_pct": 0.21739130434782608,
-                    "modal_drgba": [
-                      0,
-                      0,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "candidate adds paint absent from reference (0.2%)"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      76.16,
-                      0.0,
-                      76.16,
-                      41.6
-                    ],
-                    "area_pct": 0.21739130434782608,
-                    "modal_drgba": [
-                      -173,
-                      -93,
-                      -41,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  }
-                ],
-                "confidence": 0.2,
-                "different_pixels": 655
               }
             },
             {
@@ -98583,8 +98494,8 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.0,
-              "semantic_diff_pct": 0.0,
+              "diff_pct": 0.051304347826086956,
+              "semantic_diff_pct": 0.051304347826086956,
               "description": "display:inline flex creates an inline-level flex container in a text line; catches parsers that ignore the two-keyword form and lose child sizing.",
               "note": "",
               "kind": "feature",
@@ -98605,7 +98516,7 @@
                   {
                     "width": 1000,
                     "height": 575,
-                    "rgba_sha256": "ef33eb0000162bfd67778d555dceec140f2a846a7cefc391765ab0f46d45478b",
+                    "rgba_sha256": "7c3bc5a0d0bd0cad172bd27a0e8a2e21f0d0262b60a339d197bf41f61cc2ca5d",
                     "painted_pixels": 93625
                   }
                 ],
@@ -98617,6 +98528,104 @@
                     "painted_pixels": 93625
                   }
                 ]
+              },
+              "diagnosis": {
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
+                "magnitude": {
+                  "missing_area_pct": 0.0,
+                  "extra_area_pct": 0.0,
+                  "modal_drgba": [
+                    19,
+                    71,
+                    69,
+                    0
+                  ],
+                  "delta_e": 9.180786237998644,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 3,
+                "region_classes": [
+                  {
+                    "class": "ColorErr",
+                    "region_count": 3,
+                    "total_pixels": 295,
+                    "total_area_pct": 0.315086782376502,
+                    "union_bbox_css": [
+                      60.8,
+                      0.0,
+                      115.84,
+                      33.92
+                    ],
+                    "largest_region_pixels": 107,
+                    "largest_region_area_pct": 0.11428571428571428,
+                    "max_delta_e": 9.180786237998644
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      115.84,
+                      0.0,
+                      115.84,
+                      33.92
+                    ],
+                    "area_pct": 0.11428571428571428,
+                    "modal_drgba": [
+                      19,
+                      4,
+                      -16,
+                      0
+                    ],
+                    "delta_e": 9.180786237998644,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      60.8,
+                      0.0,
+                      60.8,
+                      29.76
+                    ],
+                    "area_pct": 0.10040053404539385,
+                    "modal_drgba": [
+                      -151,
+                      71,
+                      142,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      105.92,
+                      0.0,
+                      105.92,
+                      29.76
+                    ],
+                    "area_pct": 0.10040053404539385,
+                    "modal_drgba": [
+                      178,
+                      106,
+                      69,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  }
+                ],
+                "confidence": 1.0,
+                "different_pixels": 295,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             }
           ]
@@ -117017,8 +117026,8 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.0,
-              "semantic_diff_pct": 0.0,
+              "diff_pct": 0.24242424242424243,
+              "semantic_diff_pct": 0.24242424242424243,
               "description": "An inline-grid between two inline labels should remain on the same text line and occupy only its grid width; catches treating inline-grid as block or ignoring it still passes block-level display:grid fixtures.",
               "note": "",
               "kind": "feature",
@@ -117040,7 +117049,7 @@
                   {
                     "width": 825,
                     "height": 375,
-                    "rgba_sha256": "09c094eb685f511ba18ce1b2dd44d63c47a0beef915851b2a0a376a645b17266",
+                    "rgba_sha256": "591b1b11accedeb1d75087f898a244b2191a92dc0c983d62323610ce4e00008d",
                     "painted_pixels": 32530
                   }
                 ],
@@ -117052,6 +117061,137 @@
                     "painted_pixels": 32530
                   }
                 ]
+              },
+              "diagnosis": {
+                "primary_class": "Missing",
+                "secondary": [
+                  "Extra",
+                  "AntialiasCoverage"
+                ],
+                "headline": "visually accepted coverage phase; raw candidate lacks paint present in reference (0.8%)",
+                "magnitude": {
+                  "missing_area_pct": 0.7688995509626623,
+                  "extra_area_pct": 0.7688995509626623,
+                  "modal_drgba": [
+                    -188,
+                    115,
+                    78,
+                    0
+                  ],
+                  "delta_e": 62.65845176951225,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 3,
+                "region_classes": [
+                  {
+                    "class": "Extra",
+                    "region_count": 1,
+                    "total_pixels": 250,
+                    "total_area_pct": 0.554016620498615,
+                    "union_bbox_css": [
+                      15.68,
+                      0.0,
+                      16.0,
+                      39.68
+                    ],
+                    "largest_region_pixels": 250,
+                    "largest_region_area_pct": 0.554016620498615,
+                    "max_delta_e": 0.0
+                  },
+                  {
+                    "class": "ColorErr",
+                    "region_count": 1,
+                    "total_pixels": 250,
+                    "total_area_pct": 0.554016620498615,
+                    "union_bbox_css": [
+                      55.68,
+                      0.0,
+                      56.0,
+                      39.68
+                    ],
+                    "largest_region_pixels": 250,
+                    "largest_region_area_pct": 0.554016620498615,
+                    "max_delta_e": 0.0
+                  },
+                  {
+                    "class": "Missing",
+                    "region_count": 1,
+                    "total_pixels": 250,
+                    "total_area_pct": 0.554016620498615,
+                    "union_bbox_css": [
+                      95.68,
+                      0.0,
+                      96.0,
+                      39.68
+                    ],
+                    "largest_region_pixels": 250,
+                    "largest_region_area_pct": 0.554016620498615,
+                    "max_delta_e": 0.0
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "Missing",
+                    "bbox_css": [
+                      95.68,
+                      0.0,
+                      96.0,
+                      39.68
+                    ],
+                    "area_pct": 0.554016620498615,
+                    "modal_drgba": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "candidate lacks paint present in reference (0.6%)"
+                  },
+                  {
+                    "class": "Extra",
+                    "bbox_css": [
+                      15.68,
+                      0.0,
+                      16.0,
+                      39.68
+                    ],
+                    "area_pct": 0.554016620498615,
+                    "modal_drgba": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "candidate adds paint absent from reference (0.6%)"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      55.68,
+                      0.0,
+                      56.0,
+                      39.68
+                    ],
+                    "area_pct": 0.554016620498615,
+                    "modal_drgba": [
+                      -188,
+                      115,
+                      78,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  }
+                ],
+                "confidence": 0.3333333333333333,
+                "different_pixels": 750,
+                "visual_pass_basis": "CSS-scale observation: conserved sub-CSS coverage"
               }
             }
           ]
@@ -311606,8 +311746,8 @@
               ],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.020266666666666665,
-              "semantic_diff_pct": 0.020266666666666665,
+              "diff_pct": 0.10133333333333333,
+              "semantic_diff_pct": 0.10133333333333333,
               "description": "Cartesian family interaction for images-replaced and paged-media: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
               "note": "",
               "kind": "interaction",
@@ -311630,13 +311770,13 @@
                   {
                     "width": 600,
                     "height": 625,
-                    "rgba_sha256": "acb5f27e55142c385ce191aeaab0a22797f0bcaab3e401b8b042b75feba6eaa8",
+                    "rgba_sha256": "b61604dd347a0686c126c313ad0e6f21251c1e650408c1364f4f62f93b3533f7",
                     "painted_pixels": 249344
                   },
                   {
                     "width": 600,
                     "height": 625,
-                    "rgba_sha256": "035fd5e718d755fad7ddc45c12c9eba44b8d5984099392dd57c17de3f322939c",
+                    "rgba_sha256": "eba9af42d3894ee92ef271c9d969041e8fffce3bbc47de0e46380ae1ba692dee",
                     "painted_pixels": 304375
                   },
                   {
@@ -311648,7 +311788,7 @@
                   {
                     "width": 600,
                     "height": 625,
-                    "rgba_sha256": "1a2c76ab3bdb6cda6486064247022d3b10cf912ea60a06fb68dc1e8a765f8e13",
+                    "rgba_sha256": "ad8cddf0b14b960091ba8be1b13aa2c21aafbadd321fc51307fbd3a2bd29786f",
                     "painted_pixels": 249344
                   }
                 ],
@@ -311687,30 +311827,30 @@
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
                   "modal_drgba": [
-                    170,
-                    -100,
-                    180,
+                    -2,
+                    -48,
+                    -25,
                     0
                   ],
-                  "delta_e": 70.46559845283545,
+                  "delta_e": 44.06834992914739,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 1,
+                "region_count": 3,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 1,
-                    "total_pixels": 76,
-                    "total_area_pct": 0.030479979466119096,
+                    "region_count": 3,
+                    "total_pixels": 380,
+                    "total_area_pct": 0.15239989733059547,
                     "union_bbox_css": [
-                      79.68,
+                      65.92,
                       56.96,
-                      79.68,
+                      100.16,
                       80.96
                     ],
-                    "largest_region_pixels": 76,
-                    "largest_region_area_pct": 0.030479979466119096,
+                    "largest_region_pixels": 152,
+                    "largest_region_area_pct": 0.06095995893223819,
                     "max_delta_e": 0.0
                   }
                 ],
@@ -311720,10 +311860,10 @@
                     "bbox_css": [
                       79.68,
                       56.96,
-                      79.68,
+                      80.0,
                       80.96
                     ],
-                    "area_pct": 0.030479979466119096,
+                    "area_pct": 0.06095995893223819,
                     "modal_drgba": [
                       170,
                       -100,
@@ -311733,10 +311873,48 @@
                     "delta_e": 0.0,
                     "recovered_alpha": null,
                     "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      99.84,
+                      56.96,
+                      100.16,
+                      80.96
+                    ],
+                    "area_pct": 0.06095995893223819,
+                    "modal_drgba": [
+                      -7,
+                      -14,
+                      -30,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      65.92,
+                      56.96,
+                      65.92,
+                      80.96
+                    ],
+                    "area_pct": 0.030479979466119096,
+                    "modal_drgba": [
+                      175,
+                      188,
+                      196,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 76,
+                "different_pixels": 380,
                 "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             },
@@ -387441,8 +387619,8 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.0,
-              "semantic_diff_pct": 0.0,
+              "diff_pct": 0.08926315789473684,
+              "semantic_diff_pct": 0.08926315789473684,
               "description": "Text before and after an inline-table should remain on the same line while the inline-table internally lays out two cells side by side. Catches wrong implementations where a renderer that treats inline-table as inline text or block flow will either drop the table grid or force the trailing text to a new line.",
               "note": "",
               "kind": "feature",
@@ -387463,7 +387641,7 @@
                   {
                     "width": 950,
                     "height": 375,
-                    "rgba_sha256": "0d00df4df950f5d7498f22e80acee3c93c300aa06160ab7476bdbd5d2557c1d0",
+                    "rgba_sha256": "d2f53a494bd5f8bab2ff38730acd2c6500f294c71f2e662110a6c3db6aab61f5",
                     "painted_pixels": 45150
                   }
                 ],
@@ -387475,6 +387653,104 @@
                     "painted_pixels": 45150
                   }
                 ]
+              },
+              "diagnosis": {
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
+                "magnitude": {
+                  "missing_area_pct": 0.0,
+                  "extra_area_pct": 0.0,
+                  "modal_drgba": [
+                    25,
+                    40,
+                    53,
+                    0
+                  ],
+                  "delta_e": 46.270952389897595,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 3,
+                "region_classes": [
+                  {
+                    "class": "ColorErr",
+                    "region_count": 3,
+                    "total_pixels": 318,
+                    "total_area_pct": 0.6421907185265964,
+                    "union_bbox_css": [
+                      15.04,
+                      4.16,
+                      103.04,
+                      37.76
+                    ],
+                    "largest_region_pixels": 106,
+                    "largest_region_area_pct": 0.2140635728421988,
+                    "max_delta_e": 0.0
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      15.04,
+                      4.16,
+                      15.04,
+                      37.76
+                    ],
+                    "area_pct": 0.2140635728421988,
+                    "modal_drgba": [
+                      -213,
+                      -40,
+                      -53,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      56.96,
+                      4.16,
+                      56.96,
+                      37.76
+                    ],
+                    "area_pct": 0.2140635728421988,
+                    "modal_drgba": [
+                      213,
+                      40,
+                      53,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      103.04,
+                      4.16,
+                      103.04,
+                      37.76
+                    ],
+                    "area_pct": 0.2140635728421988,
+                    "modal_drgba": [
+                      25,
+                      140,
+                      126,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  }
+                ],
+                "confidence": 1.0,
+                "different_pixels": 318,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             }
           ]
@@ -400805,8 +401081,8 @@
               "interaction_of": [],
               "base_ids": [],
               "status": "PASS",
-              "diff_pct": 0.0,
-              "semantic_diff_pct": 0.0,
+              "diff_pct": 0.03201958384332925,
+              "semantic_diff_pct": 0.03201958384332925,
               "description": "Two inline-blocks with the same long word compare anywhere against break-word; anywhere can shrink much narrower. Catches: Mapping anywhere and break-word to the same visual breaker passes simple wrapping tests but misses intrinsic sizing differences.",
               "note": "",
               "kind": "feature",
@@ -400829,8 +401105,8 @@
                   {
                     "width": 950,
                     "height": 1075,
-                    "rgba_sha256": "c96c9852a597b9aece4dadd4a3377859020973b2bc55c6a6b7548b0ee685927f",
-                    "painted_pixels": 91417
+                    "rgba_sha256": "735c0ce2352de65dc0753f499a426f660c70a4dcb60afe545ef1f9238b0cdb02",
+                    "painted_pixels": 91308
                   }
                 ],
                 "oracle": [
@@ -400841,6 +401117,102 @@
                     "painted_pixels": 91417
                   }
                 ]
+              },
+              "diagnosis": {
+                "primary_class": "Missing",
+                "secondary": [
+                  "Extra"
+                ],
+                "headline": "visually accepted coverage phase; raw candidate lacks paint present in reference (0.2%)",
+                "magnitude": {
+                  "missing_area_pct": 0.2389041095890411,
+                  "extra_area_pct": 0.11959491337597788,
+                  "modal_drgba": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "delta_e": 0.0,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 2,
+                "region_classes": [
+                  {
+                    "class": "Missing",
+                    "region_count": 1,
+                    "total_pixels": 218,
+                    "total_area_pct": 0.04464761155758723,
+                    "union_bbox_css": [
+                      32.96,
+                      222.08,
+                      33.28,
+                      256.64
+                    ],
+                    "largest_region_pixels": 218,
+                    "largest_region_area_pct": 0.04464761155758723,
+                    "max_delta_e": 0.0
+                  },
+                  {
+                    "class": "Extra",
+                    "region_count": 1,
+                    "total_pixels": 109,
+                    "total_area_pct": 0.022323805778793615,
+                    "union_bbox_css": [
+                      131.2,
+                      222.08,
+                      131.2,
+                      256.64
+                    ],
+                    "largest_region_pixels": 109,
+                    "largest_region_area_pct": 0.022323805778793615,
+                    "max_delta_e": 0.0
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "Missing",
+                    "bbox_css": [
+                      32.96,
+                      222.08,
+                      33.28,
+                      256.64
+                    ],
+                    "area_pct": 0.04464761155758723,
+                    "modal_drgba": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "candidate lacks paint present in reference (0.04%)"
+                  },
+                  {
+                    "class": "Extra",
+                    "bbox_css": [
+                      131.2,
+                      222.08,
+                      131.2,
+                      256.64
+                    ],
+                    "area_pct": 0.022323805778793615,
+                    "modal_drgba": [
+                      0,
+                      0,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "candidate adds paint absent from reference (0.02%)"
+                  }
+                ],
+                "confidence": 0.6666666666666666,
+                "different_pixels": 327,
+                "visual_pass_basis": "CSS-scale observation: stable same-coordinate outline phase"
               }
             }
           ]
