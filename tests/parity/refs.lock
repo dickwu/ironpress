@@ -20836,7 +20836,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-text-combine-upright-center.html",
       "html_sha256": "03a607a93584d8298281eac7445a8a72a92cdc07bafdbed85e81dadf71e7ef29",
-      "manifest_sha256": "b86ad15783f528b97f25e51463fef74c0369327aa472603fb3231809294e5c02",
+      "manifest_sha256": "bf3b13bf58c21c787eb39f94a143f946cb006ba72da2b8f337215b008f24dd05",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-text-combine-upright-center.pdf",
@@ -20850,7 +20850,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-text-combine-upright-digits.html",
       "html_sha256": "1ab1fad9f758ca62e7fcae208d15b95d6a97e45e6481e7400b425fc7676eced9",
-      "manifest_sha256": "7d2cc1bfceede3c6aad172809590e905ef6737475521cb465feb320d8abc6cac",
+      "manifest_sha256": "fa4c857b1ef94e3cd031c866056ae1300dc8d51b57afbcec0eeb2dfc3d136f10",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-text-combine-upright-digits.pdf",
