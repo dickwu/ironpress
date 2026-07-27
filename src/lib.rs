@@ -113,32 +113,6 @@ fn fetch_remote_bytes(url: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn page_decl_value(raw: &str, property: &str) -> Option<String> {
-    raw.split(';').find_map(|declaration| {
-        let (prop, val) = declaration.split_once(':')?;
-        prop.trim()
-            .eq_ignore_ascii_case(property)
-            .then(|| val.trim().to_string())
-    })
-}
-
-fn parse_page_descriptor_length(value: &str) -> Option<f32> {
-    let value = value.trim();
-    if let Some(n) = value.strip_suffix("mm") {
-        n.trim().parse::<f32>().ok().map(|v| v * 2.83465)
-    } else if let Some(n) = value.strip_suffix("cm") {
-        n.trim().parse::<f32>().ok().map(|v| v * 28.3465)
-    } else if let Some(n) = value.strip_suffix("in") {
-        n.trim().parse::<f32>().ok().map(|v| v * 72.0)
-    } else if let Some(n) = value.strip_suffix("pt") {
-        n.trim().parse::<f32>().ok()
-    } else if let Some(n) = value.strip_suffix("px") {
-        n.trim().parse::<f32>().ok().map(|v| v * 0.75)
-    } else {
-        value.parse::<f32>().ok()
-    }
-}
-
 pub use error::IronpressError;
 pub use style::raster_quality::{CoverageCompression, JpegCompression, RasterQuality};
 pub use types::{CornerRadii, CornerRadius, EdgeSizes, Margin, PageSize};
@@ -788,51 +762,15 @@ impl HtmlConverter {
             && crate::layout::helpers::has_background_paint(&page_bg_style))
         .then_some(&page_bg_style);
 
-        let mut page_bleed: Option<f32> = None;
-        let mut page_bleed_auto = false;
-        let mut page_marks_crop = false;
-        let mut page_marks_cross = false;
-        let mut page_orientation = render::pdf::PageOrientation::Upright;
+        let mut page_sheet_descriptors = parser::css::PageSheetDescriptors::default();
         for pr in &page_rules {
             if pr.selector != PageSelector::None {
                 continue;
             }
-            let Some(raw) = &pr.raw_declarations else {
-                continue;
-            };
-            if let Some(value) = page_decl_value(raw, "bleed") {
-                if value.eq_ignore_ascii_case("auto") {
-                    page_bleed = None;
-                    page_bleed_auto = true;
-                } else if let Some(length) = parse_page_descriptor_length(&value) {
-                    page_bleed = Some(length.max(0.0));
-                    page_bleed_auto = false;
-                }
-            }
-            if let Some(value) = page_decl_value(raw, "marks") {
-                let value = value.to_ascii_lowercase();
-                page_marks_crop = value.split_whitespace().any(|part| part == "crop");
-                page_marks_cross = value.split_whitespace().any(|part| part == "cross");
-                if value.split_whitespace().any(|part| part == "none") {
-                    page_marks_crop = false;
-                    page_marks_cross = false;
-                }
-            }
-            if let Some(value) = page_decl_value(raw, "page-orientation") {
-                page_orientation = match value.to_ascii_lowercase().as_str() {
-                    "rotate-left" => render::pdf::PageOrientation::RotateLeft,
-                    "rotate-right" => render::pdf::PageOrientation::RotateRight,
-                    _ => render::pdf::PageOrientation::Upright,
-                };
-            }
+            page_sheet_descriptors.cascade(pr.sheet);
         }
-        let page_bleed = page_bleed.unwrap_or({
-            if page_bleed_auto || page_marks_crop {
-                6.0
-            } else {
-                0.0
-            }
-        });
+        let page_sheet = render::pdf::PageSheet::resolve(page_sheet_descriptors);
+        let page_bleed = page_sheet.bleed();
 
         // Step 5: Layout
         let mut pages = layout::engine::layout_with_rules_and_fonts_raster_quality(
@@ -874,8 +812,7 @@ impl HtmlConverter {
             .flat_map(|pr| pr.margin_boxes.iter().cloned())
             .collect();
 
-        let has_physical_decoration =
-            page_bleed > 0.0 || page_marks_crop || page_marks_cross || page_orientation.rotates();
+        let has_physical_decoration = page_sheet.has_effect();
         let has_footnote_decoration = footnote_area.style.padding != EdgeSizes::ZERO
             || footnote_area.style.separator.width > 0.0;
         let decoration = if self.header.is_some()
@@ -893,10 +830,7 @@ impl HtmlConverter {
                     &page_rules,
                     effective_page_size,
                 ),
-                bleed: page_bleed,
-                marks_crop: page_marks_crop,
-                marks_cross: page_marks_cross,
-                page_orientation,
+                sheet: page_sheet,
                 footnote_area: footnote_area.style,
             })
         } else {

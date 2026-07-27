@@ -5,6 +5,7 @@ mod math;
 mod media;
 mod model;
 mod page;
+mod page_descriptors;
 mod rules;
 mod selectors;
 #[cfg(test)]
@@ -32,6 +33,7 @@ pub(crate) use page::{
     parse_page_declarations, parse_page_length, parse_page_size,
 };
 pub use page::{parse_font_face_rules, parse_page_rules};
+pub(crate) use page_descriptors::{PageBleed, PageOrientation, PageSheetDescriptors, PrinterMarks};
 #[cfg(test)]
 pub(crate) use rules::parse_stylesheet;
 pub(crate) use rules::parse_stylesheet_with_context;

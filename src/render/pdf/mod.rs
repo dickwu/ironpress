@@ -72,6 +72,7 @@ mod math;
 mod nested_rows;
 mod occlusion;
 mod page_elements;
+mod page_marks;
 mod page_paint_plan;
 mod patterns;
 mod pdf_text;
@@ -112,9 +113,7 @@ use conic_gradients::*;
 use container::*;
 use document::*;
 #[allow(unused_imports)]
-pub use document::{
-    PageDecoration, PageOrientation, render_pdf, render_pdf_to_writer, render_pdf_with_fonts,
-};
+pub use document::{PageDecoration, render_pdf, render_pdf_to_writer, render_pdf_with_fonts};
 use flex_cell_shadows::FlexCellShadows;
 use flow_layout::*;
 use function_gradients::*;
@@ -145,6 +144,7 @@ use math::*;
 use nested_rows::{NestedRowsFlow, render_rows};
 use occlusion::*;
 use page_elements::*;
+pub(crate) use page_marks::PageSheet;
 use page_paint_plan::{ElementPaintPhase, plan_page_elements};
 #[cfg(test)]
 use patterns::PdfTilingPattern;
@@ -400,31 +400,13 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
             PageContentTransform::print(PdfVector::new(page_size.width, page_size.height))
                 .with_content_scale(page.print_content_scale);
         pdf_writer.page_content_transform = page_content_transform;
-        let bleed = decoration.map_or(0.0, |dec| dec.bleed);
-        let page_orientation =
-            decoration.map_or(PageOrientation::Upright, |dec| dec.page_orientation);
-        let sheet_width = page_size.width + 2.0 * bleed;
-        let sheet_height = page_size.height + 2.0 * bleed;
+        let sheet = decoration.map_or_else(PageSheet::default, |dec| dec.sheet);
+        let media_size = sheet.media_size(page_size);
         // Transparency Form XObjects clip to their /BBox. Use the exact visible
         // sheet in the page's pre-orientation coordinate space: transformed
         // descendants may leave their untransformed element box, but anything
         // outside this rectangle cannot contribute to the output page.
-        let page_paint_box = PdfRect::new(
-            -bleed,
-            -bleed,
-            page_size.width + 2.0 * bleed,
-            page_size.height + 2.0 * bleed,
-        );
-        let media_width = if page_orientation.rotates() {
-            sheet_height
-        } else {
-            sheet_width
-        };
-        let media_height = if page_orientation.rotates() {
-            sheet_width
-        } else {
-            sheet_height
-        };
+        let page_paint_box = sheet.paint_box(page_size);
         // Per-page margin override (CSS Paged Media 3 §3 page-context cascade,
         // e.g. an `@page :first` first-page margin, or `:left`/`:right` spread
         // margins). Shadowing `margin` here makes every downstream position
@@ -744,46 +726,18 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
             }
         }
 
-        if let Some(dec) = decoration {
-            paint_page_marks(
-                &mut decoration_content,
-                page_size,
-                bleed,
-                dec.marks_crop,
-                dec.marks_cross,
-            );
-        }
-
-        let page_matrix = match page_orientation {
-            PageOrientation::Upright => (1.0, 0.0, 0.0, 1.0, bleed, bleed),
-            PageOrientation::RotateLeft => (0.0, 1.0, -1.0, 0.0, page_size.height + bleed, bleed),
-            PageOrientation::RotateRight => (0.0, -1.0, 1.0, 0.0, bleed, page_size.width + bleed),
-        };
+        sheet.paint_marks(&mut decoration_content, page_size);
+        let page_matrix = sheet.page_matrix(page_size).cm_operator();
 
         // CSS Page paints document content before page-margin boxes. Preserve
         // those semantic layers as separate PDF streams with independently
         // balanced graphics states.
         let document_content = format!(
-            "q 1 0 0 1 0 0 cm\nq {} {} {} {} {} {} cm\nq {}{content}Q\nQ\nQ\n",
-            page_matrix.0,
-            page_matrix.1,
-            page_matrix.2,
-            page_matrix.3,
-            page_matrix.4,
-            page_matrix.5,
+            "q 1 0 0 1 0 0 cm\nq {page_matrix}q {}{content}Q\nQ\nQ\n",
             page_content_transform.operator(),
         );
-        let decoration_stream = (!decoration_content.is_empty()).then(|| {
-            format!(
-                "q 1 0 0 1 0 0 cm\nq {} {} {} {} {} {} cm\n{decoration_content}Q\nQ\n",
-                page_matrix.0,
-                page_matrix.1,
-                page_matrix.2,
-                page_matrix.3,
-                page_matrix.4,
-                page_matrix.5,
-            )
-        });
+        let decoration_stream = (!decoration_content.is_empty())
+            .then(|| format!("q 1 0 0 1 0 0 cm\nq {page_matrix}{decoration_content}Q\nQ\n",));
 
         for annotation in &mut annotations {
             annotation.rect = page_content_transform.transform_rect(annotation.rect);
@@ -794,8 +748,8 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
             None => PagePaintStreams::document_only(&document_content),
         };
         pdf_writer.add_page(
-            media_width,
-            media_height,
+            media_size.width,
+            media_size.height,
             paint_streams,
             annotations,
             page_images,

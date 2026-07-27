@@ -54,26 +54,7 @@ pub fn render_pdf_with_fonts(
     Ok(buf)
 }
 
-/// Header and footer text for page decoration.
-/// Post-layout CSS page-orientation transform.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PageOrientation {
-    /// Do not rotate the laid-out page box.
-    #[default]
-    Upright,
-    /// Rotate the laid-out page box 90 degrees counter-clockwise.
-    RotateLeft,
-    /// Rotate the laid-out page box 90 degrees clockwise.
-    RotateRight,
-}
-
-impl PageOrientation {
-    /// Whether this orientation swaps the physical sheet axes.
-    pub fn rotates(self) -> bool {
-        !matches!(self, Self::Upright)
-    }
-}
-
+/// Header, footer, page-margin, and physical-sheet decoration.
 #[derive(Default)]
 pub struct PageDecoration {
     /// Header text rendered top-center of each page.
@@ -87,14 +68,8 @@ pub struct PageDecoration {
     pub margin_boxes: Vec<crate::parser::css::MarginBox>,
     /// Cascaded page-context text inherited by page-margin boxes.
     pub margin_text: crate::layout::engine::PageMarginTextContext,
-    /// CSS Paged Media `bleed`, in points.
-    pub bleed: f32,
-    /// Render crop marks outside the page box.
-    pub marks_crop: bool,
-    /// Render cross marks outside the page box.
-    pub marks_cross: bool,
-    /// CSS Paged Media `page-orientation`, applied after layout.
-    pub page_orientation: PageOrientation,
+    /// Resolved physical-sheet bleed, printer marks, and orientation.
+    pub(crate) sheet: PageSheet,
     /// CSS GCPM `@footnote` area declarations.
     pub footnote_area: ResolvedFootnoteAreaStyle,
 }
@@ -485,60 +460,6 @@ pub(super) fn page_selector_specificity(
     selector: &crate::parser::css::PageSelector,
 ) -> (u8, u8, u8) {
     selector.specificity()
-}
-
-pub(super) fn paint_page_marks(
-    content: &mut String,
-    page_size: PageSize,
-    bleed: f32,
-    crop: bool,
-    cross: bool,
-) {
-    if bleed <= 0.0 || (!crop && !cross) {
-        return;
-    }
-    let gap = 2.0_f32.min(bleed / 3.0);
-    let w = page_size.width;
-    let h = page_size.height;
-    content.push_str("q\n0 0 0 RG\n0.5 w\n");
-    if crop {
-        for &(x, y1, y2) in &[
-            (0.0, -bleed, -gap),
-            (w, -bleed, -gap),
-            (0.0, h + gap, h + bleed),
-            (w, h + gap, h + bleed),
-        ] {
-            content.push_str(&format!("{x} {y1} m {x} {y2} l S\n"));
-        }
-        for &(y, x1, x2) in &[
-            (0.0, -bleed, -gap),
-            (0.0, w + gap, w + bleed),
-            (h, -bleed, -gap),
-            (h, w + gap, w + bleed),
-        ] {
-            content.push_str(&format!("{x1} {y} m {x2} {y} l S\n"));
-        }
-    }
-    if cross {
-        let mid_x = w / 2.0;
-        let mid_y = h / 2.0;
-        let arm = (bleed / 2.0).max(2.0);
-        for &(cx, cy) in &[
-            (mid_x, -bleed / 2.0),
-            (mid_x, h + bleed / 2.0),
-            (-bleed / 2.0, mid_y),
-            (w + bleed / 2.0, mid_y),
-        ] {
-            content.push_str(&format!(
-                "{} {cy} m {} {cy} l S\n{cx} {} m {cx} {} l S\n",
-                cx - arm,
-                cx + arm,
-                cy - arm,
-                cy + arm,
-            ));
-        }
-    }
-    content.push_str("Q\n");
 }
 
 #[allow(clippy::too_many_arguments)]

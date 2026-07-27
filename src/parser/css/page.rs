@@ -4,6 +4,7 @@ use super::{
     model::{FontFaceSource, FontStretch, FootnoteAreaStyle, PageCounterControl, UnicodeRange},
     preprocess_media_queries,
 };
+use super::{PageBleed, PageOrientation, PrinterMarks};
 
 /// Parse a CSS stylesheet and extract `@page` rules.
 pub fn parse_page_rules(css: &str) -> Vec<PageRule> {
@@ -913,8 +914,23 @@ pub(crate) fn parse_page_declarations(decls: &str) -> Option<PageRule> {
                     has_any = true;
                 }
             }
-            "bleed" | "marks" | "page-orientation" => {
-                has_any = true;
+            "bleed" => {
+                if let Some(bleed) = PageBleed::parse(val) {
+                    rule.sheet.set_bleed(bleed);
+                    has_any = true;
+                }
+            }
+            "marks" => {
+                if let Some(marks) = PrinterMarks::parse(val) {
+                    rule.sheet.set_marks(marks);
+                    has_any = true;
+                }
+            }
+            "page-orientation" => {
+                if let Some(orientation) = PageOrientation::parse(val) {
+                    rule.sheet.set_orientation(orientation);
+                    has_any = true;
+                }
             }
             _ => {}
         }

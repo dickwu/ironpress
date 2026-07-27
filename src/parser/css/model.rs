@@ -1,3 +1,4 @@
+use super::page_descriptors::PageSheetDescriptors;
 use crate::parser::dom::ElementNode;
 use crate::types::{Color, EdgeSizes};
 use std::collections::HashMap;
@@ -934,6 +935,8 @@ pub struct PageRule {
     pub text_style: PageTextStyle,
     /// Declarations from a GCPM `@footnote` area rule.
     pub(crate) footnote_area: Option<FootnoteAreaStyle>,
+    /// Physical-sheet declarations parsed at the CSS boundary.
+    pub(crate) sheet: PageSheetDescriptors,
     /// The raw declaration block of the `@page` rule (the text between `{` and
     /// `}`), retained verbatim so a CSS-aware parser can later extract the
     /// `@page` background (CSS Paged Media 3 §3.1 bleed-area background). Kept
