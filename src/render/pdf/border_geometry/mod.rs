@@ -1,9 +1,11 @@
 use super::*;
 
 mod scrollbars;
+mod square;
 mod stroke;
 
 pub(super) use scrollbars::*;
+pub(super) use square::*;
 pub(super) use stroke::*;
 
 /// The CSS border ring and its four non-overlapping side transition regions.
@@ -84,7 +86,11 @@ pub(super) struct BorderSideRegion {
 
 impl BorderSideRegion {
     pub(super) fn push_path(self, content: &mut String) {
-        let [start, second, third, fourth] = self.points;
+        self.push_path_in(content, PdfContentSpace::Points);
+    }
+
+    pub(super) fn push_path_in(self, content: &mut String, space: PdfContentSpace) {
+        let [start, second, third, fourth] = self.points.map(|point| space.point(point));
         content.push_str(&format!("{} {} m\n", start.x, start.y));
         for point in [second, third, fourth] {
             content.push_str(&format!("{} {} l\n", point.x, point.y));

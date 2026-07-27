@@ -1,9 +1,11 @@
 use super::*;
 
+mod bevel;
 mod column_rules;
 mod side_paint;
 mod uniform;
 
+use bevel::*;
 pub(super) use column_rules::*;
 use side_paint::*;
 use uniform::*;
@@ -134,6 +136,7 @@ fn paint_css_border(
         border_box,
         border,
         radii,
+        content_space,
         page_ext_gstates,
         bg_alpha_counter,
     );
@@ -147,6 +150,7 @@ fn paint_partitioned_border(
     border_box: PdfRect,
     border: &crate::layout::engine::LayoutBorder,
     radii: CornerRadii,
+    content_space: PdfContentSpace,
     page_ext_gstates: &mut Vec<(String, f32)>,
     bg_alpha_counter: &mut usize,
 ) {
@@ -184,15 +188,27 @@ fn paint_partitioned_border(
     if let Some(side) = border.uniform_paint_side()
         && is_bevel_style(side.style)
     {
-        paint_uniform_partitioned_bevel(
-            content,
-            &side,
-            ring,
-            outer_half,
-            inner_half,
-            page_ext_gstates,
-            bg_alpha_counter,
-        );
+        if radii.is_zero() && side.color.is_opaque() {
+            paint_uniform_square_bevel(
+                content,
+                &side,
+                border_box,
+                widths,
+                content_space,
+                page_ext_gstates,
+                bg_alpha_counter,
+            );
+        } else {
+            paint_uniform_exclusive_bevel(
+                content,
+                &side,
+                ring,
+                outer_half,
+                inner_half,
+                page_ext_gstates,
+                bg_alpha_counter,
+            );
+        }
         return;
     }
     let sides = PhysicalEdges::new(&border.top, &border.right, &border.bottom, &border.left);
@@ -257,61 +273,4 @@ fn paint_partitioned_border(
 
         end_border_alpha(content, alpha);
     }
-}
-
-/// Paint a uniform 3D frame with the canonical ring partition while merging
-/// the equal-colour top/left and bottom/right regions into single fill
-/// operations. The merged paths have no internal antialias seam and still do
-/// not repaint either side of the diagonal frontier.
-fn paint_uniform_partitioned_bevel(
-    content: &mut String,
-    side: &crate::layout::engine::LayoutBorderSide,
-    ring: BorderRingGeometry,
-    outer_half: BorderRingGeometry,
-    inner_half: BorderRingGeometry,
-    page_ext_gstates: &mut Vec<(String, f32)>,
-    bg_alpha_counter: &mut usize,
-) {
-    let alpha = begin_border_alpha(
-        content,
-        page_ext_gstates,
-        bg_alpha_counter,
-        side.color.alpha(),
-    );
-    let base = side.color.to_f32_rgb();
-    if matches!(side.style, BorderStyle::Groove | BorderStyle::Ridge) {
-        paint_uniform_bevel_band(content, outer_half, side.style, false, base);
-        paint_uniform_bevel_band(content, inner_half, side.style, true, base);
-    } else {
-        paint_uniform_bevel_band(content, ring, side.style, false, base);
-    }
-    end_border_alpha(content, alpha);
-}
-
-fn paint_uniform_bevel_band(
-    content: &mut String,
-    band: BorderRingGeometry,
-    style: BorderStyle,
-    inner_band: bool,
-    base: (f32, f32, f32),
-) {
-    content.push_str("q\n");
-    band.push_clip(content);
-    for (color, edges) in [
-        (
-            bevel_edge_color(style, PhysicalSide::Top, inner_band, base),
-            [PhysicalSide::Top, PhysicalSide::Left],
-        ),
-        (
-            bevel_edge_color(style, PhysicalSide::Bottom, inner_band, base),
-            [PhysicalSide::Right, PhysicalSide::Bottom],
-        ),
-    ] {
-        content.push_str(&PdfRgb::from(color).fill_operator());
-        for edge in edges {
-            band.side_region(edge).push_path(content);
-        }
-        content.push_str("f\n");
-    }
-    content.push_str("Q\n");
 }
