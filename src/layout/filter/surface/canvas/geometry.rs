@@ -92,6 +92,16 @@ impl PaintBounds {
         }
     }
 
+    pub(in crate::layout::filter::surface) fn include_transformed(
+        &mut self,
+        bounds: Self,
+        transform: crate::style::computed::CssAffineMatrix,
+    ) {
+        if let Some(bounds) = bounds.0 {
+            self.include(transform.enclosing_rect(bounds));
+        }
+    }
+
     pub(in crate::layout::filter::surface) const fn resolve(self) -> Option<Rect> {
         self.0
     }

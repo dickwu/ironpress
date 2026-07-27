@@ -4,7 +4,7 @@ use crate::layout::cells::TableRowCells;
 use crate::layout::elements::TableRow;
 use crate::types::{Size, Vector};
 
-use super::super::painter::SourcePainter;
+use super::super::painter::{RootEffectHandling, SourcePainter};
 use super::super::text::table_row_baseline_shifts;
 use super::CellSourceFrame;
 
@@ -45,6 +45,7 @@ impl SourcePainter<'_> {
                 cell.table.clips,
                 cell.table.hide_if_empty,
                 baseline_shifts.get(index).copied().unwrap_or_default(),
+                RootEffectHandling::Paint,
             )?;
         }
         Some(())

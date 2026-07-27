@@ -6,7 +6,7 @@ use crate::layout::elements::{
 };
 use crate::render::borders::CssRoundedRect;
 
-use super::painter::{RootEffectHandling, SourcePainter};
+use super::painter::SourcePainter;
 use super::text::flex_line_max_baseline;
 
 impl LayoutVisitor for SourcePainter<'_> {
@@ -20,9 +20,7 @@ impl LayoutVisitor for SourcePainter<'_> {
 
     fn visit_text_block(&mut self, element: &TextBlock) {
         self.result = (|| {
-            if element.paint.group.transform.value.is_some()
-                || element.text.writing_mode != crate::style::computed::WritingMode::HorizontalTb
-            {
+            if element.text.writing_mode != crate::style::computed::WritingMode::HorizontalTb {
                 return None;
             }
             let area = self.paint_box(element)?;
@@ -46,15 +44,6 @@ impl LayoutVisitor for SourcePainter<'_> {
 
     fn visit_container(&mut self, element: &Container) {
         self.result = (|| {
-            let effects_owned_by_caller =
-                self.space.root_effects == RootEffectHandling::DeferToOwner;
-            if (element.paint.group.transform.value.is_some() && !effects_owned_by_caller)
-                || (element.paint.group.effects.masking.clip_path.is_some()
-                    && !effects_owned_by_caller)
-                || (element.paint.group.effects.masking.image.is_some() && !effects_owned_by_caller)
-            {
-                return None;
-            }
             let area = self.paint_box(element)?;
             if element.overflow.combined.clips() {
                 let clip = CssRoundedRect::new(self.space.border_box, element.paint.border_radii)
@@ -77,9 +66,6 @@ impl LayoutVisitor for SourcePainter<'_> {
 
     fn visit_flex_row(&mut self, element: &FlexRow) {
         self.result = (|| {
-            if element.paint.group.transform.value.is_some() {
-                return None;
-            }
             let content = self.paint_box(element)?.content_box;
             let max_baseline = flex_line_max_baseline(
                 &element.content.cells,
@@ -103,7 +89,11 @@ impl LayoutVisitor for SourcePainter<'_> {
             )?;
             let frames = super::cells::grid_cell_source_frames(element);
             for (cell, frame) in element.content.cells.iter().zip(frames) {
-                self.paint_grid_cell(cell, frame.border_box_in(border_box.origin))?;
+                self.paint_grid_cell(
+                    cell,
+                    frame.border_box_in(border_box.origin),
+                    super::painter::RootEffectHandling::Paint,
+                )?;
             }
             Some(())
         })();
@@ -115,9 +105,7 @@ impl LayoutVisitor for SourcePainter<'_> {
 
     fn visit_image(&mut self, element: &Image) {
         self.result = (|| {
-            if element.paint.group.transform.value.is_some()
-                || element.paint.filter_effect.is_some()
-            {
+            if element.paint.filter_effect.is_some() {
                 return None;
             }
             let rect = self.space.border_box;

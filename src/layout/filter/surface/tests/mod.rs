@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
-use super::canvas::{RasterCanvas, SurfaceRect};
+mod cells;
+mod group;
+mod raster;
+
 use super::text::line_baseline_ascent;
 use super::*;
-use crate::layout::cells::CellPaint;
 use crate::layout::elements::{
     BoxModel, BoxPaint, ColumnRule, Container, IntoLayoutNode, LayoutSize, Positioning, TextBlock,
 };
-use crate::layout::engine::{FlexCell, FontSynthesisState, SyntheticFontWeight, TextLine, TextRun};
+use crate::layout::engine::{FontSynthesisState, SyntheticFontWeight, TextLine, TextRun};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
     BorderStyle, BoxShadow, FontFamily, GradientColor, GradientColorProvenance, GradientPosition,
@@ -102,50 +104,6 @@ fn text_raster_uses_typed_synthetic_weight() {
 }
 
 #[test]
-fn axis_aligned_source_paint_retains_fractional_pixel_coverage() {
-    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(2, 1);
-    let mut paint_bounds = canvas::PaintBounds::default();
-    RasterCanvas {
-        pixels: &mut pixels,
-        pixels_per_point: 1.0,
-        paint_bounds: &mut paint_bounds,
-    }
-    .fill(
-        SurfaceRect::new(Point::new(0.25, 0.0), Size::new(0.5, 1.0)),
-        Color::from_srgb(1.0, 0.0, 0.0, 1.0),
-    );
-
-    assert_eq!(pixels.get_pixel(0, 0)[3], 128);
-    assert_eq!(pixels.get_pixel(1, 0)[3], 0);
-}
-
-#[test]
-fn square_background_and_border_use_analytic_edge_coverage() {
-    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(12, 4);
-    let rect = SurfaceRect::from_xywh(0.21875, 0.0, 2.0, 1.0);
-    let border =
-        crate::layout::engine::LayoutBorder::uniform(crate::layout::engine::LayoutBorderSide {
-            width: 0.5,
-            color: Color::from_srgb(0.0, 0.0, 1.0, 1.0),
-            style: BorderStyle::Solid,
-        });
-    let mut paint_bounds = canvas::PaintBounds::default();
-    let mut canvas = RasterCanvas {
-        pixels: &mut pixels,
-        pixels_per_point: 4.0,
-        paint_bounds: &mut paint_bounds,
-    };
-    canvas.fill(rect, Color::WHITE);
-    canvas
-        .paint_border(rect, &border, crate::types::CornerRadii::ZERO)
-        .expect("a finite solid border paints");
-
-    // The outer edge starts at device x=.875, so each layer contributes 1/8
-    // coverage. Source-over of the two 8-bit coverages is 32 + 28 = 60.
-    assert_eq!(pixels.get_pixel(0, 1)[3], 60);
-}
-
-#[test]
 fn positioned_column_rule_uses_the_parent_padding_box_once() {
     let rule = ColumnRule {
         placement: crate::layout::elements::FragmentPlacement::in_padding_box(
@@ -179,159 +137,6 @@ fn positioned_column_rule_uses_the_parent_padding_box_once() {
         [255, 0, 0, 255]
     );
     assert_eq!(border_box_pixel(&source, Point::new(15.0, 1.0))[3], 0);
-}
-
-#[test]
-fn table_filter_source_keeps_the_used_table_border_box_height() {
-    let document = crate::parser::html::parse_html_with_styles(
-        r#"<style>
-            * { box-sizing:border-box; margin:0 }
-            .table {
-                display:table;
-                font-family:ParitySans;
-                width:126px;
-                height:68px;
-                padding:7px;
-                border:2px solid;
-                border-spacing:3px;
-            }
-            .cell { display:table-cell }
-        </style>
-        <div class="table"><div><span class="cell">Ag</span><span class="cell">Bb</span></div></div>"#,
-    )
-    .expect("valid table filter source fixture");
-    let rules = document
-        .stylesheets
-        .iter()
-        .flat_map(|stylesheet| crate::parser::css::parse_stylesheet(stylesheet))
-        .collect::<Vec<_>>();
-    let fonts = test_fonts();
-    let pages = crate::layout::engine::layout_with_rules_and_fonts(
-        &document.nodes,
-        crate::PageSize::new(300.0, 180.0),
-        crate::types::Margin::uniform(0.0),
-        &rules,
-        &fonts,
-        None,
-        0.0,
-        Default::default(),
-    );
-    let table = pages[0].elements[0].1.as_ref();
-    let geometry = source_geometry(table).expect("table principal source geometry");
-    let source =
-        paint_source_graphic(table, &fonts, 300.0, test_anchor()).expect("painted table source");
-
-    assert_eq!(geometry.size.height, 51.0);
-    assert_eq!(
-        source.paint_bounds,
-        Some(crate::types::Rect::from_xywh(0.0, 0.0, 94.5, 51.0))
-    );
-}
-
-#[test]
-fn inset_shadow_ring_uses_the_padding_box_without_corner_overdraw() {
-    let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(10, 10);
-    let mut paint_bounds = canvas::PaintBounds::default();
-    RasterCanvas {
-        pixels: &mut pixels,
-        pixels_per_point: 1.0,
-        paint_bounds: &mut paint_bounds,
-    }
-    .paint_inset_shadows(
-        SurfaceRect::new(Point::ORIGIN, Size::new(10.0, 10.0)),
-        &[BoxShadow {
-            offset_x: 0.0,
-            offset_y: 0.0,
-            blur: 0.0,
-            spread: 2.0,
-            color: Color::from_srgb(1.0, 0.0, 0.0, 0.5),
-            color_source: crate::style::computed::ColorSource::Absolute,
-            inset: true,
-        }],
-        96.0,
-    )
-    .expect("a finite square inset shadow paints");
-
-    assert!((127..=128).contains(&pixels.get_pixel(0, 0)[3]));
-    assert_eq!(pixels.get_pixel(5, 5)[3], 0);
-}
-
-#[test]
-fn flex_cell_source_includes_outset_shadow_overflow() {
-    let cell = FlexCell {
-        width: 20.0,
-        natural_height: 10.0,
-        paint: CellPaint {
-            box_paint: BoxPaint {
-                background: crate::layout::elements::BackgroundPaint {
-                    color: Some(Color::WHITE),
-                    ..Default::default()
-                },
-                shadows: vec![BoxShadow {
-                    offset_x: 4.0,
-                    offset_y: 3.0,
-                    blur: 0.0,
-                    spread: 0.0,
-                    color: Color::from_srgb(1.0, 0.0, 0.0, 0.5),
-                    color_source: crate::style::computed::ColorSource::Absolute,
-                    inset: false,
-                }],
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let source = paint_flex_cell_source(
-        &cell,
-        Size::new(cell.width, cell.natural_height),
-        &HashMap::new(),
-        72.0,
-        test_anchor(),
-    )
-    .expect("flex source with an outset shadow");
-
-    assert_eq!(
-        source.geometry.paint_overflow(),
-        EdgeSizes::new(0.0, 4.0, 3.0, 0.0)
-    );
-    assert_eq!(source.pixels.dimensions(), (24, 13));
-    let shadow = border_box_pixel(&source, Point::new(22.0, 11.0));
-    assert!(shadow[0] > 120 && shadow[1] < 10 && shadow[2] < 10);
-    assert!((127..=128).contains(&shadow[3]));
-}
-
-#[test]
-fn flex_cell_filter_source_clips_background_to_rounded_border_box() {
-    let cell = FlexCell {
-        width: 20.0,
-        natural_height: 10.0,
-        paint: CellPaint {
-            box_paint: BoxPaint {
-                background: crate::layout::elements::BackgroundPaint {
-                    color: Some(Color::WHITE),
-                    ..Default::default()
-                },
-                border_radii: crate::types::CornerRadii::circular(4.0),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let source = paint_flex_cell_source(
-        &cell,
-        Size::new(cell.width, cell.natural_height),
-        &HashMap::new(),
-        72.0,
-        test_anchor(),
-    )
-    .expect("rounded flex source");
-
-    assert_eq!(source.pixels.get_pixel(0, 0)[3], 0);
-    assert_eq!(source.pixels.get_pixel(10, 5)[3], 255);
 }
 
 #[test]
@@ -373,56 +178,6 @@ fn container_filter_source_clips_descendants_to_rounded_padding_box() {
 
     assert_eq!(source.pixels.get_pixel(0, 0)[3], 0);
     assert_eq!(source.pixels.get_pixel(10, 5)[3], 255);
-}
-
-#[test]
-fn flex_cell_source_includes_nested_principal_box_overflow() {
-    let shadow = BoxShadow {
-        offset_x: 4.0,
-        offset_y: 3.0,
-        blur: 0.0,
-        spread: 0.0,
-        color: Color::from_srgb(1.0, 0.0, 0.0, 0.5),
-        color_source: crate::style::computed::ColorSource::Absolute,
-        inset: false,
-    };
-    let principal_box = TextBlock {
-        box_model: BoxModel {
-            size: LayoutSize::fixed(20.0, Some(10.0)),
-            ..Default::default()
-        },
-        paint: BoxPaint {
-            background: crate::layout::elements::BackgroundPaint {
-                color: Some(Color::WHITE),
-                ..Default::default()
-            },
-            shadows: vec![shadow],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let cell = FlexCell {
-        width: 20.0,
-        natural_height: 10.0,
-        nested_elements: vec![principal_box.boxed()],
-        ..Default::default()
-    };
-
-    let source = paint_flex_cell_source(
-        &cell,
-        Size::new(cell.width, cell.natural_height),
-        &HashMap::new(),
-        72.0,
-        test_anchor(),
-    )
-    .expect("complex flex source with principal-box overflow");
-
-    assert_eq!(
-        source.geometry.paint_overflow(),
-        EdgeSizes::new(0.0, 4.0, 3.0, 0.0)
-    );
-    let shadow = border_box_pixel(&source, Point::new(22.0, 11.0));
-    assert!(shadow[0] > 120 && shadow[1] < 10 && shadow[2] < 10);
 }
 
 #[test]

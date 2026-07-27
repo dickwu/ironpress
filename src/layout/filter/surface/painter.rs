@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::layout::elements::{
-    BoxModel, BoxPaint, Container, FlexRow, LayoutElement, LayoutVisitor, Positioning, TextBlock,
+    BoxModel, BoxPaint, Container, FlexRow, LayoutElement, Positioning, TextBlock,
 };
 use crate::parser::ttf::TtfFont;
 use crate::render::borders::CssRoundedRect;
@@ -102,7 +102,15 @@ impl ElementPaintSpace {
         }
     }
 
-    const fn with_root_effects(self, root_effects: RootEffectHandling) -> Self {
+    pub(super) const fn for_descendant_box(
+        self,
+        border_box: SurfaceRect,
+        root_effects: RootEffectHandling,
+    ) -> Self {
+        self.child(border_box, self.inherited_containing_block, root_effects)
+    }
+
+    pub(super) const fn with_root_effects(self, root_effects: RootEffectHandling) -> Self {
         Self {
             root_effects,
             ..self
@@ -199,12 +207,7 @@ impl<'a> SourcePainter<'a> {
     pub(super) fn paint_box(&mut self, element: &impl FilterBox) -> Option<DescendantPaintArea> {
         let model = element.box_model();
         let paint = element.paint();
-        if !paint.visible
-            || (paint.group.effects.opacity < 1.0
-                && self.space.root_effects == RootEffectHandling::Paint)
-            || paint.group.effects.mix_blend_mode != crate::style::computed::BlendMode::Normal
-            || paint.outline.width > 0.0
-        {
+        if !paint.visible || paint.outline.width > 0.0 {
             return None;
         }
         let rect = self.space.border_box;
@@ -256,13 +259,6 @@ impl<'a> SourcePainter<'a> {
             ),
         )?;
         for (child, frame) in children.iter().zip(frames) {
-            if child
-                .paint_group_owner()
-                .is_some_and(|owner| owner.paint_group().transform.value.is_some())
-                && area.direct_child_effects != RootEffectHandling::DeferToOwner
-            {
-                return None;
-            }
             paint_element(
                 &mut self.canvas,
                 child.as_ref(),
@@ -286,61 +282,23 @@ pub(super) fn paint_element(
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) -> Option<()> {
-    let opacity = element_group_opacity(element);
-    if space.root_effects == RootEffectHandling::Paint && opacity < 1.0 {
-        let mut group = crate::render::raster_pixels::PremultipliedRgba8::transparent(
-            canvas.pixels.width(),
-            canvas.pixels.height(),
-        );
-        let mut group_bounds = PaintBounds::default();
-        {
-            let mut group_canvas = RasterCanvas {
-                pixels: &mut group,
-                pixels_per_point: canvas.pixels_per_point,
-                paint_bounds: &mut group_bounds,
-            };
-            paint_element(
-                &mut group_canvas,
-                element,
-                space.with_root_effects(RootEffectHandling::DeferToOwner),
-                fonts,
-                filter_dpi,
-            )?;
-        }
-        canvas.composite_group(&group, opacity);
-        if let Some(bounds) = group_bounds.resolve() {
-            canvas.include_paint_bounds(bounds);
-        }
-        return Some(());
-    }
     let painter_canvas = RasterCanvas {
         pixels: canvas.pixels,
         pixels_per_point: canvas.pixels_per_point,
         paint_bounds: canvas.paint_bounds,
     };
     let mut painter = SourcePainter::new(painter_canvas, space, fonts, filter_dpi);
+    if let Some(owner) = element.paint_group_owner() {
+        return painter.paint_group(
+            space,
+            owner.paint_group(),
+            element.transform_reference_box(),
+            |painter| {
+                element.accept(painter);
+                painter.result
+            },
+        );
+    }
     element.accept(&mut painter);
     painter.result
-}
-
-fn element_group_opacity(element: &dyn LayoutElement) -> f32 {
-    struct GroupOpacity(f32);
-
-    impl LayoutVisitor for GroupOpacity {
-        fn visit_text_block(&mut self, element: &TextBlock) {
-            self.0 = element.paint.group.effects.opacity;
-        }
-
-        fn visit_container(&mut self, element: &Container) {
-            self.0 = element.paint.group.effects.opacity;
-        }
-
-        fn visit_flex_row(&mut self, element: &FlexRow) {
-            self.0 = element.paint.group.effects.opacity;
-        }
-    }
-
-    let mut opacity = GroupOpacity(1.0);
-    element.accept(&mut opacity);
-    opacity.0.clamp(0.0, 1.0)
 }

@@ -23,6 +23,7 @@ mod borders;
 mod filter;
 mod gradient_geometry;
 mod text_decoration;
+mod transforms;
 pub(crate) use filter::NormalizedFilterRegion;
 pub use filter::{DropShadow, FilterEffects, FilterOperation};
 pub use gradient_geometry::{

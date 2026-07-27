@@ -13,6 +13,41 @@ pub(crate) struct PremultipliedRgba8 {
     pixels: image::RgbaImage,
 }
 
+/// Device-space compositor state for one already-isolated CSS paint group.
+///
+/// The authored affine matrix is converted to raster samples exactly once at
+/// construction. Linear terms are unitless; only translation scales with the
+/// configured physical pixel density.
+#[derive(Clone, Copy)]
+pub(crate) struct RasterGroupCompositing {
+    transform: tiny_skia::Transform,
+    opacity: f32,
+    blend_mode: tiny_skia::BlendMode,
+}
+
+impl RasterGroupCompositing {
+    pub(crate) fn from_css(
+        transform: crate::style::computed::CssAffineMatrix,
+        opacity: f32,
+        blend_mode: crate::style::computed::BlendMode,
+        pixels_per_point: f32,
+    ) -> Self {
+        let [a, b, c, d, e, f] = transform.components();
+        Self {
+            transform: tiny_skia::Transform::from_row(
+                a as f32,
+                b as f32,
+                c as f32,
+                d as f32,
+                (e * f64::from(pixels_per_point)) as f32,
+                (f * f64::from(pixels_per_point)) as f32,
+            ),
+            opacity: opacity.clamp(0.0, 1.0),
+            blend_mode: tiny_skia_blend_mode(blend_mode),
+        }
+    }
+}
+
 impl PremultipliedRgba8 {
     pub(crate) fn transparent(width: u32, height: u32) -> Self {
         Self {
@@ -126,6 +161,58 @@ impl PremultipliedRgba8 {
             *target = premultiplied_source_over(*source_pixel, *target);
         }
         Some(())
+    }
+
+    /// Composite a same-coordinate isolated group through one CSS affine
+    /// transform. Both surfaces remain premultiplied throughout the operation.
+    pub(crate) fn composite_group(
+        &mut self,
+        source: &Self,
+        compositing: RasterGroupCompositing,
+    ) -> Option<()> {
+        let source = tiny_skia::PixmapRef::from_bytes(
+            source.pixels.as_raw(),
+            source.width(),
+            source.height(),
+        )?;
+        let width = self.width();
+        let height = self.height();
+        let mut target = tiny_skia::PixmapMut::from_bytes(self.pixels.as_mut(), width, height)?;
+        target.draw_pixmap(
+            0,
+            0,
+            source,
+            &tiny_skia::PixmapPaint {
+                opacity: compositing.opacity,
+                blend_mode: compositing.blend_mode,
+                quality: tiny_skia::FilterQuality::Bilinear,
+            },
+            compositing.transform,
+            None,
+        );
+        Some(())
+    }
+}
+
+fn tiny_skia_blend_mode(mode: crate::style::computed::BlendMode) -> tiny_skia::BlendMode {
+    use crate::style::computed::BlendMode;
+    match mode {
+        BlendMode::Normal | BlendMode::BackgroundList { .. } => tiny_skia::BlendMode::SourceOver,
+        BlendMode::Multiply => tiny_skia::BlendMode::Multiply,
+        BlendMode::Screen => tiny_skia::BlendMode::Screen,
+        BlendMode::Overlay => tiny_skia::BlendMode::Overlay,
+        BlendMode::Darken => tiny_skia::BlendMode::Darken,
+        BlendMode::Lighten => tiny_skia::BlendMode::Lighten,
+        BlendMode::ColorDodge => tiny_skia::BlendMode::ColorDodge,
+        BlendMode::ColorBurn => tiny_skia::BlendMode::ColorBurn,
+        BlendMode::HardLight => tiny_skia::BlendMode::HardLight,
+        BlendMode::SoftLight => tiny_skia::BlendMode::SoftLight,
+        BlendMode::Difference => tiny_skia::BlendMode::Difference,
+        BlendMode::Exclusion => tiny_skia::BlendMode::Exclusion,
+        BlendMode::Hue => tiny_skia::BlendMode::Hue,
+        BlendMode::Saturation => tiny_skia::BlendMode::Saturation,
+        BlendMode::Color => tiny_skia::BlendMode::Color,
+        BlendMode::Luminosity => tiny_skia::BlendMode::Luminosity,
     }
 }
 

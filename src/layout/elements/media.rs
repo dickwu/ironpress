@@ -36,6 +36,12 @@ impl ReplacedGeometry {
     }
 }
 
+impl super::TransformReferenceBox for ReplacedGeometry {
+    fn content_insets(&self) -> crate::types::EdgeSizes {
+        self.border.widths()
+    }
+}
+
 /// The part of replaced content that belongs to one fragment.
 ///
 /// The source stays unchanged: a fragment clips and translates the original
@@ -220,6 +226,10 @@ impl LayoutElement for Image {
         Some(self)
     }
 
+    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+        Some(&self.geometry)
+    }
+
     fn has_own_page_spanning_graphical_effect(&self) -> bool {
         self.paint.group.transform.establishes_stacking_context()
             || !self.paint.raster_overflow.is_zero()
@@ -362,5 +372,9 @@ impl LayoutElement for Svg {
 
     fn paint_group_owner_mut(&mut self) -> Option<&mut dyn PaintGroupOwner> {
         Some(self)
+    }
+
+    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+        Some(&self.geometry)
     }
 }

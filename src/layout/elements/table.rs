@@ -159,6 +159,10 @@ impl LayoutElement for TableBoxDecoration {
         Some(&mut self.block)
     }
 
+    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+        Some(&self.block.box_model)
+    }
+
     fn box_paint_owner(&self) -> Option<&dyn super::BoxPaintOwner> {
         Some(&self.block)
     }

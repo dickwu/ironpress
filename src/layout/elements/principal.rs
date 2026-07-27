@@ -200,6 +200,12 @@ macro_rules! impl_principal_layout_element {
                 Some(self)
             }
 
+            fn transform_reference_box(
+                &self,
+            ) -> Option<&dyn super::TransformReferenceBox> {
+                Some(&self.principal().box_model)
+            }
+
             fn box_paint_owner(&self) -> Option<&dyn super::BoxPaintOwner> {
                 Some(self)
             }

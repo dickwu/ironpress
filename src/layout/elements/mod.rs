@@ -111,6 +111,12 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
+    /// Geometry capability used to resolve `transform-box` without inspecting
+    /// a concrete layout-node type.
+    fn transform_reference_box(&self) -> Option<&dyn TransformReferenceBox> {
+        None
+    }
+
     /// Canonical visual decoration owned by this principal box.
     ///
     /// Replaced content can own a paint group without owning ordinary CSS box
@@ -346,6 +352,10 @@ impl LayoutElement for LayoutNode {
         self.as_mut().paint_group_owner_mut()
     }
 
+    fn transform_reference_box(&self) -> Option<&dyn TransformReferenceBox> {
+        self.as_ref().transform_reference_box()
+    }
+
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
         self.as_ref().box_paint_owner()
     }
@@ -490,6 +500,15 @@ pub(crate) trait PositioningOwner {
 pub(crate) trait PaintGroupOwner {
     fn paint_group(&self) -> &PaintGroup;
     fn paint_group_mut(&mut self) -> &mut PaintGroup;
+}
+
+/// Box-model geometry needed to resolve the reference box of a CSS transform.
+///
+/// Ordinary and replaced boxes retain different layout structures, but a
+/// transform consumer only needs the inset from the border box to the content
+/// box. Keeping that capability narrow avoids renderer-side concrete visitors.
+pub(crate) trait TransformReferenceBox {
+    fn content_insets(&self) -> crate::types::EdgeSizes;
 }
 
 /// Ownership of the canonical paint state shared by ordinary CSS boxes.

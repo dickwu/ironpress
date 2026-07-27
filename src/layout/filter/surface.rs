@@ -5,6 +5,7 @@ mod cells;
 mod dispatch;
 mod geometry;
 mod gradient;
+mod group;
 mod overflow;
 mod painter;
 mod source_borders;

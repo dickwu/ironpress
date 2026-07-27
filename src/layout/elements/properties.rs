@@ -1,11 +1,14 @@
 //! Reusable semantic properties carried by concrete layout nodes.
 
-use crate::layout::engine::{ContainingBlock, LayoutBorder, StackingContext};
+mod paint_group;
+
+pub(crate) use paint_group::*;
+
+use crate::layout::engine::{ContainingBlock, LayoutBorder};
 use crate::layout::flow_metrics::BlockMargins;
 use crate::layout::helpers::BackgroundFields;
 use crate::style::computed::{
-    BlendMode, BoxShadow, Clear, ClipPath, Float, Isolation, MaskMode, MaskSource, Overflow,
-    Position, TextAlign, Transform, TransformOrigin, Visibility, WritingMode,
+    BlendMode, BoxShadow, Clear, Float, Overflow, Position, TextAlign, Visibility, WritingMode,
 };
 use crate::types::{Color, CornerRadii, EdgeSizes, PhysicalEdges, Point, Rect, Size};
 
@@ -279,6 +282,12 @@ impl BoxModel {
     }
 }
 
+impl super::TransformReferenceBox for BoxModel {
+    fn content_insets(&self) -> EdgeSizes {
+        self.border.widths() + self.padding
+    }
+}
+
 /// Resolved background layers and their local compositing rule.
 #[derive(Debug, Clone)]
 pub(crate) struct BackgroundPaint {
@@ -322,137 +331,6 @@ impl OutlinePaint {
             color: style.outline_color,
             offset: style.outline_offset,
         }
-    }
-}
-
-/// Effects applied to a box after its contents have been composited.
-///
-/// Keeping the complete paint-group contract together is important when a
-/// subtree is materialized as a filtered raster: the raster replaces only the
-/// source graphic, while clipping, masking, opacity, and blending still apply
-/// to the resulting group in this order.
-#[derive(Debug, Clone)]
-pub(crate) struct GroupEffects {
-    pub(crate) opacity: f32,
-    pub(crate) mix_blend_mode: BlendMode,
-    pub(crate) isolation: Isolation,
-    pub(crate) stacking_context: StackingContext,
-    pub(crate) masking: Masking,
-}
-
-impl Default for GroupEffects {
-    fn default() -> Self {
-        Self {
-            opacity: 1.0,
-            mix_blend_mode: BlendMode::Normal,
-            isolation: Isolation::Auto,
-            stacking_context: StackingContext::None,
-            masking: Masking::default(),
-        }
-    }
-}
-
-impl GroupEffects {
-    pub(crate) fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
-        Self {
-            opacity: style.opacity,
-            mix_blend_mode: style.mix_blend_mode,
-            isolation: style.isolation,
-            stacking_context: (&style.filter).into(),
-            masking: Masking::from_style(style),
-        }
-    }
-
-    /// Whether painting this source needs no post-compositing wrapper.
-    ///
-    /// Optimized leaf painters use this as one eligibility check so adding a
-    /// new group effect cannot silently leave an older fast path behind.
-    pub(crate) fn is_identity(&self) -> bool {
-        self.opacity >= 1.0
-            && self.mix_blend_mode == BlendMode::Normal
-            && !self.isolation.isolates()
-            && !self.stacking_context.establishes()
-            && self.masking.is_none()
-    }
-
-    /// Whether PDF painting still needs an isolated transparency group around
-    /// this box's source stream.
-    pub(crate) fn needs_source_isolation(&self) -> bool {
-        self.opacity < 1.0
-            || self.mix_blend_mode != BlendMode::Normal
-            || self.isolation.isolates()
-            || self.stacking_context.needs_source_isolation()
-    }
-}
-
-/// One CSS transform together with the pivot used to resolve it against a
-/// concrete fragment border box.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct BoxTransform {
-    pub(crate) value: Option<Transform>,
-    pub(crate) origin: TransformOrigin,
-    pub(crate) reference_box: crate::style::computed::TransformBox,
-    /// A parent perspective establishes a spatial stacking group even though
-    /// the projection itself is resolved onto transformed descendants.
-    pub(crate) perspective: Option<f32>,
-}
-
-impl BoxTransform {
-    pub(crate) const fn establishes_stacking_context(self) -> bool {
-        self.value.is_some() || self.perspective.is_some()
-    }
-}
-
-/// The complete graphical group applied to a box and all of its descendants.
-///
-/// Transforms are paint-time coordinate-system changes, not physical layout
-/// positioning. Keeping them with the post-compositing effects makes the
-/// recursive contract identical for ordinary boxes, replaced content, and
-/// formatting-context cells.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PaintGroup {
-    pub(crate) stacking: super::Stacking,
-    pub(crate) transform: BoxTransform,
-    pub(crate) effects: GroupEffects,
-    /// A resolved filter retained until fragmentation establishes this
-    /// group's absolute device-space anchor.
-    pub(crate) filter: Option<crate::layout::filter::ResolvedFilter>,
-}
-
-impl PaintGroup {
-    pub(crate) fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
-        Self {
-            stacking: super::Stacking::from_style(style),
-            transform: BoxTransform {
-                value: style.transform,
-                origin: style.transform_origin,
-                reference_box: style.transform_box,
-                perspective: style.perspective,
-            },
-            effects: GroupEffects::from_style(style),
-            filter: None,
-        }
-    }
-
-    pub(crate) fn is_identity(&self) -> bool {
-        !self.transform.establishes_stacking_context() && self.effects.is_identity()
-    }
-
-    pub(crate) fn establishes_stacking_context(&self) -> bool {
-        self.transform.establishes_stacking_context()
-            || self.effects.opacity < 1.0
-            || self.effects.mix_blend_mode != BlendMode::Normal
-            || self.effects.isolation.isolates()
-            || self.effects.stacking_context.establishes()
-            || !self.effects.masking.is_none()
-    }
-
-    /// Preserve the CSS stacking boundary after replacing a filtered subtree
-    /// with its already-isolated raster output.
-    pub(crate) fn with_materialized_filter(mut self) -> Self {
-        self.effects.stacking_context = self.effects.stacking_context.materialized();
-        self.filter = None;
-        self
     }
 }
 
@@ -524,22 +402,6 @@ pub(crate) fn text_lines_have_outset_shadows(lines: &[crate::layout::engine::Tex
         .iter()
         .flat_map(|line| &line.runs)
         .any(|run| run.text_shadow.iter().any(|shadow| !shadow.inset))
-}
-
-/// Ownership of one resolved filter retained until fragmentation has produced
-/// the concrete box fragments to which graphical effects apply.
-pub(crate) trait FilterHolder {
-    fn filter_slot_mut(&mut self) -> &mut Option<crate::layout::filter::ResolvedFilter>;
-
-    fn take_filter(&mut self) -> Option<crate::layout::filter::ResolvedFilter> {
-        self.filter_slot_mut().take()
-    }
-}
-
-impl FilterHolder for PaintGroup {
-    fn filter_slot_mut(&mut self) -> &mut Option<crate::layout::filter::ResolvedFilter> {
-        &mut self.filter
-    }
 }
 
 /// Normal-flow participation of a block-level box.
@@ -994,28 +856,6 @@ pub(crate) struct OverflowBehavior {
     pub(crate) combined: Overflow,
     pub(crate) x: Overflow,
     pub(crate) y: Overflow,
-}
-
-/// Clipping and masking sources that apply to one container paint group.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Masking {
-    pub(crate) clip_path: Option<ClipPath>,
-    pub(crate) image: Option<MaskSource>,
-    pub(crate) mode: MaskMode,
-}
-
-impl Masking {
-    pub(crate) fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
-        Self {
-            clip_path: style.clip_path.clone(),
-            image: style.mask_image.clone(),
-            mode: style.mask_mode,
-        }
-    }
-
-    pub(crate) fn is_none(&self) -> bool {
-        self.clip_path.is_none() && self.image.is_none()
-    }
 }
 
 #[cfg(test)]

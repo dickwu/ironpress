@@ -8,23 +8,6 @@ use super::RasterCanvas;
 use super::geometry::{CoverageSamples, DeviceClip};
 
 impl RasterCanvas<'_> {
-    /// Composite an isolated, same-size group back onto this canvas with one
-    /// group opacity. Child pixels have already been composited internally;
-    /// scaling only their resulting alpha preserves CSS group-opacity overlap.
-    pub(in crate::layout::filter::surface) fn composite_group(
-        &mut self,
-        source: &PremultipliedRgba8,
-        opacity: f32,
-    ) {
-        let opacity = RasterCoverage::from_unit(opacity);
-        for (x, y, pixel) in source.as_image().enumerate_pixels() {
-            if pixel[3] == 0 {
-                continue;
-            }
-            self.composite_premultiplied(x, y, opacity.scale(*pixel));
-        }
-    }
-
     /// Composite an isolated descendant group through a CSS rounded clip.
     pub(in crate::layout::filter::surface) fn composite_clipped_group(
         &mut self,

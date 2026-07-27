@@ -93,10 +93,24 @@ impl SourcePainter<'_> {
             ),
             Size::new(cell.width, cross.size),
         );
-        self.paint_flex_cell_box(cell, rect)
+        self.paint_flex_cell_box(cell, rect, RootEffectHandling::Paint)
     }
 
-    pub(super) fn paint_flex_cell_box(&mut self, cell: &FlexCell, rect: SurfaceRect) -> Option<()> {
+    pub(super) fn paint_flex_cell_box(
+        &mut self,
+        cell: &FlexCell,
+        rect: SurfaceRect,
+        effects: RootEffectHandling,
+    ) -> Option<()> {
+        self.paint_group(
+            self.space.for_descendant_box(rect, effects),
+            &cell.paint.group,
+            Some(cell),
+            |painter| painter.paint_flex_cell_source(cell, rect),
+        )
+    }
+
+    fn paint_flex_cell_source(&mut self, cell: &FlexCell, rect: SurfaceRect) -> Option<()> {
         if let Some(output) = &cell.paint.filter_output {
             return self.canvas.paint_filter_output(output, rect);
         }
@@ -127,15 +141,27 @@ impl SourcePainter<'_> {
             padding_box,
             content_box: rect.inset(cell.border.widths() + cell.padding),
             absolute_containing_block: Some(padding_box),
-            direct_child_effects: RootEffectHandling::DeferToOwner,
+            direct_child_effects: RootEffectHandling::Paint,
         };
         self.paint_text_lines(&cell.lines, area.content_box, cell.text_align, 0.0)?;
         let text_height = cell.lines.iter().map(|line| line.height).sum::<f32>();
         self.paint_children(&cell.nested_elements, area.after_normal_flow(text_height))
     }
 
-    pub(super) fn paint_grid_cell(&mut self, cell: &GridCell, rect: SurfaceRect) -> Option<()> {
-        self.paint_cell_box(&cell.layout, rect, cell.placement.clips, false, 0.0)
+    pub(super) fn paint_grid_cell(
+        &mut self,
+        cell: &GridCell,
+        rect: SurfaceRect,
+        effects: RootEffectHandling,
+    ) -> Option<()> {
+        self.paint_cell_box(
+            &cell.layout,
+            rect,
+            cell.placement.clips,
+            false,
+            0.0,
+            effects,
+        )
     }
 
     pub(super) fn paint_cell_box(
@@ -145,21 +171,28 @@ impl SourcePainter<'_> {
         clips: bool,
         suppressed: bool,
         baseline_shift: f32,
+        effects: RootEffectHandling,
     ) -> Option<()> {
         if suppressed {
             return Some(());
         }
+        self.paint_group(
+            self.space.for_descendant_box(rect, effects),
+            &cell.paint.group,
+            Some(&cell.box_model),
+            |painter| painter.paint_cell_source(cell, rect, clips, baseline_shift),
+        )
+    }
+
+    fn paint_cell_source(
+        &mut self,
+        cell: &CellBox,
+        rect: SurfaceRect,
+        clips: bool,
+        baseline_shift: f32,
+    ) -> Option<()> {
         if let Some(output) = &cell.paint.filter_output {
             return self.canvas.paint_filter_output(output, rect);
-        }
-        let group = &cell.paint.group;
-        if group.transform.value.is_some()
-            || group.effects.opacity < 1.0
-            || group.effects.mix_blend_mode != crate::style::computed::BlendMode::Normal
-            || group.effects.masking.clip_path.is_some()
-            || group.effects.masking.image.is_some()
-        {
-            return None;
         }
         let border = cell.box_model.border;
         let model = BoxModel {
@@ -193,7 +226,7 @@ impl SourcePainter<'_> {
             padding_box,
             content_box,
             absolute_containing_block: Some(padding_box),
-            direct_child_effects: RootEffectHandling::DeferToOwner,
+            direct_child_effects: RootEffectHandling::Paint,
         };
         let paint_contents = |painter: &mut SourcePainter<'_>| {
             painter.paint_text_lines(
@@ -253,7 +286,7 @@ pub(crate) fn paint_grid_cell_source(
             fonts,
             filter_dpi,
         );
-        painter.paint_grid_cell(cell, border_box)?;
+        painter.paint_grid_cell(cell, border_box, RootEffectHandling::DeferToOwner)?;
     }
     Some(SourceGraphic {
         pixels,
@@ -340,7 +373,7 @@ pub(crate) fn paint_flex_cell_source(
             fonts,
             filter_dpi,
         );
-        painter.paint_flex_cell_box(cell, border_box)?;
+        painter.paint_flex_cell_box(cell, border_box, RootEffectHandling::DeferToOwner)?;
     }
     Some(SourceGraphic {
         pixels,

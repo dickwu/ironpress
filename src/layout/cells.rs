@@ -101,6 +101,18 @@ impl CellBoxModel {
     }
 }
 
+impl crate::layout::elements::TransformReferenceBox for CellBoxModel {
+    fn content_insets(&self) -> EdgeSizes {
+        self.content_insets
+    }
+}
+
+impl crate::layout::elements::TransformReferenceBox for crate::layout::engine::FlexCell {
+    fn content_insets(&self) -> EdgeSizes {
+        self.border.widths() + self.padding
+    }
+}
+
 /// Text alignment within one table or grid cell.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CellAlignment {

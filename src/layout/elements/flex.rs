@@ -172,6 +172,10 @@ impl LayoutElement for FlexRow {
         Some(self)
     }
 
+    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+        Some(&self.box_model)
+    }
+
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }
