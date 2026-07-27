@@ -1,21 +1,21 @@
 {
   "schema_version": 12,
-  "invocation_id": "514c39a4346c1c76de0a298f7ca05d04",
+  "invocation_id": "b2709f9b3d7c9a7bf9fcfe39afc7e955",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3581693-1785179482751319710-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3607151-1785180710057228107-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 99.5,
+    "score_pct": 99.63,
     "pass": 1608,
-    "fail": 8,
-    "reference_disputed": 19,
+    "fail": 6,
+    "reference_disputed": 21,
     "total": 1635
   },
   "categories": [
@@ -355521,11 +355521,11 @@
     },
     {
       "category": "text-advanced",
-      "score_pct": 95.92,
+      "score_pct": 100.0,
       "counts": {
         "pass": 47,
-        "fail": 2,
-        "reference_disputed": 0
+        "fail": 0,
+        "reference_disputed": 2
       },
       "features": [
         {
@@ -357963,8 +357963,8 @@
           "score_pct": 0.0,
           "counts": {
             "pass": 0,
-            "fail": 2,
-            "reference_disputed": 0
+            "fail": 0,
+            "reference_disputed": 2
           },
           "fixtures": [
             {
@@ -357974,7 +357974,7 @@
               "subfeature": "text-combine-upright-square-centering",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
+              "status": "REFERENCE-DISPUTED",
               "diff_pct": 0.14604166666666665,
               "semantic_diff_pct": 0.14354166666666668,
               "description": "A two-digit upright composition is a horizontal one-em square centered vertically and horizontally in the parent text-over/text-under space. Chromium lacks the Level-4 digits value, so its authenticated reference uses semantically equivalent text-combine-upright:all for this isolated ASCII run.",
@@ -357989,8 +357989,8 @@
               "expected_support": "implemented",
               "oracle": "chrome",
               "reference": {
-                "status": "verified",
-                "note": ""
+                "status": "disputed",
+                "note": "CSS Writing Modes 4 sections 9.1.2 and 9.1.3 require the composition's combined advance to fit within a measured 1em square and explicitly permit geometric compression. Ironpress follows that rule: the 24px composition occupies 18pt in the PDF. Chromium's LayoutTextCombine::DesiredWidth deliberately allows an undecorated composition 1.1em, with a source comment acknowledging that the margin is not specified; the locked PDF correspondingly uses a 19.8pt advance and outlines 10% wider than the standards-compliant candidate. Its placement remains useful evidence, but its glyph width is a compatibility canary rather than a normative appearance oracle."
               },
               "dependency_context": "",
               "html_sha256": "03a607a93584d8298281eac7445a8a72a92cdc07bafdbed85e81dadf71e7ef29",
@@ -358176,7 +358176,7 @@
               "subfeature": "text-combine-upright-digits",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
+              "status": "REFERENCE-DISPUTED",
               "diff_pct": 0.166875,
               "semantic_diff_pct": 0.164375,
               "description": "A vertical date combines two-digit numbers horizontally inside a single vertical character slot. Chromium does not implement the Level-4 digits value, so the oracle uses text-combine-upright:all, which is semantically equivalent for this isolated two-ASCII-digit run. Catches: A vertical-writing implementation can pass plain vertical text while rendering each digit as a separate stacked glyph.",
@@ -358191,8 +358191,8 @@
               "expected_support": "implemented",
               "oracle": "chrome",
               "reference": {
-                "status": "verified",
-                "note": ""
+                "status": "disputed",
+                "note": "CSS Writing Modes 4 sections 9.1.2 and 9.1.3 require the composition's combined advance to fit within a measured 1em square and explicitly permit geometric compression. Ironpress follows that rule: each 24px two-digit composition occupies 18pt in the PDF. Chromium's LayoutTextCombine::DesiredWidth deliberately allows an undecorated composition 1.1em, with a source comment acknowledging that the margin is not specified; the locked PDF correspondingly uses a 19.8pt advance and outlines 10% wider than the standards-compliant candidate. Its surrounding CJK placement remains useful evidence, but its combined-glyph width is a compatibility canary rather than a normative appearance oracle."
               },
               "dependency_context": "",
               "html_sha256": "1ab1fad9f758ca62e7fcae208d15b95d6a97e45e6481e7400b425fc7676eced9",
@@ -371492,7 +371492,7 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "fdfa5d7a63ff9700f82440b9d3d7a537862a3b965ca7234f1c57d438b899db55",
+  "refs_lock_sha256": "b0a3e3103d115f1ea1da4e3e221ce019ada7d825664ddc98dfb651ad3b0e0d54",
   "baseline_present": true,
-  "gate_failure": "parity integrity gate FAILED (8 issue(s)):\n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
+  "gate_failure": "parity integrity gate FAILED (6 issue(s)):\n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
 }
