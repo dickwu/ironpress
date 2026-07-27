@@ -121,6 +121,10 @@ impl MarginHolder for Image {
 }
 
 impl ReplacedElement for Image {
+    fn geometry(&self) -> &ReplacedGeometry {
+        &self.geometry
+    }
+
     fn geometry_mut(&mut self) -> &mut ReplacedGeometry {
         &mut self.geometry
     }
@@ -191,6 +195,10 @@ impl LayoutElement for Image {
     }
 
     fn margin_holder_mut(&mut self) -> Option<&mut dyn MarginHolder> {
+        Some(self)
+    }
+
+    fn replaced_element(&self) -> Option<&dyn ReplacedElement> {
         Some(self)
     }
 
@@ -269,6 +277,10 @@ impl MarginHolder for Svg {
 }
 
 impl ReplacedElement for Svg {
+    fn geometry(&self) -> &ReplacedGeometry {
+        &self.geometry
+    }
+
     fn geometry_mut(&mut self) -> &mut ReplacedGeometry {
         &mut self.geometry
     }
@@ -339,6 +351,10 @@ impl LayoutElement for Svg {
     }
 
     fn margin_holder_mut(&mut self) -> Option<&mut dyn MarginHolder> {
+        Some(self)
+    }
+
+    fn replaced_element(&self) -> Option<&dyn ReplacedElement> {
         Some(self)
     }
 

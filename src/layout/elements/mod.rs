@@ -68,6 +68,10 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
+    fn replaced_element(&self) -> Option<&dyn ReplacedElement> {
+        None
+    }
+
     fn replaced_element_mut(&mut self) -> Option<&mut dyn ReplacedElement> {
         None
     }
@@ -309,6 +313,10 @@ impl LayoutElement for LayoutNode {
         self.as_mut().margin_holder_mut()
     }
 
+    fn replaced_element(&self) -> Option<&dyn ReplacedElement> {
+        self.as_ref().replaced_element()
+    }
+
     fn replaced_element_mut(&mut self) -> Option<&mut dyn ReplacedElement> {
         self.as_mut().replaced_element_mut()
     }
@@ -441,6 +449,7 @@ pub(crate) trait ChildContainer {
 
 /// Behavior shared by raster and vector replaced elements.
 pub(crate) trait ReplacedElement {
+    fn geometry(&self) -> &ReplacedGeometry;
     fn geometry_mut(&mut self) -> &mut ReplacedGeometry;
 
     fn add_baseline_gap(&mut self, gap: f32) {

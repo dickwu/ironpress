@@ -1,6 +1,6 @@
 use crate::layout::elements::{
-    BoxPaint, Container, FlexContent, FlexRow, Image, IntoLayoutNode, LayoutElement, LayoutNode,
-    LayoutSize, LayoutVisitor, Positioning, Svg, TableRow, TextBlock,
+    BoxPaint, FlexContent, FlexRow, IntoLayoutNode, LayoutElement, LayoutNode, LayoutSize,
+    Positioning,
 };
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{AncestorInfo, CssRule, SelectorContext};
@@ -86,98 +86,10 @@ fn inline_block_child_should_flatten(el: &ElementNode, style: &ComputedStyle) ->
 }
 
 fn inline_block_nested_outer_width(elements: &[LayoutNode]) -> f32 {
-    struct OuterWidth(f32);
-
-    impl LayoutVisitor for OuterWidth {
-        fn visit_image(&mut self, element: &Image) {
-            self.0 = element.geometry.size.width;
-        }
-
-        fn visit_svg(&mut self, element: &Svg) {
-            self.0 = element.geometry.size.width;
-        }
-
-        fn visit_table_row(&mut self, element: &TableRow) {
-            self.0 = element.box_inline_extent();
-        }
-
-        fn visit_text_block(&mut self, element: &TextBlock) {
-            self.0 = element
-                .box_model
-                .size
-                .width
-                .fixed_value()
-                .unwrap_or_default();
-        }
-
-        fn visit_container(&mut self, element: &Container) {
-            let children_w = inline_block_nested_outer_width(&element.children);
-            if children_w > 0.0 {
-                self.0 = children_w
-                    + element.box_model.padding.horizontal()
-                    + element.box_model.border.horizontal_width();
-            } else {
-                self.0 = element
-                    .box_model
-                    .size
-                    .width
-                    .fixed_value()
-                    .unwrap_or_default();
-            }
-        }
-    }
-
-    elements.iter().fold(0.0, |width, element| {
-        let mut candidate = OuterWidth(0.0);
-        element.accept(&mut candidate);
-        width.max(candidate.0)
-    })
-}
-
-fn replaced_width(element: &dyn LayoutElement) -> Option<f32> {
-    struct ReplacedWidth(Option<f32>);
-
-    impl LayoutVisitor for ReplacedWidth {
-        fn visit_image(&mut self, element: &Image) {
-            self.0 = Some(element.geometry.size.width);
-        }
-
-        fn visit_svg(&mut self, element: &Svg) {
-            self.0 = Some(element.geometry.size.width);
-        }
-    }
-
-    let mut width = ReplacedWidth(None);
-    element.accept(&mut width);
-    width.0
-}
-
-fn text_block_background(element: &dyn LayoutElement) -> Option<crate::types::Color> {
-    struct Background(Option<crate::types::Color>);
-
-    impl LayoutVisitor for Background {
-        fn visit_text_block(&mut self, element: &TextBlock) {
-            self.0 = element.paint.background.color;
-        }
-    }
-
-    let mut background = Background(None);
-    element.accept(&mut background);
-    background.0
-}
-
-fn is_text_block(element: &dyn LayoutElement) -> bool {
-    struct IsText(bool);
-
-    impl LayoutVisitor for IsText {
-        fn visit_text_block(&mut self, _element: &TextBlock) {
-            self.0 = true;
-        }
-    }
-
-    let mut result = IsText(false);
-    element.accept(&mut result);
-    result.0
+    elements
+        .iter()
+        .filter_map(|element| element.inline_flow_extent()?.max_content_outer_extent())
+        .fold(0.0, f32::max)
 }
 
 fn inline_row_node(
@@ -461,7 +373,7 @@ fn inline_atomic_cell(
         if filter.requires_source_surface() {
             super::filter::retain_for_fragmentation(replaced.as_mut(), &filter);
         }
-        let width = replaced_width(replaced.as_ref())?;
+        let width = replaced.replaced_element()?.geometry().size.width;
         let height = estimate_element_height(replaced.as_ref());
         return Some((
             FlexCell {
@@ -622,15 +534,11 @@ fn inline_atomic_cell(
                         crate::layout::paginate::estimate_element_height(element.as_ref())
                     })
                     .sum::<f32>();
-                let table_background = nested
-                    .iter()
-                    .find_map(|element| text_block_background(element.as_ref()));
-                nested.retain(|element| !is_text_block(element.as_ref()));
                 (
                     width,
                     height,
                     nested,
-                    table_background.or_else(|| child_style.background_color),
+                    child_style.background_color,
                     LayoutBorder::from_computed(&child_style.border, child_style.color),
                     child_style.padding,
                     0.0,

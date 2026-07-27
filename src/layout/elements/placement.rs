@@ -133,6 +133,10 @@ impl LayoutElement for FragmentBox {
         self.source.margin_holder_mut()
     }
 
+    fn replaced_element(&self) -> Option<&dyn ReplacedElement> {
+        self.source.replaced_element()
+    }
+
     fn replaced_element_mut(&mut self) -> Option<&mut dyn ReplacedElement> {
         self.source.replaced_element_mut()
     }
