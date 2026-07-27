@@ -1,20 +1,20 @@
 {
   "schema_version": 12,
-  "invocation_id": "870b2838427661c0ef6ac8280c28e60e",
+  "invocation_id": "8e948c3f63432d7d4a6ff6becf5a23cd",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3455479-1785174389981888811-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3509797-1785176904218072200-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 99.32,
-    "pass": 1606,
-    "fail": 11,
+    "score_pct": 99.38,
+    "pass": 1607,
+    "fail": 10,
     "reference_disputed": 18,
     "total": 1635
   },
@@ -347605,10 +347605,10 @@
     },
     {
       "category": "lists-counters",
-      "score_pct": 97.06,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 33,
-        "fail": 1,
+        "pass": 34,
+        "fail": 0,
         "reference_disputed": 1
       },
       "features": [
@@ -349627,10 +349627,10 @@
         },
         {
           "feature": "list-style-type",
-          "score_pct": 91.67,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 11,
-            "fail": 1,
+            "pass": 12,
+            "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
@@ -349641,9 +349641,9 @@
               "subfeature": "circle",
               "interaction_of": [],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.16145454545454546,
-              "semantic_diff_pct": 0.1606060606060606,
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
               "description": "Unordered list rendering hollow circle markers on three short text items.",
               "note": "",
               "kind": "feature",
@@ -349666,7 +349666,7 @@
                   {
                     "width": 1500,
                     "height": 550,
-                    "rgba_sha256": "683fd25c621c6f1046d445cb6c9ffac04cbbf4ca8a53e32ef4a12e7a3d564fed",
+                    "rgba_sha256": "7ad1139eedeb30908f2afd883e28cdfc4d121b73772b9336a091e749388683ee",
                     "painted_pixels": 474750
                   }
                 ],
@@ -349678,103 +349678,6 @@
                     "painted_pixels": 474750
                   }
                 ]
-              },
-              "diagnosis": {
-                "primary_class": "ColorValue",
-                "secondary": [],
-                "headline": "fill recolour ΔRGB(+70,+77,+81) (ΔE 53.8)",
-                "magnitude": {
-                  "missing_area_pct": 0.0,
-                  "extra_area_pct": 0.0,
-                  "modal_drgba": [
-                    70,
-                    77,
-                    81,
-                    0
-                  ],
-                  "delta_e": 53.82945206690759,
-                  "recovered_alpha": null,
-                  "colorspace": null
-                },
-                "region_count": 3,
-                "region_classes": [
-                  {
-                    "class": "ColorErr",
-                    "region_count": 3,
-                    "total_pixels": 1332,
-                    "total_area_pct": 0.28056872037914693,
-                    "union_bbox_css": [
-                      69.44,
-                      30.4,
-                      79.68,
-                      105.6
-                    ],
-                    "largest_region_pixels": 446,
-                    "largest_region_area_pct": 0.09394418114797262,
-                    "max_delta_e": 0.0
-                  }
-                ],
-                "region_examples": [
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      69.44,
-                      96.32,
-                      79.68,
-                      105.6
-                    ],
-                    "area_pct": 0.09394418114797262,
-                    "modal_drgba": [
-                      70,
-                      77,
-                      81,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+70,+77,+81) (ΔE 0)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      69.44,
-                      30.4,
-                      79.68,
-                      39.36
-                    ],
-                    "area_pct": 0.09331226961558715,
-                    "modal_drgba": [
-                      70,
-                      77,
-                      81,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+70,+77,+81) (ΔE 0)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      69.44,
-                      63.36,
-                      79.68,
-                      72.64
-                    ],
-                    "area_pct": 0.09331226961558715,
-                    "modal_drgba": [
-                      70,
-                      77,
-                      81,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+70,+77,+81) (ΔE 0)"
-                  }
-                ],
-                "confidence": 1.0,
-                "different_pixels": 1332
               }
             },
             {
@@ -415135,5 +415038,5 @@
   "refs_lock_present": true,
   "refs_lock_sha256": "1a06f83a6c58fae49838e7b3c4e6cc8fd9423adc5d9e049ae86d6b31b713b294",
   "baseline_present": true,
-  "gate_failure": "parity integrity gate FAILED (11 issue(s)):\n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: list-style-type-circle [lists-counters/list-style-type] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
+  "gate_failure": "parity integrity gate FAILED (10 issue(s)):\n  - fixture is FAIL: interactions-cartesian-backgrounds-borders-x-positioning [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-positioning-x-tables [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-center [text-advanced/text-combine-upright:digits 2] expected_support=implemented \n  - fixture is FAIL: text-advanced-text-combine-upright-digits [text-advanced/text-combine-upright:digits 2] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
 }
