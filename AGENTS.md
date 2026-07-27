@@ -7,6 +7,7 @@
 - Use semantic types that carry meaning and reusable functionality instead of abusing meaningless scalars. Group fields by domain responsibility; copying a flat field list from an enum variant into a flat struct is not a semantic refactor.
 - Do not use interior mutability or reference counting. They normally indicate that ownership has not been modeled correctly; prefer owned values, `&`, and `&mut`.
 - Production code must never panic. Tests may panic when an assertion fails.
+- Establish every test expectation from an independent requirement, applicable specification, verified oracle, or reproduced regression before changing implementation. Never rewrite a test merely to match the code's new output; delete a test with no independently known behavioral contract instead of using it to bless the implementation.
 - Keep code simple. Long or complicated code indicates a missing abstraction; use the type system to represent prevalidated states instead of propagating `Result` or `Option` without semantic need.
 - Do not reinvent functionality that an appropriate, well-maintained crate already provides.
 - Establish every test expectation from an independent requirement, applicable specification, verified oracle, or reproduced regression before changing implementation. Never rewrite a test merely to match the code's new output; delete a test with no independently known behavioral contract instead of using it to bless the implementation.
