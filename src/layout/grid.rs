@@ -377,7 +377,16 @@ impl GridBlockSizing {
             BoxSizing::ContentBox => height.max(0.0),
         };
         Self {
-            definite_content_height: style.height.map(content_height),
+            // A definite preferred size is not the used size until min/max
+            // constraints have resolved. Track sizing, content alignment, and
+            // the final principal box must all observe the same constrained
+            // content box; reusing the authored height here and constraining
+            // only the final box makes centered tracks drift by half the clamp.
+            definite_content_height: style.height.map(|_| {
+                ResolvedBoxDimensions::from_style(style, Size::default())
+                    .content
+                    .height
+            }),
             minimum_content_height: style.min_height.map(content_height),
         }
     }
@@ -3836,6 +3845,28 @@ mod tests {
             resolve_grid_columns(&tracks, 300.0, 30.0, &intrinsic),
             [90.0, 180.0]
         );
+    }
+
+    #[test]
+    fn definite_grid_block_size_is_constrained_before_track_alignment() {
+        let style = ComputedStyle {
+            height: Some(68.0),
+            max_height: Some(58.0),
+            padding: EdgeSizes::uniform(7.0),
+            border: crate::style::computed::BorderSides::uniform(
+                crate::style::computed::BorderSide::solid(
+                    2.0,
+                    crate::parser::css::SpecifiedColor::CurrentColor,
+                ),
+            ),
+            box_sizing: BoxSizing::BorderBox,
+            ..Default::default()
+        };
+
+        let sizing = GridBlockSizing::from_style(&style);
+
+        assert_eq!(sizing.definite_content_height, Some(40.0));
+        assert_eq!(sizing.track_extent(), Some(40.0));
     }
 
     #[test]
