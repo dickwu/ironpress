@@ -207,7 +207,7 @@ impl PdfDeviceRasterPlacement {
 }
 
 impl PdfDeviceSpace {
-    pub(super) const CSS_TO_DEVICE: f64 = PageContentTransform::POINT_TO_DEVICE * 0.75;
+    pub(super) const CSS_TO_DEVICE: f64 = PageContentTransform::CSS_TO_DEVICE;
 
     /// Cancel only the point-to-device stage installed by
     /// [`PageContentTransform::operator`]. The outer device-to-page stage stays
@@ -312,7 +312,7 @@ impl PdfTextSpace {
         let Self::PageCss { page_height } = self else {
             return None;
         };
-        let scale = crate::fonts::PT_PER_CSS_PX;
+        let scale = PageContentTransform::CSS_TO_LAYOUT_OPERATOR;
         Some(format!("q\n{scale} 0 0 -{scale} 0 {page_height} cm\n"))
     }
 
@@ -356,11 +356,23 @@ impl PdfTextSpace {
 impl PageContentTransform {
     pub(super) const DEVICE_TO_PAGE: f64 = 0.24;
     pub(super) const POINT_TO_DEVICE: f64 = 1.0 / 0.24;
+    pub(super) const CSS_TO_DEVICE: f64 =
+        Self::POINT_TO_DEVICE * crate::fonts::PT_PER_CSS_PX as f64;
     /// Skia serializes the 300-DPI device-to-page float with this value in a
     /// browser-produced PDF content stream. Retaining that authored matrix is
     /// significant to device-edge coverage even though it differs from 0.24
     /// by far less than any layout-space precision.
     const DEVICE_TO_PAGE_OPERATOR: f64 = 0.23999999;
+    /// Relative CSS-pixel scale which reconstructs Chromium's directly
+    /// authored device-to-CSS matrix after our surrounding point-space stage.
+    ///
+    /// Writing a plain `0.75` after the serialized point-to-device matrix
+    /// multiplies to the next `f64` above Chromium's `0.23999999 * 3.125`
+    /// transform. Deriving the hand-off from those actual serialized stages
+    /// retains the direct browser matrix exactly instead of accumulating that
+    /// one-ULP edge phase across repeated paint.
+    const CSS_TO_LAYOUT_OPERATOR: f64 = (Self::DEVICE_TO_PAGE_OPERATOR * Self::CSS_TO_DEVICE)
+        / (Self::DEVICE_TO_PAGE_OPERATOR * Self::POINT_TO_DEVICE);
 
     pub(super) fn print(page_size: PdfVector) -> Self {
         Self {
@@ -444,7 +456,7 @@ impl PageContentTransform {
     /// Enter CSS-pixel coordinates for a box from the native page-point space.
     pub(super) fn css_box_operator(self, origin: PdfPoint) -> Option<String> {
         self.page_size?;
-        let relative_scale = crate::fonts::PT_PER_CSS_PX;
+        let relative_scale = Self::CSS_TO_LAYOUT_OPERATOR;
         Some(format!(
             "{relative_scale} 0 0 -{relative_scale} {} {} cm\n",
             origin.x, origin.y,
@@ -669,7 +681,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn css_box_transition_reconstructs_direct_print_scale_exactly() {
+    fn css_paint_transitions_reconstruct_direct_print_scale_exactly() {
         let transform = PageContentTransform::print(PdfVector::new(180.0, 72.0));
         let operator = transform
             .css_box_operator(PdfPoint::new(0.0, 72.0))
@@ -679,8 +691,23 @@ mod tests {
             .take(6)
             .map(|value| value.parse::<f64>().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(values[0], f64::from(crate::fonts::PT_PER_CSS_PX));
-        assert_eq!(-values[3], f64::from(crate::fonts::PT_PER_CSS_PX));
+        assert_eq!(values[0], PageContentTransform::CSS_TO_LAYOUT_OPERATOR);
+        assert_eq!(-values[3], PageContentTransform::CSS_TO_LAYOUT_OPERATOR);
+        assert_eq!(
+            PageContentTransform::DEVICE_TO_PAGE_OPERATOR
+                * PageContentTransform::POINT_TO_DEVICE
+                * values[0],
+            PageContentTransform::DEVICE_TO_PAGE_OPERATOR * PageContentTransform::CSS_TO_DEVICE,
+        );
+
+        let text_operator = PdfTextSpace::page_css(transform).begin_operator().unwrap();
+        let text_scale = text_operator
+            .lines()
+            .nth(1)
+            .and_then(|matrix| matrix.split_ascii_whitespace().next())
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap();
+        assert_eq!(text_scale, values[0]);
     }
 
     #[test]
