@@ -5,12 +5,11 @@ use crate::parser::css::{
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
-    AlignItems, AlignSelf, BorderSides, ComputedStyle, ContentItem, CounterStyle,
-    CounterStyleSystem, Display, FontFamily, FontStyle, FontVariantPosition, FontWeight,
-    FootnoteFormatting, ListStylePosition, ListStyleType, PercentageBasis, TARGET_PLACEHOLDER_END,
-    TARGET_PLACEHOLDER_START, TextAlign, Transform, VerticalAlign, WritingMode,
-    compute_pseudo_element_style_with_font_metrics, compute_style_with_context,
-    compute_style_with_context_and_percentage_basis_with_font_metrics,
+    AlignItems, AlignSelf, BorderSides, ComputedStyle, ContentItem, Display, FontFamily, FontStyle,
+    FontVariantPosition, FontWeight, FootnoteFormatting, ListStylePosition, ListStyleType,
+    PercentageBasis, TARGET_PLACEHOLDER_END, TARGET_PLACEHOLDER_START, TextAlign, Transform,
+    VerticalAlign, WritingMode, compute_pseudo_element_style_with_font_metrics,
+    compute_style_with_context, compute_style_with_context_and_percentage_basis_with_font_metrics,
     compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
@@ -43,10 +42,16 @@ use super::images::*;
 use super::inline::{
     layout_inline_block_group_with_env_and_spacing, layout_inline_mixed_sequence_with_env,
 };
+pub use super::inline_box::{CenteredStroke, InlineBox, InlineBoxPaint};
 use super::inline_formatting::{
     AtomicInlineKind, GeneratedContentStyles, InlineContentSequence, InlineFormattingContext,
     InlineFormattingRole, PrincipalPseudoStyles,
 };
+use super::list_markers::{
+    BuiltInBulletSlot, build_list_bullet_marker, format_counter_value, format_list_marker,
+};
+#[cfg(test)]
+use super::list_markers::{to_alpha_lower, to_roman_lower};
 use super::print_scale::{PrintContentScale, assign_page_print_scales};
 use super::root_formatting::{DocumentRootStyles, RootFormattingContext};
 use super::table::{
@@ -83,6 +88,14 @@ impl Default for LayoutBorderSide {
 }
 
 impl LayoutBorderSide {
+    pub const fn solid(width: f32, color: crate::types::Color) -> Self {
+        Self {
+            width,
+            color,
+            style: crate::style::computed::BorderStyle::Solid,
+        }
+    }
+
     /// Whether this side actually paints: it must have a positive width and a
     /// style other than `none`/`hidden`. CSS `border-style: none` suppresses the
     /// edge even when a width was declared.
@@ -324,138 +337,12 @@ impl CounterState {
             .get(name)
             .map(|s| {
                 s.iter()
-                    .map(|v| format_counter_value_for_layout(style, *v))
+                    .map(|v| format_counter_value(style, *v))
                     .collect::<Vec<_>>()
                     .join(sep)
             })
-            .unwrap_or_else(|| format_counter_value_for_layout(style, 0))
+            .unwrap_or_else(|| format_counter_value(style, 0))
     }
-}
-
-fn format_list_marker_for_layout(list_style_type: &ListStyleType, index: i32) -> String {
-    match list_style_type {
-        ListStyleType::Disc => "\u{2022} ".to_string(),
-        ListStyleType::Circle => "\u{25E6} ".to_string(),
-        ListStyleType::Square => "\u{25AA} ".to_string(),
-        ListStyleType::Decimal => format!("{index}. "),
-        ListStyleType::DecimalLeadingZero => {
-            if index < 0 {
-                format!("-{:02}. ", (index as i64).abs())
-            } else {
-                format!("{index:02}. ")
-            }
-        }
-        ListStyleType::LowerAlpha => format_positive_marker(index, to_alpha_lower),
-        ListStyleType::UpperAlpha => format_positive_marker(index, to_alpha_upper),
-        ListStyleType::LowerRoman => format_positive_marker(index, to_roman_lower),
-        ListStyleType::UpperRoman => format_positive_marker(index, to_roman_upper),
-        ListStyleType::CjkDecimal if index > 0 => {
-            super::helpers::format_list_marker(list_style_type, index as usize)
-        }
-        ListStyleType::CjkDecimal => format!("{index}、"),
-        ListStyleType::String(marker) => marker.clone(),
-        ListStyleType::CounterStyle(style) => format_custom_counter_for_layout(style, index, true),
-        ListStyleType::Custom(_) => format!("{index}. "),
-        ListStyleType::None => String::new(),
-    }
-}
-
-fn format_positive_marker(index: i32, formatter: fn(usize) -> String) -> String {
-    if index <= 0 {
-        format!("{index}. ")
-    } else {
-        format!("{}. ", formatter(index as usize))
-    }
-}
-
-fn format_counter_value_for_layout(style: &ListStyleType, value: i32) -> String {
-    if value <= 0 && !matches!(style, ListStyleType::CounterStyle(_)) {
-        return value.to_string();
-    }
-    let n = value as usize;
-    match style {
-        ListStyleType::DecimalLeadingZero => format!("{n:02}"),
-        ListStyleType::LowerAlpha => to_alpha_lower(n),
-        ListStyleType::UpperAlpha => to_alpha_upper(n),
-        ListStyleType::LowerRoman => to_roman_lower(n),
-        ListStyleType::UpperRoman => to_roman_upper(n),
-        ListStyleType::CjkDecimal => super::helpers::format_counter_value(style, value),
-        ListStyleType::CounterStyle(custom) => {
-            format_custom_counter_for_layout(custom, value, false)
-        }
-        _ => value.to_string(),
-    }
-}
-
-fn format_custom_counter_for_layout(
-    style: &CounterStyle,
-    value: i32,
-    include_affixes: bool,
-) -> String {
-    let negative = value < 0;
-    let abs_value = (value as i64).unsigned_abs() as usize;
-    let mut representation = match style.system {
-        CounterStyleSystem::Cyclic if !style.symbols.is_empty() => {
-            let idx = if abs_value == 0 {
-                0
-            } else {
-                (abs_value - 1) % style.symbols.len()
-            };
-            style.symbols[idx].clone()
-        }
-        CounterStyleSystem::Cyclic => abs_value.to_string(),
-        CounterStyleSystem::ExtendsDecimal => abs_value.to_string(),
-    };
-    if let Some((width, pad_symbol)) = &style.pad {
-        while representation.chars().count() < *width {
-            representation.insert_str(0, pad_symbol);
-        }
-    }
-    if negative {
-        representation = format!("{}{}{}", style.negative.0, representation, style.negative.1);
-    }
-    if include_affixes {
-        format!("{}{}{}", style.prefix, representation, style.suffix)
-    } else {
-        representation
-    }
-}
-
-fn resolve_content_for_layout(
-    items: &[ContentItem],
-    attributes: &HashMap<String, String>,
-    counter_state: &mut CounterState,
-) -> String {
-    if !items.iter().any(|item| {
-        matches!(
-            item,
-            ContentItem::Counter(_, ListStyleType::CounterStyle(_))
-                | ContentItem::Counters(_, _, ListStyleType::CounterStyle(_))
-        )
-    }) {
-        return super::helpers::resolve_content(items, attributes, counter_state);
-    }
-
-    let mut result = String::new();
-    for item in items {
-        match item {
-            ContentItem::Counter(name, style) => {
-                result.push_str(&format_counter_value_for_layout(
-                    style,
-                    counter_state.get(name),
-                ));
-            }
-            ContentItem::Counters(name, sep, style) => {
-                result.push_str(&counter_state.get_all_styled(name, sep, style));
-            }
-            _ => result.push_str(&super::helpers::resolve_content(
-                std::slice::from_ref(item),
-                attributes,
-                counter_state,
-            )),
-        }
-    }
-    result
 }
 
 /// Context for rendering list items.
@@ -1294,64 +1181,6 @@ pub(crate) fn is_internal_target_anchor(value: &str) -> bool {
 
 pub(crate) fn target_anchor_id(value: &str) -> Option<&str> {
     value.strip_prefix(TARGET_ANCHOR_PREFIX)
-}
-
-/// An atomic inline-level box laid out inside a line of text, produced for
-/// `display: inline-block` elements that appear among inline text. It carries
-/// the resolved box geometry, paint properties, and pre-wrapped inner content.
-#[derive(Debug, Clone, Default)]
-pub struct InlineBox {
-    /// Border-box width (the painted box width).
-    pub width: f32,
-    /// Border-box height (used to grow the line box and for vertical-align).
-    pub height: f32,
-    /// Horizontal margins (left, right). They add inline advance around the
-    /// painted border box but are not themselves painted.
-    pub margin_left: f32,
-    pub margin_right: f32,
-    pub background_color: Option<crate::types::Color>,
-    pub border: LayoutBorder,
-    pub border_image: Option<crate::style::computed::BorderImagePaint>,
-    pub border_radii: CornerRadii,
-    pub padding: EdgeSizes,
-    /// CSS `vertical-align` of the inline-block relative to the line baseline.
-    pub vertical_align: VerticalAlign,
-    /// Distance from the box's TOP border edge down to the baseline used to
-    /// align the box on its line (CSS2 §10.8.1). For an inline-block with
-    /// in-flow line content this is the baseline of its LAST line box (offset by
-    /// border-top + padding-top + the preceding lines); for a box with no
-    /// in-flow line content (or `overflow != visible`) it is the box height, so
-    /// the bottom margin edge sits on the line baseline. `None` means "no
-    /// content baseline" → fall back to the bottom-edge rule.
-    pub baseline_ascent: Option<f32>,
-    /// Pre-wrapped inner text lines (empty for content-less boxes).
-    pub lines: Vec<TextLine>,
-    /// Replaced-element image painted to fill the content box, for a pseudo-
-    /// element with `content: url(...)` (css-content-3 §1). When set, the box is
-    /// a replaced inline image rather than a text/decorative box.
-    pub image: Option<RasterImageAsset>,
-    /// CSS `position: relative` paint offset (x right, y down) in points. The box
-    /// keeps its in-flow inline slot (advance/line metrics unchanged) but its
-    /// painted box and inner content shift by this offset (CSS2 §9.4.3).
-    pub rel_offset_x: f32,
-    pub rel_offset_y: f32,
-}
-
-impl InlineBox {
-    /// A non-painting inline advance, used when inline layout needs a semantic
-    /// spacing adjustment without creating a physical box.
-    pub fn advance_only(advance: f32) -> Self {
-        Self {
-            margin_right: advance,
-            ..Self::default()
-        }
-    }
-
-    /// Total inline advance the box contributes to its line: the painted
-    /// border-box width plus its left/right margins.
-    pub fn outer_width(&self) -> f32 {
-        self.width + self.margin_left + self.margin_right
-    }
 }
 
 /// Block-level text state that cannot be inferred from an individual run.
@@ -4240,8 +4069,7 @@ pub(crate) fn flatten_element(
                 .filter(|style| !style.content.is_empty());
             let has_custom_before = custom_before.is_some();
             if let Some(ps) = custom_before {
-                let content_text =
-                    resolve_content_for_layout(&ps.content, &el.attributes, env.counter_state);
+                let content_text = resolve_content(&ps.content, &el.attributes, env.counter_state);
                 if !content_text.is_empty() {
                     push_text_run_with_fallback(
                         TextRun {
@@ -4288,13 +4116,13 @@ pub(crate) fn flatten_element(
                             ListStyleType::Custom(_) | ListStyleType::CounterStyle(_)
                         ) =>
                     {
-                        format_list_marker_for_layout(
+                        format_list_marker(
                             &style.list_style_type,
                             env.counter_state.get("list-item"),
                         )
                     }
                     Some(ListContext::Unordered { .. }) => {
-                        format_list_marker_for_layout(&style.list_style_type, 0)
+                        format_list_marker(&style.list_style_type, 0)
                     }
                     // The <ol> UA default (`list-style-type: decimal`, set in
                     // `default_style`) is inherited by the <li>, so `style
@@ -4309,9 +4137,9 @@ pub(crate) fn flatten_element(
                         } else {
                             marker_value
                         };
-                        format_list_marker_for_layout(&style.list_style_type, marker_value)
+                        format_list_marker(&style.list_style_type, marker_value)
                     }
-                    None => format_list_marker_for_layout(&style.list_style_type, 0),
+                    None => format_list_marker(&style.list_style_type, 0),
                 }
             };
             // The <li> content is indented by the list's accumulated start padding
@@ -4380,7 +4208,7 @@ pub(crate) fn flatten_element(
                 );
                 let marker_text = match marker_pseudo.as_ref() {
                     Some(ps) if !ps.content.is_empty() => {
-                        resolve_content_for_layout(&ps.content, &el.attributes, env.counter_state)
+                        resolve_content(&ps.content, &el.attributes, env.counter_state)
                     }
                     _ => marker,
                 };
@@ -4434,9 +4262,9 @@ pub(crate) fn flatten_element(
                         && style.display == Display::ListItem
                         && style.list_style_position == ListStylePosition::Inside
                     {
-                        GeometricBulletSlot::StandaloneInside
+                        BuiltInBulletSlot::StandaloneInside
                     } else {
-                        GeometricBulletSlot::Default
+                        BuiltInBulletSlot::default()
                     };
                     build_list_bullet_marker(
                         &marker_style.list_style_type,
@@ -4491,20 +4319,9 @@ pub(crate) fn flatten_element(
                     line_height_factor: text_run_line_height_factor(&style, env.fonts),
                     inline_box: Some(Box::new(InlineBox {
                         width: marker_suffix_gap,
-                        height: 0.0,
-                        margin_left: 0.0,
-                        margin_right: 0.0,
-                        background_color: None,
-                        border: LayoutBorder::default(),
-                        border_image: None,
-                        border_radii: CornerRadii::ZERO,
-                        padding: EdgeSizes::ZERO,
                         vertical_align: VerticalAlign::Baseline,
                         baseline_ascent: Some(0.0),
-                        lines: Vec::new(),
-                        image: None,
-                        rel_offset_x: 0.0,
-                        rel_offset_y: 0.0,
+                        ..InlineBox::default()
                     })),
                     ..Default::default()
                 });
@@ -13294,7 +13111,7 @@ line 3</pre>
 
     #[test]
     fn helpers_format_list_marker_roman_large() {
-        use crate::layout::helpers::format_list_marker;
+        use crate::layout::list_markers::format_list_marker;
         use crate::style::computed::ListStyleType;
 
         assert_eq!(

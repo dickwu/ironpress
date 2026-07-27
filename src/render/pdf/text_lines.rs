@@ -147,18 +147,18 @@ pub(super) fn render_inline_box(
     let box_bottom = box_bottom - inline.rel_offset_y;
     let geometry = LayoutBoxGeometry::from_layout(
         PdfRect::new(box_x, box_bottom, inline.width, h),
-        &inline.border,
+        &inline.paint.border,
         inline.padding,
-        inline.border_image.as_ref(),
+        inline.paint.border_image.as_ref(),
     );
     let box_geometry = pdf_writer.resolve_box_geometry(geometry);
     let paint_geometry = box_geometry.painting();
     let fragment_geometry = box_geometry.fragment(Default::default());
     let background_box =
-        paint_geometry.background_clip_box(BackgroundClip::Border, inline.border_radii);
+        paint_geometry.background_clip_box(BackgroundClip::Border, inline.paint.border_radii);
 
     // Background fill.
-    if let Some(background) = inline.background_color {
+    if let Some(background) = inline.paint.background_color {
         paint_solid_background(
             content,
             background,
@@ -197,9 +197,9 @@ pub(super) fn render_inline_box(
     paint_box_decoration(
         content,
         fragment_geometry,
-        &inline.border,
-        inline.border_radii,
-        inline.border_image.as_ref(),
+        &inline.paint.border,
+        inline.paint.border_radii,
+        inline.paint.border_image.as_ref(),
         BorderPaintResources {
             shadings: page_shadings,
             shading_counter,
@@ -209,6 +209,15 @@ pub(super) fn render_inline_box(
             page_images,
         },
     );
+    if let Some(stroke) = inline.paint.centered_stroke {
+        paint_centered_inline_stroke(
+            content,
+            paint_geometry.rounded_border_box(inline.paint.border_radii),
+            stroke,
+            page_ext_gstates,
+            bg_alpha_counter,
+        );
+    }
 
     // Inner text lines, laid out from the content-box top downward.
     let content_box = geometry.content_box();
@@ -247,6 +256,23 @@ pub(super) fn render_inline_box(
             );
         }
     }
+}
+
+fn paint_centered_inline_stroke(
+    content: &mut String,
+    contour: RoundedRect,
+    stroke: crate::layout::engine::CenteredStroke,
+    page_ext_gstates: &mut Vec<(String, f32)>,
+    alpha_counter: &mut usize,
+) {
+    let side = stroke.side();
+    let alpha = begin_border_alpha(content, page_ext_gstates, alpha_counter, side.color.alpha());
+    content.push_str(&PdfRgb::from(side.color).stroke_operator());
+    content.push_str("0 J\n0 j\n4 M\n");
+    content.push_str(&format!("{} w\n", side.width));
+    content.push_str(&contour.path_or_rect());
+    content.push_str("S\n");
+    end_border_alpha(content, alpha);
 }
 
 #[allow(clippy::too_many_arguments)]

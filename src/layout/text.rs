@@ -19,14 +19,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::engine::{
-    CounterState, FootnoteBodyStyle, FootnoteLinkData, InlineBox, LayoutBorder, RunWhitespace,
-    SyntheticFontWeight, TextLine, TextRun, TextShaping, decode_footnote_link,
+    CounterState, FootnoteBodyStyle, FootnoteLinkData, InlineBox, InlineBoxPaint, LayoutBorder,
+    RunWhitespace, SyntheticFontWeight, TextLine, TextRun, TextShaping, decode_footnote_link,
     encode_footnote_link_data,
 };
-use super::helpers::{DropCap, format_counter_value};
+use super::helpers::DropCap;
 use super::inline_formatting::{
     GeneratedContentStyles, InlineContentSequence, InlineSiblingCursor,
 };
+use super::list_markers::format_counter_value;
 use super::text_emphasis::TextEmphasisMetrics;
 
 fn footnote_pseudo_content(style: Option<&ComputedStyle>, marker: &str) -> Option<String> {
@@ -1645,20 +1646,9 @@ fn leader_spacer_run(template: &TextRun, width: f32) -> TextRun {
         border_radii: CornerRadii::ZERO,
         inline_box: Some(Box::new(InlineBox {
             width,
-            height: 0.0,
-            margin_left: 0.0,
-            margin_right: 0.0,
-            background_color: None,
-            border: LayoutBorder::default(),
-            border_image: None,
-            border_radii: CornerRadii::ZERO,
-            padding: EdgeSizes::ZERO,
             vertical_align: template.vertical_align,
             baseline_ascent: Some(0.0),
-            lines: Vec::new(),
-            image: None,
-            rel_offset_x: 0.0,
-            rel_offset_y: 0.0,
+            ..InlineBox::default()
         })),
         ..template.clone()
     }
@@ -3106,10 +3096,13 @@ fn build_inline_box(
         height: total_h,
         margin_left: style.margin.left.max(0.0),
         margin_right: style.margin.right.max(0.0),
-        background_color: style.background_color,
-        border: LayoutBorder::from_computed(&style.border, style.color),
-        border_image: style.border_image.paint(),
-        border_radii: style.resolve_corner_radii(total_w, total_h),
+        paint: InlineBoxPaint {
+            background_color: style.background_color,
+            border: LayoutBorder::from_computed(&style.border, style.color),
+            border_image: style.border_image.paint(),
+            border_radii: style.resolve_corner_radii(total_w, total_h),
+            ..InlineBoxPaint::default()
+        },
         padding: style.padding,
         vertical_align: style.vertical_align,
         baseline_ascent,

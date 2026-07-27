@@ -7,9 +7,9 @@ use crate::style::computed::{
     BackgroundClip, BackgroundOrigin, BackgroundPosition, BackgroundRepeat, BackgroundSize,
     BoxSizing, ComputedStyle, ConicGradient, ContentItem, Display, FontFamily, FontWeight,
     IntrinsicWidthKeyword, LEADER_PLACEHOLDER_END, LEADER_PLACEHOLDER_START, LinearGradient,
-    ListStyleType, RadialGradient, VerticalAlign, Visibility, compute_style_with_context,
+    RadialGradient, VerticalAlign, Visibility, compute_style_with_context,
 };
-use crate::types::{CornerRadii, EdgeSizes};
+use crate::types::EdgeSizes;
 use std::collections::HashMap;
 
 pub(crate) fn selector_attributes_with_has(el: &ElementNode) -> HashMap<String, String> {
@@ -503,8 +503,11 @@ use super::elements::{
     LayoutSize, OutlinePaint, Positioning, SizeConstraints, TextBlock, TextBlockStyle,
     TextFragmentation, TextSemantics,
 };
-use super::engine::{CounterState, InlineBox, LayoutBorder, LayoutElement, TextLine, TextRun};
+use super::engine::{
+    CounterState, InlineBox, InlineBoxPaint, LayoutBorder, LayoutElement, TextLine, TextRun,
+};
 use super::images::build_raster_background_tree;
+use super::list_markers::{build_list_bullet_marker, format_counter_value, format_list_marker};
 use super::text::{
     TextWrapOptions, collapse_whitespace, estimate_word_width, parent_line_strut,
     push_text_run_with_fallback, resolve_style_font_family, text_run_line_height_factor,
@@ -1027,244 +1030,6 @@ pub(crate) fn resolve_intrinsic_keyword_width(
         }
     };
     resolved.max(0.0)
-}
-
-// ---------------------------------------------------------------------------
-// Group 3 — List marker formatting
-// ---------------------------------------------------------------------------
-
-pub(crate) fn format_list_marker(list_style_type: &ListStyleType, index: usize) -> String {
-    match list_style_type {
-        ListStyleType::Disc => "\u{2022} ".to_string(),
-        ListStyleType::Circle => "\u{25E6} ".to_string(),
-        ListStyleType::Square => "\u{25AA} ".to_string(),
-        ListStyleType::Decimal => format!("{}. ", index),
-        ListStyleType::DecimalLeadingZero => format!("{:02}. ", index),
-        ListStyleType::LowerAlpha => format!("{}. ", to_alpha_lower(index)),
-        ListStyleType::UpperAlpha => format!("{}. ", to_alpha_upper(index)),
-        ListStyleType::LowerRoman => format!("{}. ", to_roman_lower(index)),
-        ListStyleType::UpperRoman => format!("{}. ", to_roman_upper(index)),
-        ListStyleType::CjkDecimal => format!("{}、", to_cjk_decimal(index)),
-        ListStyleType::String(marker) => marker.clone(),
-        ListStyleType::CounterStyle(style) => format_custom_counter_marker(style, index as i32),
-        ListStyleType::Custom(_) => format!("{}. ", index),
-        ListStyleType::None => String::new(),
-    }
-}
-/// Geometry shared by Chromium's built-in filled list markers.
-///
-/// The marker's painted bounds, advance, and baseline position form one unit:
-/// using the textual glyph advance moves `disc` and `square` to different x
-/// positions even though Chromium places them in the same marker slot.
-#[derive(Debug, Clone, Copy)]
-struct GeometricBulletMetrics {
-    size: f32,
-    advance: f32,
-    center_above_baseline: f32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum GeometricBulletSlot {
-    Default,
-    StandaloneInside,
-}
-
-impl GeometricBulletMetrics {
-    fn from_font_size(font_size: f32, slot: GeometricBulletSlot) -> Self {
-        // Chromium quantizes a filled marker to whole CSS pixels. At 22 CSS px
-        // this yields a 7 CSS-px marker; at 30 CSS px it yields 9 CSS px.
-        let size = ((font_size / crate::fonts::PT_PER_CSS_PX) * 0.32).floor()
-            * crate::fonts::PT_PER_CSS_PX;
-        let advance = match slot {
-            // Measured from the locked Chromium oracle: a 20 CSS-px outside
-            // marker slot at a 22 CSS-px font.
-            GeometricBulletSlot::Default => font_size * (10.0 / 11.0),
-            // A standalone `display: list-item; list-style-position: inside`
-            // has no list padding to hang into, so Chromium gives its inline
-            // marker a 40 CSS-px slot at a 30 CSS-px font.
-            GeometricBulletSlot::StandaloneInside => font_size * (4.0 / 3.0),
-        };
-
-        Self {
-            size,
-            advance,
-            // The marker centre sits half a CSS pixel below its painted size
-            // above baseline in Chromium's PDF output.
-            center_above_baseline: size - crate::fonts::PT_PER_CSS_PX / 2.0,
-        }
-    }
-}
-
-/// Build a geometric `disc` or `square` marker as an atomic inline box.
-///
-/// Chromium paints these built-in markers as shapes, not font glyphs. Their
-/// slot is also shape-specific rather than derived from U+2022/U+25AA advances,
-/// so the returned box owns its complete marker geometry. Other marker types
-/// use the textual path.
-pub(crate) fn build_list_bullet_marker(
-    list_style_type: &ListStyleType,
-    font_size: f32,
-    color: crate::types::Color,
-    slot: GeometricBulletSlot,
-) -> Option<InlineBox> {
-    let metrics = GeometricBulletMetrics::from_font_size(font_size, slot);
-    let border_radius = match list_style_type {
-        ListStyleType::Square => 0.0,
-        // A filled disc is a circle: a square box with a radius of half its side.
-        ListStyleType::Disc => metrics.size / 2.0,
-        _ => return None,
-    };
-    Some(InlineBox {
-        width: metrics.size,
-        height: metrics.size,
-        margin_left: 0.0,
-        margin_right: metrics.advance - metrics.size,
-        background_color: Some(color),
-        border: LayoutBorder::default(),
-        border_image: None,
-        border_radii: CornerRadii::circular(border_radius),
-        padding: EdgeSizes::ZERO,
-        vertical_align: VerticalAlign::Baseline,
-        baseline_ascent: Some(metrics.center_above_baseline + metrics.size / 2.0),
-        lines: Vec::new(),
-        image: None,
-        rel_offset_x: 0.0,
-        rel_offset_y: 0.0,
-    })
-}
-
-pub(crate) fn to_alpha_lower(n: usize) -> String {
-    if n == 0 {
-        return "a".to_string();
-    }
-    let mut result = String::new();
-    let mut val = n;
-    while val > 0 {
-        val -= 1;
-        result.insert(0, (b'a' + (val % 26) as u8) as char);
-        val /= 26;
-    }
-    result
-}
-pub(crate) fn to_alpha_upper(n: usize) -> String {
-    to_alpha_lower(n).to_uppercase()
-}
-pub(crate) fn to_roman_lower(n: usize) -> String {
-    let vals = [
-        (1000, "m"),
-        (900, "cm"),
-        (500, "d"),
-        (400, "cd"),
-        (100, "c"),
-        (90, "xc"),
-        (50, "l"),
-        (40, "xl"),
-        (10, "x"),
-        (9, "ix"),
-        (5, "v"),
-        (4, "iv"),
-        (1, "i"),
-    ];
-    let mut result = String::new();
-    let mut remaining = n;
-    for &(value, numeral) in &vals {
-        while remaining >= value {
-            result.push_str(numeral);
-            remaining -= value;
-        }
-    }
-    if result.is_empty() {
-        "0".to_string()
-    } else {
-        result
-    }
-}
-pub(crate) fn to_roman_upper(n: usize) -> String {
-    to_roman_lower(n).to_uppercase()
-}
-
-fn to_cjk_decimal(n: usize) -> String {
-    const DIGITS: [&str; 10] = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
-    if n == 0 {
-        return DIGITS[0].to_string();
-    }
-    n.to_string()
-        .chars()
-        .filter_map(|ch| ch.to_digit(10).map(|d| DIGITS[d as usize]))
-        .collect()
-}
-
-/// Format a single counter value in the given list-style-type, WITHOUT any
-/// marker suffix (unlike `format_list_marker`). Used by `counter()`/`counters()`
-/// in the `content` property, where the CSS author supplies their own separators
-/// and suffixes. Geometric markers (disc/circle/square) and `none` have no
-/// numeric textual form, so they fall back to decimal — matching how browsers
-/// render `counter(x, disc)` as the raw number.
-pub(crate) fn format_counter_value(style: &ListStyleType, value: i32) -> String {
-    // Roman/alpha styles are only defined for positive integers; negative or
-    // zero values fall back to decimal (CSS counter-style fallback behavior).
-    if value <= 0 && !matches!(style, ListStyleType::CounterStyle(_)) {
-        return value.to_string();
-    }
-    let n = value as usize;
-    match style {
-        ListStyleType::DecimalLeadingZero => format!("{n:02}"),
-        ListStyleType::LowerAlpha => to_alpha_lower(n),
-        ListStyleType::UpperAlpha => to_alpha_upper(n),
-        ListStyleType::LowerRoman => to_roman_lower(n),
-        ListStyleType::UpperRoman => to_roman_upper(n),
-        ListStyleType::CjkDecimal => to_cjk_decimal(n),
-        ListStyleType::CounterStyle(custom) => format_custom_counter_text(custom, value),
-        // decimal, disc, circle, square, none → plain decimal text.
-        _ => value.to_string(),
-    }
-}
-
-fn format_custom_counter_marker(
-    style: &crate::style::computed::CounterStyle,
-    value: i32,
-) -> String {
-    format_custom_counter(style, value, true)
-}
-
-fn format_custom_counter_text(style: &crate::style::computed::CounterStyle, value: i32) -> String {
-    format_custom_counter(style, value, false)
-}
-
-fn format_custom_counter(
-    style: &crate::style::computed::CounterStyle,
-    value: i32,
-    include_affixes: bool,
-) -> String {
-    use crate::style::computed::CounterStyleSystem;
-
-    let negative = value < 0;
-    let abs_value = value.abs();
-    let mut representation = match style.system {
-        CounterStyleSystem::Cyclic if !style.symbols.is_empty() => {
-            let idx = if abs_value == 0 {
-                0
-            } else {
-                (abs_value as usize - 1) % style.symbols.len()
-            };
-            style.symbols[idx].clone()
-        }
-        CounterStyleSystem::Cyclic => abs_value.to_string(),
-        CounterStyleSystem::ExtendsDecimal => abs_value.to_string(),
-    };
-    if let Some((width, pad_symbol)) = &style.pad {
-        while representation.chars().count() < *width {
-            representation.insert_str(0, pad_symbol);
-        }
-    }
-    if negative {
-        representation = format!("{}{}{}", style.negative.0, representation, style.negative.1);
-    }
-    if include_affixes {
-        format!("{}{}{}", style.prefix, representation, style.suffix)
-    } else {
-        representation
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1938,7 +1703,7 @@ pub(crate) fn build_pseudo_block(
             &pseudo_style.list_style_type,
             used_font_size(pseudo_style, fonts),
             pseudo_style.color,
-            GeometricBulletSlot::Default,
+            Default::default(),
         ) {
             runs.push(TextRun {
                 font_size: used_font_size(pseudo_style, fonts),
@@ -2327,17 +2092,18 @@ fn build_pseudo_inline_box(
         height,
         margin_left: pseudo_style.margin.left.max(0.0),
         margin_right: pseudo_style.margin.right.max(0.0),
-        background_color: pseudo_style.background_color,
-        border,
-        border_image: pseudo_style.border_image.paint(),
-        border_radii: pseudo_style.resolve_corner_radii(width, height),
+        paint: InlineBoxPaint {
+            background_color: pseudo_style.background_color,
+            border,
+            border_image: pseudo_style.border_image.paint(),
+            border_radii: pseudo_style.resolve_corner_radii(width, height),
+            ..InlineBoxPaint::default()
+        },
         padding: pseudo_style.padding,
         vertical_align: pseudo_style.vertical_align,
         baseline_ascent: None,
         lines,
-        image: None,
-        rel_offset_x: 0.0,
-        rel_offset_y: 0.0,
+        ..InlineBox::default()
     }
 }
 
@@ -2368,17 +2134,16 @@ fn build_pseudo_image_box(pseudo_style: &ComputedStyle, url: &str) -> Option<Inl
         height,
         margin_left: pseudo_style.margin.left.max(0.0),
         margin_right: pseudo_style.margin.right.max(0.0),
-        background_color: None,
-        border: LayoutBorder::from_computed(&pseudo_style.border, pseudo_style.color),
-        border_image: pseudo_style.border_image.paint(),
-        border_radii: pseudo_style.resolve_corner_radii(width, height),
+        paint: InlineBoxPaint {
+            border: LayoutBorder::from_computed(&pseudo_style.border, pseudo_style.color),
+            border_image: pseudo_style.border_image.paint(),
+            border_radii: pseudo_style.resolve_corner_radii(width, height),
+            ..InlineBoxPaint::default()
+        },
         padding: EdgeSizes::ZERO,
         vertical_align: pseudo_style.vertical_align,
-        baseline_ascent: None,
-        lines: Vec::new(),
         image: Some(image),
-        rel_offset_x: 0.0,
-        rel_offset_y: 0.0,
+        ..InlineBox::default()
     })
 }
 
@@ -2404,19 +2169,11 @@ pub(crate) fn build_list_image_marker(value: &str, gap: f32) -> Option<InlineBox
     Some(InlineBox {
         width,
         height,
-        margin_left: 0.0,
         margin_right: gap,
-        background_color: None,
-        border: LayoutBorder::default(),
-        border_image: None,
-        border_radii: CornerRadii::ZERO,
         padding: EdgeSizes::ZERO,
         vertical_align: VerticalAlign::Baseline,
-        baseline_ascent: None,
-        lines: Vec::new(),
         image: Some(image),
-        rel_offset_x: 0.0,
-        rel_offset_y: 0.0,
+        ..InlineBox::default()
     })
 }
 
@@ -2714,8 +2471,8 @@ pub(crate) fn patch_absolute_descendants_containing_block(
 mod generated_content_tests {
     use super::*;
     use crate::layout::engine::{SyntheticFontWeight, TextRun};
-    use crate::style::computed::ContentItem;
-    use crate::style::computed::FontStack;
+    use crate::layout::list_markers::BuiltInBulletSlot;
+    use crate::style::computed::{ContentItem, FontStack, ListStyleType};
     use std::collections::HashMap;
 
     fn cs() -> CounterState {
@@ -2728,14 +2485,14 @@ mod generated_content_tests {
             &ListStyleType::Disc,
             16.5,
             crate::types::Color::BLACK,
-            GeometricBulletSlot::Default,
+            Default::default(),
         )
         .expect("disc is a geometric marker");
         let square = build_list_bullet_marker(
             &ListStyleType::Square,
             16.5,
             crate::types::Color::BLACK,
-            GeometricBulletSlot::Default,
+            Default::default(),
         )
         .expect("square is a geometric marker");
 
@@ -2752,7 +2509,7 @@ mod generated_content_tests {
             &ListStyleType::Disc,
             22.5,
             crate::types::Color::BLACK,
-            GeometricBulletSlot::StandaloneInside,
+            BuiltInBulletSlot::StandaloneInside,
         )
         .expect("disc is a geometric marker");
 

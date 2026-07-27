@@ -498,10 +498,13 @@ fn transform_run_colors(run: &mut TextRun, transform: &impl FilterColorTransform
         shadow.color = transform.transform(shadow.color);
     }
     if let Some(inline_box) = &mut run.inline_box {
-        if let Some(color) = inline_box.background_color {
-            inline_box.background_color = Some(transform.transform(color));
+        if let Some(color) = inline_box.paint.background_color {
+            inline_box.paint.background_color = Some(transform.transform(color));
         }
-        transform_border_colors(&mut inline_box.border, transform);
+        transform_border_colors(&mut inline_box.paint.border, transform);
+        if let Some(stroke) = &mut inline_box.paint.centered_stroke {
+            stroke.transform_color(|color| transform.transform(color));
+        }
         for line in &mut inline_box.lines {
             for run in &mut line.runs {
                 transform_run_colors(run, transform);
