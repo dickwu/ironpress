@@ -149,6 +149,7 @@ pub(super) fn render_inline_box(
         PdfRect::new(box_x, box_bottom, inline.width, h),
         &inline.border,
         inline.padding,
+        inline.border_image.as_ref(),
     );
     let page_content = pdf_writer.page_content_transform;
     let box_geometry = geometry.for_paint(page_content);

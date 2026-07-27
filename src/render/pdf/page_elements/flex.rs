@@ -51,6 +51,7 @@ pub(in crate::render::pdf) fn render_flex_row(
         PdfRect::new(flex_left, row_y - full_height, container_width, full_height),
         border,
         *padding,
+        element.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let flex_box_geometry = flex_geometry.for_paint(page_content);
@@ -287,6 +288,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 ),
                 &cell.border,
                 cell.padding,
+                cell.paint.border_image.as_ref(),
             );
             let cell_box_geometry = cell_geometry.for_paint(page_content);
             let cell_paint_geometry = cell_box_geometry.painting();

@@ -83,6 +83,7 @@ impl NestedRowsRenderer<'_, '_> {
                     PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
                     &cell.layout.box_model.border,
                     cell.layout.box_model.padding(),
+                    cell.layout.paint.border_image.as_ref(),
                 );
                 let cell_box_geometry = cell_geometry.for_paint(pdf_writer.page_content_transform);
                 let cell_paint_geometry = cell_box_geometry.painting();

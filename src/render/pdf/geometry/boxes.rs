@@ -1,6 +1,7 @@
 use super::super::transforms::PageContentTransform;
 use super::{PdfPoint, PdfRect, PdfVector, RoundedRect};
 use crate::layout::elements::{BoxFragmentation, BoxTransform};
+use crate::render::background::BackgroundBleed;
 use crate::style::computed::{
     BackgroundClip, BackgroundOrigin, ShapeBox, TransformBox, TransformOrigin,
 };
@@ -16,6 +17,7 @@ pub(in crate::render::pdf) struct LayoutBoxGeometry {
     pub(in crate::render::pdf) border_box: PdfRect,
     pub(in crate::render::pdf) border: EdgeSizes,
     pub(in crate::render::pdf) padding: EdgeSizes,
+    background_bleed: BackgroundBleed,
 }
 
 /// One CSS box resolved onto the absolute print-paint grid.
@@ -28,6 +30,7 @@ pub(in crate::render::pdf) struct PaintBoxGeometry {
     pub(in crate::render::pdf) border_box: PdfRect,
     pub(in crate::render::pdf) border: EdgeSizes,
     pub(in crate::render::pdf) padding: EdgeSizes,
+    background_bleed: BackgroundBleed,
 }
 
 /// The paired layout and paint views of one CSS box at a page boundary.
@@ -63,6 +66,7 @@ impl BoxPaintGeometry {
                 edges.border(),
                 edges.padding(),
             )
+            .with_background_bleed(self.layout.background_bleed)
         });
         FragmentPaintGeometry {
             layout_reassembled,
@@ -172,6 +176,7 @@ impl FragmentPaintGeometry {
             self.reassembled.border,
             self.reassembled.padding,
         )
+        .with_background_bleed(self.reassembled.background_bleed)
     }
 
     pub(in crate::render::pdf) fn background(
@@ -197,6 +202,7 @@ impl LayoutBoxGeometry {
             border_box,
             border,
             padding,
+            background_bleed: BackgroundBleed::NONE,
         }
     }
 
@@ -204,8 +210,15 @@ impl LayoutBoxGeometry {
         border_box: PdfRect,
         border: &crate::layout::engine::LayoutBorder,
         padding: EdgeSizes,
+        border_image: Option<&crate::style::computed::BorderImagePaint>,
     ) -> Self {
         Self::new(border_box, border.widths(), padding)
+            .with_background_bleed(BackgroundBleed::from_decoration(border, border_image))
+    }
+
+    const fn with_background_bleed(mut self, background_bleed: BackgroundBleed) -> Self {
+        self.background_bleed = background_bleed;
+        self
     }
 
     fn snapped(self, page_content: PageContentTransform) -> PaintBoxGeometry {
@@ -214,6 +227,7 @@ impl LayoutBoxGeometry {
             self.border,
             self.padding,
         )
+        .with_background_bleed(self.background_bleed)
     }
 
     pub(in crate::render::pdf) fn for_paint(
@@ -254,7 +268,13 @@ impl PaintBoxGeometry {
             border_box,
             border,
             padding,
+            background_bleed: BackgroundBleed::NONE,
         }
+    }
+
+    const fn with_background_bleed(mut self, background_bleed: BackgroundBleed) -> Self {
+        self.background_bleed = background_bleed;
+        self
     }
 
     pub(in crate::render::pdf) fn padding_box(self) -> PdfRect {
@@ -305,7 +325,8 @@ impl PaintBoxGeometry {
         radii: CornerRadii,
     ) -> RoundedRect {
         let inset = match clip {
-            BackgroundClip::Border | BackgroundClip::Text => EdgeSizes::ZERO,
+            BackgroundClip::Border => self.background_bleed.clip_insets(clip, radii),
+            BackgroundClip::Text => EdgeSizes::ZERO,
             BackgroundClip::Padding => self.border,
             BackgroundClip::Content => self.border + self.padding,
         };
@@ -329,13 +350,15 @@ impl PaintBoxGeometry {
                 edges.border(),
                 edges.padding(),
             )
+            .with_background_bleed(self.background_bleed)
         });
         FragmentPaintGeometry {
             layout_reassembled: LayoutBoxGeometry::new(
                 reassembled.border_box,
                 reassembled.border,
                 reassembled.padding,
-            ),
+            )
+            .with_background_bleed(reassembled.background_bleed),
             painting: self,
             reassembled,
         }

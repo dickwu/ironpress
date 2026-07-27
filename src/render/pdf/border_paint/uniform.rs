@@ -208,15 +208,12 @@ fn paint_ring(content: &mut String, ring: BorderRingGeometry) {
 fn paint_double_border(content: &mut String, border_box: RoundedRect, width: f32, color: PdfRgb) {
     let metrics = DoubleBorderMetrics::new(width);
     let rule = metrics.stripe_width();
-    if border_box.radii.is_zero() {
+    if border_box.radii.is_circular() {
         content.push_str(&color.stroke_operator());
         content.push_str("0 J\n0 j\n");
         content.push_str(&format!("{rule} w\n"));
-        for inset in [
-            metrics.outer_centerline_inset(),
-            metrics.inner_centerline_inset(),
-        ] {
-            content.push_str(&border_box.rect.inset(EdgeSizes::uniform(inset)).rect_path());
+        for inset in metrics.centerline_insets() {
+            content.push_str(&border_box.inset(EdgeSizes::uniform(inset)).path_or_rect());
             content.push_str("S\n");
         }
         return;

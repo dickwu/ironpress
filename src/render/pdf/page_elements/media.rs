@@ -165,8 +165,12 @@ pub(in crate::render::pdf) fn paint_image_box(
     ctx: &mut PageRenderContext<'_>,
 ) {
     let image = &element.source;
-    let geometry =
-        LayoutBoxGeometry::from_layout(image_box, &element.geometry.border, EdgeSizes::ZERO);
+    let geometry = LayoutBoxGeometry::from_layout(
+        image_box,
+        &element.geometry.border,
+        EdgeSizes::ZERO,
+        element.paint.border_image.as_ref(),
+    );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let box_geometry = geometry.for_paint(page_content);
     let paint_geometry = box_geometry.painting();
@@ -301,8 +305,12 @@ pub(in crate::render::pdf) fn paint_svg_box(
     svg_box: PdfRect,
     ctx: &mut PageRenderContext<'_>,
 ) {
-    let geometry =
-        LayoutBoxGeometry::from_layout(svg_box, &element.geometry.border, EdgeSizes::ZERO);
+    let geometry = LayoutBoxGeometry::from_layout(
+        svg_box,
+        &element.geometry.border,
+        EdgeSizes::ZERO,
+        element.paint.border_image.as_ref(),
+    );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let box_geometry = geometry.for_paint(page_content);
     let paint_geometry = box_geometry.painting();

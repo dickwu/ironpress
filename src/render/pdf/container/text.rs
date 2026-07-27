@@ -86,6 +86,7 @@ pub(super) fn render_text_child(
             PdfRect::from_top(abs_x, abs_y, abs_w, abs_h),
             border,
             *padding,
+            child.paint.border_image.as_ref(),
         );
         let page_content = ctx.text.pdf_writer.page_content_transform;
         let tb_box_geometry = tb_geometry.for_paint(page_content);
@@ -314,6 +315,7 @@ pub(super) fn render_text_child(
         PdfRect::from_top(render_x, render_y, render_w, vertical_column_paint_h),
         border,
         *padding,
+        child.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let tb_box_geometry = tb_geometry.for_paint(page_content);

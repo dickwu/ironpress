@@ -2,11 +2,12 @@
 
 use super::canvas::{RasterCanvas, SurfaceRect};
 use crate::layout::elements::{BackgroundPaint, BoxModel};
-use crate::render::background::BackgroundTilePattern;
+use crate::render::background::{BackgroundBleed, BackgroundTilePattern};
 use crate::render::borders::CssRoundedRect;
 use crate::render::gradient_sampling::LinearGradientSampler;
 use crate::style::computed::{
-    BackgroundAttachment, BackgroundClip, BackgroundOrigin, BlendMode, LinearGradient,
+    BackgroundAttachment, BackgroundClip, BackgroundOrigin, BlendMode, BorderImagePaint,
+    LinearGradient,
 };
 use crate::types::{Color, CornerRadii, Point};
 
@@ -31,6 +32,7 @@ impl LinearGradientLayer {
         model: &BoxModel,
         border_box: SurfaceRect,
         radii: CornerRadii,
+        border_image: Option<&BorderImagePaint>,
     ) -> Option<Self> {
         let layer = gradient
             .layer_box
@@ -48,6 +50,7 @@ impl LinearGradientLayer {
             model,
             layer.clip.unwrap_or(BackgroundClip::Border),
             radii,
+            border_image,
         )?;
         let tiles = BackgroundTilePattern::resolve(
             layer.size.unwrap_or_default(),
@@ -88,8 +91,10 @@ impl FilterBackground {
         model: &BoxModel,
         border_box: SurfaceRect,
         radii: CornerRadii,
+        border_image: Option<&BorderImagePaint>,
     ) -> Option<Self> {
-        if background.blend_mode != BlendMode::Normal
+        if border_image.is_some()
+            || background.blend_mode != BlendMode::Normal
             || background.layers.radial_gradient.is_some()
             || background.layers.conic_gradient.is_some()
             || background.layers.svg.is_some()
@@ -100,13 +105,24 @@ impl FilterBackground {
         let color = match background.color {
             Some(color) => Some(BackgroundColor {
                 color,
-                clip: background_clip_box(border_box, model, background.layers.clip, radii)?,
+                clip: background_clip_box(
+                    border_box,
+                    model,
+                    background.layers.clip,
+                    radii,
+                    border_image,
+                )?,
             }),
             None => None,
         };
         let linear_gradient = match background.layers.gradient.as_ref() {
             Some(gradient) => Some(LinearGradientLayer::resolve(
-                gradient, background, model, border_box, radii,
+                gradient,
+                background,
+                model,
+                border_box,
+                radii,
+                border_image,
             )?),
             None => None,
         };
@@ -147,12 +163,42 @@ fn background_clip_box(
     model: &BoxModel,
     clip: BackgroundClip,
     radii: CornerRadii,
+    border_image: Option<&BorderImagePaint>,
 ) -> Option<CssRoundedRect> {
     let border_shape = CssRoundedRect::new(border_box, radii);
+    let bleed =
+        BackgroundBleed::from_decoration(&model.border, border_image).clip_insets(clip, radii);
     match clip {
-        BackgroundClip::Border => Some(border_shape),
+        BackgroundClip::Border => Some(border_shape.inset(bleed)),
         BackgroundClip::Padding => Some(border_shape.inset(model.border.widths())),
         BackgroundClip::Content => Some(border_shape.inset(model.border.widths() + model.padding)),
         BackgroundClip::Text => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::engine::LayoutBorderSide;
+    use crate::style::computed::BorderStyle;
+    use crate::types::{EdgeSizes, PhysicalEdges, Size};
+
+    #[test]
+    fn filter_background_uses_shared_opaque_border_bleed_geometry() {
+        let model = BoxModel {
+            border: PhysicalEdges::uniform(LayoutBorderSide {
+                width: 6.0,
+                color: Color::BLACK,
+                style: BorderStyle::Double,
+            }),
+            ..Default::default()
+        };
+        let border_box = SurfaceRect::new(Point::ORIGIN, Size::new(100.0, 80.0));
+        let radii = CornerRadii::circular(12.0);
+
+        assert_eq!(
+            background_clip_box(border_box, &model, BackgroundClip::Border, radii, None,),
+            Some(CssRoundedRect::new(border_box, radii).inset(EdgeSizes::uniform(1.0)))
+        );
     }
 }

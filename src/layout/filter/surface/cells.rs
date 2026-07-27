@@ -128,6 +128,7 @@ impl SourcePainter<'_> {
             &model,
             rect,
             cell.paint.border_radii,
+            cell.paint.border_image.as_ref(),
         )?;
         self.canvas
             .paint_outset_shadows(rect, &cell.paint.shadows, self.filter_dpi)?;
@@ -209,6 +210,7 @@ impl SourcePainter<'_> {
             &model,
             rect,
             cell.paint.border_radii,
+            cell.paint.border_image.as_ref(),
         )?;
         self.canvas
             .paint_outset_shadows(rect, &cell.paint.shadows, self.filter_dpi)?;

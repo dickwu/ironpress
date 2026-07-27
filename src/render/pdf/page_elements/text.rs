@@ -123,6 +123,7 @@ pub(in crate::render::pdf) fn render_text_block(
         PdfRect::new(block_x, block_bottom, render_width, border_box_h),
         border,
         *padding,
+        element.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let tb_box_geometry = tb_geometry.for_paint(page_content);

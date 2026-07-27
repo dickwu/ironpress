@@ -81,6 +81,7 @@ pub(in crate::render::pdf) fn render_container(
         PdfRect::new(container_x, container_y_top - total_h, container_w, total_h),
         border,
         *c_padding,
+        element.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let c_box_geometry = c_geometry.for_paint(page_content);

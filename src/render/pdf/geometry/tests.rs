@@ -1,9 +1,10 @@
 use super::*;
 use crate::layout::elements::BoxTransform;
+use crate::layout::engine::LayoutBorderSide;
 use crate::style::computed::{
-    BackgroundClip, BackgroundOrigin, ShapeBox, TransformBox, TransformOrigin,
+    BackgroundClip, BackgroundOrigin, BorderStyle, ShapeBox, TransformBox, TransformOrigin,
 };
-use crate::types::{CornerRadii, CornerRadius, EdgeSizes};
+use crate::types::{Color, CornerRadii, CornerRadius, EdgeSizes, PhysicalEdges};
 use crate::util::{RasterDimensions, RasterTile};
 
 #[test]
@@ -223,5 +224,31 @@ fn border_box_background_uses_the_outer_border_shape() {
     assert_eq!(
         geometry.background_clip_box(BackgroundClip::Border, radii),
         geometry.rounded_border_box(radii)
+    );
+}
+
+#[test]
+fn semantic_layout_border_carries_bleed_avoidance_to_paint_geometry() {
+    let border = PhysicalEdges::uniform(LayoutBorderSide {
+        width: 6.0,
+        color: Color::BLACK,
+        style: BorderStyle::Double,
+    });
+    let layout = LayoutBoxGeometry::from_layout(
+        PdfRect::new(10.0, 20.0, 100.0, 80.0),
+        &border,
+        EdgeSizes::ZERO,
+        None,
+    );
+    let painting = layout
+        .for_paint(super::super::transforms::PageContentTransform::default())
+        .painting();
+    let radii = CornerRadii::circular(12.0);
+
+    assert_eq!(
+        painting.background_clip_box(BackgroundClip::Border, radii),
+        painting
+            .rounded_border_box(radii)
+            .inset(EdgeSizes::uniform(1.0))
     );
 }

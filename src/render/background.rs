@@ -3,8 +3,10 @@ use crate::render::svg_geometry::SvgViewportBox;
 use crate::style::computed::{BackgroundPosition, BackgroundRepeat, BackgroundSize};
 use crate::types::CornerRadii;
 
+mod bleed;
 mod tiles;
 
+pub(crate) use bleed::BackgroundBleed;
 pub(crate) use tiles::{BackgroundRepeatModes, BackgroundTilePattern};
 
 #[derive(Debug, Clone, Copy, Default)]

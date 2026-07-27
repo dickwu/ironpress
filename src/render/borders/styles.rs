@@ -43,6 +43,10 @@ impl DoubleBorderMetrics {
         self.inner_inset() + self.stripe * 0.5
     }
 
+    pub(crate) fn centerline_insets(self) -> [f32; 2] {
+        [self.outer_centerline_inset(), self.inner_centerline_inset()]
+    }
+
     pub(crate) fn paints(self, offset: f32) -> bool {
         offset < self.stripe || offset >= self.inner_inset()
     }

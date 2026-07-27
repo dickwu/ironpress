@@ -65,6 +65,7 @@ pub(super) fn render_flex_child(
         PdfRect::from_top(x, paint_y, flex_w, row_h),
         border,
         *flex_padding,
+        child.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let flex_box_geometry = flex_geometry.for_paint(page_content);
@@ -287,6 +288,7 @@ pub(super) fn render_flex_child(
                 PdfRect::new(cell_x, cell_bottom, cell_w, cell_h),
                 &cell.border,
                 cell.padding,
+                cell.paint.border_image.as_ref(),
             );
             let cell_box_geometry = cell_geometry.for_paint(page_content);
             let cell_paint_geometry = cell_box_geometry.painting();

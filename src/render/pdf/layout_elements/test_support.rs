@@ -28,6 +28,7 @@ pub(in crate::render::pdf) fn render_nested_text_block(
         ),
         &block.border,
         block.padding,
+        None,
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let box_geometry = geometry.for_paint(page_content);
@@ -204,6 +205,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                         PdfRect::new(cell_x, row_y - cell_height, cell_w, cell_height),
                         &cell.layout.box_model.border,
                         cell.layout.box_model.padding(),
+                        cell.layout.paint.border_image.as_ref(),
                     );
                     let page_content = ctx.text.pdf_writer.page_content_transform;
                     let cell_box_geometry = cell_geometry.for_paint(page_content);
@@ -350,6 +352,7 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                 ),
                 border,
                 *padding,
+                element.paint.border_image.as_ref(),
             );
             // Paint the container's own background + border box (no text).
             // CSS2 §11.2: `visibility: hidden` suppresses only this box's own

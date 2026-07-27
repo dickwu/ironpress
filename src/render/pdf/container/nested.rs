@@ -146,6 +146,7 @@ pub(super) fn render_nested_container(
         PdfRect::from_top(nk_x, nk_top_y, nk_w, nk_total_h),
         border,
         *padding,
+        child.paint.border_image.as_ref(),
     );
     let page_content = ctx.text.pdf_writer.page_content_transform;
     let nk_box_geometry = nk_geometry.for_paint(page_content);

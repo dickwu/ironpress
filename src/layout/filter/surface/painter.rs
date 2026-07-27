@@ -211,8 +211,13 @@ impl<'a> SourcePainter<'a> {
             return None;
         }
         let rect = self.space.border_box;
-        let background =
-            FilterBackground::resolve(&paint.background, model, rect, paint.border_radii)?;
+        let background = FilterBackground::resolve(
+            &paint.background,
+            model,
+            rect,
+            paint.border_radii,
+            paint.border_image.as_ref(),
+        )?;
         self.canvas
             .paint_outset_shadows(rect, &paint.shadows, self.filter_dpi)?;
         background.paint(&mut self.canvas);
