@@ -127,7 +127,7 @@ fn visible_color_difference(
 /// energy nearly cancels. This evaluates the original, same-coordinate pixels;
 /// it neither shifts nor filters either raster.
 pub(crate) fn is_balanced_edge_coverage(tally: &ClassTally) -> bool {
-    tally.interior_color_pct == 0.0
+    !super::visibility::has_visible_interior_recolor(tally)
         && tally.color_coverage_bias <= VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS
         && tally.color_components_are_balanced
         && tally.color_errors_have_css_anchors
@@ -232,6 +232,8 @@ mod tests {
         let balanced = ClassTally {
             color_pct: 3.0,
             color_de: VISUAL_COLOR_JND + 1.0,
+            interior_color_de: VISUAL_COLOR_JND + 1.0,
+            interior_color_pct: VISUAL_INTERIOR_COLOR_PCT,
             color_coverage_bias: VISUAL_BALANCED_EDGE_COLOR_MAX_BIAS,
             color_components_are_balanced: true,
             color_errors_have_css_anchors: true,
@@ -250,6 +252,12 @@ mod tests {
             ..balanced
         };
         assert!(!is_balanced_edge_coverage(&unbalanced_component));
+
+        let visible_interior = ClassTally {
+            interior_color_pct: VISUAL_INTERIOR_COLOR_PCT + 0.001,
+            ..balanced
+        };
+        assert!(!is_balanced_edge_coverage(&visible_interior));
     }
 
     #[test]
