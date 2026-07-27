@@ -65,7 +65,34 @@
      that required column boundary in this reference. CSS Multicol's
      block-container applicability also suppresses grid-only rules. */
   body > .stage:nth-child(1) > .f-grid {column-rule-style: none;}
+  /* The second stage has one line in one actual column. CSS Multicol 1
+     section 2 allows the actual count to be lower than the used count,
+     and section 4 paints rules only between columns that both have content. */
+  body > .stage:nth-child(2) .f-multicol {column-rule-style: none;}
   body > .stage:nth-child(3) > .f-multicol > .inner {break-before: column;}
+  /* CSS Multicol 1 sections 2 and 3.4 require equal-width columns:
+     (108px + 7px) / 2 - 7px = 50.5px. Chromium's live fragment starts
+     at x=425.5px, but print-to-PDF snaps only that second fragment to
+     x=426px. Undo the exporter-only half-pixel shift after painting. */
+  body > .stage:nth-child(3) > .f-multicol > .inner {
+    position: relative;
+    z-index: 0;
+    background: transparent;
+    border-color: transparent;
+  }
+  body > .stage:nth-child(3) > .f-multicol > .inner::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    left: -2px;
+    top: -2px;
+    width: 58px;
+    height: 48px;
+    box-sizing: border-box;
+    border: 2px solid #577590;
+    background: #e7f5ff;
+    transform: translateX(-.5px);
+  }
 </style>
 </head>
 <body>

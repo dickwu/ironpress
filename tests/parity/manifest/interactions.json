@@ -4885,7 +4885,7 @@
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
     "subfeature": "same-element-and-bidirectional-nesting",
-    "description": "Cartesian family interaction for grid and multicol: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
+    "description": "Cartesian family interaction for grid and multicol: both representatives compose on one element and in both outer/inner orders. The standards-derived reference suppresses Chromium's rule beside an empty actual column, forces the CSS Multicol boundary Chromium misses, and corrects its print-only half-pixel second-fragment decoration snap while retaining Chromium's live text geometry.",
     "file": "cases/interactions/interactions-cartesian-grid-x-multicol.html",
     "interaction_of": [
       "grid",

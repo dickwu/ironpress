@@ -11358,15 +11358,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-grid-x-multicol.html",
       "html_sha256": "da9be7af66e4cfba81125eccc0c7b9eb13d1b0bee76d46672eef4842bd268f7f",
-      "manifest_sha256": "dd25480fff5aefb18209ed25881a3d2f05b92950f7a758b565480724d44e6150",
+      "manifest_sha256": "00223d8b8f205cf67eb33610dfd51bb6642c6d6141d8a7f8f928b412b6d3619f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-grid-x-multicol.pdf",
-        "sha256": "dd3ef5c3d7e5a36d0a3f35ccb7b77c40fc85c1a34f6908eaa857f67eb5549a32"
+        "sha256": "4d5fb897f8da0a877e5d02e35a4160e1f03c267575e5c5dd4ff462d022c8de48"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
       "reference_file": "references/interactions/interactions-cartesian-grid-x-multicol.html",
-      "reference_html_sha256": "28a5d75c50ee4fae1b270f8a234f123715892bd6193a9087423a7d80a46fad53"
+      "reference_html_sha256": "16e8cd5b7277a2586886e731b30f9d7361ecf7a4374c565e1265f5b005cb6c43"
     },
     "interactions-cartesian-grid-x-overflow-clipping": {
       "category": "interactions",
