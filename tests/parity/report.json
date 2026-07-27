@@ -1,20 +1,20 @@
 {
   "schema_version": 12,
-  "invocation_id": "b2709f9b3d7c9a7bf9fcfe39afc7e955",
+  "invocation_id": "2374e901708293400b8500d8860040b4",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3607151-1785180710057228107-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3701261-1785185678617513857-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 99.63,
-    "pass": 1608,
-    "fail": 6,
+    "score_pct": 100.0,
+    "pass": 1614,
+    "fail": 0,
     "reference_disputed": 21,
     "total": 1635
   },
@@ -135302,10 +135302,10 @@
     },
     {
       "category": "interactions",
-      "score_pct": 98.21,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 329,
-        "fail": 6,
+        "pass": 335,
+        "fail": 0,
         "reference_disputed": 2
       },
       "features": [
@@ -142857,10 +142857,10 @@
         },
         {
           "feature": "supported-family-cartesian-product",
-          "score_pct": 97.99,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 292,
-            "fail": 6,
+            "pass": 298,
+            "fail": 0,
             "reference_disputed": 2
           },
           "fixtures": [
@@ -197520,10 +197520,10 @@
                 "multicol"
               ],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.04992,
-              "semantic_diff_pct": 0.049624615384615385,
-              "description": "Cartesian family interaction for clip-mask and multicol: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
+              "status": "PASS",
+              "diff_pct": 0.00019692307692307693,
+              "semantic_diff_pct": 0.0,
+              "description": "Cartesian family interaction for clip-mask and multicol: both representatives compose on one element and in both outer/inner orders. The standards-derived reference corrects Chromium's print-only half-pixel clip-path shift on the second fractional-width column.",
               "note": "",
               "kind": "interaction",
               "depends_on": [
@@ -197553,847 +197553,47 @@
                   {
                     "width": 1625,
                     "height": 625,
-                    "rgba_sha256": "224e880e3369387926c3ab2dd5df78b854bb61e1a63fe967ecd93bfd6f0ed7eb",
+                    "rgba_sha256": "01144d357971b929645da0d69a5335c24648b5ce6f66cdefbdc313ab43340ef0",
                     "painted_pixels": 748544
                   }
                 ]
               },
               "diagnosis": {
-                "primary_class": "ColorValue",
-                "secondary": [
-                  "AntialiasCoverage"
-                ],
-                "headline": "fill recolour ΔRGB(+19,+17,+14) (ΔE 3.8)",
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "antialiasing coverage residue on a shared outline",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
                   "modal_drgba": [
-                    19,
-                    17,
-                    14,
+                    1,
+                    1,
+                    0,
                     0
                   ],
-                  "delta_e": 3.799555396509996,
+                  "delta_e": 0.5010267311620372,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 44,
+                "region_count": 2,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 44,
-                    "total_pixels": 507,
-                    "total_area_pct": 0.06549169146825395,
+                    "region_count": 2,
+                    "total_pixels": 2,
+                    "total_area_pct": 0.0002583498677248677,
                     "union_bbox_css": [
                       192.0,
-                      42.88,
-                      467.52,
+                      119.68,
+                      218.24,
                       122.24
                     ],
-                    "largest_region_pixels": 210,
-                    "largest_region_area_pct": 0.027126736111111112,
-                    "max_delta_e": 3.898612760685528
+                    "largest_region_pixels": 1,
+                    "largest_region_area_pct": 0.00012917493386243386,
+                    "max_delta_e": 0.5455119196947332
                   }
                 ],
                 "region_examples": [
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      409.92,
-                      50.88,
-                      411.52,
-                      85.12
-                    ],
-                    "area_pct": 0.027126736111111112,
-                    "modal_drgba": [
-                      94,
-                      84,
-                      73,
-                      0
-                    ],
-                    "delta_e": 3.898612760685528,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+94,+84,+73) (ΔE 3.9)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      465.92,
-                      55.68,
-                      466.88,
-                      72.96
-                    ],
-                    "area_pct": 0.012917493386243387,
-                    "modal_drgba": [
-                      -93,
-                      -82,
-                      -71,
-                      0
-                    ],
-                    "delta_e": 3.898612760685528,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-93,-82,-71) (ΔE 3.9)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      466.88,
-                      51.52,
-                      467.2,
-                      56.96
-                    ],
-                    "area_pct": 0.002712673611111111,
-                    "modal_drgba": [
-                      1,
-                      1,
-                      0,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+1,+1,+0) (ΔE 0)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      467.2,
-                      47.68,
-                      467.52,
-                      52.8
-                    ],
-                    "area_pct": 0.0025834986772486773,
-                    "modal_drgba": [
-                      5,
-                      4,
-                      3,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+5,+4,+3) (ΔE 0)"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      412.16,
-                      42.88,
-                      413.44,
-                      44.8
-                    ],
-                    "area_pct": 0.0023251488095238095,
-                    "modal_drgba": [
-                      94,
-                      84,
-                      73,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      464.0,
-                      88.96,
-                      464.64,
-                      90.56
-                    ],
-                    "area_pct": 0.001808449074074074,
-                    "modal_drgba": [
-                      -94,
-                      -84,
-                      -73,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      444.48,
-                      88.96,
-                      447.36,
-                      88.96
-                    ],
-                    "area_pct": 0.0012917493386243387,
-                    "modal_drgba": [
-                      19,
-                      17,
-                      14,
-                      0
-                    ],
-                    "delta_e": 1.3686713673030002,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+19,+17,+14) (ΔE 1.4)"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      447.68,
-                      89.28,
-                      450.24,
-                      89.28
-                    ],
-                    "area_pct": 0.0011625744047619048,
-                    "modal_drgba": [
-                      19,
-                      17,
-                      14,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      453.76,
-                      89.92,
-                      456.32,
-                      89.92
-                    ],
-                    "area_pct": 0.0011625744047619048,
-                    "modal_drgba": [
-                      23,
-                      21,
-                      19,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      456.64,
-                      90.24,
-                      459.2,
-                      90.24
-                    ],
-                    "area_pct": 0.0011625744047619048,
-                    "modal_drgba": [
-                      25,
-                      21,
-                      18,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      459.84,
-                      90.56,
-                      462.4,
-                      90.56
-                    ],
-                    "area_pct": 0.0011625744047619048,
-                    "modal_drgba": [
-                      23,
-                      21,
-                      19,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      451.52,
-                      89.6,
-                      453.44,
-                      89.6
-                    ],
-                    "area_pct": 0.000904224537037037,
-                    "modal_drgba": [
-                      31,
-                      27,
-                      24,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      415.04,
-                      42.88,
-                      415.68,
-                      42.88
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -7,
-                      -6,
-                      -5,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      418.56,
-                      43.2,
-                      419.2,
-                      43.2
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -17,
-                      -16,
-                      -14,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      420.8,
-                      43.52,
-                      421.44,
-                      43.52
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -13,
-                      -12,
-                      -10,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      426.56,
-                      43.84,
-                      427.2,
-                      43.84
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -9,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      432.32,
-                      44.16,
-                      432.96,
-                      44.16
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -9,
-                      -8,
-                      -7,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      434.56,
-                      44.48,
-                      435.2,
-                      44.48
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -25,
-                      -21,
-                      -18,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      438.08,
-                      44.48,
-                      438.72,
-                      44.48
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -9,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      440.32,
-                      44.8,
-                      440.96,
-                      44.8
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -9,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      466.88,
-                      46.72,
-                      467.52,
-                      46.72
-                    ],
-                    "area_pct": 0.00038752480158730157,
-                    "modal_drgba": [
-                      -20,
-                      -18,
-                      -16,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      414.08,
-                      42.88,
-                      414.4,
-                      42.88
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -23,
-                      -21,
-                      -19,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      416.32,
-                      43.2,
-                      416.64,
-                      43.2
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -25,
-                      -23,
-                      -20,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      417.6,
-                      43.2,
-                      417.92,
-                      43.2
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -21,
-                      -18,
-                      -15,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      419.84,
-                      43.2,
-                      420.16,
-                      43.2
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -10,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      422.08,
-                      43.52,
-                      422.4,
-                      43.52
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -33,
-                      -29,
-                      -25,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      423.36,
-                      43.52,
-                      423.68,
-                      43.52
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -15,
-                      -13,
-                      -12,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      424.32,
-                      43.52,
-                      424.64,
-                      43.52
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -9,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      425.6,
-                      43.84,
-                      425.92,
-                      43.84
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -37,
-                      -32,
-                      -28,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      427.84,
-                      43.84,
-                      428.16,
-                      43.84
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -23,
-                      -21,
-                      -19,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      429.12,
-                      43.84,
-                      429.44,
-                      43.84
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -7,
-                      -6,
-                      -5,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      430.08,
-                      44.16,
-                      430.4,
-                      44.16
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -25,
-                      -23,
-                      -20,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      431.36,
-                      44.16,
-                      431.68,
-                      44.16
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -31,
-                      -27,
-                      -24,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      433.6,
-                      44.16,
-                      433.92,
-                      44.16
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -12,
-                      -11,
-                      -10,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      435.84,
-                      44.48,
-                      436.16,
-                      44.48
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -22,
-                      -20,
-                      -18,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      437.12,
-                      44.48,
-                      437.44,
-                      44.48
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -15,
-                      -13,
-                      -12,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      439.36,
-                      44.8,
-                      439.68,
-                      44.8
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -37,
-                      -32,
-                      -28,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      441.6,
-                      44.8,
-                      441.92,
-                      44.8
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -25,
-                      -23,
-                      -20,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      442.88,
-                      44.8,
-                      443.2,
-                      44.8
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -7,
-                      -6,
-                      -5,
-                      0
-                    ],
-                    "delta_e": 3.898612760685528,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      465.92,
-                      46.4,
-                      466.24,
-                      46.4
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      -3,
-                      -3,
-                      -2,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      411.2,
-                      85.44,
-                      411.52,
-                      85.44
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      19,
-                      17,
-                      14,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      450.56,
-                      89.6,
-                      450.88,
-                      89.6
-                    ],
-                    "area_pct": 0.0002583498677248677,
-                    "modal_drgba": [
-                      19,
-                      17,
-                      14,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
                   {
                     "class": "AntialiasCoverage",
                     "bbox_css": [
@@ -198434,7 +197634,8 @@
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 507
+                "different_pixels": 2,
+                "visual_pass_basis": "raw same-coordinate visibility policy"
               }
             },
             {
@@ -276341,7 +275542,7 @@
                 "grid"
               ],
               "base_ids": [],
-              "status": "FAIL",
+              "status": "PASS",
               "diff_pct": 0.05021538461538461,
               "semantic_diff_pct": 0.05021538461538461,
               "description": "Cartesian family interaction for generated-content and grid: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
@@ -276382,7 +275583,7 @@
               "diagnosis": {
                 "primary_class": "ColorValue",
                 "secondary": [],
-                "headline": "fill recolour ΔRGB(-1,-2,-2) (ΔE 51.7)",
+                "headline": "visually accepted coverage phase; raw fill recolour ΔRGB(-1,-2,-2) (ΔE 51.7)",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
@@ -276474,7 +275675,8 @@
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 510
+                "different_pixels": 510,
+                "visual_pass_basis": "CSS-scale observation: balanced edge coverage"
               }
             },
             {
@@ -277270,7 +276472,7 @@
                 "multicol"
               ],
               "base_ids": [],
-              "status": "FAIL",
+              "status": "PASS",
               "diff_pct": 0.03278769230769231,
               "semantic_diff_pct": 0.03278769230769231,
               "description": "Cartesian family interaction for generated-content and multicol: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
@@ -277313,7 +276515,7 @@
                 "secondary": [
                   "AntialiasCoverage"
                 ],
-                "headline": "fill recolour ΔRGB(+3,+2,+2) (ΔE 33.7)",
+                "headline": "visually accepted coverage phase; raw fill recolour ΔRGB(+3,+2,+2) (ΔE 33.7)",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
@@ -277386,7 +276588,8 @@
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 333
+                "different_pixels": 333,
+                "visual_pass_basis": "CSS-scale observation: balanced edge coverage"
               }
             },
             {
@@ -279222,10 +278425,10 @@
                 "multicol"
               ],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.06262153846153846,
-              "semantic_diff_pct": 0.06262153846153846,
-              "description": "Cartesian family interaction for grid and multicol: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
+              "status": "PASS",
+              "diff_pct": 0.041747692307692305,
+              "semantic_diff_pct": 0.041747692307692305,
+              "description": "Cartesian family interaction for grid and multicol: both representatives compose on one element and in both outer/inner orders. The standards-derived reference suppresses Chromium's rule beside an empty actual column, forces the CSS Multicol boundary Chromium misses, and corrects its print-only half-pixel second-fragment decoration snap while retaining Chromium's live text geometry.",
               "note": "",
               "kind": "interaction",
               "depends_on": [
@@ -279255,15 +278458,15 @@
                   {
                     "width": 1625,
                     "height": 625,
-                    "rgba_sha256": "788cca7181f3c28e079c9bc2cbfe63a3ca34cbeab44fc0b8781a0312f9129db0",
+                    "rgba_sha256": "5b5c42f6108aa5a719ea5da2ab4b8baab79097b769d7ffb81d8c57f694135eda",
                     "painted_pixels": 748544
                   }
                 ]
               },
               "diagnosis": {
-                "primary_class": "ColorValue",
+                "primary_class": "AntialiasCoverage",
                 "secondary": [],
-                "headline": "fill recolour ΔRGB(+144,+128,+111) (ΔE 37.0)",
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
@@ -279273,51 +278476,90 @@
                     111,
                     0
                   ],
-                  "delta_e": 36.96639621735717,
+                  "delta_e": 36.966396217356774,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 1,
+                "region_count": 3,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 1,
-                    "total_pixels": 636,
-                    "total_area_pct": 0.08215525793650794,
+                    "region_count": 3,
+                    "total_pixels": 424,
+                    "total_area_pct": 0.054770171957671955,
                     "union_bbox_css": [
-                      265.92,
-                      64.96,
-                      267.52,
-                      98.56
+                      409.6,
+                      42.88,
+                      465.6,
+                      90.56
                     ],
-                    "largest_region_pixels": 636,
-                    "largest_region_area_pct": 0.08215525793650794,
-                    "max_delta_e": 36.96639621735717
+                    "largest_region_pixels": 150,
+                    "largest_region_area_pct": 0.01937624007936508,
+                    "max_delta_e": 0.0
                   }
                 ],
                 "region_examples": [
                   {
-                    "class": "ColorValue",
+                    "class": "AntialiasCoverage",
                     "bbox_css": [
-                      265.92,
-                      64.96,
-                      267.52,
-                      98.56
+                      409.6,
+                      42.88,
+                      409.6,
+                      90.56
                     ],
-                    "area_pct": 0.08215525793650794,
+                    "area_pct": 0.01937624007936508,
                     "modal_drgba": [
                       144,
                       128,
                       111,
                       0
                     ],
-                    "delta_e": 36.96639621735717,
+                    "delta_e": 0.0,
                     "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+144,+128,+111) (ΔE 37.0)"
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      411.52,
+                      45.12,
+                      411.52,
+                      88.64
+                    ],
+                    "area_pct": 0.017696965939153438,
+                    "modal_drgba": [
+                      -144,
+                      -128,
+                      -111,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      465.6,
+                      45.12,
+                      465.6,
+                      88.64
+                    ],
+                    "area_pct": 0.017696965939153438,
+                    "modal_drgba": [
+                      144,
+                      128,
+                      111,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 636
+                "different_pixels": 424,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             },
             {
@@ -283233,9 +282475,9 @@
                 "typography"
               ],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.10476307692307692,
-              "semantic_diff_pct": 0.10476307692307692,
+              "status": "PASS",
+              "diff_pct": 0.037415384615384614,
+              "semantic_diff_pct": 0.037415384615384614,
               "description": "Cartesian family interaction for images-replaced and typography: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
               "note": "",
               "kind": "interaction",
@@ -283258,7 +282500,7 @@
                   {
                     "width": 1625,
                     "height": 625,
-                    "rgba_sha256": "a6d89e563c2af16d580de2c4315b5e02cdad118027fef6b15e824fcfc6a60074",
+                    "rgba_sha256": "cd4384f727d118e5daf0f557981d76e71dc7303b6d36c43000b43d49984c797a",
                     "painted_pixels": 748544
                   }
                 ],
@@ -283272,81 +282514,41 @@
                 ]
               },
               "diagnosis": {
-                "primary_class": "ColorValue",
-                "secondary": [
-                  "AntialiasCoverage"
-                ],
-                "headline": "fill recolour ΔRGB(+4,+75,+30) (ΔE 52.1)",
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
                   "modal_drgba": [
-                    4,
-                    75,
+                    170,
+                    100,
                     30,
                     0
                   ],
-                  "delta_e": 52.10329958716787,
+                  "delta_e": 70.46559845283575,
                   "recovered_alpha": null,
                   "colorspace": null
                 },
-                "region_count": 5,
+                "region_count": 3,
                 "region_classes": [
                   {
                     "class": "ColorErr",
-                    "region_count": 5,
-                    "total_pixels": 1064,
-                    "total_area_pct": 0.13744212962962962,
+                    "region_count": 3,
+                    "total_pixels": 380,
+                    "total_area_pct": 0.04908647486772486,
                     "union_bbox_css": [
                       88.0,
                       42.88,
-                      418.88,
+                      398.72,
                       95.68
                     ],
-                    "largest_region_pixels": 304,
-                    "largest_region_area_pct": 0.03926917989417989,
+                    "largest_region_pixels": 228,
+                    "largest_region_area_pct": 0.02945188492063492,
                     "max_delta_e": 0.0
                   }
                 ],
                 "region_examples": [
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      383.68,
-                      71.68,
-                      384.64,
-                      95.68
-                    ],
-                    "area_pct": 0.03926917989417989,
-                    "modal_drgba": [
-                      -31,
-                      -175,
-                      -55,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-31,-175,-55) (ΔE 0)"
-                  },
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      417.92,
-                      71.68,
-                      418.88,
-                      95.68
-                    ],
-                    "area_pct": 0.03926917989417989,
-                    "modal_drgba": [
-                      71,
-                      75,
-                      195,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(+71,+75,+195) (ΔE 0)"
-                  },
                   {
                     "class": "AntialiasCoverage",
                     "bbox_css": [
@@ -283356,25 +282558,6 @@
                       80.96
                     ],
                     "area_pct": 0.02945188492063492,
-                    "modal_drgba": [
-                      190,
-                      110,
-                      30,
-                      0
-                    ],
-                    "delta_e": 0.0,
-                    "recovered_alpha": null,
-                    "headline": "antialiasing coverage residue on a shared outline"
-                  },
-                  {
-                    "class": "AntialiasCoverage",
-                    "bbox_css": [
-                      398.08,
-                      71.68,
-                      398.4,
-                      95.68
-                    ],
-                    "area_pct": 0.019634589947089946,
                     "modal_drgba": [
                       190,
                       110,
@@ -283403,10 +282586,30 @@
                     "delta_e": 0.0,
                     "recovered_alpha": null,
                     "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      398.72,
+                      71.68,
+                      398.72,
+                      95.68
+                    ],
+                    "area_pct": 0.009817294973544973,
+                    "modal_drgba": [
+                      170,
+                      -100,
+                      180,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 1064
+                "different_pixels": 380,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             },
             {
@@ -292173,9 +291376,9 @@
                 "overflow-clipping"
               ],
               "base_ids": [],
-              "status": "FAIL",
-              "diff_pct": 0.012996923076923078,
-              "semantic_diff_pct": 0.012996923076923078,
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
               "description": "Cartesian family interaction for multicol and overflow-clipping: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
               "note": "",
               "kind": "interaction",
@@ -292198,7 +291401,7 @@
                   {
                     "width": 1625,
                     "height": 625,
-                    "rgba_sha256": "3010c02ec5f6b33b7c5e4ece0c80474aa19a5fe981f4a83189ed3b6b0f932cf5",
+                    "rgba_sha256": "8cceb796697864fd849dc66696d2196f60ece59cea0d49e0715608cedbdb6f6c",
                     "painted_pixels": 748544
                   }
                 ],
@@ -292210,65 +291413,6 @@
                     "painted_pixels": 748544
                   }
                 ]
-              },
-              "diagnosis": {
-                "primary_class": "ColorValue",
-                "secondary": [],
-                "headline": "fill recolour ΔRGB(-144,-128,-111) (ΔE 37.0)",
-                "magnitude": {
-                  "missing_area_pct": 0.0,
-                  "extra_area_pct": 0.0,
-                  "modal_drgba": [
-                    -144,
-                    -128,
-                    -111,
-                    0
-                  ],
-                  "delta_e": 36.96639621735717,
-                  "recovered_alpha": null,
-                  "colorspace": null
-                },
-                "region_count": 1,
-                "region_classes": [
-                  {
-                    "class": "ColorErr",
-                    "region_count": 1,
-                    "total_pixels": 132,
-                    "total_area_pct": 0.017051091269841268,
-                    "union_bbox_css": [
-                      77.12,
-                      102.08,
-                      78.72,
-                      108.8
-                    ],
-                    "largest_region_pixels": 132,
-                    "largest_region_area_pct": 0.017051091269841268,
-                    "max_delta_e": 36.96639621735717
-                  }
-                ],
-                "region_examples": [
-                  {
-                    "class": "ColorValue",
-                    "bbox_css": [
-                      77.12,
-                      102.08,
-                      78.72,
-                      108.8
-                    ],
-                    "area_pct": 0.017051091269841268,
-                    "modal_drgba": [
-                      -144,
-                      -128,
-                      -111,
-                      0
-                    ],
-                    "delta_e": 36.96639621735717,
-                    "recovered_alpha": null,
-                    "headline": "fill recolour ΔRGB(-144,-128,-111) (ΔE 37.0)"
-                  }
-                ],
-                "confidence": 1.0,
-                "different_pixels": 132
               }
             },
             {
@@ -371492,7 +370636,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "b0a3e3103d115f1ea1da4e3e221ce019ada7d825664ddc98dfb651ad3b0e0d54",
-  "baseline_present": true,
-  "gate_failure": "parity integrity gate FAILED (6 issue(s)):\n  - fixture is FAIL: interactions-cartesian-clip-mask-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-grid [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-generated-content-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-grid-x-multicol [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-images-replaced-x-typography [interactions/supported-family-cartesian-product] expected_support=implemented \n  - fixture is FAIL: interactions-cartesian-multicol-x-overflow-clipping [interactions/supported-family-cartesian-product] expected_support=implemented \nCurrent report: /home/frederic/IdeaProjects/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/frederic/IdeaProjects/ironpress/tests/parity/reports/index.html"
+  "refs_lock_sha256": "0a2848eb6be146e4355c9fd9febc88a17d7b779e67ef74715d76b0bf71070997",
+  "baseline_present": true
 }
