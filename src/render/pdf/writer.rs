@@ -104,7 +104,7 @@ impl PdfWriter {
         )
     }
 
-    /// Root an outer atomic inline subtree at its authored layout position.
+    /// Root an outer atomic inline subtree at its resolved paint position.
     ///
     /// Nested atomic boxes inherit the existing grid: the subtree is one paint
     /// unit in the parent inline formatting context, not a sequence of

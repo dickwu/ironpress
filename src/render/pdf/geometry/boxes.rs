@@ -35,9 +35,9 @@ pub(in crate::render::pdf) struct PaintBoxGeometry {
 
 /// CSS-pixel grid used when layout geometry crosses into vector paint.
 ///
-/// Normal flow uses the page grid. An outer atomic inline box roots a local
-/// grid at its authored position so its descendants move as one coherent paint
-/// unit while retaining the same CSS-pixel quantization.
+/// Normal flow uses the page grid. After the outer atomic inline box crosses
+/// that grid, it roots a local grid at its snapped position so descendants move
+/// as one coherent paint unit while retaining the same CSS-pixel quantization.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(in crate::render::pdf) enum BoxPaintGrid {
     #[default]

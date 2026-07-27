@@ -290,14 +290,14 @@ pub(in crate::render::pdf) fn render_flex_row(
                 cell.padding,
                 cell.paint.border_image.as_ref(),
             );
+            let cell_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(cell_geometry);
+            let cell_paint_geometry = cell_box_geometry.painting();
             if cell.role.is_atomic_inline() {
                 prior_box_paint_grid = ctx
                     .text
                     .pdf_writer
-                    .enter_atomic_inline_paint_grid(cell_geometry.border_box.top_left());
+                    .enter_atomic_inline_paint_grid(cell_paint_geometry.border_box.top_left());
             }
-            let cell_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(cell_geometry);
-            let cell_paint_geometry = cell_box_geometry.painting();
             let cell_fragment_geometry =
                 cell_box_geometry.fragment(cell.fragmentation.box_fragmentation);
             let cell_paint_box = cell_paint_geometry.border_box;

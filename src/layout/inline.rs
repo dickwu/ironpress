@@ -40,6 +40,10 @@ use super::text::{
     text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
+mod row_cursor;
+
+use row_cursor::{InlineRowCursor, InlineRowSeparator, InlineRowUnit};
+
 fn content_only_flex_style(
     style: &ComputedStyle,
     dimensions: ResolvedBoxDimensions,
@@ -214,7 +218,6 @@ fn inline_text_cell(
     mut runs: Vec<crate::layout::engine::TextRun>,
     parent_style: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
-    x: f32,
 ) -> Option<(FlexCell, f32)> {
     if runs.is_empty() {
         return None;
@@ -255,7 +258,6 @@ fn inline_text_cell(
     Some((
         FlexCell {
             lines,
-            x_offset: x,
             width,
             text_align: parent_style.text_align,
             natural_height: height,
@@ -266,24 +268,26 @@ fn inline_text_cell(
     ))
 }
 
-/// Width of one collapsed ASCII space in the parent inline formatting context.
+/// Advance of one collapsed ASCII space in the parent inline formatting context.
 ///
 /// A space at the edge of a text fragment has no glyph run of its own: the
 /// line breaker correctly discards it at that fragment edge.  Atomic inline
 /// boxes split a mixed sequence into fragments, so their adjacent source
 /// whitespace must be retained as an advance between those fragments instead.
-fn collapsed_inline_space_width(
+fn collapsed_inline_space_advance(
     parent_style: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
 ) -> f32 {
-    estimate_word_width(
+    let glyph_advance = estimate_word_width(
         " ",
         used_font_size(parent_style, fonts),
         &resolve_style_font_family(parent_style, fonts),
         parent_style.font_weight == crate::style::computed::FontWeight::Bold,
         parent_style.font_style.is_slanted(),
         fonts,
-    )
+    );
+    crate::layout::elements::TextSpacing::from_style(parent_style)
+        .add_internal_advance(glyph_advance, " ")
 }
 
 fn runs_have_visible_inline_content(runs: &[crate::layout::engine::TextRun]) -> bool {
@@ -344,7 +348,6 @@ fn inline_atomic_cell(
     kind: AtomicInlineKind,
     ctx: &LayoutContext,
     selector_context: &SelectorContext<'_>,
-    x: f32,
     env: &mut LayoutEnv,
 ) -> Option<(FlexCell, f32)> {
     let ancestors = selector_context.ancestors.as_slice();
@@ -378,7 +381,6 @@ fn inline_atomic_cell(
         let height = estimate_element_height(replaced.as_ref());
         return Some((
             FlexCell {
-                x_offset: x,
                 width,
                 natural_height: height,
                 fragmentation: FlexItemFragmentation::definite(),
@@ -603,7 +605,7 @@ fn inline_atomic_cell(
                 return Some((
                     FlexCell {
                         lines,
-                        x_offset: x + child_style.margin.left,
+                        x_offset: child_style.margin.left,
                         width: total_w,
                         text_align: child_style.text_align,
                         padding: child_style.padding,
@@ -627,7 +629,7 @@ fn inline_atomic_cell(
 
     Some((
         FlexCell {
-            x_offset: x + child_style.margin.left,
+            x_offset: child_style.margin.left,
             width,
             text_align: child_style.text_align,
             padding,
@@ -682,7 +684,8 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
         .to_vec();
     let mut pending_runs = Vec::new();
     let mut cells = Vec::new();
-    let mut x = 0.0f32;
+    let mut cursor = InlineRowCursor::default();
+    let inline_spacing = crate::layout::elements::TextSpacing::from_style(parent_style);
     let mut saw_atomic = false;
     let mut middle_aligned_line: Option<MiddleAlignedLine> = None;
     let mut last_item_was_atomic = false;
@@ -704,10 +707,6 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                     None,
                     ancestors,
                 );
-                if pending_space_after_atomic && runs_have_visible_inline_content(&pending_runs) {
-                    x += collapsed_inline_space_width(parent_style, env.fonts);
-                    pending_space_after_atomic = false;
-                }
                 pending_trailing_space = text.chars().next_back().is_some_and(char::is_whitespace);
                 last_item_was_atomic = false;
             }
@@ -741,26 +740,33 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                 match role {
                     InlineFormattingRole::Atomic(kind) => {
                         saw_atomic = true;
-                        if pending_space_after_atomic {
-                            x += collapsed_inline_space_width(parent_style, env.fonts);
-                            pending_space_after_atomic = false;
-                        }
                         let has_space_before_atomic = pending_trailing_space
                             && runs_have_visible_inline_content(&pending_runs);
+                        let separator_after_previous_atomic =
+                            pending_space_after_atomic.then(|| {
+                                InlineRowSeparator::CollapsedSpace(collapsed_inline_space_advance(
+                                    parent_style,
+                                    env.fonts,
+                                ))
+                            });
+                        let mut emitted_text = false;
                         if let Some((cell, advance)) = inline_text_cell(
                             std::mem::take(&mut pending_runs),
                             parent_style,
                             env.fonts,
-                            x,
                         ) {
-                            x += advance;
-                            cells.push(cell);
-                        }
-                        if has_space_before_atomic {
-                            x += collapsed_inline_space_width(parent_style, env.fonts);
+                            cursor.push(
+                                &mut cells,
+                                cell,
+                                advance,
+                                InlineRowUnit::Text,
+                                separator_after_previous_atomic.unwrap_or_default(),
+                                inline_spacing,
+                            );
+                            emitted_text = true;
                         }
                         if let Some((cell, advance)) =
-                            inline_atomic_cell(el, &child_style, kind, ctx, &selector_ctx, x, env)
+                            inline_atomic_cell(el, &child_style, kind, ctx, &selector_ctx, env)
                         {
                             if child_style.vertical_align
                                 == crate::style::computed::VerticalAlign::Middle
@@ -770,9 +776,26 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                                     parent_x_height(parent_style, env.fonts),
                                 );
                             }
-                            x += advance;
-                            cells.push(cell);
+                            let separator = if has_space_before_atomic
+                                || (!emitted_text && separator_after_previous_atomic.is_some())
+                            {
+                                InlineRowSeparator::CollapsedSpace(collapsed_inline_space_advance(
+                                    parent_style,
+                                    env.fonts,
+                                ))
+                            } else {
+                                InlineRowSeparator::Adjacent
+                            };
+                            cursor.push(
+                                &mut cells,
+                                cell,
+                                advance,
+                                InlineRowUnit::Atomic,
+                                separator,
+                                inline_spacing,
+                            );
                         }
+                        pending_space_after_atomic = false;
                         last_item_was_atomic = true;
                         pending_trailing_space = false;
                     }
@@ -784,12 +807,6 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                             None,
                             ancestors,
                         );
-                        if pending_space_after_atomic
-                            && runs_have_visible_inline_content(&pending_runs)
-                        {
-                            x += collapsed_inline_space_width(parent_style, env.fonts);
-                            pending_space_after_atomic = false;
-                        }
                         pending_trailing_space = false;
                         last_item_was_atomic = false;
                     }
@@ -806,13 +823,25 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
         }
     }
     sequence.append_after(&mut pending_runs, env.fonts, env.counter_state);
-    if let Some((cell, _advance)) = inline_text_cell(
-        std::mem::take(&mut pending_runs),
-        parent_style,
-        env.fonts,
-        x,
-    ) {
-        cells.push(cell);
+    if let Some((cell, advance)) =
+        inline_text_cell(std::mem::take(&mut pending_runs), parent_style, env.fonts)
+    {
+        let separator = if pending_space_after_atomic {
+            InlineRowSeparator::CollapsedSpace(collapsed_inline_space_advance(
+                parent_style,
+                env.fonts,
+            ))
+        } else {
+            InlineRowSeparator::Adjacent
+        };
+        cursor.push(
+            &mut cells,
+            cell,
+            advance,
+            InlineRowUnit::Text,
+            separator,
+            inline_spacing,
+        );
     }
 
     if !saw_atomic {
@@ -861,7 +890,7 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
     let container_width = if carries_parent_box_geometry {
         parent_style.width.unwrap_or(ctx.available_width())
     } else {
-        x
+        cursor.position()
     };
     let padding = if carries_parent_box_geometry {
         parent_style.padding
