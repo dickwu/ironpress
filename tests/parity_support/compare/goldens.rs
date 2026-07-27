@@ -1416,6 +1416,38 @@ fn golden_repeated_sub_authored_chromatic_frontiers_remain_visible() {
 }
 
 #[test]
+fn golden_repeated_single_sample_chromatic_frontiers_are_device_quantization() {
+    let mut reference = canvas(180, 140);
+    let mut candidate = reference.clone();
+    for frontier in 0..5 {
+        let x0 = 20 + frontier * 30;
+        fill(&mut reference, x0, 20, x0 + 19, 119, BLACK);
+        fill(&mut candidate, x0, 20, x0 + 19, 119, BLACK);
+        fill(
+            &mut reference,
+            x0 + 19,
+            20,
+            x0 + 19,
+            119,
+            Rgba([198, 40, 40, 255]),
+        );
+        fill(
+            &mut candidate,
+            x0 + 19,
+            20,
+            x0 + 19,
+            119,
+            Rgba([25, 118, 210, 255]),
+        );
+    }
+
+    let outcome = run(&candidate, &reference);
+    assert_eq!(outcome.regions.region_count(PixelClass::ColorErr), 5);
+    assert!(outcome.regions.only_coherent_sub_authored_color_frontiers());
+    assert_eq!(outcome.status, Status::Pass);
+}
+
+#[test]
 fn golden_stacked_border_edge_uses_one_shared_foreground() {
     let yellow = Rgba([253, 216, 53, 255]);
     let mut reference = canvas(180, 100);

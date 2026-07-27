@@ -70,6 +70,8 @@ pub(crate) struct CoverageEvidence {
     pub(crate) long_device_edge_residue: bool,
     /// A whole component is a narrow colour ramp between shared endpoints.
     pub(crate) shared_color_ramp: bool,
+    /// Exactly one raster sample wide between two unchanged local colours.
+    pub(crate) single_sample_color_frontier: bool,
     /// Below the authored visibility width between two unchanged local colours.
     pub(crate) sub_authored_color_frontier: bool,
     pub(crate) color_ramp_proven_px: u32,
@@ -120,6 +122,7 @@ pub(crate) struct CoverageAggregate {
     pub(crate) all_sub_css_presence_residues: bool,
     pub(crate) all_one_device_pixel_presence_residues: bool,
     pub(crate) all_shared_color_ramps: bool,
+    pub(crate) all_single_sample_color_frontiers: bool,
     pub(crate) all_sub_authored_color_frontiers: bool,
 }
 
@@ -271,15 +274,19 @@ impl RegionSet {
             .is_some_and(|aggregate| aggregate.coverage.all_shared_color_ramps)
     }
 
-    /// Whether the complete colour-error field consists of a coherent number
-    /// of frontiers narrower than the fixed authored visibility width.
+    /// Whether the complete colour-error field consists of frontiers below the
+    /// fixed authored visibility width. A single raster sample is direct device
+    /// quantization and remains below the limit independently per component.
+    /// Wider bands receive the coherent-component guard so repeated authored
+    /// glyph-like strokes cannot accumulate behind the same exception.
     pub(crate) fn only_coherent_sub_authored_color_frontiers(&self) -> bool {
         self.aggregates
             .iter()
             .find(|aggregate| aggregate.class == PixelClass::ColorErr)
             .is_some_and(|aggregate| {
-                aggregate.coverage.all_sub_authored_color_frontiers
-                    && aggregate.region_count <= VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS
+                aggregate.coverage.all_single_sample_color_frontiers
+                    || (aggregate.coverage.all_sub_authored_color_frontiers
+                        && aggregate.region_count <= VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS)
             })
     }
 
@@ -477,6 +484,7 @@ impl CoverageAggregate {
             all_sub_css_presence_residues: coverage.sub_css_presence_residue,
             all_one_device_pixel_presence_residues: coverage.one_device_pixel_presence_residue,
             all_shared_color_ramps: coverage.shared_color_ramp,
+            all_single_sample_color_frontiers: coverage.single_sample_color_frontier,
             all_sub_authored_color_frontiers: coverage.sub_authored_color_frontier,
         }
     }
@@ -486,6 +494,7 @@ impl CoverageAggregate {
         self.all_sub_css_presence_residues &= coverage.sub_css_presence_residue;
         self.all_one_device_pixel_presence_residues &= coverage.one_device_pixel_presence_residue;
         self.all_shared_color_ramps &= coverage.shared_color_ramp;
+        self.all_single_sample_color_frontiers &= coverage.single_sample_color_frontier;
         self.all_sub_authored_color_frontiers &= coverage.sub_authored_color_frontier;
     }
 }
@@ -968,6 +977,18 @@ fn diagnose_region(
                 && proof.has_direct_sample()
                 && is_sub_visibility_same_family_edge(members, cand, reference, w))
     });
+    let single_sample_color_frontier = class == PixelClass::ColorErr
+        && is_single_sample_color_frontier(
+            members,
+            cand,
+            reference,
+            w,
+            x0,
+            y0,
+            x1,
+            y1,
+            &mut diagnostics.component_pixels,
+        );
     let sub_authored_color_frontier = class == PixelClass::ColorErr
         && is_sub_authored_color_frontier(
             members,
@@ -1018,6 +1039,7 @@ fn diagnose_region(
             one_device_pixel_presence_residue,
             long_device_edge_residue,
             shared_color_ramp,
+            single_sample_color_frontier,
             sub_authored_color_frontier,
             color_ramp_proven_px: color_ramp_proof.map_or(0, |proof| proof.proven() as u32),
             color_ramp_total_px: color_ramp_proof.map_or(0, |proof| proof.total as u32),
@@ -1135,6 +1157,30 @@ fn is_sub_authored_color_frontier(
                 dy,
                 VISUAL_SUB_AUTHORED_COLOR_FRONTIER_MAX_CSS_PX,
             ) && shared_color_frontier(cand, reference, x, y, dx, dy)
+        })
+    })
+}
+
+fn is_single_sample_color_frontier(
+    members: &[usize],
+    cand: &RgbaImage,
+    reference: &RgbaImage,
+    width: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    component: &mut ComponentPixels,
+) -> bool {
+    if !component.reset(members, width, x0, y0, x1, y1) {
+        return false;
+    }
+    members.iter().all(|&index| {
+        let x = (index % width) as isize;
+        let y = (index / width) as isize;
+        CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
+            component.is_single_sample_run(x, y, dx, dy)
+                && shared_color_frontier(cand, reference, x, y, dx, dy)
         })
     })
 }
@@ -1345,7 +1391,7 @@ impl ComponentPixels {
         None
     }
 
-    fn is_one_device_pixel_run(&self, x: isize, y: isize, dx: isize, dy: isize) -> bool {
+    fn is_single_sample_run(&self, x: isize, y: isize, dx: isize, dy: isize) -> bool {
         matches!(
             (
                 self.run_length(x, y, -dx, -dy, 1),
@@ -1594,7 +1640,7 @@ fn shared_layered_coverage_color_normal(
         (x as usize, y as usize),
         (before_x, before_y, -dx, -dy),
         (after_x, after_y, dx, dy),
-        component.is_one_device_pixel_run(x, y, dx, dy),
+        component.is_single_sample_run(x, y, dx, dy),
     )
 }
 
