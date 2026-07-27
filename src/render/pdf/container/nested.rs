@@ -365,22 +365,19 @@ pub(super) fn render_nested_container(
                 ctx.text.pdf_writer,
             );
 
-            // Draw background with proper alpha support
+            // Draw the solid layer through the same resolved background
+            // geometry used by gradients and images. In particular, this
+            // preserves the paint-only bleed inset below opaque rounded
+            // borders for nested boxes instead of reverting to the raw
+            // border box.
             if let Some(color) = background_color {
-                let (r, g, b, a) = color.to_f32_rgba();
-                let needs_alpha = a < 1.0;
-                if needs_alpha {
-                    let gs_name = format!("GScca{}", ctx.bg_alpha_counter);
-                    *ctx.bg_alpha_counter += 1;
-                    ctx.page_ext_gstates.push((gs_name.clone(), a));
-                    content.push_str(&format!("/{gs_name} gs\n"));
-                }
-                content.push_str(&PdfRgb::from((r, g, b)).fill_operator());
-                content.push_str(&nk_border_box.path_or_rect());
-                content.push_str("f\n");
-                if needs_alpha {
-                    content.push_str("/GSDefault gs\n");
-                }
+                paint_solid_background(
+                    content,
+                    *color,
+                    nk_background_clip,
+                    ctx.page_ext_gstates,
+                    ctx.bg_alpha_counter,
+                );
             }
 
             // `background-blend-mode`: the background image layers (gradient /
