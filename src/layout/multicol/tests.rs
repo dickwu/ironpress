@@ -1,13 +1,16 @@
 use super::flow::{
     ColumnFragmentation, SourceBlockRange, balance_fragmented_columns, fragment_columns,
-    item_minimum_fragment_size, make_fragment_box, project_text_lines_into_fragment,
+    item_minimum_fragment_size,
 };
+use super::fragments::{make_fragment_box, project_text_lines_into_fragment};
+use super::items::{ChildMulticolInfo, ColumnBreakInfo, MultiColItem};
 use super::*;
 use crate::layout::elements::{
-    Container, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, LayoutVisitor, Table,
-    visit_layout_tree,
+    Container, IntoLayoutNode, LayoutElement, LayoutElementTestExt, LayoutElementTestMutExt,
+    LayoutVisitor, Table, TextBlock, visit_layout_tree,
 };
 use crate::layout::engine::{LayoutBorderSide, TextLine};
+use crate::layout::paginate::estimate_element_height;
 use crate::parser::css::parse_stylesheet;
 use crate::parser::html::parse_html_with_styles;
 use crate::style::computed::{BorderSide, BorderStyle, Position};
