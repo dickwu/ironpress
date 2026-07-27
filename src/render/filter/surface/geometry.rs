@@ -1,6 +1,7 @@
 //! Device geometry for an SVG filter surface and its object bounding box.
 
 use crate::render::raster_pixels::PremultipliedRgba8;
+use crate::render::raster_scale::RasterScale;
 use crate::style::computed::NormalizedFilterRegion;
 use crate::types::{EdgeSizes, Rect, Size};
 
@@ -51,30 +52,6 @@ impl FilterSourceGeometry {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct RasterScale {
-    horizontal: f32,
-    vertical: f32,
-}
-
-impl RasterScale {
-    pub(super) fn at_dpi(dpi: f32) -> Option<Self> {
-        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
-        (pixels_per_point.is_finite() && pixels_per_point > 0.0).then_some(Self {
-            horizontal: pixels_per_point,
-            vertical: pixels_per_point,
-        })
-    }
-
-    #[cfg(test)]
-    pub(super) const fn uniform(pixels_per_point: f32) -> Self {
-        Self {
-            horizontal: pixels_per_point,
-            vertical: pixels_per_point,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RasterRegion {
     pub(super) left: i64,
@@ -91,10 +68,10 @@ impl RasterRegion {
     ) -> Option<Self> {
         let resolved = geometry.resolve(region);
         let bounds = Self {
-            left: floored_coordinate(f64::from(resolved.origin.x) * f64::from(scale.horizontal))?,
-            top: floored_coordinate(f64::from(resolved.origin.y) * f64::from(scale.vertical))?,
-            right: ceiled_coordinate(f64::from(resolved.right()) * f64::from(scale.horizontal))?,
-            bottom: ceiled_coordinate(f64::from(resolved.bottom()) * f64::from(scale.vertical))?,
+            left: scale.floor(resolved.origin.x)?,
+            top: scale.floor(resolved.origin.y)?,
+            right: scale.ceil(resolved.right())?,
+            bottom: scale.ceil(resolved.bottom())?,
         };
         (bounds.right > bounds.left && bounds.bottom > bounds.top).then_some(bounds)
     }
@@ -113,10 +90,10 @@ impl RasterRegion {
     ) -> EdgeSizes {
         let surface_size = geometry.surface_size();
         EdgeSizes::new(
-            -(self.top as f32) / scale.vertical,
-            self.right as f32 / scale.horizontal - surface_size.width,
-            self.bottom as f32 / scale.vertical - surface_size.height,
-            -(self.left as f32) / scale.horizontal,
+            -scale.pixels_to_points(self.top as f32),
+            scale.pixels_to_points(self.right as f32) - surface_size.width,
+            scale.pixels_to_points(self.bottom as f32) - surface_size.height,
+            -scale.pixels_to_points(self.left as f32),
         )
     }
 
@@ -125,8 +102,8 @@ impl RasterRegion {
         overflow: EdgeSizes,
         scale: RasterScale,
     ) -> Option<Self> {
-        let left = rounded_coordinate(-f64::from(overflow.left * scale.horizontal))?;
-        let top = rounded_coordinate(-f64::from(overflow.top * scale.vertical))?;
+        let left = scale.round(-overflow.left)?;
+        let top = scale.round(-overflow.top)?;
         Some(Self {
             left,
             top,
@@ -187,32 +164,6 @@ impl RasterRegion {
     }
 }
 
-pub(super) fn rounded_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.round() as i64)
-}
-
-fn floored_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.floor() as i64)
-}
-
-fn ceiled_coordinate(value: f64) -> Option<i64> {
-    Some(stabilized_coordinate(value)?.ceil() as i64)
-}
-
-fn stabilized_coordinate(value: f64) -> Option<f64> {
-    const DEVICE_EDGE_EPSILON: f64 = 0.001;
-
-    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return None;
-    }
-    let integer = value.round();
-    Some(if (value - integer).abs() <= DEVICE_EDGE_EPSILON {
-        integer
-    } else {
-        value
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +176,7 @@ mod tests {
             Rect::new(Point::new(2.0, 2.0), Size::new(10.0, 6.0)),
         )
         .expect("the test geometry is finite and positive");
-        let scale = RasterScale::uniform(3.125);
+        let scale = RasterScale::at_dpi(225.0);
         let normalized = NormalizedFilterRegion::new(-0.2, -0.5, 1.4, 2.0)
             .expect("the normalized test region is valid");
         let region = RasterRegion::resolve(normalized, geometry, scale)
@@ -241,13 +192,5 @@ mod tests {
         ] {
             assert!((actual - expected).abs() < 0.000_01);
         }
-    }
-
-    #[test]
-    fn device_edge_stabilization_does_not_grow_integral_bounds() {
-        assert_eq!(floored_coordinate(11.999_999), Some(12));
-        assert_eq!(ceiled_coordinate(12.000_001), Some(12));
-        assert_eq!(floored_coordinate(11.99), Some(11));
-        assert_eq!(ceiled_coordinate(12.01), Some(13));
     }
 }

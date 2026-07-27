@@ -246,16 +246,6 @@ pub(crate) fn synthetic_raster_background(
     }
 }
 
-fn points_to_filtered_background_pixels(points: f32, filter_dpi: f32) -> u32 {
-    ((points.max(0.0) * filter_dpi.max(1.0) / 72.0)
-        .round()
-        .max(1.0)) as u32
-}
-
-fn filtered_background_pixels_to_points(pixels: u32, filter_dpi: f32) -> f32 {
-    pixels as f32 * 72.0 / filter_dpi.max(1.0)
-}
-
 fn pad_rgba_image(image: &image::RgbaImage, padding: u32) -> Option<image::RgbaImage> {
     if padding == 0 {
         return Some(image.clone());
@@ -292,11 +282,11 @@ fn encode_blurred_png_for_background(
         return None;
     }
 
-    let filter_dpi = request.filter_dpi.max(1.0);
-    let canvas_width = points_to_filtered_background_pixels(request.canvas_box.width, filter_dpi);
-    let canvas_height = points_to_filtered_background_pixels(request.canvas_box.height, filter_dpi);
-    let image_width = points_to_filtered_background_pixels(request.image_box.width, filter_dpi);
-    let image_height = points_to_filtered_background_pixels(request.image_box.height, filter_dpi);
+    let scale = crate::render::raster_scale::RasterScale::at_dpi(request.filter_dpi);
+    let canvas_width = scale.sample_count(request.canvas_box.width)?;
+    let canvas_height = scale.sample_count(request.canvas_box.height)?;
+    let image_width = scale.sample_count(request.image_box.width)?;
+    let image_height = scale.sample_count(request.image_box.height)?;
 
     let mut canvas =
         image::RgbaImage::from_pixel(canvas_width, canvas_height, image::Rgba([0, 0, 0, 0]));
@@ -306,16 +296,17 @@ fn encode_blurred_png_for_background(
         image_height,
         image::imageops::FilterType::Lanczos3,
     );
-    let image_x = ((request.image_box.x - request.canvas_box.x) * filter_dpi / 72.0).round() as i64;
-    let image_y = ((request.image_box.y - request.canvas_box.y) * filter_dpi / 72.0).round() as i64;
+    let image_x = scale.round(request.image_box.x - request.canvas_box.x)?;
+    let image_y = scale.round(request.image_box.y - request.canvas_box.y)?;
     image::imageops::overlay(&mut canvas, &resized, image_x, image_y);
 
-    let kernel = crate::render::blur::FilterBlurKernel::new(request.blur_radius, filter_dpi)?;
+    let kernel =
+        crate::render::blur::FilterBlurKernel::new(request.blur_radius, request.filter_dpi)?;
     let padding = kernel.padding_px;
     let padded = pad_rgba_image(&canvas, padding)?;
     let blurred = crate::render::blur::blur_css_filter(&padded, kernel)?;
     let encoded = encode_rgba_png(&blurred)?;
-    let padding_points = filtered_background_pixels_to_points(padding, filter_dpi);
+    let padding_points = scale.pixels_to_points(padding as f32);
     let draw_box = SvgViewportBox::new(
         request.canvas_box.x - padding_points,
         request.canvas_box.y - padding_points,
@@ -533,24 +524,25 @@ mod tests {
         assert_eq!(overflow.bottom, 0.0);
     }
 
-    // ── points_to_filtered_background_pixels / filtered_background_pixels_to_points roundtrip
-
     #[test]
-    fn filtered_background_pixels_roundtrip() {
-        // Convert a point value → pixels → back to points.
-        // Due to rounding the roundtrip is approximate.
-        let original_points = 72.0f32; // exactly 300 px at 300 PPI
-        let pixels = points_to_filtered_background_pixels(original_points, 300.0);
+    fn filtered_background_uses_the_shared_physical_scale() {
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(300.0);
+        let original_points = 72.0;
+        let pixels = scale
+            .sample_count(original_points)
+            .expect("positive test extent has a sample count");
+        let recovered = scale.pixels_to_points(pixels as f32);
+
         assert_eq!(pixels, 300);
-        let recovered = filtered_background_pixels_to_points(pixels, 300.0);
         assert!((recovered - original_points).abs() < 0.5);
     }
 
     #[test]
-    fn points_to_filtered_background_pixels_zero_clamps_to_one() {
-        // Negative / zero input should yield the minimum of 1 pixel.
-        assert_eq!(points_to_filtered_background_pixels(0.0, 300.0), 1);
-        assert_eq!(points_to_filtered_background_pixels(-100.0, 300.0), 1);
+    fn filtered_background_rejects_empty_extents() {
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(300.0);
+
+        assert_eq!(scale.sample_count(0.0), None);
+        assert_eq!(scale.sample_count(-100.0), None);
     }
 
     fn make_solid_image(r: u8, g: u8, b: u8, a: u8) -> image::RgbaImage {

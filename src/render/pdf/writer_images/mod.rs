@@ -276,12 +276,11 @@ impl PdfWriter {
             return None;
         }
 
-        let target_w = (display_w_pt * self.opts.raster_quality.source_image_dpi / 72.0)
-            .round()
-            .max(1.0) as u32;
-        let target_h = (display_h_pt * self.opts.raster_quality.source_image_dpi / 72.0)
-            .round()
-            .max(1.0) as u32;
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(
+            self.opts.raster_quality.source_image_dpi,
+        );
+        let target_w = scale.sample_count(display_w_pt)?;
+        let target_h = scale.sample_count(display_h_pt)?;
         let scale = ((target_w as f32 / source_width as f32)
             .min(target_h as f32 / source_height as f32))
         .min(1.0);

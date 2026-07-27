@@ -141,7 +141,7 @@ pub(super) fn blurred_simple_text_block(
     if blur_radius_pt <= 0.0 {
         return None;
     }
-    let px_per_pt = crate::render::blur::px_per_pt_at_dpi(filter_dpi);
+    let px_per_pt = crate::render::raster_scale::RasterScale::at_dpi(filter_dpi).pixels_per_point();
     let px_w = (width_pt * px_per_pt).round().max(1.0) as u32;
     let px_h = (height_pt * px_per_pt).round().max(1.0) as u32;
     let mut img = image::RgbaImage::new(px_w, px_h);
@@ -181,7 +181,7 @@ pub(super) fn blurred_simple_container_group(
     if width_pt <= 0.0 || height_pt <= 0.0 || blur_radius_pt <= 0.0 || border.has_visible() {
         return None;
     }
-    let px_per_pt = crate::render::blur::px_per_pt_at_dpi(filter_dpi);
+    let px_per_pt = crate::render::raster_scale::RasterScale::at_dpi(filter_dpi).pixels_per_point();
     let px_w = (width_pt * px_per_pt).round().max(1.0) as u32;
     let px_h = (height_pt * px_per_pt).round().max(1.0) as u32;
     let mut img = image::RgbaImage::new(px_w, px_h);

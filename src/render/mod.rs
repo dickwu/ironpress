@@ -9,6 +9,7 @@ pub mod pdf;
 pub(crate) mod pdf_fonts;
 pub(crate) mod pdf_syntax;
 pub(crate) mod raster_pixels;
+pub(crate) mod raster_scale;
 pub mod shading;
 pub(crate) mod svg_geometry;
 pub mod svg_to_pdf;

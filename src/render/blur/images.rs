@@ -15,7 +15,7 @@ pub(crate) fn rasterize_image_buffer(
     if source.width() == 0 || source.height() == 0 || display_w_pt <= 0.0 || display_h_pt <= 0.0 {
         return None;
     }
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let width = filter_raster_pixels(display_w_pt, scale)?;
     let height = filter_raster_pixels(display_h_pt, scale)?;
     let css_scaled = if image_rendering.is_pixelated() {

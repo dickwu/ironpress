@@ -276,7 +276,8 @@ pub(crate) fn paint_grid_cell_source(
     {
         let canvas = RasterCanvas {
             pixels: &mut pixels,
-            pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
+            pixels_per_point: crate::render::raster_scale::RasterScale::at_dpi(filter_dpi)
+                .pixels_per_point(),
             paint_bounds: &mut paint_bounds,
         };
         let border_box = SurfaceRect::new(geometry.border_origin(), size);
@@ -364,7 +365,8 @@ pub(crate) fn paint_flex_cell_source(
     {
         let canvas = RasterCanvas {
             pixels: &mut pixels,
-            pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
+            pixels_per_point: crate::render::raster_scale::RasterScale::at_dpi(filter_dpi)
+                .pixels_per_point(),
             paint_bounds: &mut paint_bounds,
         };
         let mut painter = SourcePainter::new(

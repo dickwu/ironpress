@@ -6,7 +6,8 @@ use crate::style::computed::{FilterOperation, NormalizedFilterRegion};
 use crate::types::EdgeSizes;
 
 use super::color_space::RasterFilterColorSpace;
-use geometry::{RasterRegion, RasterScale};
+use crate::render::raster_scale::RasterScale;
+use geometry::RasterRegion;
 
 /// Filtered pixels and their directional paint overflow around the source box.
 pub(crate) struct FilteredSurface {
@@ -100,7 +101,7 @@ pub(crate) fn apply_operations_to_surface(
     }
     let effect_support = overflow;
     if let Some(region) = svg_region {
-        let scale = RasterScale::at_dpi(filter_dpi)?;
+        let scale = RasterScale::at_dpi(filter_dpi);
         let region = RasterRegion::resolve(region, geometry, scale)?;
         let source_frame = RasterRegion::source_frame(&pixels, overflow, scale)?;
         pixels = region.extract(&pixels, source_frame)?;
@@ -140,7 +141,7 @@ fn blend_with_flood(
     region: NormalizedFilterRegion,
     filter_dpi: f32,
 ) -> Option<PremultipliedFilteredSurface> {
-    let scale = RasterScale::at_dpi(filter_dpi)?;
+    let scale = RasterScale::at_dpi(filter_dpi);
     let raster_region = RasterRegion::resolve(region, geometry, scale)?;
     let (width, height) = raster_region.dimensions()?;
     let source_region = RasterRegion::source_frame(source, source_overflow, scale)?;

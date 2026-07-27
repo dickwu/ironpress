@@ -23,7 +23,7 @@ pub(crate) fn blur_painted_buffer_to_rgba(
     if source.width() == 0 || source.height() == 0 || blur_radius_pt <= 0.0 {
         return None;
     }
-    let s = filter_dpi_scale(filter_dpi);
+    let s = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let kernel = FilterBlurKernel::new(blur_radius_pt, filter_dpi)?;
     let pad = kernel.padding_px;
     let padded_w = padded_pixels(source.width(), pad)?;
@@ -45,7 +45,7 @@ pub(crate) fn blur_premultiplied_buffer(
     if source.width() == 0 || source.height() == 0 || blur_radius_pt <= 0.0 {
         return None;
     }
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let kernel = FilterBlurKernel::new(blur_radius_pt, filter_dpi)?;
     let padding = kernel.padding_px;
     let mut padded = crate::render::raster_pixels::PremultipliedRgba8::transparent(

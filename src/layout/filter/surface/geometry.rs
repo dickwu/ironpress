@@ -43,20 +43,14 @@ impl DeviceRasterBounds {
         anchor: SourceRasterAnchor,
         size: Size,
         authored_overflow: EdgeSizes,
-        pixels_per_point: f32,
+        scale: crate::render::raster_scale::RasterScale,
     ) -> Option<Self> {
         let origin = anchor.border_origin();
         Some(Self {
-            left: device_floor(origin.x - authored_overflow.left, pixels_per_point)?,
-            top: device_floor(origin.y - authored_overflow.top, pixels_per_point)?,
-            right: device_ceil(
-                origin.x + size.width + authored_overflow.right,
-                pixels_per_point,
-            )?,
-            bottom: device_ceil(
-                origin.y + size.height + authored_overflow.bottom,
-                pixels_per_point,
-            )?,
+            left: scale.floor(origin.x - authored_overflow.left)?,
+            top: scale.floor(origin.y - authored_overflow.top)?,
+            right: scale.ceil(origin.x + size.width + authored_overflow.right)?,
+            bottom: scale.ceil(origin.y + size.height + authored_overflow.bottom)?,
         })
     }
 
@@ -67,26 +61,17 @@ impl DeviceRasterBounds {
         })
     }
 
-    fn border_origin(self, anchor: SourceRasterAnchor, pixels_per_point: f32) -> Point {
+    fn border_origin(
+        self,
+        anchor: SourceRasterAnchor,
+        scale: crate::render::raster_scale::RasterScale,
+    ) -> Point {
         let origin = anchor.border_origin();
         Point::new(
-            origin.x - self.left as f32 / pixels_per_point,
-            origin.y - self.top as f32 / pixels_per_point,
+            origin.x - scale.pixels_to_points(self.left as f32),
+            origin.y - scale.pixels_to_points(self.top as f32),
         )
     }
-}
-
-fn device_floor(points: f32, pixels_per_point: f32) -> Option<i64> {
-    finite_device_coordinate(points, pixels_per_point).map(|value| value.floor() as i64)
-}
-
-fn device_ceil(points: f32, pixels_per_point: f32) -> Option<i64> {
-    finite_device_coordinate(points, pixels_per_point).map(|value| value.ceil() as i64)
-}
-
-fn finite_device_coordinate(points: f32, pixels_per_point: f32) -> Option<f64> {
-    let value = f64::from(points) * f64::from(pixels_per_point);
-    (value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64).then_some(value)
 }
 
 /// Border-box geometry retained when a painted filter source becomes an image.
@@ -112,14 +97,13 @@ impl RasterSurfaceFrame {
         dpi: f32,
         anchor: SourceRasterAnchor,
     ) -> Option<Self> {
-        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
-        let bounds =
-            DeviceRasterBounds::enclosing(anchor, size, authored_overflow, pixels_per_point)?;
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(dpi);
+        let bounds = DeviceRasterBounds::enclosing(anchor, size, authored_overflow, scale)?;
         let dimensions = bounds.dimensions()?;
-        let border_origin = bounds.border_origin(anchor, pixels_per_point);
+        let border_origin = bounds.border_origin(anchor, scale);
         let surface_size = Size::new(
-            dimensions.width as f32 / pixels_per_point,
-            dimensions.height as f32 / pixels_per_point,
+            scale.pixels_to_points(dimensions.width as f32),
+            scale.pixels_to_points(dimensions.height as f32),
         );
         Some(Self {
             dimensions,

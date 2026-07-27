@@ -132,7 +132,7 @@ pub(crate) fn blur_shadow_mask(
 
     use resvg::tiny_skia;
 
-    let s = filter_dpi_scale(filter_dpi);
+    let s = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
     let kernel = CoverageBlurKernel::from_sigma(sigma)?;
     let pad = kernel.padding_px;
@@ -190,7 +190,7 @@ pub(crate) fn blur_inset_shadow_mask(
 
     use resvg::tiny_skia;
 
-    let s = filter_dpi_scale(filter_dpi);
+    let s = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let sigma = (shadow.blur / PT_PER_PX) * s / 2.0;
     let kernel = CoverageBlurKernel::from_sigma(sigma)?;
     let bounds = InsetMaskBounds::for_shadow(shadow, kernel)?;
@@ -355,7 +355,7 @@ pub(crate) fn blur_shadow_alpha_mask(
         return None;
     }
 
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let sigma = (blur_pt / PT_PER_PX) * scale / 2.0;
     let kernel = CoverageBlurKernel::from_sigma(sigma)?;
     let padding = kernel.padding_px;

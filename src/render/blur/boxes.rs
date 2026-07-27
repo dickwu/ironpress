@@ -22,7 +22,7 @@ pub(crate) fn blur_box(
 
     use resvg::tiny_skia;
 
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let kernel = FilterBlurKernel::new(blur_radius_pt, filter_dpi)?;
     let padding = kernel.padding_px;
     let box_x = filter_raster_axis(width_pt, scale)?;

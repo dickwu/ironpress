@@ -249,7 +249,7 @@ pub(crate) fn rasterize_run_alpha(request: GlyphRasterRequest<'_>) -> Option<Gly
     }
 
     // Font size and shaped point offsets are resolved in the same device space.
-    let s = filter_dpi_scale(request.dpi);
+    let s = RasterScale::at_dpi(request.dpi).pixels_per_css_pixel();
     let pt_to_px = s / PT_PER_PX;
     let stroke_px = (request.style.embolden * pt_to_px).max(0.0);
     let positioning =

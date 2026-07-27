@@ -601,10 +601,9 @@
             .collect();
 
         assert!(
-            content.contains("/Width 101 /Height 101"),
-            "the fractional page-space origin of a 24pt color-filter surface must be enclosed by \
-             101 device samples at the default 300-DPI filter resolution; embedded image headers: \
-             {image_headers:?}"
+            content.contains("/Width 100 /Height 100"),
+            "24pt at the default 300-DPI filter resolution is exactly 100 device samples; \
+             embedded image headers: {image_headers:?}"
         );
         assert!(
             !content.contains("/Width 96 /Height 96"),

@@ -30,7 +30,8 @@ impl SourcePaintPass {
         {
             let mut canvas = RasterCanvas {
                 pixels: &mut pixels,
-                pixels_per_point: crate::render::blur::px_per_pt_at_dpi(filter_dpi),
+                pixels_per_point: crate::render::raster_scale::RasterScale::at_dpi(filter_dpi)
+                    .pixels_per_point(),
                 paint_bounds: &mut paint_bounds,
             };
             paint_element(

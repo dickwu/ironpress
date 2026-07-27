@@ -31,7 +31,7 @@ pub(crate) fn turbulence_displacement_rect(
     if width_pt <= 0.0 || height_pt <= 0.0 || color.a <= 0.0 {
         return None;
     }
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let width_css = width_pt / PT_PER_PX;
     let height_css = height_pt / PT_PER_PX;
     let overflow = spec.filter_region_overflow;

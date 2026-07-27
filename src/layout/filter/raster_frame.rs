@@ -30,17 +30,17 @@ impl FilterRasterFrame {
         let Some(paint_bounds) = paint_bounds else {
             return self;
         };
-        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(dpi);
         let Some(subset) = DeviceSubset::resolve(
             paint_bounds,
             raster_overflow,
             effect_support,
-            pixels_per_point,
+            scale,
             self.pixels.dimensions(),
         ) else {
             return self;
         };
-        self.crop_to(subset, pixels_per_point)
+        self.crop_to(subset, scale)
     }
 
     /// Discard filter allocation which a following CSS mask cannot expose.
@@ -49,22 +49,24 @@ impl FilterRasterFrame {
     /// box. The mask itself remains a post-filter PDF effect; this subset only
     /// removes provably unreachable samples and preserves their device phase.
     pub(super) fn subset_to_border_box(self, size: crate::types::Size, dpi: f32) -> Self {
-        let pixels_per_point = crate::render::blur::px_per_pt_at_dpi(dpi);
+        let scale = crate::render::raster_scale::RasterScale::at_dpi(dpi);
         let bounds = crate::types::Rect::from_xywh(
             self.overflow.left,
             self.overflow.top,
             size.width,
             size.height,
         );
-        let Some(subset) =
-            DeviceSubset::enclosing(bounds, pixels_per_point, self.pixels.dimensions())
-        else {
+        let Some(subset) = DeviceSubset::enclosing(bounds, scale, self.pixels.dimensions()) else {
             return self;
         };
-        self.crop_to(subset, pixels_per_point)
+        self.crop_to(subset, scale)
     }
 
-    fn crop_to(mut self, subset: DeviceSubset, pixels_per_point: f32) -> Self {
+    fn crop_to(
+        mut self,
+        subset: DeviceSubset,
+        scale: crate::render::raster_scale::RasterScale,
+    ) -> Self {
         let crop = subset.crop_edges(self.pixels.dimensions());
         if crop.is_empty() {
             return self;
@@ -76,7 +78,7 @@ impl FilterRasterFrame {
         }
         self.pixels =
             image::imageops::crop_imm(&self.pixels, crop.left, crop.top, width, height).to_image();
-        self.overflow -= crop.to_points(pixels_per_point);
+        self.overflow -= crop.to_points(scale);
         self
     }
 }
@@ -94,7 +96,7 @@ impl DeviceSubset {
         paint_bounds: crate::types::Rect,
         raster_overflow: EdgeSizes,
         effect_support: EdgeSizes,
-        pixels_per_point: f32,
+        scale: crate::render::raster_scale::RasterScale,
         dimensions: (u32, u32),
     ) -> Option<Self> {
         let left = paint_bounds.origin.x - effect_support.left + raster_overflow.left;
@@ -103,27 +105,21 @@ impl DeviceSubset {
         let bottom = paint_bounds.bottom() + effect_support.bottom + raster_overflow.top;
         Self::enclosing(
             crate::types::Rect::from_xywh(left, top, right - left, bottom - top),
-            pixels_per_point,
+            scale,
             dimensions,
         )
     }
 
     fn enclosing(
         bounds: crate::types::Rect,
-        pixels_per_point: f32,
+        scale: crate::render::raster_scale::RasterScale,
         dimensions: (u32, u32),
     ) -> Option<Self> {
         let floor = |points: f32, maximum: u32| {
-            let value = points * pixels_per_point;
-            value
-                .is_finite()
-                .then(|| value.floor().clamp(0.0, maximum as f32) as u32)
+            Some(scale.floor(points)?.clamp(0, i64::from(maximum)) as u32)
         };
         let ceil = |points: f32, maximum: u32| {
-            let value = points * pixels_per_point;
-            value
-                .is_finite()
-                .then(|| value.ceil().clamp(0.0, maximum as f32) as u32)
+            Some(scale.ceil(points)?.clamp(0, i64::from(maximum)) as u32)
         };
         let subset = Self {
             left: floor(bounds.origin.x, dimensions.0)?,
@@ -174,12 +170,12 @@ impl DeviceEdges {
         self.top == 0 && self.right == 0 && self.bottom == 0 && self.left == 0
     }
 
-    fn to_points(self, pixels_per_point: f32) -> EdgeSizes {
+    fn to_points(self, scale: crate::render::raster_scale::RasterScale) -> EdgeSizes {
         EdgeSizes::new(
-            self.top as f32 / pixels_per_point,
-            self.right as f32 / pixels_per_point,
-            self.bottom as f32 / pixels_per_point,
-            self.left as f32 / pixels_per_point,
+            scale.pixels_to_points(self.top as f32),
+            scale.pixels_to_points(self.right as f32),
+            scale.pixels_to_points(self.bottom as f32),
+            scale.pixels_to_points(self.left as f32),
         )
     }
 }

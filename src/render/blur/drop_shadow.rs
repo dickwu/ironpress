@@ -81,7 +81,8 @@ pub(crate) fn drop_shadow_surface(
     {
         return None;
     }
-    let pixels_per_point = px_per_pt_at_dpi(filter_dpi);
+    let pixels_per_point =
+        crate::render::raster_scale::RasterScale::at_dpi(filter_dpi).pixels_per_point();
     let kernel = (shadow.blur > 0.0)
         .then(|| FilterBlurKernel::new(shadow.blur, filter_dpi))
         .flatten();

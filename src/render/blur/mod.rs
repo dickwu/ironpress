@@ -16,6 +16,7 @@
 
 use crate::layout::engine::{ImageFormat, LayoutBorder, RasterImageAsset};
 use crate::parser::ttf::TtfFont;
+use crate::render::raster_scale::RasterScale;
 use crate::style::computed::{BoxShadow, DropShadow, ImageRendering};
 use crate::types::{CornerRadii, EdgeSizes};
 
@@ -47,10 +48,6 @@ const PT_PER_PX: f32 = 0.75;
 /// Maximum device-pixel shortfall treated as arithmetic noise at a half-pixel
 /// raster boundary.
 const FILTER_RASTER_HALF_PIXEL_TOLERANCE: f64 = 0.01;
-
-fn filter_dpi_scale(filter_dpi: f32) -> f32 {
-    crate::style::raster_quality::raster_dpi_at_least(filter_dpi, 1.0) / 96.0
-}
 
 /// One authored filter extent represented both by the backing-pixel bound and
 /// the unquantized paint extent within that bound.
@@ -104,7 +101,7 @@ pub(crate) fn box_shadow_blur_overflow(blur_radius_pt: f32, filter_dpi: f32) -> 
     if blur_radius_pt <= 0.0 {
         return Some(0.0);
     }
-    let scale = filter_dpi_scale(filter_dpi);
+    let scale = RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
     let sigma = (blur_radius_pt / PT_PER_PX) * scale / 2.0;
     let padding = pad_pixels(sigma)?;
     Some(padding as f32 / scale * PT_PER_PX)
@@ -194,7 +191,8 @@ pub(crate) struct FilterBlurKernel {
 
 impl FilterBlurKernel {
     pub(crate) fn new(blur_radius_pt: f32, filter_dpi: f32) -> Option<Self> {
-        let nominal_sigma = blur_radius_pt / PT_PER_PX * filter_dpi_scale(filter_dpi);
+        let nominal_sigma =
+            blur_radius_pt / PT_PER_PX * RasterScale::at_dpi(filter_dpi).pixels_per_css_pixel();
         if !nominal_sigma.is_normal() || nominal_sigma <= 0.0 {
             return None;
         }
@@ -259,11 +257,6 @@ pub(crate) fn rgba_to_png_alpha_asset(
         None,
         filter_dpi,
     ))
-}
-
-/// Device pixels per point at one physical raster resolution.
-pub(crate) fn px_per_pt_at_dpi(dpi: f32) -> f32 {
-    filter_dpi_scale(dpi) / PT_PER_PX
 }
 
 /// Convert an `f32` 0..1 RGBA to a tiny-skia non-premultiplied `Color`.

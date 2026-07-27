@@ -56,7 +56,8 @@ pub(super) fn render_text_shadow_blur(
     };
 
     let px_per_pt =
-        crate::render::blur::px_per_pt_at_dpi(pdf_writer.opts.raster_quality.filter_dpi);
+        crate::render::raster_scale::RasterScale::at_dpi(pdf_writer.opts.raster_quality.filter_dpi)
+            .pixels_per_point();
     let buf_w_px = (mask_w + 2 * pad) as f32;
     let buf_h_px = (mask_h + 2 * pad) as f32;
     let w_pt = buf_w_px / px_per_pt;
