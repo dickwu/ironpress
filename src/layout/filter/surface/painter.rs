@@ -292,7 +292,7 @@ pub(super) fn paint_element(
         return painter.paint_group(
             space,
             owner.paint_group(),
-            element.transform_reference_box(),
+            element.box_reference_geometry(),
             |painter| {
                 element.accept(painter);
                 painter.result

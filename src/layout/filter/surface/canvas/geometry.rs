@@ -92,6 +92,12 @@ impl PaintBounds {
         }
     }
 
+    pub(in crate::layout::filter::surface) fn clip_to(&mut self, clip: Option<Rect>) {
+        self.0 = self
+            .0
+            .and_then(|bounds| clip.and_then(|clip| bounds.intersection(clip)));
+    }
+
     pub(in crate::layout::filter::surface) fn include_transformed(
         &mut self,
         bounds: Self,

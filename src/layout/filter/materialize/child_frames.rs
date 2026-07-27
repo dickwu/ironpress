@@ -96,7 +96,7 @@ impl Resolver<'_> {
         anchor: PageBoxAnchor,
         size: crate::types::Size,
         group: &crate::layout::elements::PaintGroup,
-        reference_box: &dyn crate::layout::elements::TransformReferenceBox,
+        reference_box: &dyn crate::layout::elements::BoxReferenceGeometry,
     ) -> InheritedFilterPaintSpace {
         self.descendant_space
             .enter(anchor, size, Some(group), Some(reference_box))

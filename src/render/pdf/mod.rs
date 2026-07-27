@@ -27,9 +27,9 @@ use crate::render::svg_geometry::SvgViewportBox;
 use crate::style::computed::{
     AlignItems, BackgroundAttachment, BackgroundClip, BackgroundPosition, BackgroundRepeat,
     BackgroundSize, BorderCollapse, BorderStyle, Clear, ConicGradient, Float, FontFamily,
-    GradientInterpolation, GradientRamp, LengthPercent, LinearGradient, MaskComposite, MaskLayer,
-    MaskLayerSource, MaskMode, MaskSource, Overflow, Position, RadialExtent, RadialGradient,
-    RadialShape, ResolvedGradientHint, ResolvedGradientRamp, TextAlign, VerticalAlign,
+    GradientInterpolation, GradientRamp, LinearGradient, MaskComposite, MaskLayer, MaskLayerSource,
+    MaskMode, MaskSource, Overflow, Position, RadialExtent, RadialGradient, RadialShape,
+    ResolvedGradientHint, ResolvedGradientRamp, TextAlign, VerticalAlign,
 };
 use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalSide, Rect};
 use crate::util::{AxisRepeatPattern, MAX_RASTER_TILE_EDGE, RasterDimensions, RasterTile};

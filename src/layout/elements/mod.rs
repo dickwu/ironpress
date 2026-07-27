@@ -111,9 +111,9 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
-    /// Geometry capability used to resolve `transform-box` without inspecting
-    /// a concrete layout-node type.
-    fn transform_reference_box(&self) -> Option<&dyn TransformReferenceBox> {
+    /// Box-reference geometry used by transforms, clips, masks, and other
+    /// graphical effects without inspecting a concrete layout-node type.
+    fn box_reference_geometry(&self) -> Option<&dyn BoxReferenceGeometry> {
         None
     }
 
@@ -352,8 +352,8 @@ impl LayoutElement for LayoutNode {
         self.as_mut().paint_group_owner_mut()
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn TransformReferenceBox> {
-        self.as_ref().transform_reference_box()
+    fn box_reference_geometry(&self) -> Option<&dyn BoxReferenceGeometry> {
+        self.as_ref().box_reference_geometry()
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
@@ -502,13 +502,26 @@ pub(crate) trait PaintGroupOwner {
     fn paint_group_mut(&mut self) -> &mut PaintGroup;
 }
 
-/// Box-model geometry needed to resolve the reference box of a CSS transform.
+/// Canonical border-, padding-, and content-box geometry for graphical effects.
 ///
-/// Ordinary and replaced boxes retain different layout structures, but a
-/// transform consumer only needs the inset from the border box to the content
-/// box. Keeping that capability narrow avoids renderer-side concrete visitors.
-pub(crate) trait TransformReferenceBox {
+/// Ordinary boxes, replaced content, and formatting-context cells retain
+/// different state structures. Consumers ask this capability for the semantic
+/// reference box instead of rediscovering insets or visiting concrete types.
+pub(crate) trait BoxReferenceGeometry {
+    fn border_insets(&self) -> crate::types::EdgeSizes;
     fn content_insets(&self) -> crate::types::EdgeSizes;
+
+    fn shape_box(
+        &self,
+        border_box: crate::types::Rect,
+        kind: crate::style::computed::ShapeBox,
+    ) -> crate::types::Rect {
+        match kind {
+            crate::style::computed::ShapeBox::Border => border_box,
+            crate::style::computed::ShapeBox::Padding => border_box.inset(self.border_insets()),
+            crate::style::computed::ShapeBox::Content => border_box.inset(self.content_insets()),
+        }
+    }
 }
 
 /// Ownership of the canonical paint state shared by ordinary CSS boxes.

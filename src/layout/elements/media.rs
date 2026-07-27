@@ -36,7 +36,11 @@ impl ReplacedGeometry {
     }
 }
 
-impl super::TransformReferenceBox for ReplacedGeometry {
+impl super::BoxReferenceGeometry for ReplacedGeometry {
+    fn border_insets(&self) -> crate::types::EdgeSizes {
+        self.border.widths()
+    }
+
     fn content_insets(&self) -> crate::types::EdgeSizes {
         self.border.widths()
     }
@@ -226,7 +230,7 @@ impl LayoutElement for Image {
         Some(self)
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+    fn box_reference_geometry(&self) -> Option<&dyn super::BoxReferenceGeometry> {
         Some(&self.geometry)
     }
 
@@ -374,7 +378,7 @@ impl LayoutElement for Svg {
         Some(self)
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+    fn box_reference_geometry(&self) -> Option<&dyn super::BoxReferenceGeometry> {
         Some(&self.geometry)
     }
 }

@@ -202,38 +202,6 @@ mod geometry_consumer_tests {
     }
 }
 
-pub(super) fn resolve_len_percent(v: LengthPercent, extent: f32) -> f32 {
-    v.resolve(extent)
-}
-
-pub(super) fn resolve_clip_radius(
-    radius: crate::style::computed::ClipRadius,
-    w: f32,
-    h: f32,
-    cx: f32,
-    cy: f32,
-) -> f32 {
-    match radius {
-        crate::style::computed::ClipRadius::Length(lp) => {
-            resolve_len_percent(lp, (w * w + h * h).sqrt() / std::f32::consts::SQRT_2)
-        }
-        crate::style::computed::ClipRadius::Extent(extent) => match extent {
-            crate::style::computed::ShapeExtent::ClosestSide => cx.min(w - cx).min(cy.min(h - cy)),
-            crate::style::computed::ShapeExtent::FarthestSide => cx.max(w - cx).max(cy.max(h - cy)),
-            crate::style::computed::ShapeExtent::ClosestCorner => {
-                let dx = cx.min(w - cx);
-                let dy = cy.min(h - cy);
-                (dx * dx + dy * dy).sqrt()
-            }
-            crate::style::computed::ShapeExtent::FarthestCorner => {
-                let dx = cx.max(w - cx);
-                let dy = cy.max(h - cy);
-                (dx * dx + dy * dy).sqrt()
-            }
-        },
-    }
-}
-
 pub(super) fn push_clip_path(
     content: &mut String,
     clip: &crate::style::computed::ClipPath,
@@ -250,11 +218,11 @@ pub(super) fn push_clip_path(
             geometry_box,
         } => {
             let reference = geometry.shape_box(*geometry_box);
-            let cx_off = resolve_len_percent(*cx, reference.width);
-            let cy_off = resolve_len_percent(*cy, reference.height);
+            let cx_off = cx.resolve(reference.width);
+            let cy_off = cy.resolve(reference.height);
             let cxp = reference.left + cx_off;
             let cyp = reference.top() - cy_off;
-            let rad = resolve_clip_radius(*r, reference.width, reference.height, cx_off, cy_off);
+            let rad = r.resolve_circle(reference.width, reference.height, cx_off, cy_off);
             PdfEllipse::circle(PdfPoint::new(cxp, cyp), rad).push_path(content);
         }
         ClipPath::Ellipse {
@@ -265,28 +233,15 @@ pub(super) fn push_clip_path(
             geometry_box,
         } => {
             let reference = geometry.shape_box(*geometry_box);
-            let off_x = resolve_len_percent(*cx, reference.width);
-            let off_y = resolve_len_percent(*cy, reference.height);
+            let off_x = cx.resolve(reference.width);
+            let off_y = cy.resolve(reference.height);
             let cxp = reference.left + off_x;
             let cyp = reference.top() - off_y;
-            let resolve_r =
-                |r: crate::style::computed::ClipRadius, axis: f32, other: f32, off: f32| match r {
-                    crate::style::computed::ClipRadius::Length(lp) => resolve_len_percent(lp, axis),
-                    crate::style::computed::ClipRadius::Extent(
-                        crate::style::computed::ShapeExtent::ClosestSide,
-                    ) => off.min(axis - off),
-                    crate::style::computed::ClipRadius::Extent(
-                        crate::style::computed::ShapeExtent::FarthestSide,
-                    ) => off.max(axis - off),
-                    crate::style::computed::ClipRadius::Extent(_) => {
-                        (axis * axis + other * other).sqrt() * 0.5
-                    }
-                };
             PdfEllipse::new(
                 PdfPoint::new(cxp, cyp),
                 PdfVector::new(
-                    resolve_r(*rx, reference.width, reference.height, off_x),
-                    resolve_r(*ry, reference.height, reference.width, off_y),
+                    rx.resolve_ellipse_axis(reference.width, reference.height, off_x),
+                    ry.resolve_ellipse_axis(reference.height, reference.width, off_y),
                 ),
             )
             .push_path(content);
@@ -300,10 +255,10 @@ pub(super) fn push_clip_path(
             geometry_box,
         } => {
             let reference = geometry.shape_box(*geometry_box);
-            let x0 = reference.left + resolve_len_percent(*l, reference.width);
-            let x1 = reference.right() - resolve_len_percent(*right, reference.width);
-            let y1 = reference.top() - resolve_len_percent(*top, reference.height);
-            let y0 = reference.bottom + resolve_len_percent(*bottom, reference.height);
+            let x0 = reference.left + l.resolve(reference.width);
+            let x1 = reference.right() - right.resolve(reference.width);
+            let y1 = reference.top() - top.resolve(reference.height);
+            let y0 = reference.bottom + bottom.resolve(reference.height);
             let (rw, rh) = ((x1 - x0).max(0.0), (y1 - y0).max(0.0));
             content.push_str(&PdfRect::new(x0, y0, rw, rh).rounded(*radii).path_or_rect());
         }
@@ -314,8 +269,8 @@ pub(super) fn push_clip_path(
         } => {
             let reference = geometry.shape_box(*geometry_box);
             for (i, (px, py)) in points.iter().enumerate() {
-                let x = reference.left + resolve_len_percent(*px, reference.width);
-                let y = reference.top() - resolve_len_percent(*py, reference.height);
+                let x = reference.left + px.resolve(reference.width);
+                let y = reference.top() - py.resolve(reference.height);
                 content.push_str(&format!("{x} {y} {}\n", if i == 0 { "m" } else { "l" }));
             }
             content.push_str("h\n");
@@ -375,11 +330,11 @@ pub(super) fn push_clip_path(
             geometry_box,
         } => {
             let reference = geometry.shape_box(*geometry_box);
-            let rw = resolve_len_percent(*width, reference.width);
-            let rh = resolve_len_percent(*height, reference.height);
+            let rw = width.resolve(reference.width);
+            let rh = height.resolve(reference.height);
             let rect = PdfRect::from_top(
-                reference.left + resolve_len_percent(*x, reference.width),
-                reference.top() - resolve_len_percent(*y, reference.height),
+                reference.left + x.resolve(reference.width),
+                reference.top() - y.resolve(reference.height),
                 rw,
                 rh,
             );

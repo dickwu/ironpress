@@ -159,7 +159,7 @@ impl LayoutElement for TableBoxDecoration {
         Some(&mut self.block)
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+    fn box_reference_geometry(&self) -> Option<&dyn super::BoxReferenceGeometry> {
         Some(&self.block.box_model)
     }
 

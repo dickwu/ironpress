@@ -364,6 +364,60 @@ pub enum ClipRadius {
     Extent(ShapeExtent),
 }
 
+impl ClipRadius {
+    /// Resolve a circle radius against the basic-shape reference box.
+    pub(crate) fn resolve_circle(
+        self,
+        width: f32,
+        height: f32,
+        center_x: f32,
+        center_y: f32,
+    ) -> f32 {
+        match self {
+            Self::Length(length) => {
+                length.resolve((width * width + height * height).sqrt() / std::f32::consts::SQRT_2)
+            }
+            Self::Extent(ShapeExtent::ClosestSide) => center_x
+                .min(width - center_x)
+                .min(center_y.min(height - center_y)),
+            Self::Extent(ShapeExtent::FarthestSide) => center_x
+                .max(width - center_x)
+                .max(center_y.max(height - center_y)),
+            Self::Extent(ShapeExtent::ClosestCorner) => {
+                let x = center_x.min(width - center_x);
+                let y = center_y.min(height - center_y);
+                (x * x + y * y).sqrt()
+            }
+            Self::Extent(ShapeExtent::FarthestCorner) => {
+                let x = center_x.max(width - center_x);
+                let y = center_y.max(height - center_y);
+                (x * x + y * y).sqrt()
+            }
+        }
+    }
+
+    /// Resolve one ellipse radius along its selected axis.
+    pub(crate) fn resolve_ellipse_axis(
+        self,
+        axis_extent: f32,
+        other_extent: f32,
+        center_offset: f32,
+    ) -> f32 {
+        match self {
+            Self::Length(length) => length.resolve(axis_extent),
+            Self::Extent(ShapeExtent::ClosestSide) => {
+                center_offset.min(axis_extent - center_offset)
+            }
+            Self::Extent(ShapeExtent::FarthestSide) => {
+                center_offset.max(axis_extent - center_offset)
+            }
+            Self::Extent(ShapeExtent::ClosestCorner | ShapeExtent::FarthestCorner) => {
+                (axis_extent * axis_extent + other_extent * other_extent).sqrt() * 0.5
+            }
+        }
+    }
+}
+
 /// A CSS `clip-path` basic shape. Lengths are in points; positions/percentages
 /// resolve against the selected reference box at render time.
 #[derive(Debug, Clone, PartialEq)]

@@ -5,7 +5,7 @@
 //! simpler layer coordinate system and retain the remaining transform for
 //! post-filter compositing. These types keep those meanings separate.
 
-use crate::layout::elements::{PaintGroup, TransformReferenceBox};
+use crate::layout::elements::{BoxReferenceGeometry, PaintGroup};
 use crate::style::computed::{CssAffineMatrix, CssVector};
 use crate::types::{Point, Rect, Size, Vector};
 
@@ -54,7 +54,7 @@ impl InheritedFilterPaintSpace {
         anchor: PageBoxAnchor,
         size: Size,
         group: Option<&PaintGroup>,
-        reference_box: Option<&dyn TransformReferenceBox>,
+        reference_box: Option<&dyn BoxReferenceGeometry>,
     ) -> FilterBoxPaintSpace {
         let own_transform = group
             .and_then(|group| {
@@ -62,7 +62,7 @@ impl InheritedFilterPaintSpace {
                     Rect::new(anchor.border_origin(), size),
                     reference_box.map_or(
                         crate::types::EdgeSizes::ZERO,
-                        TransformReferenceBox::content_insets,
+                        BoxReferenceGeometry::content_insets,
                     ),
                 )
             })

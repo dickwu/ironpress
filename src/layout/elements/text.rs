@@ -313,7 +313,7 @@ impl LayoutElement for TextBlock {
         Some(self)
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
+    fn box_reference_geometry(&self) -> Option<&dyn super::BoxReferenceGeometry> {
         Some(&self.box_model)
     }
 

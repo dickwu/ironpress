@@ -282,7 +282,11 @@ impl BoxModel {
     }
 }
 
-impl super::TransformReferenceBox for BoxModel {
+impl super::BoxReferenceGeometry for BoxModel {
+    fn border_insets(&self) -> EdgeSizes {
+        self.border.widths()
+    }
+
     fn content_insets(&self) -> EdgeSizes {
         self.border.widths() + self.padding
     }

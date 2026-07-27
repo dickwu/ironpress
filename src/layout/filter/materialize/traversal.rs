@@ -19,7 +19,7 @@ impl TraversalFrame {
                 self.anchor,
                 geometry.size,
                 element.paint_group_owner().map(|owner| owner.paint_group()),
-                element.transform_reference_box(),
+                element.box_reference_geometry(),
             )
         });
         ElementTraversalSpace {

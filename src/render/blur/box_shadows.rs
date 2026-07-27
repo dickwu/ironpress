@@ -1,8 +1,8 @@
 //! Raster source construction for CSS box and text shadows.
 
 use super::*;
-use crate::render::curves::{CurveSink, CurveTolerance, QuadraticBezier, RoundedRectPath};
-use crate::types::{Point, Rect, Size, Vector};
+use crate::render::curves::{CurveTolerance, RoundedRectPath, TinySkiaCurveSink};
+use crate::types::{Rect, Size, Vector};
 
 /// A blurred shape's coverage, independent of the color painted through it.
 ///
@@ -224,13 +224,13 @@ pub(crate) fn blur_inset_shadow_mask(
         .inset(EdgeSizes::uniform(spread_px));
     let mut path = tiny_skia::PathBuilder::new();
     RoundedRectPath::new(caster, CornerRadii::ZERO).write_to(
-        &mut TinySkiaCurveSink(&mut path),
+        &mut TinySkiaCurveSink::new(&mut path),
         CurveTolerance::RASTER_PIXEL,
     );
     if hole.size.width > 0.0 && hole.size.height > 0.0 {
         let hole_radii = radii.grow(-shadow.spread) * pt_to_px;
         RoundedRectPath::new(hole, hole_radii).write_to(
-            &mut TinySkiaCurveSink(&mut path),
+            &mut TinySkiaCurveSink::new(&mut path),
             CurveTolerance::RASTER_PIXEL,
         );
     }
@@ -287,7 +287,7 @@ impl RoundedCoverageClip {
         let mut mask = tiny_skia::Pixmap::new(coverage.width(), coverage.height())?;
         let mut path = tiny_skia::PathBuilder::new();
         RoundedRectPath::new(self.rect, self.radii).write_to(
-            &mut TinySkiaCurveSink(&mut path),
+            &mut TinySkiaCurveSink::new(&mut path),
             CurveTolerance::RASTER_PIXEL,
         );
         let path = path.finish()?;
@@ -317,29 +317,10 @@ fn append_rounded_box_path(
     height: f32,
     radii: CornerRadii,
 ) {
-    RoundedRectPath::new(Rect::from_xywh(x, y, width, height), radii)
-        .write_to(&mut TinySkiaCurveSink(path), CurveTolerance::RASTER_PIXEL);
-}
-
-struct TinySkiaCurveSink<'a>(&'a mut resvg::tiny_skia::PathBuilder);
-
-impl CurveSink for TinySkiaCurveSink<'_> {
-    fn move_to(&mut self, point: Point) {
-        self.0.move_to(point.x, point.y);
-    }
-
-    fn line_to(&mut self, point: Point) {
-        self.0.line_to(point.x, point.y);
-    }
-
-    fn quadratic_to(&mut self, curve: QuadraticBezier) {
-        self.0
-            .quad_to(curve.control.x, curve.control.y, curve.end.x, curve.end.y);
-    }
-
-    fn close(&mut self) {
-        self.0.close();
-    }
+    RoundedRectPath::new(Rect::from_xywh(x, y, width, height), radii).write_to(
+        &mut TinySkiaCurveSink::new(path),
+        CurveTolerance::RASTER_PIXEL,
+    );
 }
 
 /// Blur a pre-rasterized straight-alpha glyph coverage mask and tint it.

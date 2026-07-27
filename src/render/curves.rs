@@ -36,6 +36,37 @@ pub(crate) trait CurveSink {
     fn close(&mut self);
 }
 
+/// Adapter from shared CSS curve geometry to tiny-skia paths.
+///
+/// Filter sources, masks, and shadows all use this sink so their raster paths
+/// cannot drift into independent rounded-corner approximations.
+pub(crate) struct TinySkiaCurveSink<'a>(&'a mut resvg::tiny_skia::PathBuilder);
+
+impl<'a> TinySkiaCurveSink<'a> {
+    pub(crate) const fn new(builder: &'a mut resvg::tiny_skia::PathBuilder) -> Self {
+        Self(builder)
+    }
+}
+
+impl CurveSink for TinySkiaCurveSink<'_> {
+    fn move_to(&mut self, point: Point) {
+        self.0.move_to(point.x, point.y);
+    }
+
+    fn line_to(&mut self, point: Point) {
+        self.0.line_to(point.x, point.y);
+    }
+
+    fn quadratic_to(&mut self, curve: QuadraticBezier) {
+        self.0
+            .quad_to(curve.control.x, curve.control.y, curve.end.x, curve.end.y);
+    }
+
+    fn close(&mut self) {
+        self.0.close();
+    }
+}
+
 /// The vector path of one CSS rounded rectangle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RoundedRectPath {

@@ -200,9 +200,9 @@ macro_rules! impl_principal_layout_element {
                 Some(self)
             }
 
-            fn transform_reference_box(
+            fn box_reference_geometry(
                 &self,
-            ) -> Option<&dyn super::TransformReferenceBox> {
+            ) -> Option<&dyn super::BoxReferenceGeometry> {
                 Some(&self.principal().box_model)
             }
 

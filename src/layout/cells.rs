@@ -101,13 +101,21 @@ impl CellBoxModel {
     }
 }
 
-impl crate::layout::elements::TransformReferenceBox for CellBoxModel {
+impl crate::layout::elements::BoxReferenceGeometry for CellBoxModel {
+    fn border_insets(&self) -> EdgeSizes {
+        self.border_insets
+    }
+
     fn content_insets(&self) -> EdgeSizes {
         self.content_insets
     }
 }
 
-impl crate::layout::elements::TransformReferenceBox for crate::layout::engine::FlexCell {
+impl crate::layout::elements::BoxReferenceGeometry for crate::layout::engine::FlexCell {
+    fn border_insets(&self) -> EdgeSizes {
+        self.border.widths()
+    }
+
     fn content_insets(&self) -> EdgeSizes {
         self.border.widths() + self.padding
     }

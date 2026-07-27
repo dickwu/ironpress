@@ -177,8 +177,8 @@ impl LayoutElement for FragmentBox {
         self.source.paint_group_owner_mut()
     }
 
-    fn transform_reference_box(&self) -> Option<&dyn super::TransformReferenceBox> {
-        self.source.transform_reference_box()
+    fn box_reference_geometry(&self) -> Option<&dyn super::BoxReferenceGeometry> {
+        self.source.box_reference_geometry()
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {

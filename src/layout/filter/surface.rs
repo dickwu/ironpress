@@ -2,6 +2,7 @@
 
 mod canvas;
 mod cells;
+mod clip;
 mod dispatch;
 mod geometry;
 mod gradient;
