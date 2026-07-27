@@ -2361,7 +2361,7 @@
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
     "subfeature": "same-element-and-bidirectional-nesting",
-    "description": "Cartesian family interaction for clip-mask and multicol: both representatives compose on one element and in both outer/inner orders. Paged-media representatives force actual page breaks.",
+    "description": "Cartesian family interaction for clip-mask and multicol: both representatives compose on one element and in both outer/inner orders. The standards-derived reference corrects Chromium's print-only half-pixel clip-path shift on the second fractional-width column.",
     "file": "cases/interactions/interactions-cartesian-clip-mask-x-multicol.html",
     "interaction_of": [
       "clip-mask",
@@ -2375,7 +2375,8 @@
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-clip-mask-x-multicol.html"
   },
   {
     "id": "interactions-cartesian-clip-mask-x-overflow-clipping",

@@ -9692,15 +9692,15 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-clip-mask-x-multicol.html",
       "html_sha256": "7c913a2dfb6645db0718db452ba697b6d6c3c82d077c6a43bf56fa9e1f06ffd2",
-      "manifest_sha256": "8b8611a58da7118e522b7441a4f9436e9268f4507c421b0376df91f64befedf0",
+      "manifest_sha256": "0cf74cbb1f067987305611963791bd140e08088bdf8466b2446a389a4c632213",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-clip-mask-x-multicol.pdf",
-        "sha256": "a1031e684509cd93d49b4bb8fcccc22d074a79ef129f51423948e91bda5988a0"
+        "sha256": "41b2568531d099843f3251525b6f50d6a857e7162abe04d767bbd80e0b50434d"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/interactions/interactions-cartesian-clip-mask-x-multicol.html",
-      "reference_html_sha256": "7c913a2dfb6645db0718db452ba697b6d6c3c82d077c6a43bf56fa9e1f06ffd2"
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/interactions/interactions-cartesian-clip-mask-x-multicol.html",
+      "reference_html_sha256": "a2beede814ddb58bc28a91172d91b6e3909c1cccd8d857c52ec7756ecd327da8"
     },
     "interactions-cartesian-clip-mask-x-overflow-clipping": {
       "category": "interactions",
