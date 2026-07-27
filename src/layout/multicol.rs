@@ -3,9 +3,9 @@
 //! Implements a column-major *balanced* flow: the container's block-level
 //! children are laid out top-to-bottom filling column 1, then column 2, etc.,
 //! with the content distributed so the columns end up roughly equal height.
-//! Each column is emitted as an absolutely positioned [`Container`]
-//! at its computed x-offset inside the multicol element's padding box, so the
-//! columns sit side-by-side without participating in the parent's vertical flow.
+//! Each column retains fragmentainer-local physical placement independently
+//! from authored CSS positioning, so it sits beside its peers without changing
+//! containing-block, stacking, or fragmentation semantics.
 //!
 //! Supported:
 //! - `column-count`, `column-width`, and the `columns` shorthand (used-column
@@ -475,13 +475,9 @@ pub(crate) fn layout_multicol_container(
     // the running vertical cursor so successive segments stack.
     let pad_left = style.border.left.used_width() + style.padding.left;
     let pad_top = style.border.top.used_width() + style.padding.top;
-    // Column/band/rule containers are emitted as `Position::Absolute` children of
-    // the multicol wrapper. The renderer places absolute children at the wrapper's
-    // PADDING-box origin (CSS §10.1), so their offsets must be padding-box-relative:
-    // strip the wrapper border from the border-box-relative cursors below. The
-    // height accounting (`cursor_y`/`max_bottom`) stays in border-box coordinates.
-    let bl = style.border.left.used_width();
-    let bt = style.border.top.used_width();
+    // Anonymous columns, bands, and rules retain padding-box-relative physical
+    // placement independently of authored CSS positioning. The height
+    // accounting (`cursor_y`/`max_bottom`) stays in border-box coordinates.
 
     // Explicit border-box height (if any) resolved up front so the column rule
     // can span the full content box of a definite-height multicol container
@@ -518,7 +514,7 @@ pub(crate) fn layout_multicol_container(
             column_children.push(make_fragment_box(
                 &item.elements[0],
                 BoxFragmentPlacement::whole(
-                    Point::new(x_cursor - bl, pad_top - bt),
+                    Point::new(x_cursor - pad_left, 0.0),
                     Size::new(item_w, item.height),
                 ),
             ));
@@ -532,6 +528,7 @@ pub(crate) fn layout_multicol_container(
                 inline_offset,
                 BlockMargins::new(style.margin.top, style.margin.bottom),
             ),
+            positioned_depth,
         ));
         output.push(
             PageBreak {
@@ -569,11 +566,11 @@ pub(crate) fn layout_multicol_container(
     {
         let rows = if style.column_fill_auto {
             build_paginated_column_rows(
-                &items, num_cols, col_width, gap, pad_left, bl, pad_top, bt, col_fill_h, style,
+                &items, num_cols, col_width, gap, pad_left, col_fill_h, style,
             )
         } else {
             build_balanced_paginated_column_rows(
-                &items, num_cols, col_width, gap, pad_left, bl, pad_top, bt, col_fill_h, style,
+                &items, num_cols, col_width, gap, pad_left, col_fill_h, style,
             )
         };
         // Only fragment when the content genuinely spills past one page (more than
@@ -602,6 +599,7 @@ pub(crate) fn layout_multicol_container(
                         inline_offset,
                         BlockMargins::new(mt, mb),
                     ),
+                    positioned_depth,
                 ));
             }
             return;
@@ -619,9 +617,6 @@ pub(crate) fn layout_multicol_container(
             col_width,
             gap,
             pad_left,
-            bl,
-            pad_top,
-            bt,
             col_fill_h,
             inner_width,
             style,
@@ -646,6 +641,7 @@ pub(crate) fn layout_multicol_container(
                         inline_offset,
                         BlockMargins::new(mt, mb),
                     ),
+                    positioned_depth,
                 ));
             }
             return;
@@ -668,8 +664,8 @@ pub(crate) fn layout_multicol_container(
             let band_h = items[i].height;
             let band = make_band_container(
                 std::mem::take(&mut items[i].elements),
-                pad_left - bl,
-                cursor_y - bt,
+                style.padding.left,
+                style.padding.top + cursor_y - pad_top,
                 inner_width,
                 band_h,
             );
@@ -735,8 +731,8 @@ pub(crate) fn layout_multicol_container(
                 column_children.push(make_column_container(
                     col_kids,
                     c,
-                    col_x - bl,
-                    cursor_y - bt,
+                    col_x - pad_left + style.padding.left,
+                    style.padding.top + cursor_y - pad_top,
                     col_width,
                     fragmented.used_block_sizes[c],
                 ));
@@ -785,8 +781,8 @@ pub(crate) fn layout_multicol_container(
                 column_children.push(make_column_container(
                     col_kids,
                     c,
-                    col_x - bl,
-                    cursor_y - bt,
+                    col_x - pad_left + style.padding.left,
+                    style.padding.top + cursor_y - pad_top,
                     col_width,
                     col_height,
                 ));
@@ -845,8 +841,8 @@ pub(crate) fn layout_multicol_container(
             };
             rule_children.push(make_rule_container(
                 span.gap_after,
-                span.inline_offset - bl,
-                rule_top - bt,
+                span.inline_offset - pad_left + style.padding.left,
+                rule_top - pad_top + style.padding.top,
                 rule_w,
                 rule_h,
                 rule_color,
@@ -873,37 +869,58 @@ pub(crate) fn layout_multicol_container(
             inline_offset,
             BlockMargins::new(style.margin.top, style.margin.bottom),
         ),
+        positioned_depth,
     ));
 }
 
 /// Build one multicol wrapper [`Container`] holding `column_children`.
-/// (the absolutely-positioned columns/bands/rules). Shared by the single-page
+/// The retained columns, bands, and rules carry physical fragment placements.
+/// Shared by the single-page
 /// layout and by each page-row of the paginated path, which override the wrapper's
 /// `block_height` (full page for a continuing fragment, shrink-wrapped for the
 /// last) and its `margin_top`/`margin_bottom` (the box is one flow element, so only
 /// the first fragment keeps the top margin and only the last keeps the bottom).
 fn emit_multicol_wrapper(
     style: &ComputedStyle,
-    column_children: Vec<LayoutNode>,
+    mut column_children: Vec<LayoutNode>,
     geometry: MulticolFragmentGeometry,
+    positioned_depth: usize,
 ) -> LayoutNode {
+    let border = LayoutBorder::from_computed(&style.border, style.color);
+    if crate::layout::helpers::establishes_containing_block(style) {
+        let border_box = Size::new(
+            geometry.size.width.fixed_value().unwrap_or_default(),
+            geometry.size.height.used().unwrap_or_default(),
+        );
+        crate::layout::helpers::patch_absolute_descendants_containing_block(
+            &mut column_children,
+            crate::layout::engine::ContainingBlock {
+                x: 0.0,
+                width: (border_box.width - border.horizontal_width()).max(0.0),
+                height: (border_box.height - border.vertical_width()).max(0.0),
+                depth: positioned_depth,
+            },
+        );
+    }
     MulticolContainer::new(Container {
         children: column_children,
         box_model: BoxModel {
             size: geometry.size,
             margins: geometry.margins,
             padding: style.padding,
-            border: LayoutBorder::from_computed(&style.border, style.color),
+            border,
         },
         paint: BoxPaint::from_style(style, geometry.size),
         flow: crate::layout::elements::BlockFlow {
             float: style.float,
             clear: style.clear,
         },
-        positioning: Positioning::from_style(style).with_resolved_insets(crate::types::EdgeSizes {
-            left: geometry.inline_offset.value(),
-            ..Default::default()
-        }),
+        positioning: Positioning::from_style(style)
+            .with_resolved_insets(crate::types::EdgeSizes {
+                left: geometry.inline_offset.value(),
+                ..Default::default()
+            })
+            .with_containing_block_depth(positioned_depth),
         fragmentation: BoxFragmentation::from_style(style)
             .with_decoration(crate::style::computed::BoxDecorationBreak::Slice),
         overflow: OverflowBehavior {

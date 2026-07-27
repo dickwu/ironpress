@@ -48,7 +48,6 @@ use super::inline_formatting::{
 };
 use super::print_scale::{PrintContentScale, assign_page_print_scales};
 use super::root_formatting::{DocumentRootStyles, RootFormattingContext};
-pub(crate) use super::table::cell_box_intrinsic_content_height;
 use super::table::{
     TableLayoutContext, anonymous_table_box_style, anonymous_table_from_cells, flatten_table,
 };
@@ -425,8 +424,6 @@ pub(crate) enum ListContext {
     Unordered { indent: f32 },
     Ordered { index: i32, step: i32, indent: f32 },
 }
-
-pub(crate) use super::table::table_cell_content_height;
 
 /// Identity of one flex line within its owning [`FlexRow`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -2828,7 +2825,7 @@ fn rasterize_svg_displacement_rect(
         asset: raster.asset,
         geometry: FilterRasterGeometry {
             size: source_geometry.size,
-            margins: source_geometry.margins,
+            margins: source_geometry.flow.margins,
             positioning: source_geometry.positioning,
             raster_overflow: raster.raster_overflow,
         },
@@ -3053,7 +3050,12 @@ pub(crate) fn flatten_nodes(
             output,
             super::inline_formatting::GeneratedInlineContent::new(&table, None, None),
             env,
-            TableLayoutContext::new(ctx, ancestors, child_index, sibling_count, positioned_depth),
+            TableLayoutContext::new(
+                ctx,
+                ancestors,
+                ElementSiblingContext::new(child_index, sibling_count),
+                positioned_depth,
+            ),
         );
     }
 
@@ -4627,8 +4629,7 @@ pub(crate) fn flatten_element(
                 TableLayoutContext::new(
                     &layout_ctx,
                     ancestors,
-                    child_index,
-                    sibling_count,
+                    ElementSiblingContext::new(child_index, sibling_count),
                     positioned_depth,
                 ),
             );

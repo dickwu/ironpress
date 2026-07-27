@@ -148,7 +148,10 @@ fn square_background_and_border_use_analytic_edge_coverage() {
 #[test]
 fn positioned_column_rule_uses_the_parent_padding_box_once() {
     let rule = ColumnRule {
-        positioning: Positioning::absolute_at(Point::new(10.0, 0.0)),
+        placement: crate::layout::elements::FragmentPlacement::in_padding_box(
+            crate::types::Vector::new(10.0, 0.0),
+            Size::new(2.0, 10.0),
+        ),
         height: 10.0,
         paint: crate::layout::engine::LayoutBorderSide {
             width: 2.0,
@@ -176,6 +179,53 @@ fn positioned_column_rule_uses_the_parent_padding_box_once() {
         [255, 0, 0, 255]
     );
     assert_eq!(border_box_pixel(&source, Point::new(15.0, 1.0))[3], 0);
+}
+
+#[test]
+fn table_filter_source_keeps_the_used_table_border_box_height() {
+    let document = crate::parser::html::parse_html_with_styles(
+        r#"<style>
+            * { box-sizing:border-box; margin:0 }
+            .table {
+                display:table;
+                font-family:ParitySans;
+                width:126px;
+                height:68px;
+                padding:7px;
+                border:2px solid;
+                border-spacing:3px;
+            }
+            .cell { display:table-cell }
+        </style>
+        <div class="table"><div><span class="cell">Ag</span><span class="cell">Bb</span></div></div>"#,
+    )
+    .expect("valid table filter source fixture");
+    let rules = document
+        .stylesheets
+        .iter()
+        .flat_map(|stylesheet| crate::parser::css::parse_stylesheet(stylesheet))
+        .collect::<Vec<_>>();
+    let fonts = test_fonts();
+    let pages = crate::layout::engine::layout_with_rules_and_fonts(
+        &document.nodes,
+        crate::PageSize::new(300.0, 180.0),
+        crate::types::Margin::uniform(0.0),
+        &rules,
+        &fonts,
+        None,
+        0.0,
+        Default::default(),
+    );
+    let table = pages[0].elements[0].1.as_ref();
+    let geometry = source_geometry(table).expect("table principal source geometry");
+    let source =
+        paint_source_graphic(table, &fonts, 300.0, test_anchor()).expect("painted table source");
+
+    assert_eq!(geometry.size.height, 51.0);
+    assert_eq!(
+        source.paint_bounds,
+        Some(crate::types::Rect::from_xywh(0.0, 0.0, 94.5, 51.0))
+    );
 }
 
 #[test]

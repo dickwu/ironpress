@@ -29,9 +29,10 @@ use super::engine::{
 };
 use super::inline::layout_inline_mixed_sequence_with_env;
 use super::inline_formatting::{
-    AnonymousInlineFormattingContext, InlineContentSequence, InlineFormattingContext,
-    InlineFormattingRole,
+    AnonymousInlineFormattingContext, GeneratedInlineContent, InlineContentSequence,
+    InlineFormattingContext, InlineFormattingRole,
 };
+use super::table::TableLayoutContext;
 use super::text::{
     FlexTextRunCollector, TextWrapOptions, measure_text_intrinsic_widths, parent_line_strut,
     resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
@@ -1820,7 +1821,12 @@ fn layout_grid_item_content_inner(
     // along the main axis instead of stacking them block-by-block.
     if matches!(
         item_style.display,
-        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+        Display::Flex
+            | Display::InlineFlex
+            | Display::Grid
+            | Display::InlineGrid
+            | Display::Table
+            | Display::InlineTable
     ) {
         // Give the inner container exactly the item's content-box width so flex
         // main-axis distribution / grid track sizing resolve correctly.
@@ -1849,29 +1855,54 @@ fn layout_grid_item_content_inner(
         } else if let Some(content_h) = content_height {
             inner_style.height = Some(content_h);
         }
-        if matches!(item_style.display, Display::Flex | Display::InlineFlex) {
-            crate::layout::flex::layout_flex_container(
-                item_el,
-                &inner_style,
-                &child_ctx,
-                &mut out,
-                &child_ancestors,
-                item_style.before.as_ref(),
-                item_style.after.as_ref(),
-                frame.descendants.positioned_depth,
-                env,
-            );
-        } else {
-            layout_grid_container_inner(
-                item_el,
-                &inner_style,
-                &child_ctx,
-                &mut out,
-                &child_ancestors,
-                frame.descendants.positioned_depth,
-                env,
-                subgrid,
-            );
+        match item_style.display {
+            Display::Flex | Display::InlineFlex => {
+                crate::layout::flex::layout_flex_container(
+                    item_el,
+                    &inner_style,
+                    &child_ctx,
+                    &mut out,
+                    &child_ancestors,
+                    item_style.before.as_ref(),
+                    item_style.after.as_ref(),
+                    frame.descendants.positioned_depth,
+                    env,
+                );
+            }
+            Display::Grid | Display::InlineGrid => {
+                layout_grid_container_inner(
+                    item_el,
+                    &inner_style,
+                    &child_ctx,
+                    &mut out,
+                    &child_ancestors,
+                    frame.descendants.positioned_depth,
+                    env,
+                    subgrid,
+                );
+            }
+            Display::Table | Display::InlineTable => {
+                inner_style.display = Display::Table;
+                let source = item_style.source_position.as_context();
+                crate::layout::table::flatten_table(
+                    item_el,
+                    &inner_style,
+                    &mut out,
+                    GeneratedInlineContent::new(
+                        item_el,
+                        item_style.before.as_ref(),
+                        item_style.after.as_ref(),
+                    ),
+                    env,
+                    TableLayoutContext::new(
+                        &child_ctx,
+                        item_ancestors,
+                        source,
+                        frame.descendants.positioned_depth,
+                    ),
+                );
+            }
+            _ => {}
         }
         return CellContent {
             lines: Vec::new(),

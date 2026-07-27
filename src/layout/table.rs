@@ -7,9 +7,9 @@ use crate::layout::elements::{
     LayoutSize, LayoutVisitor, LayoutVisitorMut, PageBreak, PaintGroup, Positioning,
     SizeConstraints, Svg, Table, TableBoxDecoration, TableCells, TableFormatting,
     TableFragmentGroup, TableFragmentation, TableGridIdentity, TableInlineGeometry, TableRow,
-    TableRowFlow, TextBlock,
+    TextBlock,
 };
-use crate::layout::flow_metrics::BlockMargins;
+use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins};
 use crate::parser::css::{AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
@@ -30,8 +30,8 @@ use super::context::{ContainingBlock, LayoutContext, LayoutEnv};
 #[cfg(test)]
 use super::engine::LayoutBorderSide;
 use super::engine::{
-    CounterState, ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, TextLine,
-    TextRun, collects_as_inline_text, element_is_empty, element_sibling_list, flatten_element,
+    CounterState, ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, TextRun,
+    collects_as_inline_text, element_is_empty, element_sibling_list, flatten_element,
     forward_siblings, has_background_paint, recurses_as_layout_child,
 };
 use super::helpers::{PseudoBoxContext, build_pseudo_block, pseudo_is_block_like};
@@ -78,15 +78,14 @@ impl<'context, 'dom> TableLayoutContext<'context, 'dom> {
     pub(crate) const fn new(
         layout: &'context LayoutContext,
         ancestors: &'context [AncestorInfo<'dom>],
-        source_index: usize,
-        sibling_count: usize,
+        source: ElementSiblingContext<'_>,
         positioned_depth: usize,
     ) -> Self {
         Self {
             layout,
             ancestors,
-            source_index,
-            sibling_count,
+            source_index: source.child_index(),
+            sibling_count: source.sibling_count(),
             positioned_depth,
         }
     }
@@ -168,7 +167,7 @@ fn update_table_row(element: &mut dyn LayoutElement, update: impl FnOnce(&mut Ta
 fn table_row_node(
     grid: TableGridIdentity,
     content: TableCells,
-    flow: TableRowFlow,
+    flow: BlockFlowSpacing,
     formatting: TableFormatting,
     fragmentation: TableFragmentation,
     inline: TableInlineGeometry,
@@ -398,26 +397,6 @@ fn cell_has_no_content(cell_el: &ElementNode) -> bool {
         // counts as "empty" here.
         DomNode::Text(text) => text.chars().all(|c| c.is_ascii_whitespace()),
     })
-}
-
-pub(crate) fn table_cell_content_height(cell: &TableCell) -> f32 {
-    // An explicit cell height acts as a minimum (CSS): an empty cell with
-    // `height:Npx` must still occupy that height rather than collapsing.
-    cell_box_intrinsic_content_height(&cell.layout).max(cell.layout.box_model.minimum_block_size)
-}
-
-fn nested_cell_content_height(elements: &[LayoutNode]) -> f32 {
-    super::paginate::simulate_block_flow(elements).height
-}
-
-/// The cell's *actual* content height (padding + text + nested content), WITHOUT
-/// the `min_content_height` floor. Used to position content within a taller cell
-/// (e.g. `vertical-align` offset), where the real content extent is needed
-/// rather than the cell's full height.
-pub(crate) fn cell_box_intrinsic_content_height(cell: &CellBox) -> f32 {
-    let text_h: f32 = cell.content.lines.iter().map(|line| line.height).sum();
-    let nested_h = nested_cell_content_height(&cell.content.children);
-    text_h + nested_h + cell.box_model.content_insets.vertical()
 }
 
 /// Parse a width for a `<col>` / `<colgroup>` element.
@@ -1075,7 +1054,7 @@ fn hide_table_cell_paint(cell: &mut TableCell) {
         .layout
         .box_model
         .minimum_block_size
-        .max(table_cell_content_height(cell));
+        .max(cell.row_block_extent());
     cell.layout.content.lines.clear();
     cell.layout.content.children.clear();
     cell.layout.paint.background = Default::default();
@@ -1278,10 +1257,7 @@ fn distribute_extra_width(widths: &mut [f32], extra: f32) {
 }
 
 fn row_height_from_cells(cells: &[TableCell]) -> f32 {
-    cells
-        .iter()
-        .map(table_cell_content_height)
-        .fold(0.0f32, f32::max)
+    crate::layout::cells::TableRowCells::row_block_extent(cells)
 }
 
 fn enforce_row_min_height(cells: &mut [TableCell], min_height: f32) {
@@ -1365,64 +1341,6 @@ fn table_cell_vertical_align(value: VerticalAlign) -> VerticalAlign {
     match value {
         VerticalAlign::Middle | VerticalAlign::Bottom | VerticalAlign::Top => value,
         _ => VerticalAlign::Top,
-    }
-}
-
-fn estimate_run_text_width(run: &TextRun, text: &str, fonts: &HashMap<String, TtfFont>) -> f32 {
-    estimate_word_width(
-        text,
-        run.font_size,
-        &run.font_family,
-        run.bold,
-        run.font_style.is_slanted(),
-        fonts,
-    )
-}
-
-fn clip_text_lines_to_width(
-    lines: &mut [TextLine],
-    max_width: f32,
-    fonts: &HashMap<String, TtfFont>,
-) {
-    if max_width <= 0.0 {
-        for line in lines {
-            line.runs.clear();
-        }
-        return;
-    }
-
-    for line in lines {
-        let mut used = 0.0f32;
-        let mut clipped_runs = Vec::new();
-        for run in &line.runs {
-            let run_width = estimate_run_text_width(run, &run.text, fonts);
-            if used + run_width <= max_width {
-                used += run_width;
-                clipped_runs.push(run.clone());
-                continue;
-            }
-
-            let mut clipped_text = String::new();
-            for ch in run.text.chars() {
-                let mut candidate = clipped_text.clone();
-                candidate.push(ch);
-                let candidate_width = estimate_run_text_width(run, &candidate, fonts);
-                if used + candidate_width > max_width {
-                    if !clipped_text.is_empty() {
-                        clipped_text.push(ch);
-                    }
-                    break;
-                }
-                clipped_text.push(ch);
-            }
-            if !clipped_text.is_empty() {
-                let mut clipped = run.clone();
-                clipped.text = clipped_text;
-                clipped_runs.push(clipped);
-            }
-            break;
-        }
-        line.runs = clipped_runs;
     }
 }
 
@@ -3100,7 +3018,7 @@ pub(crate) fn flatten_table(
                             cells: row_cells,
                             column_widths: row_col_widths,
                         },
-                        TableRowFlow::new(if first_emitted_row {
+                        BlockFlowSpacing::from_internal_start(if first_emitted_row {
                             table_grid_box_insets.top
                         } else {
                             0.0
@@ -3140,7 +3058,7 @@ pub(crate) fn flatten_table(
                         cells: Vec::new(),
                         column_widths: row_col_widths,
                     },
-                    TableRowFlow::new(
+                    BlockFlowSpacing::from_internal_start(
                         spacer_height
                             + if first_emitted_row {
                                 table_grid_box_insets.top
@@ -3357,14 +3275,11 @@ pub(crate) fn flatten_table(
                 counter_state,
             );
             counter_state.leave_element(cell_counter_scope);
-            let mut lines = wrap_text_runs(
+            let lines = wrap_text_runs(
                 runs,
                 table_cell_text_wrap_options(&cell_style, cell_inner, fonts),
                 fonts,
             );
-            if cell_style.overflow.clips() {
-                clip_text_lines_to_width(&mut lines, cell_inner, fonts);
-            }
 
             let column_bg = column_info
                 .iter()
@@ -3491,7 +3406,7 @@ pub(crate) fn flatten_table(
                 // table's own `margin-top`. The first row is therefore inset
                 // only by the top *vertical* `border-spacing` (zero when
                 // collapsed); subsequent rows are separated by the same.
-                TableRowFlow::new(
+                BlockFlowSpacing::from_internal_start(
                     if style.border_collapse == BorderCollapse::Separate {
                         effective_border_spacing_vertical
                     } else {
@@ -4172,6 +4087,7 @@ fn push_line_break_run(
 #[cfg(test)]
 mod subpoint_width_tests {
     use super::*;
+    use crate::layout::cells::TableRowCells;
     use crate::layout::elements::{LayoutElementTestExt, visit_layout_tree};
     use crate::layout::engine::{
         SyntheticFontWeight, layout, layout_with_rules, layout_with_rules_and_fonts,
@@ -4396,12 +4312,7 @@ mod subpoint_width_tests {
         let margin_top = last_row.flow.margins.start;
         let margin_bottom = last_row.flow.margins.end;
         let flow_extra_bottom = last_row.flow.extra_end;
-        let row_height = last_row
-            .content
-            .cells
-            .iter()
-            .map(table_cell_content_height)
-            .fold(0.0_f32, f32::max);
+        let row_height = last_row.content.cells.as_slice().row_block_extent();
         assert_eq!(
             estimate_element_height(last_row),
             margin_top + row_height + flow_extra_bottom + margin_bottom,

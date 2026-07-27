@@ -106,6 +106,22 @@ impl<T: PrincipalBox> ChildContainer for T {
 
 macro_rules! impl_principal_layout_element {
     ($node:ty, $visit:ident) => {
+        impl_principal_layout_element!(@define $node, $visit,);
+    };
+    ($node:ty, $visit:ident, fragment_placement) => {
+        impl_principal_layout_element!(@define $node, $visit,
+            fn fragment_placement_owner(
+                &self,
+            ) -> Option<&dyn super::FragmentPlacementOwner> {
+                Some(self)
+            }
+
+            fn contributes_to_normal_flow(&self) -> bool {
+                false
+            }
+        );
+    };
+    (@define $node:ty, $visit:ident, $($extra:item)*) => {
         impl super::LayoutElement for $node {
             fn clone_box(&self) -> super::LayoutNode {
                 Box::new(self.clone())
@@ -203,6 +219,8 @@ macro_rules! impl_principal_layout_element {
             ) -> Option<&dyn crate::layout::filter::ExactVectorFilterSource> {
                 Some(self.principal())
             }
+
+            $($extra)*
 
             fn page_content_role(&self) -> super::PageContentRole {
                 self.principal()

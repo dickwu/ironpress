@@ -679,8 +679,7 @@ fn inline_atomic_cell(
                     TableLayoutContext::new(
                         ctx,
                         ancestors,
-                        child_index,
-                        sibling_count,
+                        ElementSiblingContext::new(child_index, sibling_count),
                         positioned_depth,
                     ),
                 );

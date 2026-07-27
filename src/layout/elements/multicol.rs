@@ -1,4 +1,7 @@
-use super::{Container, PrincipalBox, impl_principal_layout_element};
+use super::{
+    Container, FragmentPlacement, FragmentPlacementOwner, LayoutElement, PrincipalBox,
+    impl_principal_layout_element,
+};
 
 /// The principal box of a CSS multi-column formatting context.
 ///
@@ -25,11 +28,41 @@ impl MulticolContainer {
 pub(crate) struct MulticolColumn {
     pub(crate) principal: Container,
     pub(crate) index: usize,
+    placement: FragmentPlacement,
 }
 
 impl MulticolColumn {
-    pub(crate) const fn new(principal: Container, index: usize) -> Self {
-        Self { principal, index }
+    pub(crate) const fn new(
+        principal: Container,
+        index: usize,
+        placement: FragmentPlacement,
+    ) -> Self {
+        Self {
+            principal,
+            index,
+            placement,
+        }
+    }
+
+    pub(crate) fn with_principal(&self, principal: Container) -> Self {
+        let mut placement = self.placement;
+        if let Some(width) = principal.box_model.size.width.fixed_value() {
+            placement.size.width = width;
+        }
+        if let Some(height) = principal.box_model.size.height.used() {
+            placement.size.height = height;
+        }
+        Self::new(principal, self.index, placement)
+    }
+}
+
+impl FragmentPlacementOwner for MulticolColumn {
+    fn fragment_placement(&self) -> FragmentPlacement {
+        self.placement
+    }
+
+    fn fragment_source(&self) -> &dyn LayoutElement {
+        &self.principal
     }
 }
 
@@ -54,4 +87,4 @@ impl PrincipalBox for MulticolColumn {
 }
 
 impl_principal_layout_element!(MulticolContainer, visit_multicol_container);
-impl_principal_layout_element!(MulticolColumn, visit_multicol_column);
+impl_principal_layout_element!(MulticolColumn, visit_multicol_column, fragment_placement);

@@ -6,8 +6,7 @@ use crate::layout::elements::{
 };
 use crate::layout::engine::{
     FlexCell, FlexLineId, FootnoteItem, ImageFormat, Page, PngMetadata, TableCell, TextLine,
-    TextRun, cell_box_intrinsic_content_height, decode_footnote_link, is_internal_target_anchor,
-    layout_element_paint_order, table_cell_content_height,
+    TextRun, decode_footnote_link, is_internal_target_anchor, layout_element_paint_order,
 };
 use crate::layout::paginate::ResolvedFootnoteAreaStyle;
 use crate::layout::text::{OverflowWrap, TextWrapOptions, wrap_text_runs};
@@ -51,6 +50,7 @@ mod border_images;
 mod border_paint;
 mod border_support;
 mod cell_effects;
+mod clipping;
 mod compositing;
 mod conic_gradients;
 mod container;
@@ -106,6 +106,7 @@ use border_images::render_border_image;
 use border_paint::*;
 use border_support::*;
 use cell_effects::{paint_box_filter_output, paint_cell_filter_output};
+use clipping::ContentClip;
 use compositing::*;
 use conic_gradients::*;
 use container::*;
@@ -131,8 +132,8 @@ use images::{
 #[cfg(test)]
 use layout_elements::NestedLayoutFrame;
 use layout_elements::{
-    CellRenderBox, PageRenderContext, compute_grid_row_height, compute_row_height,
-    render_cell_content, row_baseline_shifts, table_cell_geometry, table_row_origin_x,
+    CellRenderBox, PageRenderContext, compute_grid_row_height, render_cell_content,
+    row_baseline_shifts,
 };
 pub(crate) use line_metrics::sanitize_pdf_name;
 use line_metrics::*;
@@ -208,11 +209,11 @@ struct PageElementRenderer<'call, 'frame, 'page> {
 
 impl LayoutVisitor for PageElementRenderer<'_, '_, '_> {
     fn visit_column_rule(&mut self, element: &ColumnRule) {
-        let origin = element.positioning.origin();
+        let offset = element.placement.offset();
         paint_column_rule_line(
             self.content,
-            self.frame.margin.left + origin.x,
-            self.frame.page_size.height - self.frame.margin.top - self.frame.y_pos - origin.y,
+            self.frame.margin.left + offset.x,
+            self.frame.page_size.height - self.frame.margin.top - self.frame.y_pos - offset.y,
             element.paint.width,
             element.height,
             &element.paint,

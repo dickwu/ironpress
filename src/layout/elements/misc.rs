@@ -1,6 +1,6 @@
 use super::{
-    BlockFlowParticipant, InlineFlowExtent, LayoutElement, LayoutNode, LayoutVisitor,
-    LayoutVisitorMut, PaintGroup, PaintGroupOwner, Positioning, PositioningOwner,
+    BlockFlowParticipant, FragmentPlacement, FragmentPlacementOwner, InlineFlowExtent,
+    LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut, PaintGroup, PaintGroupOwner,
 };
 use crate::layout::engine::LayoutBorderSide;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
@@ -10,18 +10,18 @@ use crate::types::{Color, Size};
 pub(crate) struct ColumnRule {
     /// Document-order column immediately before this rule.
     pub(crate) gap_after: usize,
-    pub(crate) positioning: Positioning,
+    pub(crate) placement: FragmentPlacement,
     pub(crate) height: f32,
     pub(crate) paint: LayoutBorderSide,
 }
 
-impl PositioningOwner for ColumnRule {
-    fn positioning(&self) -> &Positioning {
-        &self.positioning
+impl FragmentPlacementOwner for ColumnRule {
+    fn fragment_placement(&self) -> FragmentPlacement {
+        self.placement
     }
 
-    fn positioning_mut(&mut self) -> &mut Positioning {
-        &mut self.positioning
+    fn fragment_source(&self) -> &dyn LayoutElement {
+        self
     }
 }
 
@@ -38,11 +38,7 @@ impl LayoutElement for ColumnRule {
         visitor.visit_column_rule(self);
     }
 
-    fn positioning_owner(&self) -> Option<&dyn PositioningOwner> {
-        Some(self)
-    }
-
-    fn positioning_owner_mut(&mut self) -> Option<&mut dyn PositioningOwner> {
+    fn fragment_placement_owner(&self) -> Option<&dyn FragmentPlacementOwner> {
         Some(self)
     }
 

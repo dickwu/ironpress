@@ -1,13 +1,11 @@
 use super::*;
+use crate::layout::cells::TableRowCells;
 use crate::layout::elements::{LayoutElementTestExt, LayoutNode};
 
 #[cfg(test)]
 pub(in crate::render::pdf) fn table_row_total_height(row: &dyn LayoutElement) -> f32 {
-    row.inspect_table(|row| {
-        row.flow
-            .outer_extent(compute_row_height(&row.content.cells))
-    })
-    .unwrap_or_default()
+    row.inspect_table(|row| row.flow.outer_extent(row.content.cells.row_block_extent()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -178,34 +176,17 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
             .element
             .inspect_table(|row| {
                 let cells = &row.content.cells;
-                let col_widths = &row.content.column_widths;
-                let border_collapse = &row.formatting.border_collapse;
-                let border_spacing = &row.formatting.border_spacing;
-                let offset_left = row.grid_inline_offset();
-                let spacing = if *border_collapse == BorderCollapse::Collapse {
-                    0.0
-                } else {
-                    *border_spacing
-                };
+                let cell_frames = row.cell_inline_frames();
                 let row_y = planned_element.origin.y;
-                let row_origin_x = table_row_origin_x(planned_element.origin.x, offset_left);
-                let row_height = compute_row_height(cells);
+                let row_height = cells.row_block_extent();
                 let baseline_shifts = row_baseline_shifts(cells, ctx.text.custom_fonts);
 
-                let mut col_pos: usize = 0;
                 for (cell_idx, cell) in cells.iter().enumerate() {
-                    if cell.span.rows == 0 {
-                        col_pos += cell.span.columns;
+                    let Some(cell_frame) = cell_frames.get(cell_idx).copied().flatten() else {
                         continue;
-                    }
-
-                    let (cell_x, cell_w) = table_cell_geometry(
-                        col_widths,
-                        col_pos,
-                        cell.span.columns,
-                        spacing,
-                        row_origin_x,
-                    );
+                    };
+                    let cell_x = planned_element.origin.x + cell_frame.offset();
+                    let cell_w = cell_frame.extent();
 
                     let cell_height = if cell.span.rows > 1 {
                         let mut total_height = row_height;
@@ -279,8 +260,6 @@ pub(in crate::render::pdf) fn render_nested_layout_elements(
                         &abs_origins,
                         ctx,
                     );
-
-                    col_pos += cell.span.columns;
                 }
             })
             .is_some()
@@ -458,7 +437,7 @@ pub(in crate::render::pdf) fn plan_nested_layout_elements(
                     available_width: frame.available_width,
                     blur_canvas_box: None,
                 });
-                cursor_y -= compute_row_height(cells)
+                cursor_y -= cells.row_block_extent()
                     + row.flow.internal.end
                     + row.flow.extra_end
                     + row.flow.margins.end;

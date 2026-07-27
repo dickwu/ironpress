@@ -12,6 +12,7 @@ mod media;
 mod metadata;
 mod misc;
 mod multicol;
+mod placement;
 mod principal;
 mod properties;
 mod stacking;
@@ -31,13 +32,14 @@ pub(crate) use media::{
 pub(crate) use metadata::{AvoidPageBreak, NamedString, PageBreak, RunningElement};
 pub(crate) use misc::{ColumnRule, HorizontalRule, MathBlock, ProgressBar, ProgressColors};
 pub(crate) use multicol::{MulticolColumn, MulticolContainer};
+pub(crate) use placement::{FragmentBox, FragmentPlacement, FragmentPlacementOwner};
 pub(crate) use principal::{PrincipalBox, impl_principal_layout_element};
 pub(crate) use properties::*;
 pub(crate) use stacking::{Stacking, StackingLevel, StackingParticipant, StackingRole};
 pub(crate) use table::{
     Table, TableBoxDecoration, TableBoxDecorationOwner, TableCells, TableFormatting,
     TableFragmentGroup, TableFragmentation, TableGridIdentity, TableGridOwner, TableInlineGeometry,
-    TableRow, TableRowFlow,
+    TableRow,
 };
 #[cfg(test)]
 pub(crate) use test_support::{LayoutElementTestExt, LayoutElementTestMutExt};
@@ -186,6 +188,11 @@ pub(crate) trait LayoutElement: Debug {
     /// Identity of the table grid whose rows participate in one coordinated
     /// background/border/content paint schedule.
     fn table_grid_owner(&self) -> Option<&dyn TableGridOwner> {
+        None
+    }
+
+    /// Physical fragmentainer placement, distinct from authored CSS position.
+    fn fragment_placement_owner(&self) -> Option<&dyn FragmentPlacementOwner> {
         None
     }
 
@@ -369,6 +376,14 @@ impl LayoutElement for LayoutNode {
 
     fn table_box_decoration_owner(&self) -> Option<&dyn TableBoxDecorationOwner> {
         self.as_ref().table_box_decoration_owner()
+    }
+
+    fn table_grid_owner(&self) -> Option<&dyn TableGridOwner> {
+        self.as_ref().table_grid_owner()
+    }
+
+    fn fragment_placement_owner(&self) -> Option<&dyn FragmentPlacementOwner> {
+        self.as_ref().fragment_placement_owner()
     }
 
     fn exact_vector_filter_source(

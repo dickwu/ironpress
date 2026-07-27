@@ -301,6 +301,42 @@ pub(super) fn flex_line_max_baseline(
         .reduce(f32::max)
 }
 
+pub(crate) fn table_row_baseline_shifts(
+    cells: &[crate::layout::cells::TableCell],
+    fonts: &HashMap<String, TtfFont>,
+) -> Vec<f32> {
+    let baselines = cells
+        .iter()
+        .map(|cell| {
+            (cell.layout.alignment.block == crate::style::computed::VerticalAlign::Baseline)
+                .then(|| {
+                    let line = cell
+                        .layout
+                        .content
+                        .lines
+                        .iter()
+                        .find(|line| line.runs.iter().any(|run| !run.text.is_empty()))?;
+                    Some(
+                        cell.layout.box_model.content_insets.top
+                            + line_baseline_ascent(line, fonts),
+                    )
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let common = baselines
+        .iter()
+        .filter_map(|baseline| *baseline)
+        .reduce(f32::max);
+    baselines
+        .into_iter()
+        .map(|baseline| match (baseline, common) {
+            (Some(own), Some(common)) => (common - own).max(0.0),
+            _ => 0.0,
+        })
+        .collect()
+}
+
 pub(super) fn line_baseline_ascent(line: &TextLine, fonts: &HashMap<String, TtfFont>) -> f32 {
     line.baseline_ascent.unwrap_or_else(|| {
         let (ascent, descent) = line

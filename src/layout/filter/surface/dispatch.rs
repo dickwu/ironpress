@@ -1,7 +1,8 @@
 //! Layout-element visitor dispatch for the source painter.
 
 use crate::layout::elements::{
-    ColumnRule, Container, FlexRow, GridRow, Image, LayoutVisitor, MulticolContainer, TextBlock,
+    ColumnRule, Container, FlexRow, GridRow, Image, LayoutVisitor, MulticolContainer, TableRow,
+    TextBlock,
 };
 use crate::render::borders::CssRoundedRect;
 
@@ -106,6 +107,10 @@ impl LayoutVisitor for SourcePainter<'_> {
             }
             Some(())
         })();
+    }
+
+    fn visit_table_row(&mut self, element: &TableRow) {
+        self.result = self.paint_table_row(element);
     }
 
     fn visit_image(&mut self, element: &Image) {

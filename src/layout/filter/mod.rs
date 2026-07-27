@@ -126,7 +126,7 @@ impl FilteredGraphic {
             source: self.asset,
             geometry: ReplacedGeometry::new(
                 self.geometry.size,
-                self.geometry.margins,
+                self.geometry.flow.margins,
                 LayoutBorder::default(),
             ),
             positioning: self.geometry.positioning,

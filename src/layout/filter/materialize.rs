@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::layout::elements::{
     Container, FlexRow, GridRow, LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut,
+    TableRow,
 };
 use crate::parser::ttf::TtfFont;
 use crate::types::{EdgeSizes, Point, Rect};
@@ -43,16 +44,20 @@ impl ChildRasterAnchors {
             ) -> Option<Vec<SourceRasterAnchor>> {
                 let padding_box = border_box.inset(border);
                 let content_box = padding_box.inset(padding);
-                super::surface::block_child_frames(children, content_box, Some(padding_box)).map(
-                    |frames| {
-                        frames
-                            .into_iter()
-                            .map(|frame| {
-                                SourceRasterAnchor::at_border_origin(frame.border_box.origin)
-                            })
-                            .collect()
-                    },
+                super::surface::block_child_frames(
+                    children,
+                    super::surface::BlockChildSpace::new(
+                        content_box,
+                        padding_box,
+                        Some(padding_box),
+                    ),
                 )
+                .map(|frames| {
+                    frames
+                        .into_iter()
+                        .map(|frame| SourceRasterAnchor::at_border_origin(frame.border_box.origin))
+                        .collect()
+                })
             }
         }
 
@@ -104,6 +109,47 @@ impl ChildRasterAnchors {
                     );
                     match nested {
                         Some(nested) => anchors.extend(nested),
+                        None => {
+                            anchors.extend(cell.layout.content.children.iter().map(|_| cell_anchor))
+                        }
+                    }
+                }
+                self.anchors = Some(anchors);
+            }
+
+            fn visit_table_row(&mut self, element: &TableRow) {
+                if element.formatting.is_collapsed()
+                    || element.content.cells.iter().any(|cell| cell.span.rows > 1)
+                {
+                    return;
+                }
+                let frames = super::surface::table_cell_source_frames(element);
+                let baseline_shifts =
+                    super::surface::table_row_baseline_shifts(&element.content.cells, self.fonts);
+                let mut anchors = Vec::new();
+                for ((cell, frame), baseline_shift) in element
+                    .content
+                    .cells
+                    .iter()
+                    .zip(frames)
+                    .zip(baseline_shifts)
+                {
+                    let Some(frame) = frame else {
+                        continue;
+                    };
+                    let cell_anchor = frame.anchor_in(self.parent_anchor);
+                    let nested = super::surface::block_child_frames(
+                        &cell.layout.content.children,
+                        frame.nested_child_space(
+                            self.parent_anchor.border_origin(),
+                            &cell.layout,
+                            baseline_shift,
+                        ),
+                    );
+                    match nested {
+                        Some(nested) => anchors.extend(nested.into_iter().map(|frame| {
+                            SourceRasterAnchor::at_border_origin(frame.border_box.origin)
+                        })),
                         None => {
                             anchors.extend(cell.layout.content.children.iter().map(|_| cell_anchor))
                         }

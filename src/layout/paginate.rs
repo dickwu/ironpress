@@ -1,6 +1,7 @@
+use super::cells::TableRowCells;
 use super::engine::{
     FootnoteItem, GridCell, Page, PageBreakSide, ReplacedFragment, TextLine, TextRun,
-    decode_footnote_link_data, table_cell_content_height, target_anchor_id,
+    decode_footnote_link_data, target_anchor_id,
 };
 use super::flow_metrics::BlockMargins;
 use super::fragmentation::split_flow_at_descendant_break;
@@ -1580,12 +1581,7 @@ fn split_table_row_node(
         return None;
     }
 
-    let row_h = element
-        .content
-        .cells
-        .iter()
-        .map(table_cell_content_height)
-        .fold(0.0f32, f32::max);
+    let row_h = element.content.cells.row_block_extent();
     if !is_positive_with_roundoff(row_h)
         || !is_positive_with_roundoff(avail_below_box_top)
         || !exceeds_with_roundoff(row_h, avail_below_box_top)
@@ -2520,12 +2516,7 @@ impl LayoutVisitor for ElementFlowGeometry {
     }
 
     fn visit_table_row(&mut self, element: &TableRow) {
-        let row_height = element
-            .content
-            .cells
-            .iter()
-            .map(table_cell_content_height)
-            .fold(0.0, f32::max);
+        let row_height = element.content.cells.row_block_extent();
         self.set(
             element.flow.content_extent(row_height),
             element.flow.margins,
@@ -2761,12 +2752,7 @@ pub(crate) fn paginate_with_first_page(
 
         impl LayoutVisitor for RowHeight {
             fn visit_table_row(&mut self, element: &TableRow) {
-                self.0 = element
-                    .content
-                    .cells
-                    .iter()
-                    .map(table_cell_content_height)
-                    .fold(0.0, f32::max);
+                self.0 = element.content.cells.row_block_extent();
             }
         }
 
@@ -4747,7 +4733,7 @@ mod break_tests {
             page.elements
                 .iter()
                 .filter_map(|(_, element)| {
-                    element.inspect_table(|row| table_cell_content_height(&row.content.cells[0]))
+                    element.inspect_table(|row| row.content.cells[0].row_block_extent())
                 })
                 .collect::<Vec<_>>()
         };

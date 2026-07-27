@@ -3,9 +3,9 @@ use super::{
     column_x,
 };
 use crate::layout::elements::{
-    BlockSize, BoxModel, BoxPaint, ColumnRule, Container, FragmentBreakQuery, FragmentBreakRule,
-    IntoLayoutNode, LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut,
-    MulticolColumn, Positioning, TextBlock,
+    BlockSize, BoxModel, BoxPaint, ColumnRule, Container, FragmentBox, FragmentBreakQuery,
+    FragmentBreakRule, FragmentPlacement, IntoLayoutNode, LayoutElement, LayoutNode, LayoutSize,
+    LayoutVisitor, LayoutVisitorMut, MulticolColumn, TextBlock,
 };
 use crate::layout::engine::{LayoutBorderSide, TextLine};
 use crate::layout::flow_metrics::BlockMargins;
@@ -13,7 +13,7 @@ use crate::layout::roundoff::{
     equal_with_roundoff, exceeds_with_roundoff, is_positive_with_roundoff,
 };
 use crate::style::computed::{BorderStyle, ComputedStyle, Position};
-use crate::types::{Point, Size};
+use crate::types::{Point, Size, Vector};
 
 /// Distribute `items` into a sequence of per-page column rows for a paginated
 /// multicol (CSS Multicol §2). Each page-row is a fresh set of `num_cols` columns
@@ -34,9 +34,6 @@ pub(super) fn build_paginated_column_rows(
     col_width: f32,
     gap: f32,
     pad_left: f32,
-    bl: f32,
-    pad_top: f32,
-    bt: f32,
     col_fill_h: f32,
     style: &ComputedStyle,
 ) -> Vec<(Vec<LayoutNode>, f32)> {
@@ -76,8 +73,8 @@ pub(super) fn build_paginated_column_rows(
             row_children.push(make_column_container(
                 kids,
                 pc,
-                col_x - bl,
-                pad_top - bt,
+                col_x - pad_left + style.padding.left,
+                style.padding.top,
                 col_width,
                 fragmented.used_block_sizes[vc],
             ));
@@ -100,8 +97,8 @@ pub(super) fn build_paginated_column_rows(
                 let rule_x = gap_center - rule_w / 2.0;
                 row_children.push(make_rule_container(
                     c,
-                    rule_x - bl,
-                    pad_top - bt,
+                    rule_x - pad_left + style.padding.left,
+                    style.padding.top,
                     rule_w,
                     row_max,
                     rule_color,
@@ -125,9 +122,6 @@ pub(super) fn build_balanced_paginated_column_rows(
     col_width: f32,
     gap: f32,
     pad_left: f32,
-    bl: f32,
-    pad_top: f32,
-    bt: f32,
     col_fill_h: f32,
     style: &ComputedStyle,
 ) -> Vec<(Vec<LayoutNode>, f32)> {
@@ -165,8 +159,8 @@ pub(super) fn build_balanced_paginated_column_rows(
                 let rule_x = gap_center - rule_w / 2.0;
                 row_children.push(make_rule_container(
                     c,
-                    rule_x - bl,
-                    pad_top - bt,
+                    rule_x - pad_left + style.padding.left,
+                    style.padding.top,
                     rule_w,
                     best_h,
                     rule_color,
@@ -189,8 +183,8 @@ pub(super) fn build_balanced_paginated_column_rows(
             row_children.push(make_column_container(
                 col_kids,
                 c,
-                col_x - bl,
-                pad_top - bt,
+                col_x - pad_left + style.padding.left,
+                style.padding.top,
                 col_width,
                 col_height,
             ));
@@ -212,9 +206,6 @@ pub(super) fn build_paginated_column_rows_with_spans(
     col_width: f32,
     gap: f32,
     pad_left: f32,
-    bl: f32,
-    pad_top: f32,
-    bt: f32,
     col_fill_h: f32,
     inner_width: f32,
     style: &ComputedStyle,
@@ -245,8 +236,8 @@ pub(super) fn build_paginated_column_rows_with_spans(
             let rule_x = gap_center - rule_w / 2.0;
             row_children.push(make_rule_container(
                 c,
-                rule_x - bl,
-                pad_top + run_top - bt,
+                rule_x - pad_left + style.padding.left,
+                style.padding.top + run_top,
                 rule_w,
                 run_h,
                 rule_color,
@@ -288,8 +279,8 @@ pub(super) fn build_paginated_column_rows_with_spans(
             row_children.push(make_column_container(
                 col_kids,
                 c,
-                col_x - bl,
-                pad_top + top - bt,
+                col_x - pad_left + style.padding.left,
+                style.padding.top + top,
                 col_width,
                 col_height,
             ));
@@ -306,8 +297,8 @@ pub(super) fn build_paginated_column_rows_with_spans(
             }
             row_children.push(make_band_container(
                 items[i].elements.clone(),
-                pad_left - bl,
-                pad_top + cursor - bt,
+                style.padding.left,
+                style.padding.top + cursor,
                 inner_width,
                 band_h,
             ));
@@ -489,6 +480,10 @@ impl BoxFragmentPlacement {
 
     const fn is_whole(self) -> bool {
         self.edges.block_start && self.edges.block_end
+    }
+
+    const fn physical(self) -> FragmentPlacement {
+        FragmentPlacement::in_content_box(Vector::new(self.origin.x, self.origin.y), self.size)
     }
 }
 
@@ -1039,8 +1034,7 @@ fn item_block_break(item: &MultiColItem, query: FragmentBreakQuery) -> Option<f3
         .find_block_break(query)
 }
 
-/// Build an absolutely-positioned column container at `(off_left, off_top)`
-/// from the multicol element's border-box top-left, holding `kids` in flow.
+/// Build one anonymous column fragmentainer at a content-box-local placement.
 pub(super) fn make_column_container(
     kids: Vec<LayoutNode>,
     column_index: usize,
@@ -1049,8 +1043,13 @@ pub(super) fn make_column_container(
     width: f32,
     height: f32,
 ) -> LayoutNode {
-    let principal = empty_abs_container_value(kids, off_left, off_top, width, height, None);
-    MulticolColumn::new(principal, column_index).boxed()
+    let principal = empty_container_value(kids, width, height, None);
+    MulticolColumn::new(
+        principal,
+        column_index,
+        FragmentPlacement::in_padding_box(Vector::new(off_left, off_top), Size::new(width, height)),
+    )
+    .boxed()
 }
 
 /// Smallest block-size at which the item's next unbreakable visual unit fits.
@@ -1198,27 +1197,20 @@ fn project_fragment_subtree(element: &mut dyn LayoutElement, source: SourceBlock
 /// Build one positioned fragment box for a `column-fill: auto` slice of an item.
 ///
 /// Clones the item's single block element, projects its text through the source
-/// fragment offset, repositions it as an absolute box at `off_top`
-/// (column-content-relative), forces its border-box height to the slice height,
-/// and applies `box-decoration-break: slice` borders: the first slice keeps the
-/// top border, the last slice keeps the bottom border, and any cut edge drops its
-/// border. The projected subtree assigns content to exactly one fragment;
-/// authored visible overflow from the final fragment remains visible.
+/// fragment offset, retains its fragmentainer-local placement independently of
+/// authored positioning, forces its border-box height to the slice height, and
+/// applies `box-decoration-break: slice` borders. The projected subtree assigns
+/// content to exactly one fragment; authored visible overflow from the final
+/// fragment remains visible.
 pub(super) fn make_fragment_box(
     src: &dyn LayoutElement,
     placement: BoxFragmentPlacement,
 ) -> LayoutNode {
     if placement.is_whole() {
-        if let Some(wrapped) = make_whole_text_fragment(
-            src,
-            placement.origin.x,
-            placement.origin.y,
-            placement.size.width,
-            placement.size.height,
-        ) {
+        if let Some(wrapped) = make_whole_text_fragment(src, placement.physical()) {
             return wrapped;
         }
-        return position_whole_fragment(src, placement.origin.x, placement.origin.y);
+        return retain_whole_fragment(src, placement.physical());
     }
     struct FragmentProjector {
         placement: BoxFragmentPlacement,
@@ -1239,9 +1231,6 @@ pub(super) fn make_fragment_box(
             }
             element.box_model.size.height = BlockSize::definite(self.placement.size.height);
             element.box_model.margins = BlockMargins::ZERO;
-            element.positioning.scheme = Position::Absolute;
-            element.positioning.insets.top = self.placement.origin.y;
-            element.positioning.insets.left = self.placement.origin.x;
         }
 
         fn visit_text_block(&mut self, element: &mut TextBlock) {
@@ -1266,61 +1255,43 @@ pub(super) fn make_fragment_box(
                 padding.vertical(),
             ));
             element.box_model.margins = BlockMargins::ZERO;
-            element.positioning.scheme = Position::Absolute;
-            element.positioning.insets.top = self.placement.origin.y;
-            element.positioning.insets.left = self.placement.origin.x;
             element.clipping.rect = None;
         }
     }
 
     let mut element = src.clone_box();
     element.accept_mut(&mut FragmentProjector { placement });
-    element
+    FragmentBox::new(element, placement.physical()).boxed()
 }
 
-/// Move an unsliced item into its column without replacing its computed size.
+/// Retain an unsliced item in its column without replacing its computed size.
 /// Intrinsic, min/max, and overflow widths remain properties of the source box;
 /// the column fragmentainer constrains placement, not the box itself.
-fn position_whole_fragment(src: &dyn LayoutElement, off_left: f32, off_top: f32) -> LayoutNode {
-    struct WholeFragmentPositioner {
-        off_left: f32,
-        off_top: f32,
-    }
+fn retain_whole_fragment(src: &dyn LayoutElement, placement: FragmentPlacement) -> LayoutNode {
+    struct WholeFragment;
 
-    impl LayoutVisitorMut for WholeFragmentPositioner {
+    impl LayoutVisitorMut for WholeFragment {
         fn visit_container(&mut self, element: &mut Container) {
             element.box_model.margins = BlockMargins::ZERO;
-            element.positioning.scheme = Position::Absolute;
-            element.positioning.insets.top = self.off_top;
-            element.positioning.insets.left = self.off_left;
         }
 
         fn visit_text_block(&mut self, element: &mut TextBlock) {
             element.box_model.margins = BlockMargins::ZERO;
-            element.positioning.scheme = Position::Absolute;
-            element.positioning.insets.top = self.off_top;
-            element.positioning.insets.left = self.off_left;
             element.clipping.rect = None;
         }
     }
 
     let mut element = src.clone_box();
-    element.accept_mut(&mut WholeFragmentPositioner { off_left, off_top });
-    element
+    element.accept_mut(&mut WholeFragment);
+    FragmentBox::new(element, placement).boxed()
 }
 
 fn make_whole_text_fragment(
     src: &dyn LayoutElement,
-    off_left: f32,
-    off_top: f32,
-    width: f32,
-    height: f32,
+    placement: FragmentPlacement,
 ) -> Option<LayoutNode> {
     struct WholeTextFragment {
-        off_left: f32,
-        off_top: f32,
-        width: f32,
-        height: f32,
+        placement: FragmentPlacement,
         result: Option<LayoutNode>,
     }
 
@@ -1340,22 +1311,30 @@ fn make_whole_text_fragment(
             text.positioning.scheme = Position::Static;
             text.positioning.insets = crate::types::EdgeSizes::ZERO;
             text.clipping.rect = None;
-            self.result = Some(empty_abs_container(
-                vec![text.boxed()],
-                self.off_left,
-                self.off_top,
-                self.width,
-                self.height,
-                Some(background),
-            ));
+            let principal = Container {
+                children: vec![text.boxed()],
+                box_model: BoxModel {
+                    size: LayoutSize::fixed(
+                        self.placement.size.width,
+                        Some(self.placement.size.height),
+                    ),
+                    ..Default::default()
+                },
+                paint: BoxPaint {
+                    background: crate::layout::elements::BackgroundPaint {
+                        color: Some(background),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            self.result = Some(FragmentBox::new(principal.boxed(), self.placement).boxed());
         }
     }
 
     let mut visitor = WholeTextFragment {
-        off_left,
-        off_top,
-        width,
-        height,
+        placement,
         result: None,
     };
     src.accept(&mut visitor);
@@ -1374,7 +1353,11 @@ pub(super) fn make_band_container(
     width: f32,
     height: f32,
 ) -> LayoutNode {
-    empty_abs_container(kids, off_left, off_top, width, height, None)
+    FragmentBox::new(
+        empty_container_value(kids, width, height, None).boxed(),
+        FragmentPlacement::in_padding_box(Vector::new(off_left, off_top), Size::new(width, height)),
+    )
+    .boxed()
 }
 
 /// Build a semantically identified rule spanning a column gap.
@@ -1389,7 +1372,10 @@ pub(super) fn make_rule_container(
 ) -> LayoutNode {
     ColumnRule {
         gap_after,
-        positioning: Positioning::absolute_at(crate::types::Point::new(off_left, off_top)),
+        placement: FragmentPlacement::in_padding_box(
+            Vector::new(off_left, off_top),
+            Size::new(width, height),
+        ),
         height,
         paint: LayoutBorderSide {
             width,
@@ -1401,23 +1387,8 @@ pub(super) fn make_rule_container(
     .boxed()
 }
 
-/// Shared constructor for an absolutely-positioned, border/padding-free
-/// container used for columns, bands, and rules.
-pub(super) fn empty_abs_container(
+fn empty_container_value(
     kids: Vec<LayoutNode>,
-    off_left: f32,
-    off_top: f32,
-    width: f32,
-    height: f32,
-    bg: Option<crate::types::Color>,
-) -> LayoutNode {
-    empty_abs_container_value(kids, off_left, off_top, width, height, bg).boxed()
-}
-
-fn empty_abs_container_value(
-    kids: Vec<LayoutNode>,
-    off_left: f32,
-    off_top: f32,
     width: f32,
     height: f32,
     bg: Option<crate::types::Color>,
@@ -1435,7 +1406,6 @@ fn empty_abs_container_value(
             },
             ..Default::default()
         },
-        positioning: Positioning::absolute_at(crate::types::Point::new(off_left, off_top)),
         ..Default::default()
     }
 }
@@ -1450,7 +1420,6 @@ pub(super) fn empty_flow_anchor() -> LayoutNode {
             visible: false,
             ..Default::default()
         },
-        positioning: Positioning::default(),
         ..Default::default()
     }
     .boxed()

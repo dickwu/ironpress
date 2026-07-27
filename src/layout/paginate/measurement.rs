@@ -1,11 +1,16 @@
 //! Block-axis measurement for concrete layout nodes.
 
+use crate::layout::cells::TableRowCells;
 use crate::layout::elements::{
     Container, FlexRow, GridRow, HorizontalRule, Image, LayoutElement, LayoutVisitor, MathBlock,
     ProgressBar, Svg, TableRow, TextBlock,
 };
 /// Measure one laid-out node's outer block-axis extent.
 pub(crate) fn element_height(element: &dyn LayoutElement) -> f32 {
+    if !element.contributes_to_normal_flow() {
+        return 0.0;
+    }
+
     #[derive(Default)]
     struct Height(f32);
 
@@ -43,12 +48,7 @@ pub(crate) fn element_height(element: &dyn LayoutElement) -> f32 {
         }
 
         fn visit_table_row(&mut self, element: &TableRow) {
-            let row_height = element
-                .content
-                .cells
-                .iter()
-                .map(crate::layout::table::table_cell_content_height)
-                .fold(0.0, f32::max);
+            let row_height = element.content.cells.row_block_extent();
             self.0 = element.flow.outer_extent(row_height);
         }
 

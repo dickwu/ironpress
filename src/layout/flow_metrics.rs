@@ -21,6 +21,45 @@ impl BlockMargins {
     }
 }
 
+/// Block-axis spacing around a retained border box.
+///
+/// CSS margins participate in sibling collapse. Formatting-context insets and
+/// trailing continuation extent do not, so keeping them distinct prevents a
+/// renderer or offscreen painter from treating internal table geometry as a
+/// margin.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct BlockFlowSpacing {
+    pub(crate) margins: BlockMargins,
+    pub(crate) internal: BlockMargins,
+    pub(crate) extra_end: f32,
+}
+
+impl BlockFlowSpacing {
+    pub(crate) const fn from_margins(margins: BlockMargins) -> Self {
+        Self {
+            margins,
+            internal: BlockMargins::ZERO,
+            extra_end: 0.0,
+        }
+    }
+
+    pub(crate) const fn from_internal_start(internal_start: f32) -> Self {
+        Self {
+            margins: BlockMargins::ZERO,
+            internal: BlockMargins::new(internal_start, 0.0),
+            extra_end: 0.0,
+        }
+    }
+
+    pub(crate) const fn content_extent(self, box_extent: f32) -> f32 {
+        self.internal.total() + box_extent + self.extra_end
+    }
+
+    pub(crate) const fn outer_extent(self, box_extent: f32) -> f32 {
+        self.margins.total() + self.content_extent(box_extent)
+    }
+}
+
 /// Common margin access for every concrete [`LayoutElement`] box kind.
 ///
 /// Consumers operate on the semantic pair and no longer destructure every

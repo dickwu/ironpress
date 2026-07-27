@@ -6,9 +6,9 @@
 //! independent formatting context.
 
 use crate::layout::elements::{
-    BlockSize, BoxFragmentSlice, ColumnRule, Container, FlexRow, GridRow, IntoLayoutNode,
-    LayoutElement, LayoutNode, LayoutVisitor, MulticolColumn, MulticolContainer, PageBreak, Table,
-    TableRow,
+    BlockSize, BoxFragmentSlice, ColumnRule, Container, FlexRow, FragmentPlacementOwner, GridRow,
+    IntoLayoutNode, LayoutElement, LayoutNode, LayoutVisitor, MulticolColumn, MulticolContainer,
+    PageBreak, Table, TableRow,
 };
 use crate::layout::engine::{
     FlexCell, FlexFragmentRole, FlexItemFragmentation, FlexNestedOrigin, PageBreakSide,
@@ -503,9 +503,8 @@ fn split_multicol_column(
     split: ForcedBreak<Vec<LayoutNode>>,
     space: FragmentainerSpace,
 ) -> ForcedBreak<Option<LayoutNode>> {
-    split_container_principal(&element.principal, split, space, |_| BlockSize::AUTO).map_sides(
-        |fragment| fragment.map(|principal| MulticolColumn::new(principal, element.index).boxed()),
-    )
+    split_container_principal(&element.principal, split, space, |_| BlockSize::AUTO)
+        .map_sides(|fragment| fragment.map(|principal| element.with_principal(principal).boxed()))
 }
 
 fn retain_supported_column_rules(principal: &mut Container) {
@@ -518,12 +517,15 @@ fn retain_supported_column_rules(principal: &mut Container) {
     impl LayoutVisitor for ChildIdentity {
         fn visit_multicol_column(&mut self, element: &MulticolColumn) {
             if !element.principal.children.is_empty() {
-                self.column = Some((element.index, element.principal.positioning.insets.top));
+                self.column = Some((element.index, element.fragment_placement().block_offset()));
             }
         }
 
         fn visit_column_rule(&mut self, element: &ColumnRule) {
-            self.rule = Some((element.gap_after, element.positioning.insets.top));
+            self.rule = Some((
+                element.gap_after,
+                element.fragment_placement().block_offset(),
+            ));
         }
     }
 
@@ -653,41 +655,19 @@ fn split_container_principal(
     }
 }
 
-/// Size a new multicol line from the positioned column fragments it contains.
+/// Size a new multicol line from the retained fragments it contains.
 ///
-/// Multicol columns are anonymous fragmentainers represented as positioned
-/// children, so ordinary block-flow measurement intentionally ignores them.
+/// Multicol columns are anonymous fragmentainers with physical placements, so
+/// ordinary block-flow measurement intentionally ignores them.
 /// At a page break they nevertheless define the block size of the continuing
 /// principal multicol box.
 fn multicol_continuation_block_size(element: &Container) -> BlockSize {
-    #[derive(Default)]
-    struct BorderBoxExtent(Option<f32>);
-
-    impl LayoutVisitor for BorderBoxExtent {
-        fn visit_container(&mut self, element: &Container) {
-            self.0 = element.box_model.size.height.used();
-        }
-
-        fn visit_text_block(&mut self, element: &crate::layout::elements::TextBlock) {
-            self.0 = element.box_model.size.height.used().map(|height| {
-                height
-                    + element.box_model.padding.vertical()
-                    + element.box_model.border.vertical_width()
-            });
-        }
-    }
-
     let content_bottom = element
         .children
         .iter()
         .filter_map(|child| {
-            let positioning = child.positioning_owner()?.positioning();
-            if !positioning.scheme.is_absolute() {
-                return None;
-            }
-            let mut extent = BorderBoxExtent::default();
-            child.accept(&mut extent);
-            extent.0.map(|height| positioning.insets.top + height)
+            let placement = child.fragment_placement_owner()?.fragment_placement();
+            Some(placement.block_offset() + placement.size.height)
         })
         .fold(0.0_f32, f32::max);
     BlockSize::fragment(

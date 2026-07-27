@@ -134,6 +134,38 @@ pub struct CellBox {
 }
 
 impl CellBox {
+    /// Actual block extent occupied by text, nested flow, padding, and the
+    /// cell-owned border share.
+    ///
+    /// This deliberately excludes the track minimum. Alignment needs the
+    /// intrinsic content extent even when layout has stretched the row.
+    pub(crate) fn intrinsic_block_extent(&self) -> f32 {
+        let text = self
+            .content
+            .lines
+            .iter()
+            .map(|line| line.height)
+            .sum::<f32>();
+        let nested = crate::layout::paginate::simulate_block_flow(&self.content.children).height;
+        text + nested + self.box_model.content_insets.vertical()
+    }
+
+    /// Block-start offset of intrinsic content inside a stretched cell.
+    pub(crate) fn content_block_offset(&self, row_extent: f32) -> f32 {
+        let free = (row_extent - self.intrinsic_block_extent()).max(0.0);
+        match self.alignment.block {
+            VerticalAlign::Middle => crate::fonts::ceil_to_css_pixel(free / 2.0),
+            VerticalAlign::Bottom | VerticalAlign::TextBottom => free,
+            VerticalAlign::Top
+            | VerticalAlign::TextTop
+            | VerticalAlign::Baseline
+            | VerticalAlign::Super
+            | VerticalAlign::Sub
+            | VerticalAlign::Length(_)
+            | VerticalAlign::Percent(_) => 0.0,
+        }
+    }
+
     pub(crate) fn has_outset_graphical_effect(&self) -> bool {
         self.paint.has_outset_graphical_effect()
             || crate::layout::elements::text_lines_have_outset_shadows(&self.content.lines)
@@ -252,6 +284,28 @@ pub struct TableCell {
 impl CellBoxHolder for TableCell {
     fn cell_box(&self) -> &CellBox {
         &self.layout
+    }
+}
+
+impl TableCell {
+    /// Minimum block extent contributed by this cell to its originating row.
+    pub(crate) fn row_block_extent(&self) -> f32 {
+        self.layout
+            .intrinsic_block_extent()
+            .max(self.layout.box_model.minimum_block_size)
+    }
+}
+
+/// Canonical row-track measurement over any retained table-cell slice.
+pub(crate) trait TableRowCells {
+    fn row_block_extent(&self) -> f32;
+}
+
+impl TableRowCells for [TableCell] {
+    fn row_block_extent(&self) -> f32 {
+        self.iter()
+            .map(TableCell::row_block_extent)
+            .fold(0.0_f32, f32::max)
     }
 }
 

@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::layout::cells::GridCell;
+use crate::layout::cells::{CellBox, GridCell};
 use crate::layout::elements::{BoxModel, FlexRow, GridRow, Positioning};
 use crate::layout::engine::FlexCell;
-use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::AlignItems;
 use crate::types::{EdgeSizes, Point, Size, Vector};
@@ -17,27 +16,16 @@ use super::overflow::flex_cell_paint_overflow;
 use super::painter::{DescendantPaintArea, ElementPaintSpace, RootEffectHandling, SourcePainter};
 use super::text::{flex_cell_baseline, flex_line_max_baseline};
 
-/// Concrete border-box geometry of one grid item within its row.
-#[derive(Clone, Copy)]
-pub(crate) struct GridCellSourceFrame {
-    pub(crate) size: Size,
-    border_offset: Vector,
-}
+mod frame;
+mod table;
 
-impl GridCellSourceFrame {
-    pub(crate) fn anchor_in(self, row_anchor: SourceRasterAnchor) -> SourceRasterAnchor {
-        SourceRasterAnchor::at_border_origin(row_anchor.border_origin() + self.border_offset)
-    }
-
-    pub(super) fn border_box_in(self, row_origin: Point) -> SurfaceRect {
-        SurfaceRect::new(row_origin + self.border_offset, self.size)
-    }
-}
+pub(crate) use frame::CellSourceFrame;
+pub(crate) use table::table_cell_source_frames;
 
 /// Resolve every grid item's concrete border box from retained track geometry.
 /// Source painting and post-pagination filter materialization share this one
 /// calculation.
-pub(crate) fn grid_cell_source_frames(grid: &GridRow) -> Vec<GridCellSourceFrame> {
+pub(crate) fn grid_cell_source_frames(grid: &GridRow) -> Vec<CellSourceFrame> {
     let content_offset = Vector::new(
         grid.box_model.border.left.width + grid.box_model.padding.left,
         grid.box_model.border.top.width + grid.box_model.padding.top,
@@ -68,11 +56,10 @@ pub(crate) fn grid_cell_source_frames(grid: &GridRow) -> Vec<GridCellSourceFrame
                 (Vector::ZERO, Size::new(track_width, row_height)),
                 |inset| (Vector::new(inset.offset.x, inset.offset.y), inset.size),
             );
-            GridCellSourceFrame {
+            CellSourceFrame::new(
                 size,
-                border_offset: content_offset
-                    + Vector::new(track_x + inset_offset.x, inset_offset.y),
-            }
+                content_offset + Vector::new(track_x + inset_offset.x, inset_offset.y),
+            )
         })
         .collect()
 }
@@ -137,6 +124,7 @@ impl SourcePainter<'_> {
         self.canvas
             .paint_border(rect, &cell.border, cell.paint.border_radii)?;
         let area = DescendantPaintArea {
+            padding_box,
             content_box: rect.inset(cell.border.widths() + cell.padding),
             absolute_containing_block: Some(padding_box),
             direct_child_effects: RootEffectHandling::DeferToOwner,
@@ -147,61 +135,88 @@ impl SourcePainter<'_> {
     }
 
     pub(super) fn paint_grid_cell(&mut self, cell: &GridCell, rect: SurfaceRect) -> Option<()> {
-        if let Some(output) = &cell.layout.paint.filter_output {
+        self.paint_cell_box(&cell.layout, rect, cell.placement.clips, false, 0.0)
+    }
+
+    pub(super) fn paint_cell_box(
+        &mut self,
+        cell: &CellBox,
+        rect: SurfaceRect,
+        clips: bool,
+        suppressed: bool,
+        baseline_shift: f32,
+    ) -> Option<()> {
+        if suppressed {
+            return Some(());
+        }
+        if let Some(output) = &cell.paint.filter_output {
             return self.canvas.paint_filter_output(output, rect);
         }
-        if cell.placement.clips {
+        let group = &cell.paint.group;
+        if group.transform.value.is_some()
+            || group.effects.opacity < 1.0
+            || group.effects.mix_blend_mode != crate::style::computed::BlendMode::Normal
+            || group.effects.masking.clip_path.is_some()
+            || group.effects.masking.image.is_some()
+        {
             return None;
         }
-        let border = cell.layout.box_model.border;
+        let border = cell.box_model.border;
         let model = BoxModel {
             size: crate::layout::elements::LayoutSize::fixed(
                 rect.size.width,
                 Some(rect.size.height),
             ),
-            padding: cell.layout.box_model.padding(),
+            padding: cell.box_model.padding(),
             border,
             ..Default::default()
         };
         let background = FilterBackground::resolve(
-            &cell.layout.paint.background,
+            &cell.paint.background,
             &model,
             rect,
-            cell.layout.paint.border_radii,
+            cell.paint.border_radii,
         )?;
         self.canvas
-            .paint_outset_shadows(rect, &cell.layout.paint.shadows, self.filter_dpi)?;
+            .paint_outset_shadows(rect, &cell.paint.shadows, self.filter_dpi)?;
         background.paint(&mut self.canvas);
         let padding_box = rect.inset(border.widths());
-        self.canvas.paint_inset_shadows(
-            padding_box,
-            &cell.layout.paint.shadows,
-            self.filter_dpi,
-        )?;
         self.canvas
-            .paint_border(rect, &border, cell.layout.paint.border_radii)?;
+            .paint_inset_shadows(padding_box, &cell.paint.shadows, self.filter_dpi)?;
+        self.canvas
+            .paint_border(rect, &border, cell.paint.border_radii)?;
+        let mut content_box = rect.inset(cell.box_model.content_insets);
+        let block_offset = cell.content_block_offset(rect.size.height) + baseline_shift;
+        content_box.origin.y += block_offset;
+        content_box.size.height = (content_box.size.height - block_offset).max(0.0);
         let area = DescendantPaintArea {
-            content_box: rect.inset(cell.layout.box_model.content_insets),
+            padding_box,
+            content_box,
             absolute_containing_block: Some(padding_box),
             direct_child_effects: RootEffectHandling::DeferToOwner,
         };
-        self.paint_text_lines(
-            &cell.layout.content.lines,
-            area.content_box,
-            cell.layout.alignment.inline,
-            0.0,
-        )?;
-        let text_height = cell
-            .layout
-            .content
-            .lines
-            .iter()
-            .map(|line| line.height)
-            .sum::<f32>();
-        self.paint_children(
-            &cell.layout.content.children,
-            area.after_normal_flow(text_height),
-        )
+        let paint_contents = |painter: &mut SourcePainter<'_>| {
+            painter.paint_text_lines(
+                &cell.content.lines,
+                area.content_box,
+                cell.alignment.inline,
+                0.0,
+            )?;
+            let text_height = cell
+                .content
+                .lines
+                .iter()
+                .map(|line| line.height)
+                .sum::<f32>();
+            painter.paint_children(&cell.content.children, area.after_normal_flow(text_height))
+        };
+        if clips {
+            let clip = crate::render::borders::CssRoundedRect::new(rect, cell.paint.border_radii)
+                .inset(border.widths());
+            self.paint_clipped_descendants(clip, paint_contents)
+        } else {
+            paint_contents(self)
+        }
     }
 }
 
@@ -215,7 +230,7 @@ pub(crate) fn paint_grid_cell_source(
 ) -> Option<SourceGraphic> {
     let layout = SourceGeometry {
         size,
-        margins: BlockMargins::ZERO,
+        flow: crate::layout::flow_metrics::BlockFlowSpacing::default(),
         positioning: Positioning::default(),
     };
     let geometry = SourceRasterGeometry::resolve(layout, EdgeSizes::ZERO, filter_dpi, anchor)?;
@@ -247,19 +262,6 @@ pub(crate) fn paint_grid_cell_source(
     })
 }
 
-/// Concrete border-box geometry of one flex item within its row.
-#[derive(Clone, Copy)]
-pub(crate) struct FlexCellSourceFrame {
-    pub(crate) size: Size,
-    border_offset: Vector,
-}
-
-impl FlexCellSourceFrame {
-    pub(crate) fn anchor_in(self, flex_anchor: SourceRasterAnchor) -> SourceRasterAnchor {
-        SourceRasterAnchor::at_border_origin(flex_anchor.border_origin() + self.border_offset)
-    }
-}
-
 /// Resolve every flex item's concrete border-box frame after line alignment.
 ///
 /// The returned order is the cell order. Keeping size and position together in
@@ -268,7 +270,7 @@ impl FlexCellSourceFrame {
 pub(crate) fn flex_cell_source_frames(
     flex: &FlexRow,
     fonts: &HashMap<String, TtfFont>,
-) -> Vec<FlexCellSourceFrame> {
+) -> Vec<CellSourceFrame> {
     let max_baseline = flex_line_max_baseline(&flex.content.cells, flex.content.alignment, fonts);
     flex.content
         .cells
@@ -288,13 +290,13 @@ pub(crate) fn flex_cell_source_frames(
                 flex.content.alignment,
                 baseline_shift,
             );
-            FlexCellSourceFrame {
-                size: Size::new(cell.width, cross.size),
-                border_offset: Vector::new(
+            CellSourceFrame::new(
+                Size::new(cell.width, cross.size),
+                Vector::new(
                     flex.box_model.border.left.width + flex.box_model.padding.left + cell.x_offset,
                     flex.box_model.border.top.width + flex.box_model.padding.top + cross.offset,
                 ),
-            }
+            )
         })
         .collect()
 }
@@ -310,7 +312,7 @@ pub(crate) fn paint_flex_cell_source(
 ) -> Option<SourceGraphic> {
     let layout = SourceGeometry {
         size,
-        margins: BlockMargins::ZERO,
+        flow: crate::layout::flow_metrics::BlockFlowSpacing::default(),
         positioning: Positioning::default(),
     };
     let geometry = SourceRasterGeometry::resolve(

@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::cells::TableRowCells;
 use crate::layout::elements::{GridRow, LayoutVisitor, TableRow};
 
 mod grid;
@@ -10,7 +11,7 @@ fn table_row_height(element: &dyn LayoutElement) -> Option<f32> {
 
     impl LayoutVisitor for Height {
         fn visit_table_row(&mut self, element: &TableRow) {
-            self.0 = Some(compute_row_height(&element.content.cells));
+            self.0 = Some(element.content.cells.row_block_extent());
         }
     }
 

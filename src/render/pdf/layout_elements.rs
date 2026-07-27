@@ -250,14 +250,6 @@ pub(super) struct NestedTextBlock<'a> {
     pub(super) text_indent: f32,
 }
 
-/// Compute the height of a table row from its cells.
-pub(super) fn compute_row_height(cells: &[TableCell]) -> f32 {
-    cells
-        .iter()
-        .map(table_cell_content_height)
-        .fold(0.0f32, f32::max)
-}
-
 /// Compute a grid row's painted height. Unlike a table row, a grid track size is
 /// resolved during layout (css-grid-1 §11): the row track already accounts for
 /// each item's definite/auto height, and a grid item with a definite height does
@@ -269,45 +261,6 @@ pub(super) fn compute_grid_row_height(cells: &[GridCell]) -> f32 {
         .iter()
         .map(|cell| cell.layout.box_model.minimum_block_size)
         .fold(0.0f32, f32::max)
-}
-
-pub(super) fn table_cell_geometry(
-    col_widths: &[f32],
-    col_pos: usize,
-    colspan: usize,
-    spacing: f32,
-    origin_x: f32,
-) -> (f32, f32) {
-    // `border-spacing` is drawn before the first column and between every pair of
-    // columns (and after the last), so the first cell is inset by one `spacing`
-    // and each subsequent column is preceded by another. For `border-collapse`
-    // (spacing == 0) this leading inset vanishes.
-    let cell_x = origin_x
-        + spacing
-        + col_widths.iter().take(col_pos).sum::<f32>()
-        + spacing * col_pos as f32;
-    let cell_w = col_widths.iter().skip(col_pos).take(colspan).sum::<f32>()
-        + spacing * colspan.saturating_sub(1) as f32;
-    (cell_x, cell_w)
-}
-
-/// Resolve a table row's grid origin inside its containing formatting context.
-///
-/// Layout stores the table's margin, border, and padding contribution in the
-/// row offset. Keeping this addition shared prevents nested rows from silently
-/// dropping box-model insets that page-level rows retain.
-pub(super) fn table_row_origin_x(containing_origin_x: f32, offset_left: f32) -> f32 {
-    containing_origin_x + offset_left
-}
-
-#[cfg(test)]
-mod table_row_origin_tests {
-    use super::table_row_origin_x;
-
-    #[test]
-    fn nested_row_keeps_its_layout_offset() {
-        assert_eq!(table_row_origin_x(20.0, 7.5), 27.5);
-    }
 }
 
 pub(super) fn render_cell_content(
@@ -501,27 +454,7 @@ pub(super) fn render_cell_text(
 }
 
 fn cell_content_top(cell: &CellBox, row_y: f32, row_height: f32) -> f32 {
-    // `vertical-align` positions the cell's *actual* content within the (taller)
-    // cell box, so use the intrinsic content height — not the value clamped to
-    // the cell's own `min_content_height`, which would leave no room to offset.
-    let content_height = cell_box_intrinsic_content_height(cell);
-    let offset = match cell.alignment.block {
-        // Chromium resolves a half-CSS-pixel remainder toward the block start.
-        // The corresponding distance from the PDF top edge therefore rounds up
-        // on the CSS-pixel grid: 40px - 21px leaves a 19px surplus and a 10px
-        // (not 9.5px) top offset.
-        VerticalAlign::Middle => {
-            crate::fonts::ceil_to_css_pixel(((row_height - content_height) / 2.0).max(0.0))
-        }
-        VerticalAlign::Bottom | VerticalAlign::TextBottom => (row_height - content_height).max(0.0),
-        VerticalAlign::Top
-        | VerticalAlign::TextTop
-        | VerticalAlign::Baseline
-        | VerticalAlign::Super
-        | VerticalAlign::Sub
-        | VerticalAlign::Length(_)
-        | VerticalAlign::Percent(_) => 0.0,
-    };
+    let offset = cell.content_block_offset(row_height);
     row_y - offset - cell.box_model.content_insets.top
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 use crate::layout::elements::{
-    ColumnRule, Container, FlexRow, GridRow, HorizontalRule, Image, LayoutNode, LayoutVisitor,
-    MathBlock, ProgressBar, Svg, TableRow, TextBlock,
+    ColumnRule, Container, FlexRow, FragmentPlacementOwner, GridRow, HorizontalRule, Image,
+    LayoutNode, LayoutVisitor, MathBlock, ProgressBar, Svg, TableRow, TextBlock,
 };
 
 mod flex;
@@ -110,6 +110,50 @@ impl DirectChildRenderer<'_, '_, '_> {
         self.handled = true;
         self.result = Some(position);
     }
+
+    fn render(&mut self, element: &dyn LayoutElement) {
+        if let Some(placed) = element.fragment_placement_owner() {
+            self.render_placed_fragment(placed);
+        } else {
+            element.accept(self);
+        }
+    }
+
+    fn render_placed_fragment(&mut self, placed: &dyn FragmentPlacementOwner) {
+        let placement = placed.fragment_placement();
+        let anchor = if placement.uses_padding_box() {
+            self.flow.frame.padding_origin
+        } else {
+            self.flow.frame.content_origin
+        };
+        let offset = placement.offset();
+        let origin = PdfPoint::new(anchor.x + offset.x, anchor.y - offset.y);
+        let planned_flow_top = HashMap::from([(0, origin.y)]);
+        let flow = ContainerFlowContext {
+            frame: ContainerFrame::new(origin, placement.size, origin),
+            container_top_y: origin.y,
+            flow_top_by_index: &planned_flow_top,
+            float_top_by_index: self.flow.float_top_by_index,
+            left_float_bottom: self.flow.left_float_bottom,
+            right_float_bottom: self.flow.right_float_bottom,
+            device_space_available: self.flow.device_space_available,
+            paint_phase: self.flow.paint_phase,
+        };
+        let position = FlowPosition::new(origin.y, origin.y, 0.0);
+        let mut renderer = DirectChildRenderer {
+            content: self.content,
+            child_index: 0,
+            flow: &flow,
+            position,
+            abs_origins: self.abs_origins,
+            ctx: self.ctx,
+            handled: false,
+            result: None,
+        };
+        placed.fragment_source().accept(&mut renderer);
+        self.handled = renderer.handled;
+        self.result = Some(self.position);
+    }
 }
 
 impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
@@ -128,11 +172,10 @@ impl LayoutVisitor for DirectChildRenderer<'_, '_, '_> {
 
     fn visit_column_rule(&mut self, element: &ColumnRule) {
         if self.flow.paint_phase.paints_decoration() {
-            let origin = element.positioning.origin();
             paint_column_rule_line(
                 self.content,
-                self.flow.frame.padding_origin.x + origin.x,
-                self.flow.frame.padding_origin.y - origin.y,
+                self.flow.frame.content_origin.x,
+                self.flow.frame.content_origin.y,
                 element.paint.width,
                 element.height,
                 &element.paint,
@@ -462,7 +505,7 @@ pub(super) fn render_container_children(
                         handled: false,
                         result: None,
                     };
-                    child.accept(&mut renderer);
+                    renderer.render(child);
                     (renderer.handled, renderer.result)
                 };
                 let descendants = ctx.stacking.take_since(marker);
@@ -503,7 +546,7 @@ pub(super) fn render_container_children(
                     handled: false,
                     result: None,
                 };
-                child.accept(&mut renderer);
+                renderer.render(child);
                 (renderer.handled, renderer.result)
             };
             let descendants = ctx.stacking.take_since(marker);

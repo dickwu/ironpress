@@ -5,7 +5,7 @@ use super::{
     TextBlock, impl_principal_layout_element,
 };
 use crate::layout::cells::TableCell;
-use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
+use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins, MarginHolder};
 use crate::style::computed::BorderCollapse;
 use crate::types::{CornerRadii, EdgeSizes};
 
@@ -174,6 +174,32 @@ pub(crate) struct TableCells {
     pub(crate) column_widths: Vec<f32>,
 }
 
+/// Resolved inline track geometry of one retained table cell.
+///
+/// The frame is relative to the table row's formatting-context origin. It
+/// carries the logical track index because collapsed-border ownership and
+/// painting must use the same track placement as the cell border box.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TableCellInlineFrame {
+    column_start: usize,
+    offset: f32,
+    extent: f32,
+}
+
+impl TableCellInlineFrame {
+    pub(crate) const fn column_start(self) -> usize {
+        self.column_start
+    }
+
+    pub(crate) const fn offset(self) -> f32 {
+        self.offset
+    }
+
+    pub(crate) const fn extent(self) -> f32 {
+        self.extent
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TableFormatting {
     pub(crate) border_collapse: BorderCollapse,
@@ -190,6 +216,14 @@ impl TableFormatting {
 
     pub(crate) const fn is_collapsed(self) -> bool {
         matches!(self.border_collapse, BorderCollapse::Collapse)
+    }
+
+    pub(crate) const fn inline_spacing(self) -> f32 {
+        if self.is_collapsed() {
+            0.0
+        } else {
+            self.border_spacing
+        }
     }
 
     /// CSS Tables overrides authored table-root padding to zero in collapsed
@@ -338,38 +372,6 @@ impl TableFragmentGroup {
     }
 }
 
-/// Block-axis geometry of one row in the flattened table formatting context.
-///
-/// CSS margins belong to the table's outer box and may collapse with sibling
-/// blocks. Grid spacing, table padding, and collapsed-border overhang are
-/// internal table geometry and must never join that collapse. Keeping those
-/// quantities separate prevents row rendering from treating a table inset as
-/// an oversized CSS margin.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TableRowFlow {
-    pub(crate) margins: BlockMargins,
-    pub(crate) internal: BlockMargins,
-    pub(crate) extra_end: f32,
-}
-
-impl TableRowFlow {
-    pub(crate) const fn new(internal_start: f32) -> Self {
-        Self {
-            margins: BlockMargins::ZERO,
-            internal: BlockMargins::new(internal_start, 0.0),
-            extra_end: 0.0,
-        }
-    }
-
-    pub(crate) const fn content_extent(self, row_height: f32) -> f32 {
-        self.internal.total() + row_height + self.extra_end
-    }
-
-    pub(crate) const fn outer_extent(self, row_height: f32) -> f32 {
-        self.margins.total() + self.content_extent(row_height)
-    }
-}
-
 /// Stable source-tree identity shared by every row of one table grid.
 ///
 /// Rows are flattened so pagination can fragment them independently, but table
@@ -398,7 +400,7 @@ pub(crate) trait TableGridOwner {
 pub(crate) struct TableRow {
     pub(crate) grid: TableGridIdentity,
     pub(crate) content: TableCells,
-    pub(crate) flow: TableRowFlow,
+    pub(crate) flow: BlockFlowSpacing,
     pub(crate) formatting: TableFormatting,
     pub(crate) fragmentation: TableFragmentation,
     pub(crate) inline: TableInlineGeometry,
@@ -425,6 +427,43 @@ impl TableRow {
 
     pub(crate) const fn box_inline_end(&self) -> f32 {
         self.inline.box_end()
+    }
+
+    /// Resolve every originating cell against the canonical retained tracks.
+    ///
+    /// Phantom cells produced by a rowspan still consume their column span but
+    /// have no independent border box, so their frame is `None`.
+    pub(crate) fn cell_inline_frames(&self) -> Vec<Option<TableCellInlineFrame>> {
+        let spacing = self.formatting.inline_spacing();
+        let mut column_start = 0_usize;
+        self.content
+            .cells
+            .iter()
+            .map(|cell| {
+                let start = column_start;
+                column_start = column_start.saturating_add(cell.span.columns);
+                if cell.span.rows == 0 {
+                    return None;
+                }
+                let offset = self.grid_inline_offset()
+                    + spacing
+                    + self.content.column_widths.iter().take(start).sum::<f32>()
+                    + spacing * start as f32;
+                let extent = self
+                    .content
+                    .column_widths
+                    .iter()
+                    .skip(start)
+                    .take(cell.span.columns)
+                    .sum::<f32>()
+                    + spacing * cell.span.columns.saturating_sub(1) as f32;
+                Some(TableCellInlineFrame {
+                    column_start: start,
+                    offset,
+                    extent,
+                })
+            })
+            .collect()
     }
 }
 

@@ -11,7 +11,7 @@ use crate::style::computed::Position;
 use crate::types::{Point, Size};
 
 use super::canvas::{PaintBounds, RasterCanvas, SurfaceRect};
-use super::geometry::block_child_frames;
+use super::geometry::{BlockChildSpace, block_child_frames};
 use super::gradient::FilterBackground;
 
 /// Common box state used by the source painter without flattening concrete
@@ -121,6 +121,7 @@ pub(super) enum RootEffectHandling {
 /// the containing padding box.
 #[derive(Clone, Copy)]
 pub(super) struct DescendantPaintArea {
+    pub(super) padding_box: SurfaceRect,
     pub(super) content_box: SurfaceRect,
     pub(super) absolute_containing_block: Option<SurfaceRect>,
     pub(super) direct_child_effects: RootEffectHandling,
@@ -225,6 +226,7 @@ impl<'a> SourcePainter<'a> {
             self.space.inherited_containing_block
         };
         Some(DescendantPaintArea {
+            padding_box,
             content_box: rect.inset(model.border.widths() + model.padding),
             absolute_containing_block,
             direct_child_effects: RootEffectHandling::Paint,
@@ -246,9 +248,12 @@ impl<'a> SourcePainter<'a> {
     ) -> Option<()> {
         let frames = block_child_frames(
             children,
-            crate::types::Rect::new(area.content_box.origin, area.content_box.size),
-            area.absolute_containing_block
-                .map(|rect| crate::types::Rect::new(rect.origin, rect.size)),
+            BlockChildSpace::new(
+                crate::types::Rect::new(area.content_box.origin, area.content_box.size),
+                crate::types::Rect::new(area.padding_box.origin, area.padding_box.size),
+                area.absolute_containing_block
+                    .map(|rect| crate::types::Rect::new(rect.origin, rect.size)),
+            ),
         )?;
         for (child, frame) in children.iter().zip(frames) {
             if child

@@ -619,9 +619,8 @@ pub(super) fn render_nested_container(
         // Scroll containers inset the clip by the reserved gutter so
         // content does not paint under the scrollbar.
         let clip = overflow.clips();
-        let clip_command = clip.then(|| {
-            let mut command = String::from("q\n");
-            if has_v || has_h {
+        let content_clip = clip.then(|| {
+            let path = if has_v || has_h {
                 // Rectangular clip inset by the per-side border and the
                 // reserved gutter (right gutter for vertical, bottom for
                 // horizontal — matching the LTR/top-anchored UA layout).
@@ -630,21 +629,16 @@ pub(super) fn render_nested_container(
                     bottom: h_gutter,
                     ..Default::default()
                 });
-                command.push_str(&scroll_clip.rect_path());
-                command.push_str("W n\n");
+                scroll_clip.rect_path()
             } else {
-                command.push_str(
-                    &nk_paint_geometry
-                        .rounded_padding_box(*cont_radii)
-                        .path_or_rect(),
-                );
-                command.push_str("W n\n");
-            }
-            command
+                nk_paint_geometry
+                    .rounded_padding_box(*cont_radii)
+                    .path_or_rect()
+            };
+            ContentClip::from_path(path)
         });
-        if let Some(command) = &clip_command {
-            content.push_str(command);
-            ctx.stacking.push_clip(command.clone());
+        if let Some(clip) = &content_clip {
+            clip.begin(content, &mut ctx.stacking);
         }
 
         // Recurse into nested children
@@ -682,9 +676,8 @@ pub(super) fn render_nested_container(
             },
         );
 
-        if clip {
-            ctx.stacking.pop_clip();
-            content.push_str("Q\n");
+        if let Some(clip) = &content_clip {
+            clip.finish(content, &mut ctx.stacking);
         }
 
         // Paint the print scrollbar chrome in the reserved gutter,

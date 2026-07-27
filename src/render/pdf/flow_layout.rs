@@ -78,6 +78,9 @@ pub(super) enum CollapseRole {
 }
 
 pub(super) fn collapse_role(element: &dyn LayoutElement) -> CollapseRole {
+    if element.fragment_placement_owner().is_some() {
+        return CollapseRole::Skip;
+    }
     if element
         .positioning_owner()
         .is_some_and(|owner| owner.positioning().scheme.is_absolute())
@@ -206,8 +209,8 @@ pub(super) fn abs_child_anchor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::elements::{IntoLayoutNode, TableRowFlow, TextBlock};
-    use crate::layout::flow_metrics::BlockMargins;
+    use crate::layout::elements::{IntoLayoutNode, TextBlock};
+    use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins};
 
     fn empty_block(margins: BlockMargins) -> LayoutNode {
         TextBlock {
@@ -223,7 +226,7 @@ mod tests {
     #[test]
     fn table_internal_spacing_stays_outside_sibling_margin_collapse() {
         let table = TableRow {
-            flow: TableRowFlow {
+            flow: BlockFlowSpacing {
                 margins: BlockMargins::new(4.0, 6.0),
                 internal: BlockMargins::new(2.0, 3.0),
                 ..Default::default()

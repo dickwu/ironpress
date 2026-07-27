@@ -1,14 +1,46 @@
 use super::flow::{
-    ColumnFragmentation, SourceBlockRange, balance_fragmented_columns, empty_abs_container,
-    fragment_columns, item_minimum_fragment_size, make_fragment_box,
-    project_text_lines_into_fragment,
+    ColumnFragmentation, SourceBlockRange, balance_fragmented_columns, fragment_columns,
+    item_minimum_fragment_size, make_fragment_box, project_text_lines_into_fragment,
 };
 use super::*;
 use crate::layout::elements::{
-    Container, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, Table,
+    Container, IntoLayoutNode, LayoutElementTestExt, LayoutElementTestMutExt, LayoutVisitor, Table,
+    visit_layout_tree,
 };
 use crate::layout::engine::{LayoutBorderSide, TextLine};
+use crate::parser::css::parse_stylesheet;
+use crate::parser::html::parse_html_with_styles;
 use crate::style::computed::{BorderSide, BorderStyle, Position};
+
+fn layout_test_document(
+    html: &str,
+    page_size: crate::PageSize,
+) -> Vec<crate::layout::engine::Page> {
+    let document = parse_html_with_styles(html).expect("valid multicol test document");
+    let rules = document
+        .stylesheets
+        .iter()
+        .flat_map(|css| parse_stylesheet(css))
+        .collect::<Vec<_>>();
+    crate::layout::engine::layout_with_rules(
+        &document.nodes,
+        page_size,
+        crate::Margin::uniform(0.0),
+        &rules,
+    )
+}
+
+fn test_abs_container(width: f32, height: f32, origin: Point) -> LayoutNode {
+    Container {
+        box_model: BoxModel {
+            size: LayoutSize::fixed(width, Some(height)),
+            ..Default::default()
+        },
+        positioning: Positioning::absolute_at(origin),
+        ..Default::default()
+    }
+    .boxed()
+}
 
 fn item(height: f32, span_all: bool) -> MultiColItem {
     MultiColItem {
@@ -47,7 +79,7 @@ fn paragraph_item(line_count: usize) -> MultiColItem {
 
 fn atomic_avoid_item(height: f32) -> MultiColItem {
     MultiColItem {
-        elements: vec![empty_abs_container(Vec::new(), 0.0, 0.0, 1.0, height, None)],
+        elements: vec![test_abs_container(1.0, height, Point::default())],
         break_inside_avoid_column: true,
         ..item(height, false)
     }
@@ -55,14 +87,7 @@ fn atomic_avoid_item(height: f32) -> MultiColItem {
 
 fn atomic_avoid_item_with_margin(box_height: f32, margin_bottom: f32) -> MultiColItem {
     MultiColItem {
-        elements: vec![empty_abs_container(
-            Vec::new(),
-            0.0,
-            0.0,
-            1.0,
-            box_height,
-            None,
-        )],
+        elements: vec![test_abs_container(1.0, box_height, Point::default())],
         fragmentation_height: box_height + margin_bottom,
         margin_bottom,
         break_inside_avoid_column: true,
@@ -95,9 +120,6 @@ fn paginated_span_rows_preserve_exact_layout_offsets() {
         40.0,
         10.0,
         3.0,
-        1.0,
-        7.0,
-        2.0,
         100.0,
         90.0,
         &style,
@@ -109,17 +131,17 @@ fn paginated_span_rows_preserve_exact_layout_offsets() {
         .iter()
         .map(|element| {
             element
-                .inspect_column_rule(|rule| rule.positioning.insets.top)
-                .or_else(|| element.inspect_container(|container| container.positioning.insets.top))
-                .expect("expected positioned multicol wrapper")
+                .fragment_placement_owner()
+                .map(|owner| owner.fragment_placement().block_offset())
+                .expect("expected retained multicol fragment")
         })
         .collect();
-    assert_eq!(offsets, vec![5.0, 5.0, 15.0]);
+    assert_eq!(offsets, vec![0.0, 0.0, 10.0]);
 }
 
 #[test]
 fn ordinary_near_rule_shaped_container_remains_ordinary() {
-    let mut ordinary = empty_abs_container(Vec::new(), 3.0, 4.0, 2.005, 20.0, None);
+    let mut ordinary = test_abs_container(2.005, 20.0, Point::new(3.0, 4.0));
     ordinary
         .update_container(|container| {
             container.box_model.border.left = LayoutBorderSide {
@@ -159,9 +181,9 @@ fn column_rule_identity_survives_subpoint_paint_perturbation() {
 #[test]
 fn auto_columns_do_not_discard_a_subpoint_continuation() {
     let mut first = item(50.0, false);
-    first.elements = vec![empty_abs_container(Vec::new(), 0.0, 0.0, 1.0, 50.0, None)];
+    first.elements = vec![test_abs_container(1.0, 50.0, Point::default())];
     let mut second = item(50.01, false);
-    second.elements = vec![empty_abs_container(Vec::new(), 0.0, 0.0, 1.0, 50.01, None)];
+    second.elements = vec![test_abs_container(1.0, 50.01, Point::default())];
     let items = [first, second];
     let fragmented = fragment_columns(&items, &[0, 1], ColumnFragmentation::fixed(2, 100.0));
 
@@ -183,7 +205,7 @@ fn continuation_tracks_its_source_offset() {
 #[test]
 fn balance_fragments_one_breakable_box_across_requested_columns() {
     let mut breakable = item(22.0, false);
-    breakable.elements = vec![empty_abs_container(Vec::new(), 0.0, 0.0, 1.0, 22.0, None)];
+    breakable.elements = vec![test_abs_container(1.0, 22.0, Point::default())];
 
     let fragmented = balance_fragmented_columns(&[breakable], &[0], 2);
 
@@ -378,11 +400,19 @@ fn sliced_container_projects_owned_children_and_preserves_inline_size() {
             (
                 container.children.len(),
                 container.box_model.size.width.fixed_value(),
-                container.positioning.insets.left,
-                container.positioning.insets.top,
+                container.positioning.scheme,
             )
         }),
-        Some((1, Some(43.5), 2.0, 3.0))
+        Some((1, Some(43.5), Position::Static))
+    );
+    assert_eq!(
+        first
+            .fragment_placement_owner()
+            .map(|owner| owner.fragment_placement()),
+        Some(crate::layout::elements::FragmentPlacement::in_content_box(
+            crate::types::Vector::new(2.0, 3.0),
+            crate::types::Size::new(10.0, 20.0),
+        ))
     );
 
     let continuation = make_fragment_box(
@@ -472,9 +502,6 @@ fn balanced_pages_do_not_absorb_visible_overflow() {
         100.0,
         0.0,
         0.0,
-        0.0,
-        0.0,
-        0.0,
         100.0,
         100.0,
         &style,
@@ -486,18 +513,8 @@ fn balanced_pages_do_not_absorb_visible_overflow() {
 #[test]
 fn paginated_auto_columns_grow_from_actual_atomic_placement() {
     let items: Vec<_> = (0..20).map(|_| atomic_avoid_item(51.0)).collect();
-    let rows = build_paginated_column_rows(
-        &items,
-        2,
-        40.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        100.0,
-        &ComputedStyle::default(),
-    );
+    let rows =
+        build_paginated_column_rows(&items, 2, 40.0, 0.0, 0.0, 100.0, &ComputedStyle::default());
 
     assert_eq!(rows.len(), 10);
     let mut placed = 0;
@@ -539,6 +556,125 @@ fn empty_flow_anchor_has_exactly_zero_flow_height() {
             crate::layout::elements::LayoutSize::fixed(0.0, Some(0.0)),
         ))
     );
+}
+
+#[test]
+fn balanced_column_fragments_do_not_multiply_the_wrapper_flow_height() {
+    let pages = layout_test_document(
+        r#"
+        <style>
+          @page { size: 600px 176px; margin: 0; }
+          * { box-sizing: border-box; margin: 0; }
+          .columns {
+            column-count: 3;
+            column-gap: 24px;
+            column-fill: balance;
+            width: 480px;
+            margin: 20px;
+            border: 2px solid;
+            padding: 8px;
+          }
+          .block { height: 48px; margin-bottom: 8px; }
+        </style>
+        <div class="columns">
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+        </div>
+        "#,
+        crate::PageSize::new(600.0, 176.0),
+    );
+
+    assert_eq!(pages.len(), 1);
+}
+
+#[test]
+fn paginated_auto_columns_retain_each_fragmentainer_row() {
+    let pages = layout_test_document(
+        r#"
+        <style>
+          @page { size: 384px 152px; margin: 0; }
+          * { box-sizing: border-box; margin: 0; }
+          .columns {
+            column-count: 2;
+            column-gap: 40px;
+            column-fill: auto;
+          }
+          .block { height: 50px; border: 2px solid; }
+        </style>
+        <div class="columns">
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div>
+        </div>
+        "#,
+        crate::PageSize::new(384.0, 152.0),
+    );
+
+    assert_eq!(pages.len(), 2);
+}
+
+#[test]
+fn multicol_retains_absolute_inline_descendant_and_its_containing_block() {
+    let pages = layout_test_document(
+        r#"
+        <style>
+          @page { size: 220px 120px; margin: 0; }
+          * { box-sizing: border-box; margin: 0; }
+          .columns {
+            position: relative;
+            column-count: 2;
+            column-gap: 7px;
+            width: 126px;
+            height: 68px;
+            padding: 7px;
+            border: 2px solid black;
+          }
+          .own { height: 22px; }
+          .own > span:last-child {
+            position: absolute;
+            right: 4px;
+            bottom: 4px;
+          }
+        </style>
+        <div class="columns"><div class="own"><span>Ag</span><span>Bb</span></div></div>
+        "#,
+        crate::PageSize::new(220.0, 120.0),
+    );
+
+    #[derive(Default)]
+    struct PositionedBb(Option<crate::layout::elements::Positioning>);
+
+    impl LayoutVisitor for PositionedBb {
+        fn visit_text_block(&mut self, element: &TextBlock) {
+            let text = element
+                .lines
+                .iter()
+                .flat_map(|line| &line.runs)
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            if text == "Bb" {
+                self.0 = Some(element.positioning.clone());
+            }
+        }
+    }
+
+    let mut positioned = PositionedBb::default();
+    for (_, element) in &pages[0].elements {
+        visit_layout_tree(element.as_ref(), &mut positioned);
+    }
+    let positioning = positioned
+        .0
+        .expect("absolute inline descendant must remain a distinct layout box");
+    assert_eq!(positioning.scheme, Position::Absolute);
+    let containing_block = positioning
+        .containing_block
+        .expect("absolute inline descendant must retain the multicol containing block");
+    assert_eq!(containing_block.width, 122.0 * crate::fonts::PT_PER_CSS_PX);
+    assert_eq!(containing_block.height, 64.0 * crate::fonts::PT_PER_CSS_PX);
 }
 
 #[test]

@@ -79,6 +79,23 @@ impl TextBlock {
         }
     }
 
+    /// Natural text and padding extent before the used block-size constraint.
+    pub(crate) fn natural_padding_box_block_extent(&self) -> f32 {
+        self.box_model.padding.vertical() + self.lines.iter().map(|line| line.height).sum::<f32>()
+    }
+
+    /// Used border-box extent shared by layout, fragmentation, and paint.
+    ///
+    /// `TextBlock` stores a padding-box block size. Borders are therefore
+    /// added after resolving that size, including for a definite height.
+    pub(crate) fn border_box_block_extent(&self) -> f32 {
+        self.box_model
+            .size
+            .height
+            .resolve(self.natural_padding_box_block_extent())
+            + self.box_model.border.vertical_width()
+    }
+
     pub(crate) fn background_box(style: &ComputedStyle, geometry: BackgroundBoxGeometry) -> Self {
         let size = super::LayoutSize::fixed(geometry.size.width, Some(geometry.size.height));
         let role = if geometry.repeat_on_each_page && geometry.z_index < 0 {
@@ -160,12 +177,6 @@ impl ContainingBlockConsumer for TextBlock {
             return;
         }
 
-        let text_height = self.lines.iter().map(|line| line.height).sum::<f32>();
-        let height = self.box_model.size.height.resolve(
-            self.box_model.padding.vertical()
-                + text_height
-                + self.box_model.border.vertical_width(),
-        );
         let width = self.box_model.size.width.fixed_value().unwrap_or_else(|| {
             self.lines
                 .iter()
@@ -185,8 +196,10 @@ impl ContainingBlockConsumer for TextBlock {
                 .fold(0.0, f32::max)
         });
 
-        self.positioning
-            .resolve_against(containing_block, Size::new(width, height));
+        self.positioning.resolve_against(
+            containing_block,
+            Size::new(width, self.border_box_block_extent()),
+        );
     }
 }
 
@@ -218,11 +231,7 @@ impl BoxPaintOwner for TextBlock {
 
 impl BlockFragmentationSource for TextBlock {
     fn block_extent(&self) -> f32 {
-        let border = self.box_model.border.vertical_width();
-        let natural = border
-            + self.box_model.padding.vertical()
-            + self.lines.iter().map(|line| line.height).sum::<f32>();
-        self.box_model.size.height.resolve(natural - border) + border
+        self.border_box_block_extent()
     }
 
     fn find_block_break(&self, query: FragmentBreakQuery) -> Option<f32> {

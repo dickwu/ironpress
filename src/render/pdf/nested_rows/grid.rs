@@ -244,6 +244,15 @@ impl NestedRowsRenderer<'_, '_> {
                     },
                 );
 
+                let content_clip = cell.placement.clips.then(|| {
+                    ContentClip::rounded_padding_box(
+                        cell_paint_geometry,
+                        cell.layout.paint.border_radii,
+                    )
+                });
+                if let Some(clip) = &content_clip {
+                    clip.begin(content, self.stacking);
+                }
                 let cell_inner_w = cell_content_box.width;
                 let mut baseline_cursor = TextBaselineCursor::new(
                     cell_content_box.top(),
@@ -303,16 +312,6 @@ impl NestedRowsRenderer<'_, '_> {
                         .iter()
                         .map(|line| line.height)
                         .sum::<f32>();
-                    let nested_clip = cell.placement.clips;
-                    let clip_command = nested_clip.then(|| {
-                        cell_paint_geometry
-                            .padding_box()
-                            .rounded(CornerRadii::ZERO)
-                            .clip_command()
-                    });
-                    if let Some(command) = &clip_command {
-                        content.push_str(command);
-                    }
                     let nested_x = cell_content_box.left;
                     let nested_w = cell_content_box.width;
                     let nested_y = cell_content_box.top() - text_h;
@@ -337,9 +336,6 @@ impl NestedRowsRenderer<'_, '_> {
                     )
                     .with_initial_fixed_origin(initial_fixed_origin);
                     child_ctx.stacking = self.stacking.fork();
-                    if let Some(command) = &clip_command {
-                        child_ctx.stacking.push_clip(command.clone());
-                    }
                     render_container_children(
                         content,
                         &cell.layout.content.children,
@@ -365,13 +361,12 @@ impl NestedRowsRenderer<'_, '_> {
                             ..Default::default()
                         },
                     );
-                    if nested_clip {
-                        child_ctx.stacking.pop_clip();
-                        content.push_str("Q\n");
-                    }
                     self.stacking.restore(child_ctx.stacking.take_since(0));
                 }
 
+                if let Some(clip) = &content_clip {
+                    clip.finish(content, self.stacking);
+                }
                 let mut cell_ctx = PageRenderContext::new(
                     pdf_writer,
                     page_images,

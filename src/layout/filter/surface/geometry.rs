@@ -1,10 +1,11 @@
 //! Geometry of a SourceGraphic and its physical raster backing.
 
+use crate::layout::cells::TableRowCells;
 use crate::layout::elements::{
     ColumnRule, Container, FlexRow, GridRow, Image, LayoutElement, LayoutVisitor, Positioning,
-    TextBlock,
+    TableRow, TextBlock,
 };
-use crate::layout::flow_metrics::BlockMargins;
+use crate::layout::flow_metrics::BlockFlowSpacing;
 use crate::types::{EdgeSizes, Point, Size};
 
 /// Absolute top-down page position of a filter source's border box.
@@ -92,7 +93,7 @@ fn finite_device_coordinate(points: f32, pixels_per_point: f32) -> Option<f64> {
 #[derive(Debug, Clone)]
 pub(crate) struct SourceGeometry {
     pub(crate) size: Size,
-    pub(crate) margins: BlockMargins,
+    pub(crate) flow: BlockFlowSpacing,
     pub(crate) positioning: Positioning,
 }
 
@@ -205,26 +206,20 @@ pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeome
         fn visit_column_rule(&mut self, element: &ColumnRule) {
             self.0 = Some(SourceGeometry {
                 size: Size::new(element.paint.width, element.height),
-                margins: BlockMargins::ZERO,
-                positioning: element.positioning.clone(),
+                flow: BlockFlowSpacing::default(),
+                positioning: Positioning::default(),
             });
         }
 
         fn visit_text_block(&mut self, element: &TextBlock) {
-            let text_height = element.lines.iter().map(|line| line.height).sum::<f32>();
-            let height = element.box_model.size.height.resolve(
-                element.box_model.padding.vertical()
-                    + text_height
-                    + element.box_model.border.vertical_width(),
-            );
             self.0 = element
                 .box_model
                 .size
                 .width
                 .fixed_value()
                 .map(|width| SourceGeometry {
-                    size: Size::new(width, height),
-                    margins: element.box_model.margins,
+                    size: Size::new(width, element.border_box_block_extent()),
+                    flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                     positioning: element.positioning.clone(),
                 });
         }
@@ -238,7 +233,7 @@ pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeome
                 .fixed_value()
                 .map(|width| SourceGeometry {
                     size: Size::new(width, height),
-                    margins: element.box_model.margins,
+                    flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                     positioning: element.positioning.clone(),
                 });
         }
@@ -256,7 +251,7 @@ pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeome
                 positioning.insets.left += element.inline_offset.value();
                 SourceGeometry {
                     size: Size::new(width, height),
-                    margins: element.box_model.margins,
+                    flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                     positioning,
                 }
             });
@@ -278,15 +273,26 @@ pub(crate) fn source_geometry(element: &dyn LayoutElement) -> Option<SourceGeome
                 + element.box_model.border.vertical_width();
             self.0 = Some(SourceGeometry {
                 size: Size::new(width, height),
-                margins: element.box_model.margins,
+                flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                 positioning: Default::default(),
+            });
+        }
+
+        fn visit_table_row(&mut self, element: &TableRow) {
+            self.0 = Some(SourceGeometry {
+                size: Size::new(
+                    element.box_inline_extent(),
+                    element.content.cells.row_block_extent(),
+                ),
+                flow: element.flow,
+                positioning: Positioning::default(),
             });
         }
 
         fn visit_image(&mut self, element: &Image) {
             self.0 = Some(SourceGeometry {
                 size: element.geometry.size,
-                margins: element.geometry.flow.margins,
+                flow: BlockFlowSpacing::from_margins(element.geometry.flow.margins),
                 positioning: element.positioning.clone(),
             });
         }
@@ -316,15 +322,9 @@ fn source_geometry_in_content(
             if !element.box_model.size.width.is_fill_available() {
                 return;
             }
-            let text_height = element.lines.iter().map(|line| line.height).sum::<f32>();
-            let height = element.box_model.size.height.resolve(
-                element.box_model.padding.vertical()
-                    + text_height
-                    + element.box_model.border.vertical_width(),
-            );
             self.geometry = Some(SourceGeometry {
-                size: Size::new(self.available_width, height),
-                margins: element.box_model.margins,
+                size: Size::new(self.available_width, element.border_box_block_extent()),
+                flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                 positioning: element.positioning.clone(),
             });
         }
@@ -333,7 +333,7 @@ fn source_geometry_in_content(
             if element.box_model.size.width.is_fill_available() {
                 self.geometry = Some(SourceGeometry {
                     size: Size::new(self.available_width, container_source_height(element)),
-                    margins: element.box_model.margins,
+                    flow: BlockFlowSpacing::from_margins(element.box_model.margins),
                     positioning: element.positioning.clone(),
                 });
             }
@@ -354,26 +354,60 @@ pub(crate) struct BlockChildFrame {
     pub(crate) border_box: crate::types::Rect,
 }
 
+/// Coordinate spaces shared by every child of one block formatting context.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockChildSpace {
+    content_box: crate::types::Rect,
+    padding_box: crate::types::Rect,
+    absolute_containing_block: Option<crate::types::Rect>,
+}
+
+impl BlockChildSpace {
+    pub(crate) const fn new(
+        content_box: crate::types::Rect,
+        padding_box: crate::types::Rect,
+        absolute_containing_block: Option<crate::types::Rect>,
+    ) -> Self {
+        Self {
+            content_box,
+            padding_box,
+            absolute_containing_block,
+        }
+    }
+}
+
 /// Resolve block children once for every SourceGraphic paint path. Sharing
 /// this sequence prevents nested boxes from acquiring different device phases
 /// based on which concrete parent type owns them.
 pub(crate) fn block_child_frames(
     children: &[crate::layout::elements::LayoutNode],
-    content_box: crate::types::Rect,
-    absolute_containing_block: Option<crate::types::Rect>,
+    space: BlockChildSpace,
 ) -> Option<Vec<BlockChildFrame>> {
     use crate::style::computed::Position;
 
     let mut frames = Vec::new();
     frames.try_reserve_exact(children.len()).ok()?;
-    let mut cursor_y = content_box.origin.y;
+    let mut cursor_y = space.content_box.origin.y;
     let mut previous_margin_end = 0.0;
     for child in children {
-        let geometry = source_geometry_in_content(child.as_ref(), content_box.size.width)?;
+        if let Some(placed) = child.fragment_placement_owner() {
+            let placement = placed.fragment_placement();
+            let geometry =
+                source_geometry_in_content(placed.fragment_source(), placement.size.width)?;
+            frames.push(BlockChildFrame {
+                border_box: crate::types::Rect::new(
+                    placement.resolve(space.content_box.origin, space.padding_box.origin),
+                    geometry.size,
+                ),
+            });
+            continue;
+        }
+        let geometry = source_geometry_in_content(child.as_ref(), space.content_box.size.width)?;
         let positioning = &geometry.positioning;
+        let flow = geometry.flow;
         let (origin, advances_flow) = match positioning.scheme {
             Position::Absolute | Position::Fixed => {
-                let containing_block = absolute_containing_block?;
+                let containing_block = space.absolute_containing_block?;
                 (
                     Point::new(
                         containing_block.origin.x + positioning.insets.left,
@@ -383,11 +417,11 @@ pub(crate) fn block_child_frames(
                 )
             }
             Position::Static | Position::Relative | Position::Sticky => {
-                cursor_y +=
-                    collapsed_margin_start_extra(geometry.margins.start, previous_margin_end);
+                cursor_y += collapsed_margin_start_extra(flow.margins.start, previous_margin_end);
+                cursor_y += flow.internal.start;
                 (
                     Point::new(
-                        content_box.origin.x + positioning.insets.left,
+                        space.content_box.origin.x + positioning.insets.left,
                         cursor_y + positioning.insets.top,
                     ),
                     true,
@@ -398,8 +432,9 @@ pub(crate) fn block_child_frames(
             border_box: crate::types::Rect::new(origin, geometry.size),
         });
         if advances_flow {
-            cursor_y += geometry.size.height + geometry.margins.end;
-            previous_margin_end = geometry.margins.end;
+            cursor_y +=
+                geometry.size.height + flow.internal.end + flow.extra_end + flow.margins.end;
+            previous_margin_end = flow.margins.end;
         }
     }
     Some(frames)

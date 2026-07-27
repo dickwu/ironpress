@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::cells::TableRowCells;
 use crate::layout::elements::TableRow;
 
 impl NestedRowsRenderer<'_, '_> {
@@ -22,25 +23,18 @@ impl NestedRowsRenderer<'_, '_> {
         let cells = &element.content.cells;
         let col_widths = &element.content.column_widths;
         let border_collapse = element.formatting.border_collapse;
-        let border_spacing = element.formatting.border_spacing;
         let outer_margins = element.flow.margins;
         let internal_spacing = element.flow.internal;
         let flow_extra_bottom = element.flow.extra_end;
-        let offset_left = element.grid_inline_offset();
+        let cell_frames = element.cell_inline_frames();
         if self.first_margin == FirstMarginState::Pending {
             cursor_y -=
                 collapsed_margin_top_extra(outer_margins.start, self.previous_margin_bottom);
         }
         self.first_margin = FirstMarginState::Pending;
         cursor_y -= internal_spacing.start;
-        let spacing = if border_collapse == BorderCollapse::Collapse {
-            0.0
-        } else {
-            border_spacing
-        };
         let row_y = cursor_y;
-        let row_origin_x = table_row_origin_x(origin_x, offset_left);
-        let row_height = compute_row_height(cells);
+        let row_height = cells.row_block_extent();
         if !self.paint {
             cursor_y -= row_height + internal_spacing.end + flow_extra_bottom + outer_margins.end;
             self.cursor_y = cursor_y;
@@ -48,36 +42,27 @@ impl NestedRowsRenderer<'_, '_> {
             return;
         }
         let baseline_shifts = row_baseline_shifts(cells, custom_fonts);
-        let mut col_pos = 0;
         let stacking_scope = StackingScope::for_element(element);
         let mut stacking_plan = StackingPaintPlan::default();
         for (cell_idx, cell) in cells.iter().enumerate() {
-            if cell.span.rows == 0 {
-                col_pos += cell.span.columns;
+            let Some(cell_frame) = cell_frames.get(cell_idx).copied().flatten() else {
                 continue;
-            }
+            };
+            let col_pos = cell_frame.column_start();
             let phaseable = cell.layout.stacking_level().is_in_flow()
                 && crate::layout::elements::BoxPaintOwner::supports_phased_paint(&cell.layout);
             let cell_phase = match (self.table_cell_phase, phaseable) {
                 (TableCellPaintPhase::All, _) => TableCellPaintPhase::All,
                 (phase, true) => phase,
                 (TableCellPaintPhase::Contents, false) => TableCellPaintPhase::All,
-                _ => {
-                    col_pos += cell.span.columns;
-                    continue;
-                }
+                _ => continue,
             };
             let marker = self.stacking.marker();
             let mut cell_content = String::new();
             'paint_cell: {
                 let content = &mut cell_content;
-                let (cell_x, cell_w) = table_cell_geometry(
-                    col_widths,
-                    col_pos,
-                    cell.span.columns,
-                    spacing,
-                    row_origin_x,
-                );
+                let cell_x = origin_x + cell_frame.offset();
+                let cell_w = cell_frame.extent();
                 let (horizontal_border_left, horizontal_border_right) =
                     collapsed_table_horizontal_border_span(
                         cell,
@@ -369,6 +354,15 @@ impl NestedRowsRenderer<'_, '_> {
                 }
 
                 if cell_phase.paints_contents() {
+                    let content_clip = cell.table.clips.then(|| {
+                        ContentClip::rounded_padding_box(
+                            cell_paint_geometry,
+                            cell.layout.paint.border_radii,
+                        )
+                    });
+                    if let Some(clip) = &content_clip {
+                        clip.begin(content, self.stacking);
+                    }
                     let mut page_context = PageRenderContext::new(
                         pdf_writer,
                         page_images,
@@ -396,6 +390,9 @@ impl NestedRowsRenderer<'_, '_> {
                     );
                     cell_group.finish(content, &mut page_context);
                     self.stacking.restore(page_context.stacking.take_since(0));
+                    if let Some(clip) = &content_clip {
+                        clip.finish(content, self.stacking);
+                    }
                 } else {
                     let mut page_context = PageRenderContext::new(
                         pdf_writer,
@@ -423,7 +420,6 @@ impl NestedRowsRenderer<'_, '_> {
                 cell_content,
                 descendants,
             );
-            col_pos += cell.span.columns;
         }
         if stacking_scope.is_local() {
             self.stacking.paint_plan(stacking_plan, content);

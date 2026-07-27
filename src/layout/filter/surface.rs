@@ -13,12 +13,14 @@ mod text;
 
 pub(crate) use cells::{
     flex_cell_source_frames, grid_cell_source_frames, paint_flex_cell_source,
-    paint_grid_cell_source,
+    paint_grid_cell_source, table_cell_source_frames,
 };
 pub(crate) use geometry::{
-    SourceGeometry, SourceGraphic, SourceRasterAnchor, block_child_frames, source_geometry,
+    BlockChildSpace, SourceGeometry, SourceGraphic, SourceRasterAnchor, block_child_frames,
+    source_geometry,
 };
 pub(crate) use source_graphic::paint_source_graphic;
+pub(crate) use text::table_row_baseline_shifts;
 
 #[cfg(test)]
 mod tests;
