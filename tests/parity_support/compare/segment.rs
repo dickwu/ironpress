@@ -7,10 +7,11 @@ use image::RgbaImage;
 use super::super::config::{
     COVERAGE_RAMP_CHANNEL_TOLERANCE, CSS_PX, VISUAL_BALANCED_AGGREGATE_RAMP_MIN_PROVEN_RATIO,
     VISUAL_BALANCED_EDGE_COMPONENT_MAX_BIAS, VISUAL_BALANCED_EDGE_COMPONENT_MAX_SPAN_CSS_PX,
-    VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2, VISUAL_COLOR_JND,
-    VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO, VISUAL_LAYERED_COVERAGE_MAX_DEPTH_CSS_PX,
-    VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2, VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX,
-    VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2, VISUAL_STRAIGHT_DEVICE_EDGE_MIN_SPAN_CSS_PX,
+    VISUAL_BALANCED_EDGE_COMPONENT_MIN_AREA_CSS_PX2, VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS,
+    VISUAL_COLOR_JND, VISUAL_COVERAGE_RAMP_MIN_PROVEN_RATIO,
+    VISUAL_LAYERED_COVERAGE_MAX_DEPTH_CSS_PX, VISUAL_PRESENCE_COMPONENT_AREA_CSS_PX2,
+    VISUAL_PRESENCE_COMPONENT_SPAN_CSS_PX, VISUAL_PRESENCE_TOTAL_AREA_CSS_PX2,
+    VISUAL_STRAIGHT_DEVICE_EDGE_MIN_SPAN_CSS_PX, VISUAL_SUB_AUTHORED_COLOR_FRONTIER_MAX_CSS_PX,
     VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_AREA_CSS_PX2,
     VISUAL_UNPROVEN_COLOR_FRAGMENT_MAX_TOTAL_CSS_PX2,
 };
@@ -69,8 +70,8 @@ pub(crate) struct CoverageEvidence {
     pub(crate) long_device_edge_residue: bool,
     /// A whole component is a narrow colour ramp between shared endpoints.
     pub(crate) shared_color_ramp: bool,
-    /// Exactly one device pixel wide between two unchanged local colours.
-    pub(crate) one_device_pixel_color_frontier: bool,
+    /// Below the authored visibility width between two unchanged local colours.
+    pub(crate) sub_authored_color_frontier: bool,
     pub(crate) color_ramp_proven_px: u32,
     pub(crate) color_ramp_total_px: u32,
     pub(crate) compact_color_ramp_remainder: bool,
@@ -119,7 +120,7 @@ pub(crate) struct CoverageAggregate {
     pub(crate) all_sub_css_presence_residues: bool,
     pub(crate) all_one_device_pixel_presence_residues: bool,
     pub(crate) all_shared_color_ramps: bool,
-    pub(crate) all_one_device_pixel_color_frontiers: bool,
+    pub(crate) all_sub_authored_color_frontiers: bool,
 }
 
 /// Direct-presence census after long one-device shared edges are removed.
@@ -270,11 +271,16 @@ impl RegionSet {
             .is_some_and(|aggregate| aggregate.coverage.all_shared_color_ramps)
     }
 
-    pub(crate) fn only_one_device_pixel_color_frontiers(&self) -> bool {
+    /// Whether the complete colour-error field consists of a coherent number
+    /// of frontiers narrower than the fixed authored visibility width.
+    pub(crate) fn only_coherent_sub_authored_color_frontiers(&self) -> bool {
         self.aggregates
             .iter()
             .find(|aggregate| aggregate.class == PixelClass::ColorErr)
-            .is_some_and(|aggregate| aggregate.coverage.all_one_device_pixel_color_frontiers)
+            .is_some_and(|aggregate| {
+                aggregate.coverage.all_sub_authored_color_frontiers
+                    && aggregate.region_count <= VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS
+            })
     }
 
     /// Whether shared-endpoint ramps cover the complete colour residual except
@@ -471,7 +477,7 @@ impl CoverageAggregate {
             all_sub_css_presence_residues: coverage.sub_css_presence_residue,
             all_one_device_pixel_presence_residues: coverage.one_device_pixel_presence_residue,
             all_shared_color_ramps: coverage.shared_color_ramp,
-            all_one_device_pixel_color_frontiers: coverage.one_device_pixel_color_frontier,
+            all_sub_authored_color_frontiers: coverage.sub_authored_color_frontier,
         }
     }
 
@@ -480,7 +486,7 @@ impl CoverageAggregate {
         self.all_sub_css_presence_residues &= coverage.sub_css_presence_residue;
         self.all_one_device_pixel_presence_residues &= coverage.one_device_pixel_presence_residue;
         self.all_shared_color_ramps &= coverage.shared_color_ramp;
-        self.all_one_device_pixel_color_frontiers &= coverage.one_device_pixel_color_frontier;
+        self.all_sub_authored_color_frontiers &= coverage.sub_authored_color_frontier;
     }
 }
 
@@ -962,8 +968,8 @@ fn diagnose_region(
                 && proof.has_direct_sample()
                 && is_sub_visibility_same_family_edge(members, cand, reference, w))
     });
-    let one_device_pixel_color_frontier = class == PixelClass::ColorErr
-        && is_one_device_pixel_color_frontier(
+    let sub_authored_color_frontier = class == PixelClass::ColorErr
+        && is_sub_authored_color_frontier(
             members,
             cand,
             reference,
@@ -1012,7 +1018,7 @@ fn diagnose_region(
             one_device_pixel_presence_residue,
             long_device_edge_residue,
             shared_color_ramp,
-            one_device_pixel_color_frontier,
+            sub_authored_color_frontier,
             color_ramp_proven_px: color_ramp_proof.map_or(0, |proof| proof.proven() as u32),
             color_ramp_total_px: color_ramp_proof.map_or(0, |proof| proof.total as u32),
             compact_color_ramp_remainder,
@@ -1104,7 +1110,7 @@ fn is_one_device_pixel_shared_coverage_residue(
         )
 }
 
-fn is_one_device_pixel_color_frontier(
+fn is_sub_authored_color_frontier(
     members: &[usize],
     cand: &RgbaImage,
     reference: &RgbaImage,
@@ -1122,8 +1128,13 @@ fn is_one_device_pixel_color_frontier(
         let x = (index % width) as isize;
         let y = (index / width) as isize;
         CONTOUR_NORMALS.into_iter().any(|(dx, dy)| {
-            component.is_one_device_pixel_run(x, y, dx, dy)
-                && shared_color_frontier(cand, reference, x, y, dx, dy)
+            component.run_is_narrower_than(
+                x,
+                y,
+                dx,
+                dy,
+                VISUAL_SUB_AUTHORED_COLOR_FRONTIER_MAX_CSS_PX,
+            ) && shared_color_frontier(cand, reference, x, y, dx, dy)
         })
     })
 }
@@ -1341,6 +1352,34 @@ impl ComponentPixels {
                 self.run_length(x, y, dx, dy, 1),
             ),
             (Some(before), Some(after)) if before + after + 1 == 1
+        )
+    }
+
+    /// Whether this exact-class normal run is physically narrower than a
+    /// configured authored-space width. The calculation is resolution-aware:
+    /// diagonal device steps carry their Euclidean length rather than being
+    /// counted as axis-aligned samples.
+    fn run_is_narrower_than(
+        &self,
+        x: isize,
+        y: isize,
+        dx: isize,
+        dy: isize,
+        maximum_css_px: f64,
+    ) -> bool {
+        let maximum_device_px = maximum_css_px * CSS_PX;
+        let device_step = ((dx * dx + dy * dy) as f64).sqrt();
+        let maximum_samples = (maximum_device_px / device_step).floor() as usize;
+        if maximum_samples == 0 {
+            return false;
+        }
+        matches!(
+            (
+                self.run_length(x, y, -dx, -dy, maximum_samples),
+                self.run_length(x, y, dx, dy, maximum_samples),
+            ),
+            (Some(before), Some(after))
+                if (before + after + 1) as f64 * device_step < maximum_device_px
         )
     }
 }

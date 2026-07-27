@@ -272,9 +272,9 @@ pub(crate) fn compare_v2(cand: &RgbaImage, reference: &RgbaImage) -> V2Outcome {
                 "CSS-scale observation: sub-CSS shared-colour coverage",
                 true,
             )
-        } else if visibility_regions.only_one_device_pixel_color_frontiers() {
+        } else if visibility_regions.only_coherent_sub_authored_color_frontiers() {
             (
-                "CSS-scale observation: one-device-pixel colour frontier",
+                "CSS-scale observation: coherent sub-authored colour frontier",
                 true,
             )
         } else if visibility::is_predominantly_shared_coverage_phase(

@@ -1345,24 +1345,73 @@ fn golden_one_device_pixel_canvas_edge_chromatic_frontier_is_sub_visible() {
 
     let outcome = run(&candidate, &reference);
     assert!(!outcome.regions.only_shared_coverage_color_residues());
-    assert!(outcome.regions.only_one_device_pixel_color_frontiers());
+    assert!(outcome.regions.only_coherent_sub_authored_color_frontiers());
     assert_eq!(outcome.status, Status::Pass);
 }
 
 #[test]
-fn golden_one_css_pixel_canvas_edge_chromatic_frontier_remains_visible() {
+fn golden_two_device_pixel_canvas_edge_chromatic_frontier_is_sub_visible() {
     let mut reference = canvas(100, 100);
     fill(&mut reference, 80, 20, 99, 79, BLACK);
     let mut candidate = reference.clone();
     for y in 20..=79 {
-        for x in 96..=99 {
+        for x in 98..=99 {
             reference.put_pixel(x, y, Rgba([198, 40, 40, 255]));
             candidate.put_pixel(x, y, Rgba([25, 118, 210, 255]));
         }
     }
 
     let outcome = run(&candidate, &reference);
-    assert!(!outcome.regions.only_one_device_pixel_color_frontiers());
+    assert!(outcome.regions.only_coherent_sub_authored_color_frontiers());
+    assert_eq!(outcome.status, Status::Pass);
+}
+
+#[test]
+fn golden_three_device_pixel_canvas_edge_chromatic_frontier_remains_visible() {
+    let mut reference = canvas(100, 100);
+    fill(&mut reference, 80, 20, 99, 79, BLACK);
+    let mut candidate = reference.clone();
+    for y in 20..=79 {
+        for x in 97..=99 {
+            reference.put_pixel(x, y, Rgba([198, 40, 40, 255]));
+            candidate.put_pixel(x, y, Rgba([25, 118, 210, 255]));
+        }
+    }
+
+    let outcome = run(&candidate, &reference);
+    assert!(!outcome.regions.only_coherent_sub_authored_color_frontiers());
+    assert_eq!(outcome.status, Status::Fail);
+}
+
+#[test]
+fn golden_repeated_sub_authored_chromatic_frontiers_remain_visible() {
+    let mut reference = canvas(180, 140);
+    let mut candidate = reference.clone();
+    for frontier in 0..5 {
+        let x0 = 20 + frontier * 30;
+        fill(&mut reference, x0, 20, x0 + 19, 119, BLACK);
+        fill(&mut candidate, x0, 20, x0 + 19, 119, BLACK);
+        fill(
+            &mut reference,
+            x0 + 18,
+            20,
+            x0 + 19,
+            119,
+            Rgba([198, 40, 40, 255]),
+        );
+        fill(
+            &mut candidate,
+            x0 + 18,
+            20,
+            x0 + 19,
+            119,
+            Rgba([25, 118, 210, 255]),
+        );
+    }
+
+    let outcome = run(&candidate, &reference);
+    assert_eq!(outcome.regions.region_count(PixelClass::ColorErr), 5);
+    assert!(!outcome.regions.only_coherent_sub_authored_color_frontiers());
     assert_eq!(outcome.status, Status::Fail);
 }
 

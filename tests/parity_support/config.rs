@@ -114,6 +114,14 @@ pub(crate) const VISUAL_EDGE_PRESENCE_PCT: f64 = 1.0;
 /// fragmented evidence remains subject to the aggregate coverage cap above so
 /// repeated glyph displacement cannot masquerade as one coherent contour.
 pub(crate) const VISUAL_COHERENT_OUTLINE_MAX_COMPONENTS: u64 = 4;
+/// Maximum physical width of an exact-colour frontier that remains below the
+/// authored visibility scale. At the pinned 300 DPI this admits a two-sample
+/// diagonal junction (0.91 CSS px) but rejects a three-sample axial strip
+/// (0.96 CSS px), which is raster quantization of an authored one-CSS-pixel
+/// feature. Every accepted normal must still terminate in two distinct
+/// byte-identical colours shared by candidate and oracle, and the complete
+/// field must satisfy the coherent-component limit above.
+pub(crate) const VISUAL_SUB_AUTHORED_COLOR_FRONTIER_MAX_CSS_PX: f64 = 0.95;
 /// Minimum fraction of painted union content that must remain byte-identical
 /// before a paired sub-CSS outline phase can be treated as a stable large
 /// shape. This separates a device-grid phase around an otherwise unchanged

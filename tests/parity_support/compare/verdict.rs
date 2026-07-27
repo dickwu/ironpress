@@ -86,7 +86,7 @@ fn visible_color_difference(
     if visibility_regions.shared_coverage_color_with_compact_remainder() {
         return false;
     }
-    if visibility_regions.only_one_device_pixel_color_frontiers() {
+    if visibility_regions.only_coherent_sub_authored_color_frontiers() {
         return false;
     }
 
