@@ -1,13 +1,12 @@
 //! Page-row construction for paginated multi-column formatting contexts.
 
+use super::distribution::{balance_columns, balanced_buckets_height};
 use super::flow::{ColumnFragmentation, fragment_columns};
 use super::fragments::{
     make_band_container, make_column_container, make_fragment_box, make_rule_container,
 };
+use super::geometry::{column_has_content, column_rule_x, column_x};
 use super::items::MultiColItem;
-use super::{
-    balance_columns, balanced_buckets_height, column_has_content, column_rule_x, column_x,
-};
 use crate::layout::elements::LayoutNode;
 use crate::layout::roundoff::exceeds_with_roundoff;
 use crate::style::computed::ComputedStyle;

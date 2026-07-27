@@ -1,6 +1,6 @@
 //! Fragmentainer geometry and balancing for multi-column content.
 
-use super::balance_columns;
+use super::distribution::balance_columns;
 use super::items::MultiColItem;
 use crate::layout::elements::{
     Container, FragmentBreakQuery, FragmentBreakRule, FragmentPlacement, LayoutElement,

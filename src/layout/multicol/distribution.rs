@@ -96,22 +96,39 @@ pub(super) fn balance_columns(heights: &[f32], num_cols: usize) -> Vec<Vec<usize
 /// short. A block whose addition would overflow the current non-empty column
 /// instead starts the next one (never split). The slice-able common case is
 /// handled by `fragment_columns`, which fragments the crossing block.
-/// Overflow past the last column piles into it.
+/// Overflow creates additional columns in the inline direction; the specified
+/// count is the initial line size, not a clipping boundary.
 pub(super) fn fill_columns(heights: &[f32], num_cols: usize, fill_h: f32) -> Vec<Vec<usize>> {
     let n = heights.len();
-    if num_cols <= 1 || n == 0 || fill_h <= 0.0 {
+    if n == 0 || fill_h <= 0.0 {
         return vec![(0..n).collect()];
     }
-    let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); num_cols];
+    let mut buckets: Vec<Vec<usize>> = (0..num_cols.max(1)).map(|_| Vec::new()).collect();
     let mut col = 0usize;
     let mut col_h = 0.0f32;
     for (idx, &h) in heights.iter().enumerate() {
-        if col + 1 < num_cols && col_h > 0.0 && exceeds_with_roundoff(col_h + h, fill_h) {
+        if col_h > 0.0 && exceeds_with_roundoff(col_h + h, fill_h) {
             col += 1;
             col_h = 0.0;
+            if col == buckets.len() {
+                buckets.push(Vec::new());
+            }
         }
         buckets[col].push(idx);
         col_h += h;
     }
     buckets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sequential_overflow_extends_past_the_specified_column_count() {
+        assert_eq!(
+            fill_columns(&[60.0, 60.0, 60.0], 2, 100.0),
+            vec![vec![0], vec![1], vec![2]]
+        );
+    }
 }

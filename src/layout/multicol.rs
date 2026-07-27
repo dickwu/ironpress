@@ -30,23 +30,21 @@
 //!   splits, and `break-inside: avoid` keeps a box whole whenever it can fit.
 
 mod distribution;
+mod fill;
 mod flow;
 mod fragments;
 mod geometry;
 mod items;
 mod page_rows;
 
-use distribution::{
-    balance_columns, balanced_buckets_height, fill_columns, max_vertical_rl_item_height,
-};
-use flow::{
-    BoxFragmentPlacement, ColumnFragmentation, balance_fragmented_columns, fragment_columns,
-};
+use distribution::max_vertical_rl_item_height;
+use fill::MulticolBlockFlow;
+use flow::BoxFragmentPlacement;
 use fragments::{
     empty_flow_anchor, item_is_splittable, make_band_container, make_column_container,
     make_fragment_box, make_rule_container,
 };
-use geometry::{column_has_content, column_rule_x, column_x, resolve_columns};
+use geometry::{column_rule_x, column_x, resolve_columns};
 use items::{ChildMulticolInfo, ColumnBreakInfo, MultiColItem, child_multicol_info};
 use page_rows::{
     build_balanced_paginated_column_rows, build_paginated_column_rows,
@@ -263,20 +261,11 @@ pub(crate) fn layout_multicol_container(
     // placement independently of authored CSS positioning. The height
     // accounting (`cursor_y`/`max_bottom`) stays in border-box coordinates.
 
-    // Explicit border-box height (if any) resolved up front so the column rule
-    // can span the full content box of a definite-height multicol container
-    // (CSS Multicol §6: the rule is as tall as the column box, and in a
-    // definite-height container the columns fill the content box).
-    let explicit_border_box_h = style.height.map(|h| {
-        if style.box_sizing == crate::style::computed::BoxSizing::BorderBox {
-            h
-        } else {
-            h + style.border.vertical_width() + style.padding.vertical()
-        }
-    });
+    let block_flow = MulticolBlockFlow::from_style(style);
+    let preferred_border_box_h = block_flow.preferred_border_box();
 
     if style.writing_mode.is_vertical() {
-        let natural_block_size = explicit_border_box_h.unwrap_or_else(|| {
+        let natural_block_size = preferred_border_box_h.unwrap_or_else(|| {
             pad_top
                 + max_vertical_rl_item_height(&items)
                 + style.padding.bottom
@@ -341,7 +330,7 @@ pub(crate) fn layout_multicol_container(
     let in_flow = style.position.is_in_flow() && style.float == crate::style::computed::Float::None;
     let all_splittable = !items.is_empty() && items.iter().all(item_is_splittable);
     let no_span = items.iter().all(|it| !it.span_all);
-    if explicit_border_box_h.is_none()
+    if preferred_border_box_h.is_none()
         && in_flow
         && no_span
         && all_splittable
@@ -389,7 +378,7 @@ pub(crate) fn layout_multicol_container(
             return;
         }
     }
-    if explicit_border_box_h.is_none()
+    if preferred_border_box_h.is_none()
         && in_flow
         && !no_span
         && num_cols >= 1
@@ -434,10 +423,7 @@ pub(crate) fn layout_multicol_container(
 
     let mut column_children: Vec<LayoutNode> = Vec::new();
     // A pending rule span recorded per balanced run.
-    // Emitted after the loop so a single-run, definite-height container can have
-    // its rules stretched to the full content-box height.
     let mut rule_spans: Vec<ColumnRuleSpan> = Vec::new();
-    let mut run_count = 0usize;
     let mut cursor_y = pad_top; // distance from border-box top to current band top
     let mut max_bottom = pad_top;
 
@@ -473,28 +459,14 @@ pub(crate) fn layout_multicol_container(
         // the top of N+1). Only used when every item in the run is a simple,
         // slice-able block box; otherwise (or for `balance`) fall back to the
         // atomic bucket distribution.
-        let fill_h_auto = match (style.column_fill_auto, explicit_border_box_h) {
-            (true, Some(height)) => {
-                Some((height - style.padding.vertical() - style.border.vertical_width()).max(0.0))
-            }
-            _ => None,
-        };
-        let use_fragmentation =
-            num_cols > 1 && run.iter().all(item_is_splittable) && !run.is_empty();
+        let use_fragmentation = run.iter().all(item_is_splittable) && !run.is_empty();
 
         let mut run_max_h = 0.0f32;
         let mut run_nonempty_cols = vec![false; num_cols];
         if use_fragmentation {
             // ---- Fragmenting fill path (auto or balance) -------------------
             let run_indices: Vec<usize> = (0..run.len()).collect();
-            let fragmented = match fill_h_auto {
-                Some(fill_h) => fragment_columns(
-                    run,
-                    &run_indices,
-                    ColumnFragmentation::overflowing(num_cols, fill_h),
-                ),
-                None => balance_fragmented_columns(run, &run_indices, num_cols),
-            };
+            let fragmented = block_flow.fragment(run, &run_indices, num_cols);
             if fragmented.columns.len() > run_nonempty_cols.len() {
                 run_nonempty_cols.resize(fragmented.columns.len(), false);
             }
@@ -523,11 +495,8 @@ pub(crate) fn layout_multicol_container(
             }
         } else {
             // ---- Atomic bucket path (balance, or non-slice-able auto) ------
-            let heights: Vec<f32> = run.iter().map(|it| it.height).collect();
-            let buckets = match fill_h_auto {
-                Some(fill_h) => fill_columns(&heights, num_cols, fill_h),
-                None => balance_columns(&heights, num_cols),
-            };
+            let run_indices = (0..run.len()).collect::<Vec<_>>();
+            let buckets = block_flow.distribute_atomic(run, &run_indices, num_cols);
 
             // The last non-empty column in document order is the natural end of
             // the run's content: its trailing margin is NOT adjoining a
@@ -573,10 +542,9 @@ pub(crate) fn layout_multicol_container(
             }
         }
 
-        // Record one rule span per gap for this run; the final height is decided
-        // after the loop (full content box for a single definite-height run,
-        // otherwise the run's column-content height).
-        if style.column_rule.used_width() > 0.0 && num_cols > 1 {
+        // Record one rule span per gap for this run. The resolved block flow
+        // distinguishes an authored height from a maximum-height cap.
+        if style.column_rule.used_width() > 0.0 && run_nonempty_cols.len() > 1 {
             let rule_w = style.column_rule.used_width();
             for c in 0..run_nonempty_cols.len().saturating_sub(1) {
                 let has_left = run_nonempty_cols.get(c).copied().unwrap_or(false);
@@ -590,45 +558,28 @@ pub(crate) fn layout_multicol_container(
                     gap_after: c,
                     inline_offset: rule_x,
                     block_offset: cursor_y,
-                    block_size: run_max_h,
+                    block_size: block_flow.rule_block_size(run_max_h),
                 });
             }
         }
-        run_count += 1;
 
         cursor_y += run_max_h;
         max_bottom = max_bottom.max(cursor_y);
     }
 
-    // Emit the recorded column rules. Per CSS Multicol §6 the rule is as tall as
-    // the column box. In a definite-height container with a single balanced run
-    // the columns fill the content box, so the rule spans from the content-box
-    // top (`pad_top`) to its bottom (matching Chrome, which paints the rule the
-    // full height of the box rather than only the filled content).
+    // Emit the recorded column rules. CSS Multicol section 4 makes each rule as
+    // tall as its anonymous column box.
     if !rule_spans.is_empty() {
         let rule_w = style.column_rule.used_width();
         let rule_color = style.column_rule.color.resolve(style.color);
-        // Content-box bottom (border-box coords) when the height is definite.
-        let content_box_bottom = explicit_border_box_h
-            .map(|bh| bh - style.padding.bottom - style.border.bottom.used_width());
         let mut rule_children: Vec<LayoutNode> = Vec::new();
         for span in rule_spans {
-            let (rule_top, rule_h) = match content_box_bottom {
-                // Single balanced run + definite height: span the whole content
-                // box (top padding edge → bottom padding edge).
-                Some(bottom) if run_count == 1 => {
-                    (pad_top, (bottom - pad_top).max(span.block_size))
-                }
-                // Multiple runs (broken by span-all bands) or auto height: the
-                // rule is as tall as this run's columns.
-                _ => (span.block_offset, span.block_size),
-            };
             rule_children.push(make_rule_container(
                 span.gap_after,
                 span.inline_offset - pad_left + style.padding.left,
-                rule_top - pad_top + style.padding.top,
+                span.block_offset - pad_top + style.padding.top,
                 rule_w,
-                rule_h,
+                span.block_size,
                 rule_color,
                 style.column_rule.style,
             ));

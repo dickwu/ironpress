@@ -1,3 +1,4 @@
+use super::distribution::balance_columns;
 use super::flow::{
     ColumnFragmentation, SourceBlockRange, balance_fragmented_columns, fragment_columns,
     item_minimum_fragment_size,
