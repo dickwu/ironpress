@@ -5,15 +5,15 @@
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-2644542-1785141339694032159-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-2688446-1785144075752035201-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
-    "score_pct": 97.53,
-    "pass": 1577,
-    "fail": 40,
+    "score_pct": 97.59,
+    "pass": 1578,
+    "fail": 39,
     "reference_disputed": 18,
     "total": 1635
   },
@@ -49034,7 +49034,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             }
           ]
@@ -53094,10 +53094,10 @@
     },
     {
       "category": "effects",
-      "score_pct": 98.31,
+      "score_pct": 100.0,
       "counts": {
-        "pass": 58,
-        "fail": 1,
+        "pass": 59,
+        "fail": 0,
         "reference_disputed": 1
       },
       "features": [
@@ -53211,7 +53211,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1251,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -53315,7 +53315,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 625,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -53894,10 +53894,10 @@
         },
         {
           "feature": "background-blend-mode comma-separated list",
-          "score_pct": 0.0,
+          "score_pct": 100.0,
           "counts": {
-            "pass": 0,
-            "fail": 1,
+            "pass": 1,
+            "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
@@ -53911,7 +53911,7 @@
                 "background-image"
               ],
               "base_ids": [],
-              "status": "FAIL",
+              "status": "PASS",
               "diff_pct": 0.8520634920634921,
               "semantic_diff_pct": 0.8520634920634921,
               "description": "background-blend-mode lists must match background layers: Two background image layers use different blend modes: top red stripe multiplies, lower blue stripe screens with the background color. Catches wrong implementation: Computed style keeps one blend mode and applies it to every layer or only the first layer.",
@@ -53950,7 +53950,7 @@
               "diagnosis": {
                 "primary_class": "ColorValue",
                 "secondary": [],
-                "headline": "fill recolour ΔRGB(-1,-6,-24) (ΔE 3.7)",
+                "headline": "visually accepted coverage phase; raw fill recolour ΔRGB(-1,-6,-24) (ΔE 3.7)",
                 "magnitude": {
                   "missing_area_pct": 0.0,
                   "extra_area_pct": 0.0,
@@ -54004,7 +54004,8 @@
                   }
                 ],
                 "confidence": 1.0,
-                "different_pixels": 2684
+                "different_pixels": 2684,
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             }
           ]
@@ -62321,7 +62322,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 238,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             }
           ]
@@ -84497,7 +84498,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1133,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             }
           ]
@@ -92820,7 +92821,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1514,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             }
           ]
@@ -143156,7 +143157,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 3137,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -145772,7 +145773,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2728,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -147080,7 +147081,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1570,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -149696,7 +149697,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 3170,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -152342,7 +152343,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1412,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -154958,7 +154959,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2724,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -156266,7 +156267,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2136,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -157574,7 +157575,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2744,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -160190,7 +160191,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2617,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -161498,7 +161499,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2655,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -162806,7 +162807,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 3166,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -168105,7 +168106,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 1595,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -172061,7 +172062,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2617,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
@@ -173369,7 +173370,7 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 2599,
-                "visual_pass_basis": "CSS-scale observation: one-device-pixel colour frontier"
+                "visual_pass_basis": "CSS-scale observation: coherent sub-authored colour frontier"
               }
             },
             {
