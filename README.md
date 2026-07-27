@@ -190,9 +190,9 @@ scripts/parity-gen-refs.sh <category>   # regenerate oracle PDFs explicitly
 scripts/parity-gen-refs.sh --check      # authenticate the complete corpus
 ```
 
-- **Run it:** `cargo test --test feature_parity` renders every fixture in-process,
-  rasterizes the candidate and oracle PDFs symmetrically, and applies the exact
-  raw-pixel evidence plus the fixed visibility verdict.
+- **Run it:** `scripts/parity.sh` supplies a fresh invocation identity, renders
+  every fixture in-process, rasterizes candidate and oracle PDFs symmetrically,
+  and verifies that JSON, Markdown, and HTML all belong to that invocation.
 - **Read it:** `tests/parity/REPORT.md` is the compact, problem-first report;
   `tests/parity/report.json` contains the complete machine result; and
   `tests/parity/reports/index.html` provides the visual evidence.
@@ -203,8 +203,9 @@ scripts/parity-gen-refs.sh --check      # authenticate the complete corpus
   the pinned Chromium Fontations/Foundation launcher; authenticated historical
   non-Chromium PDFs are evidence-only and cannot be regenerated.
 - **Baseline:** `tests/parity/baseline.json` is a separately reviewed regression
-  baseline. Updating it is explicit and cannot bless a visibility regression or
-  hide raw evidence.
+  snapshot. Updating it is explicit; retained FAILs remain current-health
+  failures while their exact rasters become protected against movement or
+  worsening.
 - **CI:** `.github/workflows/parity.yml` runs the same browser-free gate, checks
   `refs.lock`, and uploads the current report and evidence even when defects make
   the gate fail.

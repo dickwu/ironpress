@@ -1,6 +1,6 @@
 //! Feature-parity integration test entry point.
 //!
-//! Run with: `cargo test --test feature_parity -- --nocapture`
+//! Run the durable full-corpus report with: `scripts/parity.sh`
 //!
 //! The engine renders every fixture under `tests/parity/cases/**` in-process
 //! through the `ironpress` library, then rasterizes both that PDF and the

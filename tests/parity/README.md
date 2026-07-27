@@ -73,8 +73,11 @@ PARITY_UPDATE_BASELINE=1 scripts/parity.sh
 ```
 
 That mode skips only the comparison with the old baseline. Corpus and reference
-integrity still gate, and every fixture must still pass regardless of its support
-label. It cannot be combined with `PARITY_ONLY`.
+integrity still gate. Reviewed FAIL rows and their exact raster fingerprints may
+enter the regression snapshot, but remain FAIL in the current report and keep
+the full gate red regardless of support label. The snapshot prevents those
+known failures from moving or worsening and prevents new failures from being
+introduced. Update mode cannot be combined with `PARITY_ONLY`.
 
 To intentionally regenerate one browser oracle without rewriting its category,
 set its fixture id explicitly:

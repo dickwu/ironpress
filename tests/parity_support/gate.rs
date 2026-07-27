@@ -317,9 +317,8 @@ fn is_sha256(value: &str) -> bool {
 /// Enforce harness-integrity invariants that must hold even during an intentional
 /// baseline update.
 ///
-/// A baseline is a visual-parity green snapshot. Support labels describe intended
-/// breadth only: they never permit a non-PASS result into the baseline.
-/// Report-integrity failures independent of the candidate's visual PASS/FAIL
+/// A baseline is reviewed regression history, never a source of fixture verdicts.
+/// Report-integrity failures are independent of the candidate's visual PASS/FAIL
 /// results. Both the gate and the human report consume this one checklist so a
 /// gate-red report cannot present an OK integrity headline.
 pub(crate) fn current_integrity_problems(current: &Report) -> Vec<String> {
@@ -547,7 +546,7 @@ pub(crate) fn current_integrity_problems(current: &Report) -> Vec<String> {
     problems
 }
 
-pub(crate) fn enforce_current_health(current: &Report) -> Result<(), String> {
+fn current_health_problems(current: &Report) -> Vec<String> {
     let mut problems = current_integrity_problems(current);
     if let Some(failure) = &current.gate_failure {
         problems.push(format!("report records a terminal gate failure: {failure}"));
@@ -565,26 +564,44 @@ pub(crate) fn enforce_current_health(current: &Report) -> Result<(), String> {
             ));
         }
     }
+    problems
+}
 
+fn enforce_no_problems(label: &str, problems: Vec<String>) -> Result<(), String> {
     if problems.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "parity integrity gate FAILED ({} issue(s)):\n  - {}",
+            "{label} ({} issue(s)):\n  - {}",
             problems.len(),
             problems.join("\n  - ")
         ))
     }
 }
 
-/// Validate an explicit baseline replacement without weakening current health or
-/// silently shrinking the reviewed corpus. Reference/rasterizer identities may
-/// intentionally change in update mode, but every prior fixture id must remain.
+pub(crate) fn enforce_current_health(current: &Report) -> Result<(), String> {
+    enforce_no_problems(
+        "parity integrity gate FAILED",
+        current_health_problems(current),
+    )
+}
+
+/// Validate an explicit regression-snapshot replacement without changing any
+/// current fixture verdict or silently shrinking the reviewed corpus.
+///
+/// A snapshot may retain failing fixtures: their FAIL status and exact raster
+/// fingerprints remain current-health failures, while the snapshot makes any
+/// later movement, worsening, disappearance, or new failure detectable.
+/// Reference/rasterizer identities may intentionally change in update mode, but
+/// every prior fixture id must remain.
 pub(crate) fn enforce_baseline_update(
     baseline: &BaselineState,
     current: &Report,
 ) -> Result<(), String> {
-    enforce_current_health(current)?;
+    enforce_no_problems(
+        "parity baseline update FAILED: current report is structurally invalid",
+        current_integrity_problems(current),
+    )?;
 
     let previous = match baseline {
         BaselineState::Missing => return Ok(()),
@@ -601,9 +618,10 @@ pub(crate) fn enforce_baseline_update(
             previous.schema_version, current.schema_version
         ));
     }
-    enforce_current_health(previous).map_err(|error| {
-        format!("parity baseline update FAILED: existing baseline is invalid:\n{error}")
-    })?;
+    enforce_no_problems(
+        "parity baseline update FAILED: existing baseline is structurally invalid",
+        current_integrity_problems(previous),
+    )?;
 
     let previous_by_id = previous.by_id();
     let current_by_id = current.by_id();
@@ -624,8 +642,10 @@ pub(crate) fn enforce_baseline_update(
 }
 
 /// Whether a parsed baseline is a usable regression snapshot for this run.
-/// Parsing alone is insufficient: the snapshot must be engine-healthy, use the
-/// current schema, and bind the same authenticated fixture/oracle corpus.
+/// Parsing alone is insufficient: the snapshot must be structurally sound, use
+/// the current schema, and bind the same authenticated fixture/oracle corpus.
+/// Retained FAIL verdicts do not make the snapshot incompatible; they remain
+/// failures in the current-health gate.
 pub(crate) fn baseline_is_compatible(baseline: &BaselineState, current: &Report) -> bool {
     let Some(baseline) = baseline.report() else {
         return false;
@@ -638,71 +658,82 @@ pub(crate) fn baseline_is_compatible(baseline: &BaselineState, current: &Report)
         && baseline.env.rasterizer_sha256 == current.env.rasterizer_sha256
         && baseline.env.rasterizer_version == current.env.rasterizer_version
         && baseline.env.rasterizer_arguments == current.env.rasterizer_arguments
-        && enforce_current_health(baseline).is_ok()
+        && current_integrity_problems(baseline).is_empty()
 }
 
 pub(crate) fn enforce_gate(baseline: &BaselineState, current: &Report) -> Result<(), String> {
-    enforce_current_health(current)?;
+    let mut problems = current_health_problems(current);
 
     let base = match baseline {
         BaselineState::Missing => {
-            return Err(
-                "parity regression gate FAILED: committed baseline.json is missing; use PARITY_UPDATE_BASELINE=1 only after reviewing the current report"
+            problems.push(
+                "committed baseline.json is missing; use PARITY_UPDATE_BASELINE=1 only after reviewing the current report"
                     .to_string(),
             );
+            return enforce_no_problems("parity gate FAILED", problems);
         }
         BaselineState::Invalid(error) => {
-            return Err(format!(
-                "parity regression gate FAILED: committed baseline.json is invalid or unreadable: {error}"
+            problems.push(format!(
+                "committed baseline.json is invalid or unreadable: {error}"
             ));
+            return enforce_no_problems("parity gate FAILED", problems);
         }
         BaselineState::Valid(base) => base,
     };
 
     if base.schema_version != current.schema_version {
-        return Err(format!(
-            "parity regression gate FAILED: baseline schema {} != current schema {}; use PARITY_UPDATE_BASELINE=1 after reviewing the current report",
+        problems.push(format!(
+            "baseline schema {} != current schema {}; use PARITY_UPDATE_BASELINE=1 after reviewing the current report",
             base.schema_version, current.schema_version
         ));
+        return enforce_no_problems("parity gate FAILED", problems);
     }
-    enforce_current_health(base).map_err(|error| {
-        format!("parity regression gate FAILED: committed baseline is invalid:\n{error}")
-    })?;
+    let baseline_integrity = current_integrity_problems(base);
+    if !baseline_integrity.is_empty() {
+        problems.extend(
+            baseline_integrity
+                .into_iter()
+                .map(|problem| format!("committed baseline is structurally invalid: {problem}")),
+        );
+        return enforce_no_problems("parity gate FAILED", problems);
+    }
+    let health_problem_count = problems.len();
     if base.refs_lock_sha256 != current.refs_lock_sha256 {
-        return Err(format!(
-            "parity regression gate FAILED: refs.lock identity changed (baseline {} != current {}); fixture/oracle identity changes require an explicit reviewed baseline update",
+        problems.push(format!(
+            "refs.lock identity changed (baseline {} != current {}); fixture/oracle identity changes require an explicit reviewed baseline update",
             base.refs_lock_sha256, current.refs_lock_sha256
         ));
     }
     if base.env.rasterizer_sha256 != current.env.rasterizer_sha256 {
-        return Err(format!(
-            "parity regression gate FAILED: pdftoppm executable identity changed (baseline {} != current {}); rasterizer changes require explicit review",
+        problems.push(format!(
+            "pdftoppm executable identity changed (baseline {} != current {}); rasterizer changes require explicit review",
             base.env.rasterizer_sha256, current.env.rasterizer_sha256
         ));
     }
     if base.env.rasterizer_version != current.env.rasterizer_version {
-        return Err(format!(
-            "parity regression gate FAILED: pdftoppm version changed (baseline {:?} != current {:?}); rasterizer changes require explicit review",
+        problems.push(format!(
+            "pdftoppm version changed (baseline {:?} != current {:?}); rasterizer changes require explicit review",
             base.env.rasterizer_version, current.env.rasterizer_version
         ));
     }
     if base.env.rasterizer_arguments != current.env.rasterizer_arguments {
-        return Err(format!(
-            "parity regression gate FAILED: pdftoppm argument contract changed (baseline {:?} != current {:?}); comparator changes require explicit review",
+        problems.push(format!(
+            "pdftoppm argument contract changed (baseline {:?} != current {:?}); comparator changes require explicit review",
             base.env.rasterizer_arguments, current.env.rasterizer_arguments
         ));
     }
     if base.env.dpi != current.env.dpi {
-        return Err(format!(
-            "parity regression gate FAILED: rasterization DPI changed (baseline {} != current {}); comparator changes require explicit review",
+        problems.push(format!(
+            "rasterization DPI changed (baseline {} != current {}); comparator changes require explicit review",
             base.env.dpi, current.env.dpi
         ));
+    }
+    if problems.len() != health_problem_count {
+        return enforce_no_problems("parity gate FAILED", problems);
     }
 
     let base_by_id = base.by_id();
     let cur_by_id = current.by_id();
-
-    let mut problems: Vec<String> = Vec::new();
 
     // Every committed fixture must remain present, and PASS -> FAIL is a
     // regression regardless of the rounded scalar.
@@ -769,15 +800,7 @@ pub(crate) fn enforce_gate(baseline: &BaselineState, current: &Report) -> Result
         }
     }
 
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "parity gate FAILED ({} issue(s)):\n  - {}",
-            problems.len(),
-            problems.join("\n  - ")
-        ))
-    }
+    enforce_no_problems("parity gate FAILED", problems)
 }
 
 #[cfg(test)]
@@ -875,7 +898,7 @@ mod gate_tests {
     }
 
     #[test]
-    fn baseline_update_bootstraps_only_a_missing_baseline() {
+    fn baseline_update_accepts_a_reviewed_failing_snapshot_but_not_invalid_json() {
         let current = report(vec![fixture("present", Status::Pass, "implemented")]);
         assert!(enforce_baseline_update(&BaselineState::Missing, &current).is_ok());
 
@@ -884,10 +907,8 @@ mod gate_tests {
         assert!(error.contains("existing baseline.json is invalid or unreadable"));
         assert!(error.contains("JSON syntax error at line 3"));
 
-        let unhealthy = report(vec![fixture("broken", Status::Fail, "implemented")]);
-        let error = enforce_baseline_update(&valid_baseline(&unhealthy), &current).unwrap_err();
-        assert!(error.contains("existing baseline is invalid"));
-        assert!(error.contains("fixture is FAIL: broken"));
+        let failing = report(vec![fixture("present", Status::Fail, "implemented")]);
+        assert!(enforce_baseline_update(&valid_baseline(&failing), &current).is_ok());
     }
 
     #[test]
@@ -940,7 +961,7 @@ mod gate_tests {
     }
 
     #[test]
-    fn baseline_presence_requires_a_compatible_green_snapshot() {
+    fn baseline_presence_requires_a_compatible_structural_snapshot() {
         let current = report(vec![fixture("current", Status::Pass, "implemented")]);
         let valid = report(vec![fixture("current", Status::Pass, "implemented")]);
         assert!(baseline_is_compatible(&valid_baseline(&valid), &current));
@@ -981,11 +1002,8 @@ mod gate_tests {
             &current
         ));
 
-        let unhealthy = report(vec![fixture("broken", Status::Fail, "implemented")]);
-        assert!(!baseline_is_compatible(
-            &valid_baseline(&unhealthy),
-            &current
-        ));
+        let failing = report(vec![fixture("current", Status::Fail, "implemented")]);
+        assert!(baseline_is_compatible(&valid_baseline(&failing), &current));
         assert!(!baseline_is_compatible(&BaselineState::Missing, &current));
         assert!(!baseline_is_compatible(
             &BaselineState::Invalid("broken".to_string()),
@@ -1054,16 +1072,19 @@ mod gate_tests {
     }
 
     #[test]
-    fn a_baseline_cannot_bless_an_existing_failure() {
+    fn a_failing_baseline_tracks_regressions_without_blessing_current_health() {
         let baseline = report(vec![fixture("existing", Status::Fail, "partial")]);
-        let current = report(vec![fixture("existing", Status::Pass, "partial")]);
-        let error = enforce_gate(&valid_baseline(&baseline), &current).unwrap_err();
-        assert!(error.contains("committed baseline is invalid"));
+        let improved = report(vec![fixture("existing", Status::Pass, "partial")]);
+        assert!(enforce_gate(&valid_baseline(&baseline), &improved).is_ok());
+
+        let unchanged = report(vec![fixture("existing", Status::Fail, "partial")]);
+        let error = enforce_gate(&valid_baseline(&baseline), &unchanged).unwrap_err();
         assert!(error.contains("fixture is FAIL: existing"));
+        assert!(!error.contains("baseline is structurally invalid"));
     }
 
     #[test]
-    fn changed_refs_lock_identity_cannot_reuse_a_green_baseline() {
+    fn changed_refs_lock_identity_cannot_reuse_a_compatible_baseline() {
         let baseline = report(vec![fixture("existing", Status::Pass, "implemented")]);
         let mut current = report(vec![fixture("existing", Status::Pass, "implemented")]);
         current.refs_lock_sha256 = "5".repeat(64);
@@ -1072,7 +1093,7 @@ mod gate_tests {
     }
 
     #[test]
-    fn unavailable_or_changed_rasterizer_cannot_reuse_a_green_baseline() {
+    fn unavailable_or_changed_rasterizer_cannot_reuse_a_compatible_baseline() {
         let baseline = report(vec![fixture("existing", Status::Pass, "implemented")]);
 
         let mut unavailable = baseline.clone();

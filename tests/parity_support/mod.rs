@@ -56,7 +56,7 @@ use diagnose::compute_dependency_context;
 use gate::{
     BaselineState, baseline_is_compatible, build_report, check_refs_freshness,
     collect_suspect_unsupported_pass, compute_coverage, compute_fix_first, enforce_baseline_update,
-    enforce_gate, load_baseline,
+    enforce_current_health, enforce_gate, load_baseline,
 };
 use integrity::{audit_corpus, audit_oracle_semantics, audit_raster_signals, raster_fingerprints};
 use manifest::{ManifestEntry, find_ref_mismatches, load_manifests};
@@ -78,43 +78,101 @@ struct RunPaths {
     diagnostic_root: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct InvocationId(String);
+
+impl InvocationId {
+    fn parse(value: String) -> Result<Self, String> {
+        if !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            Ok(Self(value))
+        } else {
+            Err(format!(
+                "PARITY_INVOCATION_ID must be 1-128 ASCII letters, digits, `.`, `_`, or `-`, got {value:?}"
+            ))
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug)]
-struct RunConfig {
-    update_baseline: bool,
-    only_filter: Vec<String>,
-    invocation_id: String,
+struct FixtureFilters(Vec<String>);
+
+impl FixtureFilters {
+    fn new(filters: Vec<String>) -> Result<Self, String> {
+        if filters.is_empty() {
+            Err("a filtered parity run requires at least one fixture filter".to_string())
+        } else {
+            Ok(Self(filters))
+        }
+    }
+
+    fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+enum RunConfig {
+    Full {
+        update_baseline: bool,
+        invocation_id: InvocationId,
+    },
+    Filtered {
+        filters: FixtureFilters,
+    },
 }
 
 impl RunConfig {
     fn is_filtered(&self) -> bool {
-        !self.only_filter.is_empty()
+        matches!(self, Self::Filtered { .. })
     }
-}
 
-fn invocation_id_from_env() -> Result<String, String> {
-    match std::env::var("PARITY_INVOCATION_ID") {
-        Err(std::env::VarError::NotPresent) => Ok(String::new()),
-        Err(error) => Err(format!("cannot read PARITY_INVOCATION_ID: {error}")),
-        Ok(value)
-            if !value.is_empty()
-                && value.len() <= 128
-                && value.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-                }) =>
-        {
-            Ok(value)
+    fn update_baseline(&self) -> bool {
+        matches!(
+            self,
+            Self::Full {
+                update_baseline: true,
+                ..
+            }
+        )
+    }
+
+    fn invocation_id(&self) -> &str {
+        match self {
+            Self::Full { invocation_id, .. } => invocation_id.as_str(),
+            Self::Filtered { .. } => "",
         }
-        Ok(value) => Err(format!(
-            "PARITY_INVOCATION_ID must be 1-128 ASCII letters, digits, `.`, `_`, or `-`, got {value:?}"
-        )),
+    }
+
+    fn filters(&self) -> &[String] {
+        match self {
+            Self::Full { .. } => &[],
+            Self::Filtered { filters } => filters.as_slice(),
+        }
     }
 }
 
-fn only_filter_from_env() -> Result<Vec<String>, String> {
+fn invocation_id_from_env() -> Result<Option<InvocationId>, String> {
+    match std::env::var("PARITY_INVOCATION_ID") {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(format!("cannot read PARITY_INVOCATION_ID: {error}")),
+        Ok(value) => InvocationId::parse(value).map(Some),
+    }
+}
+
+fn only_filter_from_env() -> Result<Option<FixtureFilters>, String> {
     match std::env::var("PARITY_ONLY") {
-        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(std::env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(format!("cannot read PARITY_ONLY: {error}")),
-        Ok(value) => parse_only_filter(&value),
+        Ok(value) => FixtureFilters::new(parse_only_filter(&value)?).map(Some),
     }
 }
 
@@ -376,46 +434,39 @@ fn prepare_run_paths(
 
 pub fn run() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    // Parse the scope first. Any malformed explicit PARITY_ONLY value is treated
-    // as a filtered-run failure and therefore cannot mutate durable evidence.
-    let only_filter = only_filter_from_env()?;
-    let invocation_id = match invocation_id_from_env() {
-        Ok(invocation_id) => invocation_id,
-        Err(cause) => {
-            return publish_configuration_failure(root, !only_filter.is_empty(), "", cause);
-        }
-    };
+    // Parse the scope first. A diagnostic run cannot acquire durable-report
+    // authority, while a full run cannot exist without the wrapper-supplied
+    // invocation identity checked across JSON, Markdown, and HTML.
+    let filters = only_filter_from_env()?;
     let update_baseline = match std::env::var("PARITY_UPDATE_BASELINE") {
         Err(std::env::VarError::NotPresent) => false,
         Ok(value) if value == "1" => true,
         Ok(value) => {
-            return publish_configuration_failure(
-                root,
-                !only_filter.is_empty(),
-                &invocation_id,
-                format!("PARITY_UPDATE_BASELINE must be exactly `1` when set, got {value:?}"),
+            return Err(format!(
+                "PARITY_UPDATE_BASELINE must be exactly `1` when set, got {value:?}"
+            ));
+        }
+        Err(error) => return Err(format!("cannot read PARITY_UPDATE_BASELINE: {error}")),
+    };
+    let config = match filters {
+        Some(_) if update_baseline => {
+            return Err(
+                "PARITY_ONLY and PARITY_UPDATE_BASELINE=1 are mutually exclusive; a partial run can never become the baseline"
+                    .to_string(),
             );
         }
-        Err(error) => {
-            return publish_configuration_failure(
-                root,
-                !only_filter.is_empty(),
-                &invocation_id,
-                format!("cannot read PARITY_UPDATE_BASELINE: {error}"),
-            );
+        Some(filters) => RunConfig::Filtered { filters },
+        None => {
+            let invocation_id = invocation_id_from_env()?.ok_or_else(|| {
+                "a full parity run requires a fresh report identity; use scripts/parity.sh"
+                    .to_string()
+            })?;
+            RunConfig::Full {
+                update_baseline,
+                invocation_id,
+            }
         }
     };
-    let config = RunConfig {
-        update_baseline,
-        only_filter,
-        invocation_id,
-    };
-    if config.is_filtered() && config.update_baseline {
-        return Err(
-            "PARITY_ONLY and PARITY_UPDATE_BASELINE=1 are mutually exclusive; a partial run can never become the baseline"
-                .to_string(),
-        );
-    }
     run_at(root, config)
 }
 
@@ -457,7 +508,9 @@ fn preflight_report(refs_lock_sha256: String, invocation_id: &str) -> Report {
 fn write_baseline_snapshot(path: &Path, report: &mut Report) -> Result<(), String> {
     let invocation_id = std::mem::take(&mut report.invocation_id);
     let baseline_present = std::mem::replace(&mut report.baseline_present, true);
+    let gate_failure = report.gate_failure.take();
     let result = write_report_json(path, report);
+    report.gate_failure = gate_failure;
     report.baseline_present = baseline_present;
     report.invocation_id = invocation_id;
     result
@@ -474,7 +527,7 @@ fn run_at(root: &Path, config: RunConfig) -> Result<(), String> {
         .ok()
         .map(|bytes| sha256_hex(&bytes))
         .unwrap_or_default();
-    let mut failure_report = preflight_report(refs_lock_sha256.clone(), &config.invocation_id);
+    let mut failure_report = preflight_report(refs_lock_sha256.clone(), config.invocation_id());
 
     if filtered_run {
         let paths = prepare_run_paths(&layout.root, &layout.parity, true)?;
@@ -523,12 +576,14 @@ fn run_at(root: &Path, config: RunConfig) -> Result<(), String> {
         Ok(report) => report,
         Err(cause) => return publish_failure(&mut publisher, &failure_report, cause),
     };
-    report.invocation_id.clone_from(&config.invocation_id);
+    report.invocation_id = config.invocation_id().to_string();
 
-    if config.update_baseline && report.gate_failure.is_none() {
-        // Commit the validated baseline before any complete report claims it is
-        // present. A cutoff leaves the already-published incomplete checkpoint,
-        // never a healthy report referring to a baseline that was not written.
+    if config.update_baseline() && enforce_baseline_update(&baseline, &report).is_ok() {
+        // Commit the structurally validated regression snapshot before any
+        // complete report claims it is present. Current FAIL verdicts remain in
+        // the report and still make the wrapper exit nonzero. A cutoff leaves
+        // the already-published incomplete checkpoint, never a report referring
+        // to a snapshot that was not written.
         if let Err(cause) = write_baseline_snapshot(&layout.baseline, &mut report) {
             return publish_failure(&mut publisher, &report, cause);
         }
@@ -543,9 +598,9 @@ fn run_at(root: &Path, config: RunConfig) -> Result<(), String> {
         return Err(cause);
     }
 
-    if config.update_baseline {
+    if config.update_baseline() {
         eprintln!(
-            "parity: EXPLICIT BASELINE UPDATE accepted via PARITY_UPDATE_BASELINE=1 after a healthy full run and retained-ID validation"
+            "parity: EXPLICIT BASELINE UPDATE accepted via PARITY_UPDATE_BASELINE=1 after structural and retained-ID validation; current FAIL verdicts remain gate failures"
         );
     }
 
@@ -580,19 +635,19 @@ fn execute_run(
         entries.retain(|entry| {
             let key = format!("{}/{}", entry.category, entry.id);
             config
-                .only_filter
+                .filters()
                 .iter()
                 .any(|filter| key.contains(filter.as_str()))
         });
         eprintln!(
             "parity: PARITY_ONLY={:?} -> {} fixture(s); diagnostic run cannot satisfy the gate.",
-            config.only_filter,
+            config.filters(),
             entries.len()
         );
         if entries.is_empty() {
             return Err(format!(
                 "PARITY_ONLY matched zero fixtures; the full-corpus parity gate did not run (filters: {:?})",
-                config.only_filter
+                config.filters()
             ));
         }
     }
@@ -720,8 +775,8 @@ fn execute_run(
         ));
     }
 
-    let gate_result = if config.update_baseline {
-        enforce_baseline_update(baseline, &report)
+    let gate_result = if config.update_baseline() {
+        enforce_baseline_update(baseline, &report).and_then(|()| enforce_current_health(&report))
     } else {
         enforce_gate(baseline, &report)
     };
@@ -1336,9 +1391,10 @@ fn retain_debug_candidate_pdf(
 #[cfg(test)]
 mod status_tests {
     use super::{
-        FullRunLock, Report, ReportPublisher, RunConfig, Status, build_report,
-        later_page_is_more_informative_diagnosis, parse_only_filter, prepare_run_paths,
-        publish_configuration_failure, publish_or_record_failure, run_at, write_baseline_snapshot,
+        FixtureFilters, FullRunLock, InvocationId, Report, ReportPublisher, RunConfig, Status,
+        build_report, later_page_is_more_informative_diagnosis, parse_only_filter,
+        prepare_run_paths, publish_configuration_failure, publish_or_record_failure, run_at,
+        write_baseline_snapshot,
     };
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -1361,10 +1417,9 @@ mod status_tests {
     }
 
     fn full_config() -> RunConfig {
-        RunConfig {
+        RunConfig::Full {
             update_baseline: false,
-            only_filter: Vec::new(),
-            invocation_id: "test-invocation".to_string(),
+            invocation_id: InvocationId::parse("test-invocation".to_string()).unwrap(),
         }
     }
 
@@ -1560,6 +1615,7 @@ mod status_tests {
     fn invocation_identity_is_not_part_of_the_deterministic_baseline() {
         let mut report = build_report(Vec::new(), true);
         report.invocation_id = "wrapper-invocation".to_string();
+        report.gate_failure = Some("current fixture remains FAIL".to_string());
         let path = std::env::temp_dir().join(format!(
             "ironpress-parity-baseline-token-{}.json",
             std::process::id()
@@ -1572,8 +1628,13 @@ mod status_tests {
 
         assert_eq!(report.invocation_id, "wrapper-invocation");
         assert!(!report.baseline_present);
+        assert_eq!(
+            report.gate_failure.as_deref(),
+            Some("current fixture remains FAIL")
+        );
         assert!(baseline_json.get("invocation_id").is_none());
         assert_eq!(baseline_json["baseline_present"], true);
+        assert!(baseline_json["gate_failure"].is_null());
         let _ = std::fs::remove_file(path);
 
         let missing_parent = std::env::temp_dir().join(format!(
@@ -1725,10 +1786,8 @@ mod status_tests {
 
         let cause = run_at(
             &root,
-            RunConfig {
-                update_baseline: false,
-                only_filter: vec!["fixture".to_string()],
-                invocation_id: "filtered-test".to_string(),
+            RunConfig::Filtered {
+                filters: FixtureFilters::new(vec!["fixture".to_string()]).unwrap(),
             },
         )
         .unwrap_err();
