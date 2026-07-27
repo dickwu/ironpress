@@ -1,14 +1,14 @@
 # ironpress parity health
 
-<!-- parity-invocation-id: 8e948c3f63432d7d4a6ff6becf5a23cd -->
+<!-- parity-invocation-id: 245361b980129635919916674a8907f1 -->
 
-<!-- parity-report-json-sha256: f0654f14c51161c71fdb6632d335e0a90e6c19aaecba5718c8b4e677476c1096 -->
+<!-- parity-report-json-sha256: 721b2a9be98d33451ce66ffd31abbbc1b58b34df904924cd7ea4d2826bd77272 -->
 
 | health | verified visual parity | exact raster | visual-policy | FAIL | disputed refs | total |
 |:------:|-----------------------:|-------------:|--------------:|-----:|--------------:|------:|
-| **BROKEN** | 99.38% | 1098 | 509 | 10 | 18 | 1635 |
+| **BROKEN** | 99.44% | 1098 | 509 | 9 | 19 | 1635 |
 
-**Needs attention: 10 failing fixture(s) · 18 disputed reference(s).** PASS rule: a fixed, same-coordinate human-visibility policy is applied after both PDFs use the same pdftoppm executable and arguments. It never translates, registers, or fixture-tunes either image. Every raw RGBA difference remains reported.
+**Needs attention: 9 failing fixture(s) · 19 disputed reference(s).** PASS rule: a fixed, same-coordinate human-visibility policy is applied after both PDFs use the same pdftoppm executable and arguments. It never translates, registers, or fixture-tunes either image. Every raw RGBA difference remains reported.
 
 Scope: 514 category/feature pairs · labels only: implemented 1598 · partial 37 · unsupported 0 · supported-family interactions 300/300 across 24 families.
 
@@ -22,7 +22,7 @@ Scope: 514 category/feature pairs · labels only: implemented 1598 · partial 37
 
 ### Gate result
 
-**REGRESSION — FAILED.** parity integrity gate FAILED (10 issue(s)):
+**REGRESSION — FAILED.** parity integrity gate FAILED (9 issue(s)):
 
 ## Failure triage
 
@@ -30,7 +30,7 @@ Direct paint mismatches are listed before colour-only residuals. Both remain FAI
 
 | direct evidence | fixtures | how to read it |
 |-----------------|---------:|----------------|
-| colour-only residual | 10 | colour/coverage is the policy-triggering defect; review at authored scale |
+| colour-only residual | 9 | colour/coverage is the policy-triggering defect; review at authored scale |
 
 ## Failure groups
 
@@ -38,17 +38,16 @@ Raster-output symptoms, not inferred root causes.
 
 | raster symptom | fixtures |
 |----------------|---------:|
-| ColorValue | 9 |
+| ColorValue | 8 |
 | AntialiasCoverage | 1 |
 
 ## Needs attention
 
-Integrity problems first, then all 10 rendering failure(s) and 18 disputed reference(s). A disputed reference retains its raw comparison evidence but is not a candidate verdict. The gate result is summarized once above. Support labels provide context only and never hide a defect. Generated-local visual inventory: `reports/index.html`.
+Integrity problems first, then all 9 rendering failure(s) and 19 disputed reference(s). A disputed reference retains its raw comparison evidence but is not a candidate verdict. The gate result is summarized once above. Support labels provide context only and never hide a defect. Generated-local visual inventory: `reports/index.html`.
 
 | issue | category | fixture | detail |
 |-------|----------|---------|--------|
 | FAIL | interactions | [`interactions-cartesian-backgrounds-borders-x-positioning`](cases/interactions/interactions-cartesian-backgrounds-borders-x-positioning.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.24% · raw RGBA diff 0.29% · 2934 differing RGBA pixels · fill recolour ΔRGB(-3,-2,+0) (ΔE 4.0) |
-| FAIL | interactions | [`interactions-cartesian-positioning-x-tables`](cases/interactions/interactions-cartesian-positioning-x-tables.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.19% · 1913 differing RGBA pixels · fill recolour ΔRGB(-2,-2,-2) (ΔE 69.2) |
 | FAIL | text-advanced | [`text-advanced-text-combine-upright-digits`](cases/text-advanced/text-advanced-text-combine-upright-digits.html) | text-combine-upright:digits 2 · colour-only residual · ColorValue · above-floor diff 0.16% · raw RGBA diff 0.17% · 801 differing RGBA pixels · fill recolour ΔRGB(+1,+6,+5) (ΔE 26.6) |
 | FAIL | interactions | [`interactions-cartesian-multicol-x-overflow-clipping`](cases/interactions/interactions-cartesian-multicol-x-overflow-clipping.html) | supported-family-cartesian-product · colour-only residual · AntialiasCoverage · above-floor diff 0.12% · raw RGBA diff 0.16% · 1664 differing RGBA pixels · antialiasing coverage residue on a shared outline |
 | FAIL | text-advanced | [`text-advanced-text-combine-upright-center`](cases/text-advanced/text-advanced-text-combine-upright-center.html) | text-combine-upright:digits 2 · colour-only residual · ColorValue · above-floor diff 0.14% · raw RGBA diff 0.15% · 701 differing RGBA pixels · fill recolour ΔRGB(+5,+28,+22) (ΔE 27.7) |
@@ -75,13 +74,14 @@ Integrity problems first, then all 10 rendering failure(s) and 18 disputed refer
 | REFERENCE-DISPUTED | overflow-clipping | [`overflow-axis-visible-hidden-coercion`](cases/overflow-clipping/overflow-axis-visible-hidden-coercion.html) | overflow · direct paint mismatch · Missing · above-floor diff 0.30% · raw RGBA diff 0.34% · 888 differing RGBA pixels · REFERENCE DISPUTED: CSS Overflow 3 section 3.1 makes visible compute to auto when the other axis is scrollable, which Ironpress implements. In print, auto inherits scroll's undefined overflow placement, so Chrome's scrollbar geometry and clipping pixels are a compatibility canary, not a normative oracle. · candidate lacks paint present in reference (0.3%) |
 | REFERENCE-DISPUTED | lists-counters | [`lists-counters-marker-side-match-parent`](cases/lists-counters/lists-counters-marker-side-match-parent.html) | marker-side:match-parent · direct paint mismatch · Missing · above-floor diff 0.24% · raw RGBA diff 0.24% · 1274 differing RGBA pixels · expected partial · REFERENCE DISPUTED: CSS Lists 3 leaves the exact position of outside marker boxes undefined. This fixture does not vary list-item directionality, so match-parent has no observable effect. Chromium 150 reports CSS.supports('marker-side: match-parent') as false and an empty computed value; its PDF is an unsupported-feature compatibility canary, not a normative oracle. · candidate lacks paint present in reference (0.2%) |
 | REFERENCE-DISPUTED | overflow-clipping | [`overflow-x-y-separate`](cases/overflow-clipping/overflow-x-y-separate.html) | overflow · direct paint mismatch · Extra · above-floor diff 0.23% · raw RGBA diff 0.23% · 1203 differing RGBA pixels · REFERENCE DISPUTED: CSS Overflow 3 section 3.1 makes visible compute to auto when the other axis is scrollable, which Ironpress implements. In static media, section 3.1.3 permits a UA overflow indication and section 5.1 leaves its appearance, size, and edge UA-defined; Chrome's scrollbar pixels are a compatibility canary, not a normative oracle. · candidate adds paint absent from reference (0.3%) |
+| REFERENCE-DISPUTED | interactions | [`interactions-cartesian-positioning-x-tables`](cases/interactions/interactions-cartesian-positioning-x-tables.html) | supported-family-cartesian-product · colour-only residual · ColorValue · above-floor diff 0.19% · raw RGBA diff 0.19% · 1913 differing RGBA pixels · REFERENCE DISPUTED: CSS Tables 3 section 4.1 defines the containing block generated by a positioned table wrapper as the area around which table margins are applied, explicitly including the area where the table border is drawn. Ironpress positions the absolute Bb from that border edge. Both the locked Chromium 150.0.7871.114 Foundation PDF and a fresh Chromium 150.0.7871.128 Foundation PDF instead inset it by the authored 2px table border on both axes; the specification identifies this behavior as a Chromium bug and interoperability risk. The Chromium PDF remains a compatibility canary rather than a normative geometry oracle, and the raw shared-pdftoppm evidence remains reported. · fill recolour ΔRGB(-2,-2,-2) (ΔE 69.2) |
 
 ## Categories — worst first
 
 | category | verified visual parity | pass | fail | disputed refs |
 |----------|-----------------------:|-----:|-----:|--------------:|
 | [text-advanced](cases/text-advanced/) | 95.92% | 47 | 2 | 0 |
-| [interactions](cases/interactions/) | 97.62% | 328 | 8 | 1 |
+| [interactions](cases/interactions/) | 97.91% | 328 | 7 | 2 |
 | [filters](cases/filters/) | 100.00% | 46 | 0 | 1 |
 | [paged-media](cases/paged-media/) | 100.00% | 80 | 0 | 5 |
 | [inline-text](cases/inline-text/) | 100.00% | 49 | 0 | 1 |
@@ -117,7 +117,7 @@ These labels describe intended surface coverage only. They never change a verdic
 
 ## Run details
 
-- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤2.3; a ColorErr pixel with every RGB channel delta ≤1.0% is semantically correct (its exact RGBA evidence remains reported); complete-page above-floor mismatch must be ≤1.0%; color ΔE2000 ≤2.3; edge color above that per-pixel allowance ≤1.50% of paint only when no component, span, or aggregate crosses the authored visibility floors; interior color ≤0.125%; Missing/Extra or unproven ColorErr component ≥4 CSS px²; component ≥8 CSS px span; disconnected total ≥16 CSS px². Balanced colour coverage requires page bias ≤0.10, every independently visible component (≥16 CSS px² or ≥16 CSS px span) bias ≤0.25, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least 75% of its pixels directly prove the shared ramp and the remainder is below 16 CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤6.0% each, balance bias ≤0.05, ColorErr coverage ≥2× direct presence, component bounds below the normal glyph limits, interior colour ≤0.25%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥95% byte-identical shared paint, ≤1.0% direct presence, ColorErr ≥2× presence, zero interior recolour, and a directly proven unchanged-endpoint ramp; edge-sample Delta-E is not an independent rejection when that topology is proven. A single-sample colour frontier is direct device quantization; a wider coherent frontier may pass only when every normal remains below 0.95 CSS px between two distinct byte-identical shared colours and the field has at most 4 components. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤1.0% of paint; a coherent outline may exceed that only with at most 4 direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Exact RGBA mismatch remains in the numeric report; the full-page diff paints only pixels above the per-channel floor. 300 DPI · source `/usr/bin/pdftoppm` · executed snapshot `/tmp/ironpress-pdftoppm-3509797-1785176904218072200-0/pdftoppm` · argv `[-r, 300, -png, <PDF>, <PREFIX>]` · pdftoppm version 24.08.0 · binary SHA-256 `b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013`.
+- Comparator: raw evidence is a shared upper-left canvas with white padding, no translation, registration, crop, filter, resampling, or replacement. The fixed visibility policy is applied directly to those pixels: paper ΔE2000 ≤2.3; a ColorErr pixel with every RGB channel delta ≤1.0% is semantically correct (its exact RGBA evidence remains reported); complete-page above-floor mismatch must be ≤1.0%; color ΔE2000 ≤2.3; edge color above that per-pixel allowance ≤1.50% of paint only when no component, span, or aggregate crosses the authored visibility floors; interior color ≤0.125%; Missing/Extra or unproven ColorErr component ≥4 CSS px²; component ≥8 CSS px span; disconnected total ≥16 CSS px². Balanced colour coverage requires page bias ≤0.10, every independently visible component (≥16 CSS px² or ≥16 CSS px span) bias ≤0.25, and direct unchanged anchors within one CSS px. A colour-ramp component may leave a corner/stem remainder only when at least 75% of its pixels directly prove the shared ramp and the remainder is below 16 CSS px²; a component wholly below that area floor still needs direct ramp evidence, no interior recolour, and one ink family. A mixed coverage phase additionally requires paired Missing/Extra ≤6.0% each, balance bias ≤0.05, ColorErr coverage ≥2× direct presence, component bounds below the normal glyph limits, interior colour ≤0.25%, an oriented shared paper/content ramp around every direct colour component, and either balanced colour energy or a hue-preserving ramp. A one-sided contour additionally requires ≥95% byte-identical shared paint, ≤1.0% direct presence, ColorErr ≥2× presence, zero interior recolour, and a directly proven unchanged-endpoint ramp; edge-sample Delta-E is not an independent rejection when that topology is proven. A single-sample colour frontier is direct device quantization; a wider coherent frontier may pass only when every normal remains below 0.95 CSS px between two distinct byte-identical shared colours and the field has at most 4 components. A raw unpaired contour may pass only when every authored-space normal remains below one CSS pixel between directly shared paper and content; its total length is irrelevant because physical thickness, not raster-pixel count, controls visibility. Fragmented paired shared-outline coverage remains bounded to ≤1.0% of paint; a coherent outline may exceed that only with at most 4 direct components per sign. One-CSS-pixel strips, absent thin rules, inner cuts, and repeated glyph displacement remain failures. Exact RGBA mismatch remains in the numeric report; the full-page diff paints only pixels above the per-channel floor. 300 DPI · source `/usr/bin/pdftoppm` · executed snapshot `/tmp/ironpress-pdftoppm-3550076-1785178240914462873-0/pdftoppm` · argv `[-r, 300, -png, <PDF>, <PREFIX>]` · pdftoppm version 24.08.0 · binary SHA-256 `b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013`.
 - Reference lock: present · stale refs 0 · ref-name mismatches 0.
 - Regression baseline: VALID/COMPATIBLE.
 - Generated by `scripts/parity.sh`.

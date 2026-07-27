@@ -12408,7 +12408,7 @@
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-positioning-x-tables.html",
       "html_sha256": "92a2b21b9e05deb169ca6be5b06c2d88988abd27645406dd2a5b2b3cffa34add",
-      "manifest_sha256": "c12fe1857c7e4075ac0ea45bfb5dd6d1673f3bb5a62f01b399423526827631f2",
+      "manifest_sha256": "9123763c6bf28fe981775ee7f57eb2f4f175cd5c0da8b1e20b21b8508897a8e5",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-positioning-x-tables.pdf",
