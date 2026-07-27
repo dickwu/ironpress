@@ -15740,7 +15740,7 @@
       "category": "paged-media",
       "file": "cases/paged-media/paged-running-named-page-margin-box.html",
       "html_sha256": "7ef2ced58f7ad931a3912c8dbfdea8866e2774f18518da59f7dfa32839f640c1",
-      "manifest_sha256": "16d5b570f276d82b9808913a030daff568cc65e6b23eeaf923fb3ce7507a3fd3",
+      "manifest_sha256": "ab6bf7b4faecebe57a72453fbca46b04fb66f8e31721b4b714440548c6b7076b",
       "oracle": "weasyprint",
       "pdf": {
         "file": "oracles/paged-media/paged-running-named-page-margin-box.pdf",
@@ -15810,7 +15810,7 @@
       "category": "paged-media",
       "file": "cases/paged-media/paged-string-set-attr-start.html",
       "html_sha256": "3964d5dd0ea3b53dde07e2e2fa66f7e3e013f19732d3b732b144da72f810506c",
-      "manifest_sha256": "af43e887453479b346e620b8a9b5c5b09061a95208c2cd76e5cfb876f5ea751e",
+      "manifest_sha256": "f081a30cc43bcd0a245c52a25a11f8d9f2f211e098d63f5b20af69b269f821b7",
       "oracle": "weasyprint",
       "pdf": {
         "file": "oracles/paged-media/paged-string-set-attr-start.pdf",

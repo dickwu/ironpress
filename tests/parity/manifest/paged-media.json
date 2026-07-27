@@ -1118,6 +1118,10 @@
     "description": "position:running() referenced from a named @page chapter margin box appears only on chapter pages; catches named-page geometry support that discards named margin boxes.",
     "file": "cases/paged-media/paged-running-named-page-margin-box.html",
     "oracle": "weasyprint",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS GCPM requires position:running() to remove the element from normal flow and element() to place it in the selected named-page margin box. Both PDFs put the complete CHAPTER HEAD only in the chapter-page header, with identical page-2 green body and yellow margin-box vector geometry. WeasyPrint additionally emits an explicit page-edge clip, leaving one raster column at the far-right boundary; Ironpress relies on the PDF page clip. CSS Paged Media does not prescribe that equivalent PDF encoding or its contour coverage, so the WeasyPrint PDF is not a unique pixel oracle; raw shared-pdftoppm evidence remains reported."
+    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -1261,6 +1265,10 @@
     "description": "string-set with attr() feeds string(section,start) in the page header; catches margin header renderers without named strings or attr() support.",
     "file": "cases/paged-media/paged-string-set-attr-start.html",
     "oracle": "weasyprint",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS GCPM requires string-set to accept attr() and string(name,start) to use the first assignment only when its element starts the page, otherwise the entry value. Both PDFs render the complete ALPHA header on both pages; page 2 rasterizes byte-identically, and page 1 has identical yellow header-background vector bounds. The remaining page-1 signal is glyph contour coverage plus one raster row at the shared background edge, neither of which GCPM prescribes, so the WeasyPrint PDF is not a unique pixel oracle; raw shared-pdftoppm evidence remains reported."
+    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
