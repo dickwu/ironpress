@@ -49,7 +49,7 @@ pub(super) fn paint_uniform_square_bevel(
         let half_widths = widths * 0.5;
         paint_uniform_square_bevel_band(
             content,
-            SquareBevelBandGeometry::between(border_box, EdgeSizes::ZERO, half_widths),
+            SquareBorderBandGeometry::between(border_box, EdgeSizes::ZERO, half_widths),
             side.style,
             false,
             base,
@@ -57,7 +57,7 @@ pub(super) fn paint_uniform_square_bevel(
         );
         paint_uniform_square_bevel_band(
             content,
-            SquareBevelBandGeometry::between(border_box, half_widths, widths),
+            SquareBorderBandGeometry::between(border_box, half_widths, widths),
             side.style,
             true,
             base,
@@ -66,7 +66,7 @@ pub(super) fn paint_uniform_square_bevel(
     } else {
         paint_uniform_square_bevel_band(
             content,
-            SquareBevelBandGeometry::between(border_box, EdgeSizes::ZERO, widths),
+            SquareBorderBandGeometry::between(border_box, EdgeSizes::ZERO, widths),
             side.style,
             false,
             base,
@@ -78,7 +78,7 @@ pub(super) fn paint_uniform_square_bevel(
 
 fn paint_uniform_square_bevel_band(
     content: &mut String,
-    band: SquareBevelBandGeometry,
+    band: SquareBorderBandGeometry,
     style: BorderStyle,
     inner_band: bool,
     base: (f32, f32, f32),

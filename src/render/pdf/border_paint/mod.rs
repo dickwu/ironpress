@@ -212,6 +212,9 @@ fn paint_partitioned_border(
         return;
     }
     let sides = PhysicalEdges::new(&border.top, &border.right, &border.bottom, &border.left);
+    if paint_opaque_square_solid_sides(content, border_box, widths, sides, radii, content_space) {
+        return;
+    }
 
     // Connected equal-colour solid sides form one visual region. Preserve
     // disconnected components as independent PDF paints.

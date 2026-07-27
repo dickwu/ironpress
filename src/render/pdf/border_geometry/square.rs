@@ -7,12 +7,12 @@ use super::*;
 /// frontier. This is the browser PDF decomposition for opaque square 3D
 /// borders; translucent paint must use exclusive side regions instead.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::render::pdf) struct SquareBevelBandGeometry {
+pub(in crate::render::pdf) struct SquareBorderBandGeometry {
     outer: PdfRect,
     inner: PdfRect,
 }
 
-impl SquareBevelBandGeometry {
+impl SquareBorderBandGeometry {
     pub(in crate::render::pdf) fn between(
         border_box: PdfRect,
         outer_inset: EdgeSizes,

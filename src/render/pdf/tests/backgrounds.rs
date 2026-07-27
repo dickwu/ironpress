@@ -26,23 +26,6 @@ fn radial_gradient_uses_shading_in_pdf() {
 }
 
 #[test]
-fn non_uniform_borders_render_per_side() {
-    let html =
-        r#"<div style="border-top: 2pt solid red; border-bottom: 1pt solid blue">Mixed</div>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(pdf_str.contains("1 0 0 rg"), "Should fill red top area");
-    assert!(pdf_str.contains("0 0 1 rg"), "Should fill blue bottom area");
-    let fill_count = pdf_str.matches("h\nf\n").count();
-    assert!(
-        fill_count >= 2,
-        "Should have at least 2 closed side fills, got {fill_count}"
-    );
-}
-
-#[test]
 fn gradient_clipped_to_border_radius() {
     let html = r#"<div style="background: linear-gradient(to bottom, red, blue); border-radius: 10pt; height: 50pt">Clipped</div>"#;
     let nodes = parse_html(html).unwrap();

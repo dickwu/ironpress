@@ -1,5 +1,60 @@
 use super::*;
 
+/// Paint an opaque square solid frame in browser PDF order.
+///
+/// Horizontal rectangles establish exact device-aligned outer edges. The
+/// vertical trapezoids paint afterwards and own the final diagonal corner
+/// frontier. Translucent and rounded borders stay on the exclusive ring path,
+/// where overlapping paint would change the composited result.
+pub(super) fn paint_opaque_square_solid_sides(
+    content: &mut String,
+    border_box: PdfRect,
+    widths: EdgeSizes,
+    sides: PhysicalEdges<&crate::layout::engine::LayoutBorderSide>,
+    radii: CornerRadii,
+    content_space: PdfContentSpace,
+) -> bool {
+    if !radii.is_zero()
+        || !PhysicalSide::ALL.into_iter().all(|edge| {
+            let side = sides.get(edge);
+            !side.paints() || (side.style == BorderStyle::Solid && side.color.is_opaque())
+        })
+    {
+        return false;
+    }
+
+    let band = SquareBorderBandGeometry::between(border_box, EdgeSizes::ZERO, widths);
+    if let Some(operator) = content_space.begin_operator() {
+        content.push_str(&operator);
+    }
+    for (edge, region) in [
+        (PhysicalSide::Top, band.top()),
+        (PhysicalSide::Bottom, band.bottom()),
+    ] {
+        let side = sides.get(edge);
+        if side.paints() && !region.is_empty() {
+            content.push_str(&PdfRgb::from(side.color).fill_operator());
+            content.push_str(&content_space.rect(region).rect_path());
+            content.push_str("f\n");
+        }
+    }
+    for (edge, region) in [
+        (PhysicalSide::Right, band.right()),
+        (PhysicalSide::Left, band.left()),
+    ] {
+        let side = sides.get(edge);
+        if side.paints() {
+            content.push_str(&PdfRgb::from(side.color).fill_operator());
+            region.push_path_in(content, content_space);
+            content.push_str("f\n");
+        }
+    }
+    if let Some(operator) = content_space.end_operator() {
+        content.push_str(operator);
+    }
+    true
+}
+
 /// Paint connected equal-colour solid sides as compound border-ring regions.
 ///
 /// Side ownership stays exclusive—the regions only share their frontier—but
