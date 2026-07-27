@@ -10,15 +10,14 @@ use crate::layout::elements::{
     TextBlock,
 };
 use crate::layout::flow_metrics::{BlockFlowSpacing, BlockMargins};
-use crate::parser::css::{AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext};
+use crate::parser::css::{AncestorInfo, CssRule, CssValue, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 #[cfg(test)]
 use crate::style::computed::BorderStyle;
 use crate::style::computed::{
     BorderCollapse, BoxSizing, ComputedStyle, Display, TableLayout, VerticalAlign, Visibility,
-    WhiteSpace, compute_pseudo_element_style_with_font_metrics, compute_style_with_context,
-    compute_style_with_context_with_font_metrics,
+    WhiteSpace, compute_style_with_context, compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
 use crate::types::EdgeSizes;
@@ -36,14 +35,15 @@ use super::engine::{
 };
 use super::helpers::{PseudoBoxContext, build_pseudo_block, pseudo_is_block_like};
 use super::inline_formatting::{
-    AnonymousInlineFormattingContext, GeneratedBox, GeneratedInlineContent,
+    AnonymousInlineFormattingContext, GeneratedBox, GeneratedContentStyles, GeneratedInlineContent,
+    IndependentFlowLayout, InlineFormattingChild, layout_mixed_flow_children,
 };
 #[cfg(test)]
 use super::paginate::estimate_element_height;
 use super::text::{
-    TextWrapOptions, collapse_whitespace, estimate_word_width, expand_pre_tabs,
-    measure_text_intrinsic_widths, parent_line_strut, push_styled_text_run, required_outer_width,
-    resolve_style_font_family, text_run_line_height_factor, used_font_size, wrap_text_runs,
+    InlineTextSequence, TextWrapOptions, estimate_word_width, measure_text_intrinsic_widths,
+    parent_line_strut, required_outer_width, text_run_line_height_factor, used_font_size,
+    wrap_text_runs,
 };
 
 mod collapsed_borders;
@@ -467,7 +467,7 @@ const ANONYMOUS_TABLE_CELL: &str = "#anonymous-table-cell";
 
 struct AnonymousTableRow<'a> {
     element: ElementNode,
-    generated_cells: Vec<GeneratedTableCellContent<'a>>,
+    generated_cells: Vec<GeneratedInlineContent<'a>>,
 }
 
 enum TableRowNode<'a> {
@@ -481,132 +481,6 @@ impl TableRowNode<'_> {
             Self::Element(element) => element,
             Self::Anonymous(row) => &row.element,
         }
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct GeneratedTableCellContent<'a> {
-    before: Option<GeneratedBox<'a>>,
-    after: Option<GeneratedBox<'a>>,
-}
-
-#[derive(Default)]
-struct AuthoredCellGeneratedContent {
-    before: Option<ComputedStyle>,
-    after: Option<ComputedStyle>,
-}
-
-impl AuthoredCellGeneratedContent {
-    fn resolve(
-        element: &ElementNode,
-        style: &ComputedStyle,
-        rules: &[CssRule],
-        selector: &SelectorContext<'_>,
-        fonts: &HashMap<String, TtfFont>,
-    ) -> Self {
-        let classes = element.class_list();
-        let resolve = |pseudo| {
-            compute_pseudo_element_style_with_font_metrics(
-                style,
-                rules,
-                element.tag_name(),
-                &classes,
-                element.id(),
-                &element.attributes,
-                selector,
-                pseudo,
-                FontMetrics::new(fonts),
-            )
-        };
-        Self {
-            before: resolve(PseudoElement::Before),
-            after: resolve(PseudoElement::After),
-        }
-    }
-
-    fn boundaries<'a>(&'a self, element: &'a ElementNode) -> GeneratedTableCellContent<'a> {
-        GeneratedTableCellContent {
-            before: self
-                .before
-                .as_ref()
-                .map(|style| GeneratedBox::new(element, style)),
-            after: self
-                .after
-                .as_ref()
-                .map(|style| GeneratedBox::new(element, style)),
-        }
-    }
-}
-
-impl GeneratedTableCellContent<'_> {
-    const fn is_empty(self) -> bool {
-        self.before.is_none() && self.after.is_none()
-    }
-
-    fn append_before_measurement(
-        self,
-        runs: &mut Vec<TextRun>,
-        fonts: &HashMap<String, TtfFont>,
-        counter_state: &mut CounterState,
-    ) {
-        if let Some(before) = self.before {
-            before.append_measurement_run(runs, fonts, counter_state);
-        }
-    }
-
-    fn append_after_measurement(
-        self,
-        runs: &mut Vec<TextRun>,
-        fonts: &HashMap<String, TtfFont>,
-        counter_state: &mut CounterState,
-    ) {
-        if let Some(after) = self.after {
-            after.append_measurement_run(runs, fonts, counter_state);
-        }
-    }
-
-    fn append_before_layout(
-        self,
-        runs: &mut Vec<TextRun>,
-        blocks: &mut Vec<LayoutNode>,
-        parent_style: &ComputedStyle,
-        available_width: f32,
-        fonts: &HashMap<String, TtfFont>,
-        filter_defs: &HashMap<String, ElementNode>,
-        counter_state: &mut CounterState,
-    ) {
-        append_generated_cell_layout(
-            self.before,
-            runs,
-            blocks,
-            parent_style,
-            available_width,
-            fonts,
-            filter_defs,
-            counter_state,
-        );
-    }
-
-    fn append_after_layout(
-        self,
-        runs: &mut Vec<TextRun>,
-        blocks: &mut Vec<LayoutNode>,
-        parent_style: &ComputedStyle,
-        available_width: f32,
-        fonts: &HashMap<String, TtfFont>,
-        filter_defs: &HashMap<String, ElementNode>,
-        counter_state: &mut CounterState,
-    ) {
-        append_generated_cell_layout(
-            self.after,
-            runs,
-            blocks,
-            parent_style,
-            available_width,
-            fonts,
-            filter_defs,
-            counter_state,
-        );
     }
 }
 
@@ -650,9 +524,9 @@ struct TableRowSource<'a> {
 }
 
 impl<'a> TableRowSource<'a> {
-    fn generated_cell_content(&self, cell_index: usize) -> GeneratedTableCellContent<'a> {
+    fn generated_cell_content(&self, cell_index: usize) -> GeneratedInlineContent<'a> {
         match &self.node {
-            TableRowNode::Element(_) => GeneratedTableCellContent::default(),
+            TableRowNode::Element(_) => GeneratedInlineContent::default(),
             TableRowNode::Anonymous(row) => row
                 .generated_cells
                 .get(cell_index)
@@ -739,20 +613,17 @@ pub(crate) fn anonymous_table_from_cells(cells: &[&ElementNode]) -> ElementNode 
 
 fn anonymous_table_row<'a>(
     children: Vec<(DomNode, Option<TableBoxRole>)>,
-    generated: GeneratedTableCellContent<'a>,
+    generated: GeneratedInlineContent<'a>,
 ) -> AnonymousTableRow<'a> {
     let mut row_children = Vec::new();
     let mut generated_cells = Vec::new();
     let mut anonymous_cell_children = Vec::new();
-    let mut anonymous_cell_generated = GeneratedTableCellContent {
-        before: generated.before,
-        ..Default::default()
-    };
+    let mut anonymous_cell_generated = GeneratedInlineContent::from_boxes(generated.before(), None);
     let flush_anonymous_cell =
         |row_children: &mut Vec<DomNode>,
-         generated_cells: &mut Vec<GeneratedTableCellContent<'a>>,
+         generated_cells: &mut Vec<GeneratedInlineContent<'a>>,
          anonymous_cell_children: &mut Vec<DomNode>,
-         anonymous_cell_generated: &mut GeneratedTableCellContent<'a>| {
+         anonymous_cell_generated: &mut GeneratedInlineContent<'a>| {
             if anonymous_cell_children.is_empty() && anonymous_cell_generated.is_empty() {
                 return;
             }
@@ -772,12 +643,13 @@ fn anonymous_table_row<'a>(
                 &mut anonymous_cell_generated,
             );
             row_children.push(child);
-            generated_cells.push(GeneratedTableCellContent::default());
+            generated_cells.push(GeneratedInlineContent::default());
         } else {
             anonymous_cell_children.push(child);
         }
     }
-    anonymous_cell_generated.after = generated.after;
+    anonymous_cell_generated =
+        GeneratedInlineContent::from_boxes(anonymous_cell_generated.before(), generated.after());
     flush_anonymous_cell(
         &mut row_children,
         &mut generated_cells,
@@ -793,7 +665,7 @@ fn anonymous_table_row<'a>(
 fn push_anonymous_table_row<'a>(
     row_sources: &mut Vec<TableRowSource<'a>>,
     improper_children: &mut Vec<(DomNode, Option<TableBoxRole>)>,
-    generated: &mut GeneratedTableCellContent<'a>,
+    generated: &mut GeneratedInlineContent<'a>,
     section_child_index: usize,
     section_sibling_count: usize,
 ) {
@@ -1473,24 +1345,27 @@ fn measure_caption_min_width(
     });
     let mut runs = Vec::new();
     let mut nested = Vec::new();
-    collect_table_cell_content_inner(
-        &caption_el.children,
-        caption_style,
-        &mut runs,
-        &mut nested,
-        None,
-        rules,
-        fonts,
-        filter_defs,
-        filter_dpi,
-        false,
-        false,
-        true,
-        &caption_ancestors,
-        available_width.max(0.0),
-        counter_state,
-        descendant_layout,
-    );
+    {
+        let mut flow_env = LayoutEnv {
+            rules,
+            fonts,
+            counter_state,
+            filter_defs,
+            filter_dpi,
+        };
+        layout_table_cell_flow(
+            &caption_el.children,
+            &mut runs,
+            &mut nested,
+            TableCellFlowContext {
+                style: caption_style,
+                ancestors: &caption_ancestors,
+                available_width: available_width.max(0.0),
+                descendant_layout,
+            },
+            &mut flow_env,
+        );
+    }
     let text_width: f32 = runs
         .iter()
         .map(|run| {
@@ -1946,10 +1821,8 @@ pub(crate) fn flatten_table(
     let mut header_section_claimed = false;
     let mut footer_section_claimed = false;
     let mut improper_children = Vec::new();
-    let mut improper_generated = GeneratedTableCellContent {
-        before: generated_content.before(),
-        ..Default::default()
-    };
+    let mut improper_generated =
+        GeneratedInlineContent::from_boxes(generated_content.before(), None);
     // `<caption>` / `display: table-caption` boxes and their positions among
     // the table's element children, for selector matching.
     let mut captions: Vec<(&ElementNode, usize)> = Vec::new();
@@ -2073,7 +1946,8 @@ pub(crate) fn flatten_table(
             _ => {}
         }
     }
-    improper_generated.after = generated_content.after();
+    improper_generated =
+        GeneratedInlineContent::from_boxes(improper_generated.before(), generated_content.after());
     push_anonymous_table_row(
         &mut row_sources,
         &mut improper_children,
@@ -2540,19 +2414,16 @@ pub(crate) fn flatten_table(
                             });
                         let cell_counter_scope =
                             measurement_counter_state.enter_element(&cell_style);
-                        let authored_generated = AuthoredCellGeneratedContent::resolve(
+                        let authored_generated = GeneratedContentStyles::resolve(
                             cell_el,
                             &cell_style,
                             rules,
                             &cell_sizing_ctx,
                             fonts,
                         );
-                        let authored_generated = authored_generated.boundaries(cell_el);
+                        let authored_generated = authored_generated.boxes(cell_el);
                         let mut runs = Vec::new();
                         let mut nested_rows = Vec::new();
-                        let recurse_descendants = cell_el.children.iter().any(
-                            |node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)),
-                        );
                         let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
                         push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
                         generated_cell_content.append_before_measurement(
@@ -2565,24 +2436,27 @@ pub(crate) fn flatten_table(
                             fonts,
                             &mut measurement_counter_state,
                         );
-                        collect_table_cell_content_inner(
-                            &cell_el.children,
-                            &cell_style,
-                            &mut runs,
-                            &mut nested_rows,
-                            None,
-                            rules,
-                            fonts,
-                            filter_defs,
-                            filter_dpi,
-                            false,
-                            recurse_descendants,
-                            recurse_descendants,
-                            &text_ancestors,
-                            inner_width,
-                            &mut measurement_counter_state,
-                            descendant_layout,
-                        );
+                        {
+                            let mut measurement_env = LayoutEnv {
+                                rules,
+                                fonts,
+                                counter_state: &mut measurement_counter_state,
+                                filter_defs,
+                                filter_dpi,
+                            };
+                            layout_table_cell_flow(
+                                &cell_el.children,
+                                &mut runs,
+                                &mut nested_rows,
+                                TableCellFlowContext {
+                                    style: &cell_style,
+                                    ancestors: &text_ancestors,
+                                    available_width: inner_width,
+                                    descendant_layout,
+                                },
+                                &mut measurement_env,
+                            );
+                        }
                         generated_cell_content.append_after_measurement(
                             &mut runs,
                             fonts,
@@ -2592,6 +2466,9 @@ pub(crate) fn flatten_table(
                             &mut runs,
                             fonts,
                             &mut measurement_counter_state,
+                        );
+                        runs.as_mut_slice().resolve_unclaimed_boundaries(
+                            crate::layout::elements::TextSpacing::from_style(&cell_style),
                         );
                         measurement_counter_state.leave_element(cell_counter_scope);
                         // Measure the same prepared styled tokens and the same
@@ -3157,14 +3034,14 @@ pub(crate) fn flatten_table(
                 )
             });
             let cell_counter_scope = counter_state.enter_element(&cell_style);
-            let authored_generated = AuthoredCellGeneratedContent::resolve(
+            let authored_generated = GeneratedContentStyles::resolve(
                 cell_el,
                 &cell_style,
                 rules,
                 &cell_selector_ctx,
                 fonts,
             );
-            let authored_generated = authored_generated.boundaries(cell_el);
+            let authored_generated = authored_generated.boxes(cell_el);
             // Compute effective width from auto-sized column widths. Cell borders
             // are painted INSIDE the cell box (CSS2 §17.6: the border-box is the
             // column width), so the content box is inset by the border and the
@@ -3201,10 +3078,6 @@ pub(crate) fn flatten_table(
 
             let mut runs = Vec::new();
             let mut nested_rows = Vec::new();
-            let recurse_descendants = cell_el
-                .children
-                .iter()
-                .any(|node| matches!(node, DomNode::Element(e) if recurses_as_layout_child(e.tag)));
             let mut text_ancestors = cell_selector_ctx.ancestors.clone();
             push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
             let (block_margin_top, block_margin_bottom) = table_cell_edge_block_margins(
@@ -3214,7 +3087,7 @@ pub(crate) fn flatten_table(
                 &text_ancestors,
                 FontMetrics::new(fonts),
             );
-            if let Some(before) = generated_cell_content.before
+            if let Some(before) = generated_cell_content.before()
                 && let Some(boundary) = generated_table_cell_boundary(
                     before,
                     &cell_content_style,
@@ -3226,7 +3099,8 @@ pub(crate) fn flatten_table(
             {
                 nested_rows.push(boundary);
             }
-            authored_generated.append_before_layout(
+            append_generated_cell_layout(
+                authored_generated.before(),
                 &mut runs,
                 &mut nested_rows,
                 &cell_content_style,
@@ -3235,25 +3109,28 @@ pub(crate) fn flatten_table(
                 filter_defs,
                 counter_state,
             );
-            collect_table_cell_content_inner(
-                &cell_el.children,
-                &cell_content_style,
-                &mut runs,
-                &mut nested_rows,
-                None,
-                rules,
-                fonts,
-                filter_defs,
-                filter_dpi,
-                false,
-                recurse_descendants,
-                recurse_descendants,
-                &text_ancestors,
-                cell_inner,
-                counter_state,
-                descendant_layout,
-            );
-            if let Some(after) = generated_cell_content.after
+            {
+                let mut flow_env = LayoutEnv {
+                    rules,
+                    fonts,
+                    counter_state: &mut *counter_state,
+                    filter_defs,
+                    filter_dpi,
+                };
+                layout_table_cell_flow(
+                    &cell_el.children,
+                    &mut runs,
+                    &mut nested_rows,
+                    TableCellFlowContext {
+                        style: &cell_content_style,
+                        ancestors: &text_ancestors,
+                        available_width: cell_inner,
+                        descendant_layout,
+                    },
+                    &mut flow_env,
+                );
+            }
+            if let Some(after) = generated_cell_content.after()
                 && let Some(boundary) = generated_table_cell_boundary(
                     after,
                     &cell_content_style,
@@ -3265,7 +3142,8 @@ pub(crate) fn flatten_table(
             {
                 nested_rows.push(boundary);
             }
-            authored_generated.append_after_layout(
+            append_generated_cell_layout(
+                authored_generated.after(),
                 &mut runs,
                 &mut nested_rows,
                 &cell_content_style,
@@ -3273,6 +3151,9 @@ pub(crate) fn flatten_table(
                 fonts,
                 filter_defs,
                 counter_state,
+            );
+            runs.as_mut_slice().resolve_unclaimed_boundaries(
+                crate::layout::elements::TextSpacing::from_style(&cell_content_style),
             );
             counter_state.leave_element(cell_counter_scope);
             let lines = wrap_text_runs(
@@ -3646,24 +3527,27 @@ pub(crate) fn flatten_table(
         });
         let mut caption_runs = Vec::new();
         let mut caption_nested = Vec::new();
-        collect_table_cell_content_inner(
-            &caption_el.children,
-            &caption_style,
-            &mut caption_runs,
-            &mut caption_nested,
-            None,
-            rules,
-            fonts,
-            filter_defs,
-            filter_dpi,
-            false,
-            false,
-            true,
-            &caption_ancestors,
-            caption_inner,
-            counter_state,
-            descendant_layout,
-        );
+        {
+            let mut flow_env = LayoutEnv {
+                rules,
+                fonts,
+                counter_state: &mut *counter_state,
+                filter_defs,
+                filter_dpi,
+            };
+            layout_table_cell_flow(
+                &caption_el.children,
+                &mut caption_runs,
+                &mut caption_nested,
+                TableCellFlowContext {
+                    style: &caption_style,
+                    ancestors: &caption_ancestors,
+                    available_width: caption_inner,
+                    descendant_layout,
+                },
+                &mut flow_env,
+            );
+        }
         let caption_lines = wrap_text_runs(
             caption_runs,
             TextWrapOptions::new(
@@ -3880,207 +3764,63 @@ fn table_cell_child_should_flatten(el: &ElementNode, style: &ComputedStyle) -> b
         || style.position.is_absolute()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collect_table_cell_content_inner(
-    nodes: &[DomNode],
-    parent_style: &ComputedStyle,
-    runs: &mut Vec<TextRun>,
-    nested_rows: &mut Vec<LayoutNode>,
-    link_url: Option<&str>,
-    rules: &[CssRule],
-    fonts: &HashMap<String, TtfFont>,
-    filter_defs: &HashMap<String, ElementNode>,
-    filter_dpi: f32,
-    inline_parent: bool,
-    recurse_blocks: bool,
-    suppress_direct_text_padding: bool,
-    ancestors: &[AncestorInfo],
+#[derive(Clone, Copy)]
+struct TableCellFlowContext<'style, 'ancestors, 'dom> {
+    style: &'style ComputedStyle,
+    ancestors: &'ancestors [AncestorInfo<'dom>],
     available_width: f32,
-    counter_state: &mut CounterState,
     descendant_layout: TableDescendantLayout,
-) {
-    let preserve_ws = matches!(
-        parent_style.white_space,
-        WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
-    );
-    let element_sibling_count = nodes
-        .iter()
-        .filter(|node| matches!(node, DomNode::Element(_)))
-        .count();
+}
 
-    for (node_index, node) in nodes.iter().enumerate() {
-        match node {
-            DomNode::Text(text) => {
-                let processed = if preserve_ws {
-                    expand_pre_tabs(text, parent_style, fonts)
-                } else {
-                    collapse_whitespace(text)
-                };
-                // Apply CSS text-transform
-                let processed = match parent_style.text_transform {
-                    crate::style::computed::TextTransform::Uppercase => processed.to_uppercase(),
-                    crate::style::computed::TextTransform::Lowercase => processed.to_lowercase(),
-                    crate::style::computed::TextTransform::Capitalize => {
-                        let mut result = String::with_capacity(processed.len());
-                        let mut prev_is_space = true;
-                        for c in processed.chars() {
-                            if prev_is_space && c.is_alphabetic() {
-                                for uc in c.to_uppercase() {
-                                    result.push(uc);
-                                }
-                            } else {
-                                result.push(c);
-                            }
-                            prev_is_space = c.is_whitespace();
-                        }
-                        result
-                    }
-                    crate::style::computed::TextTransform::None => processed,
-                };
-                if !processed.is_empty() {
-                    let (bg, pad) = if (inline_parent || recurse_blocks) && !preserve_ws {
-                        let pad = if suppress_direct_text_padding {
-                            EdgeSizes::ZERO
-                        } else {
-                            EdgeSizes::axes(parent_style.padding.left, parent_style.padding.top)
-                        };
-                        (parent_style.background_color, pad)
-                    } else {
-                        (None, EdgeSizes::ZERO)
-                    };
-                    push_styled_text_run(runs, processed, parent_style, link_url, bg, pad, fonts);
-                }
-            }
-            DomNode::Element(el) => {
-                let child_index = nodes[..node_index]
-                    .iter()
-                    .filter(|node| matches!(node, DomNode::Element(_)))
-                    .count();
-                let preceding_siblings = nodes[..node_index]
-                    .iter()
-                    .filter_map(|node| match node {
-                        DomNode::Element(element) => Some((
-                            element.tag_name().to_string(),
-                            element
-                                .class_list()
-                                .into_iter()
-                                .map(str::to_string)
-                                .collect(),
-                        )),
-                        _ => None,
-                    })
-                    .collect();
-                let classes = el.class_list();
-                let selector_ctx = SelectorContext {
-                    ancestors: ancestors.to_vec(),
-                    child_index,
-                    sibling_count: element_sibling_count,
-                    preceding_siblings,
-                    following_siblings: Vec::new(),
-                    is_empty: false,
-                };
-                let style = compute_style_with_context_with_font_metrics(
-                    el.tag,
-                    el.style_attr(),
-                    parent_style,
-                    rules,
-                    el.tag_name(),
-                    &classes,
-                    el.id(),
-                    &el.attributes,
-                    &selector_ctx,
-                    FontMetrics::new(fonts),
-                );
-                if style.display == Display::None {
-                    continue;
-                }
-                let url = if el.tag == HtmlTag::A {
-                    el.attributes.get("href").map(|s| s.as_str()).or(link_url)
-                } else {
-                    link_url
-                };
-                let mut child_ancestors = ancestors.to_vec();
-                child_ancestors.push(AncestorInfo {
-                    element: el,
-                    child_index,
-                    sibling_count: element_sibling_count,
-                    preceding_siblings: Vec::new(),
-                    following_siblings: Vec::new(),
-                    is_empty: false,
-                });
-                if table_cell_child_should_flatten(el, &style) && el.tag != HtmlTag::Br {
-                    let cell_ctx = descendant_layout.child_context(available_width, parent_style);
-                    let mut inner_env = LayoutEnv {
-                        rules,
-                        fonts,
-                        counter_state,
-                        filter_defs,
-                        filter_dpi,
-                    };
-                    flatten_element(
-                        el,
-                        LayoutTreeContext::new(parent_style, &cell_ctx, ancestors)
-                            .with_positioned_ancestor_depth(descendant_layout.positioned_depth)
-                            .for_element(
-                                ElementSiblingContext::new(child_index, element_sibling_count)
-                                    .with_neighbors(&selector_ctx.preceding_siblings, &[]),
-                            ),
-                        nested_rows,
-                        &mut inner_env,
-                    );
-                } else if recurse_blocks || collects_as_inline_text(el.tag) || el.tag == HtmlTag::Br
-                {
-                    if el.tag == HtmlTag::Br {
-                        push_line_break_run(runs, parent_style, fonts);
-                    } else {
-                        collect_table_cell_content_inner(
-                            &el.children,
-                            &style,
-                            runs,
-                            nested_rows,
-                            url,
-                            rules,
-                            fonts,
-                            filter_defs,
-                            filter_dpi,
-                            collects_as_inline_text(el.tag),
-                            recurse_blocks,
-                            false,
-                            &child_ancestors,
-                            available_width,
-                            counter_state,
-                            descendant_layout,
-                        );
-                        if recurse_blocks && style.display != Display::Inline && !runs.is_empty() {
-                            push_line_break_run(runs, &style, fonts);
-                        }
-                    }
-                }
-            }
-        }
+struct TableCellChildLayout<'output, 'style, 'ancestors, 'dom> {
+    context: TableCellFlowContext<'style, 'ancestors, 'dom>,
+    output: &'output mut Vec<LayoutNode>,
+}
+
+impl IndependentFlowLayout for TableCellChildLayout<'_, '_, '_, '_> {
+    fn lays_out_independently(&self, element: &ElementNode, child: &InlineFormattingChild) -> bool {
+        table_cell_child_should_flatten(element, &child.style) && element.tag != HtmlTag::Br
+    }
+
+    fn layout_independently(
+        &mut self,
+        element: &ElementNode,
+        child: &InlineFormattingChild,
+        env: &mut LayoutEnv<'_>,
+    ) {
+        let cell_context = self
+            .context
+            .descendant_layout
+            .child_context(self.context.available_width, self.context.style);
+        flatten_element(
+            element,
+            LayoutTreeContext::new(self.context.style, &cell_context, self.context.ancestors)
+                .with_positioned_ancestor_depth(self.context.descendant_layout.positioned_depth)
+                .for_element(child.source().as_context()),
+            self.output,
+            env,
+        );
     }
 }
 
-fn push_text_run(runs: &mut Vec<TextRun>, run: TextRun) {
-    runs.push(run);
-}
-
-fn push_line_break_run(
+fn layout_table_cell_flow(
+    nodes: &[DomNode],
     runs: &mut Vec<TextRun>,
-    style: &ComputedStyle,
-    fonts: &HashMap<String, TtfFont>,
+    nested_rows: &mut Vec<LayoutNode>,
+    context: TableCellFlowContext<'_, '_, '_>,
+    env: &mut LayoutEnv,
 ) {
-    push_text_run(
+    let mut child_layout = TableCellChildLayout {
+        context,
+        output: nested_rows,
+    };
+    layout_mixed_flow_children(
+        nodes,
+        context.style,
         runs,
-        TextRun {
-            text: "\n".to_string(),
-            font_size: used_font_size(style, fonts),
-            font_family: resolve_style_font_family(style, fonts),
-            line_height_factor: text_run_line_height_factor(style, fonts),
-            text_shadow: style.text_shadow.clone(),
-            metadata: crate::layout::text::text_run_metadata(style),
-            ..Default::default()
-        },
+        context.ancestors,
+        env,
+        &mut child_layout,
     );
 }
 

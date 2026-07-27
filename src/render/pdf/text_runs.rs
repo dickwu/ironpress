@@ -224,7 +224,7 @@ pub(super) fn render_run_glyph_layers_in_space(
     parent_font_size: f32,
     custom_fonts: &HashMap<String, TtfFont>,
     prepared_custom_fonts: &PreparedCustomFonts,
-    word_spacing: f32,
+    justification_word_spacing: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
     text_space: PdfTextSpace,
@@ -232,6 +232,7 @@ pub(super) fn render_run_glyph_layers_in_space(
 ) -> f32 {
     let (r, g, b) = run.color.to_f32_rgb();
     let letter_spacing = text_run_letter_spacing(run);
+    let word_spacing = run.metadata.spacing.word + justification_word_spacing;
     // css2 §10.8.1: `vertical-align: super`/`sub` paint a text run with its
     // baseline raised/lowered by a fraction of the parent (line) font size. This
     // only moves the painted glyphs vertically; the horizontal advance (the
@@ -259,7 +260,7 @@ pub(super) fn render_run_glyph_layers_in_space(
             parent_font_size,
             custom_fonts,
             prepared_custom_fonts,
-            word_spacing,
+            justification_word_spacing,
             pdf_writer,
             page_images,
             text_space,
@@ -273,10 +274,10 @@ pub(super) fn render_run_glyph_layers_in_space(
         let segments = crate::text::split_run_by_font_coverage(run, custom_fonts);
         let mut total_width = 0.0f32;
         let mut cur_x = x;
-        for (segment_text, use_fallback) in &segments {
+        for (segment_index, (segment_text, use_fallback)) in segments.iter().enumerate() {
             let mut sub_run = run.clone();
             sub_run.text = segment_text.clone();
-            sub_run.metadata.trailing_shaping_advance = 0.0;
+            sub_run.metadata.boundary = crate::layout::engine::InlineBoundaryAdvance::none();
             // `text_y` already carries this run's vertical-align shift; clear it on
             // the per-segment recursion so the shift is not applied a second time.
             sub_run.vertical_align = VerticalAlign::Baseline;
@@ -285,8 +286,10 @@ pub(super) fn render_run_glyph_layers_in_space(
                 if let Some((fallback_shaped, fallback_key, fallback_font)) =
                     crate::text::shape_with_unicode_fallback(&sub_run, custom_fonts)
                 {
-                    let w = fallback_shaped.width
-                        + letter_spacing_extra(letter_spacing, sub_run.text.chars().count());
+                    let w = sub_run
+                        .metadata
+                        .spacing
+                        .add_internal_advance(fallback_shaped.width, &sub_run.text);
                     let font_name = sanitize_pdf_name(fallback_key);
                     let font_size =
                         fallback_font.adjusted_font_size(text_space.length(sub_run.font_size));
@@ -328,7 +331,7 @@ pub(super) fn render_run_glyph_layers_in_space(
                     parent_font_size,
                     custom_fonts,
                     prepared_custom_fonts,
-                    word_spacing,
+                    justification_word_spacing,
                     pdf_writer,
                     page_images,
                     text_space,
@@ -337,21 +340,18 @@ pub(super) fn render_run_glyph_layers_in_space(
                 cur_x += w;
                 total_width += w;
             }
+            if segment_index + 1 < segments.len() {
+                cur_x += letter_spacing;
+                total_width += letter_spacing;
+            }
         }
-        return run.shaped_advance(total_width);
+        return run.inline_advance(total_width);
     }
 
     let shaped = crate::text::shape_text_run(run, custom_fonts);
     let run_width = shaped.as_ref().map_or_else(
-        || {
-            estimate_run_width_with_fonts(run, custom_fonts)
-                + letter_spacing_extra(letter_spacing, run.text.chars().count())
-        },
-        |shaped| {
-            run.shaped_advance(
-                shaped.width + letter_spacing_extra(letter_spacing, run.text.chars().count()),
-            )
-        },
+        || estimate_run_width_with_fonts(run, custom_fonts),
+        |shaped| run.text_advance(shaped.width, &run.text),
     );
     let custom_font = crate::text::resolve_custom_font(
         &run.font_family,
@@ -417,6 +417,9 @@ pub(super) fn render_run_glyph_layers_in_space(
         if letter_spacing != 0.0 {
             content.push_str(&format!("{} Tc\n", text_space.length(letter_spacing)));
         }
+        if word_spacing != 0.0 {
+            content.push_str(&format!("{} Tw\n", text_space.length(word_spacing)));
+        }
         let encoded = encode_pdf_text(&run.text);
         if text_space.is_page_css() {
             let origin = text_space.point(PdfPoint::new(x, text_y));
@@ -436,6 +439,9 @@ pub(super) fn render_run_glyph_layers_in_space(
         content.push_str(&format!("({encoded}) Tj\n"));
         if letter_spacing != 0.0 {
             content.push_str("0 Tc\n");
+        }
+        if word_spacing != 0.0 {
+            content.push_str("0 Tw\n");
         }
     }
 
@@ -465,7 +471,7 @@ fn paint_run_text_shadows_at_baseline(
     parent_font_size: f32,
     custom_fonts: &HashMap<String, TtfFont>,
     prepared_custom_fonts: &PreparedCustomFonts,
-    word_spacing: f32,
+    justification_word_spacing: f32,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
     text_space: PdfTextSpace,
@@ -511,7 +517,7 @@ fn paint_run_text_shadows_at_baseline(
                 parent_font_size,
                 custom_fonts,
                 prepared_custom_fonts,
-                word_spacing,
+                justification_word_spacing,
                 pdf_writer,
                 page_images,
                 text_space,
@@ -537,7 +543,7 @@ pub(super) fn text_combine_advance(
         // CSS Writing Modes §9.1.2 gives every composition a measured 1em
         // square. Its ink may be narrower, but that must not move the square's
         // centre or the following vertical character.
-        .then(|| run.font_size.max(0.0))
+        .then(|| run.inline_advance(run.font_size.max(0.0)))
 }
 
 /// Render one horizontal-in-vertical composition, returning its one-em-bounded
@@ -556,10 +562,22 @@ pub(super) fn render_text_combine_run(
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) -> f32 {
-    let raw_advance = estimate_run_width_with_fonts(run, custom_fonts);
+    let raw_advance = crate::text::measure_text_width_with_shaping(
+        &run.text,
+        run.font_size,
+        &run.font_family,
+        run.bold,
+        run.font_style.is_slanted(),
+        run.shaping,
+        custom_fonts,
+    )
+    .map_or_else(
+        || run.internal_text_advance(estimate_run_width(run), &run.text),
+        |width| run.internal_text_advance(width, &run.text),
+    );
     let advance = run.font_size.max(0.0);
     if advance <= f32::EPSILON || raw_advance <= f32::EPSILON {
-        return advance;
+        return run.inline_advance(advance);
     }
     let scale_x = (advance / raw_advance).min(1.0);
     let painted_advance = raw_advance * scale_x;
@@ -591,7 +609,7 @@ pub(super) fn render_text_combine_run(
     if scale_x < 1.0 {
         content.push_str("Q\n");
     }
-    advance
+    run.inline_advance(advance)
 }
 
 /// Render all text runs of a line in a single BT/ET block so the PDF viewer

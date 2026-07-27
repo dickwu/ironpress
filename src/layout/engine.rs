@@ -44,7 +44,8 @@ use super::inline::{
     layout_inline_block_group_with_env_and_spacing, layout_inline_mixed_sequence_with_env,
 };
 use super::inline_formatting::{
-    AtomicInlineKind, InlineContentSequence, InlineFormattingContext, InlineFormattingRole,
+    AtomicInlineKind, GeneratedContentStyles, InlineContentSequence, InlineFormattingContext,
+    InlineFormattingRole, PrincipalPseudoStyles,
 };
 use super::print_scale::{PrintContentScale, assign_page_print_scales};
 use super::root_formatting::{DocumentRootStyles, RootFormattingContext};
@@ -59,7 +60,7 @@ pub(crate) use super::traversal::{
 #[cfg(test)]
 use super::text::OverflowWrap;
 use super::text::{
-    TextWrapOptions, collapse_whitespace, collect_text_runs, estimate_word_width,
+    InlineRunCollector, TextWrapOptions, collapse_whitespace, estimate_word_width,
     parent_line_strut, push_text_run_with_fallback, resolve_style_font_family,
     text_run_line_height_factor, used_font_size, used_line_height, wrap_text_runs,
 };
@@ -747,22 +748,103 @@ impl RunWhitespace {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct InlineBoundaryAdvance {
+    /// Tracking between the final typographic unit in this run and the first
+    /// unit in the following run. Its state distinguishes an unclaimed source
+    /// boundary, a mechanical token split, a resolved source boundary, and a
+    /// boundary suppressed by line breaking.
+    letter_spacing: InlineBoundaryLetterSpacing,
+    /// Pair-positioning retained when adjacent glyphs must remain in distinct
+    /// paint runs.
+    contextual_shaping: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum InlineBoundaryLetterSpacing {
+    /// The nearest common inline ancestor has not claimed this source
+    /// boundary yet.
+    #[default]
+    Unclaimed,
+    /// A mechanical token split inside one source run. Coalescing restores
+    /// this to ordinary internal tracking.
+    Internal,
+    /// A real source boundary with its resolved owner and used advance.
+    Resolved(f32),
+    /// A source boundary removed by a line break.
+    Suppressed,
+}
+
+impl InlineBoundaryAdvance {
+    pub(crate) const fn none() -> Self {
+        Self {
+            letter_spacing: InlineBoundaryLetterSpacing::Suppressed,
+            contextual_shaping: 0.0,
+        }
+    }
+
+    pub(crate) const fn is_unresolved(self) -> bool {
+        matches!(self.letter_spacing, InlineBoundaryLetterSpacing::Unclaimed)
+    }
+
+    pub(crate) fn resolve_letter_spacing(&mut self, advance: f32) {
+        if self.is_unresolved() {
+            self.letter_spacing = InlineBoundaryLetterSpacing::Resolved(advance);
+        }
+    }
+
+    pub(crate) fn set_contextual_shaping(&mut self, advance: f32) {
+        self.contextual_shaping = advance;
+    }
+
+    pub(crate) fn discard(&mut self) {
+        *self = Self::none();
+    }
+
+    pub(crate) fn total(self) -> f32 {
+        let letter_spacing = match self.letter_spacing {
+            InlineBoundaryLetterSpacing::Resolved(advance) => advance,
+            InlineBoundaryLetterSpacing::Unclaimed
+            | InlineBoundaryLetterSpacing::Internal
+            | InlineBoundaryLetterSpacing::Suppressed => 0.0,
+        };
+        letter_spacing + self.contextual_shaping
+    }
+
+    pub(crate) fn can_be_absorbed_by(self, spacing: TextSpacing) -> bool {
+        self.contextual_shaping == 0.0
+            && match self.letter_spacing {
+                InlineBoundaryLetterSpacing::Unclaimed | InlineBoundaryLetterSpacing::Internal => {
+                    true
+                }
+                InlineBoundaryLetterSpacing::Resolved(advance) => advance == spacing.letter,
+                InlineBoundaryLetterSpacing::Suppressed => false,
+            }
+    }
+
+    pub(crate) fn mark_internal(&mut self) {
+        *self = Self {
+            letter_spacing: InlineBoundaryLetterSpacing::Internal,
+            contextual_shaping: 0.0,
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct TextRunMetadata {
     /// CSS `text-emphasis` state, kept together because its mark, colour,
     /// position, and resolved ruby geometry must travel as one unit.
     pub emphasis: crate::layout::text_emphasis::TextEmphasis,
-    pub letter_spacing: f32,
-    pub word_spacing: f32,
+    pub(crate) spacing: TextSpacing,
     /// The inherited `text-combine-upright` rule carried to vertical text
     /// expansion. The expansion clears it for ordinary glyphs and retains it
     /// only on the resulting single-glyph composition.
     pub text_combine_upright: crate::style::computed::TextCombineUpright,
     pub is_drop_cap: bool,
     pub whitespace: RunWhitespace,
-    /// Extra inline advance contributed by contextual shaping at this run's
-    /// trailing boundary. The glyphs remain painted by their own styled runs;
-    /// this preserves pair kerning without permitting a cross-style ligature.
-    pub trailing_shaping_advance: f32,
+    /// Inline geometry owned by the boundary after this run. Keeping tracking
+    /// and contextual shaping together makes every width and paint consumer
+    /// advance through one semantic boundary.
+    pub(crate) boundary: InlineBoundaryAdvance,
 }
 
 /// OpenType features that affect the shape and advance of a text run.
@@ -886,19 +968,58 @@ impl Default for TextRun {
 }
 
 impl TextRun {
-    /// Add the finite contextual advance retained at this run's trailing edge.
+    /// Add the finite inline advance retained at this run's trailing edge.
     ///
-    /// A CSS inline boundary can keep pair positioning while its paint (for
-    /// example `::first-letter` colour) remains distinct. Every width consumer
-    /// goes through this helper so layout, clipping, and PDF painting agree.
-    pub(crate) fn shaped_advance(&self, width: f32) -> f32 {
-        width
-            + self
-                .metadata
-                .trailing_shaping_advance
-                .is_finite()
-                .then_some(self.metadata.trailing_shaping_advance)
-                .unwrap_or_default()
+    /// CSS tracking and pair positioning can both cross a paint-run boundary.
+    /// Every width consumer goes through this helper so layout, clipping, and
+    /// PDF painting agree.
+    pub(crate) fn inline_advance(&self, width: f32) -> f32 {
+        let boundary = self.metadata.boundary.total();
+        width + boundary.is_finite().then_some(boundary).unwrap_or_default()
+    }
+
+    /// Complete advance for text painted by this run.
+    ///
+    /// Internal tracking and the separately-owned outgoing inline boundary
+    /// are deliberately composed here so every layout and paint consumer uses
+    /// the same geometry.
+    pub(crate) fn text_advance(&self, raw_width: f32, text: &str) -> f32 {
+        self.inline_advance(self.internal_text_advance(raw_width, text))
+    }
+
+    pub(crate) fn internal_text_advance(&self, raw_width: f32, text: &str) -> f32 {
+        self.metadata.spacing.add_internal_advance(raw_width, text)
+    }
+
+    /// Complete advance for an atomic inline carried by this run.
+    pub(crate) fn atomic_inline_advance(&self) -> Option<f32> {
+        self.inline_box
+            .as_deref()
+            .map(|inline| self.inline_advance(inline.outer_width()))
+    }
+
+    pub(crate) fn has_typographic_unit(&self) -> bool {
+        self.inline_box.is_some() || self.text.chars().any(|character| character != '\n')
+    }
+
+    pub(crate) fn forces_line_break(&self) -> bool {
+        self.inline_box.is_none() && self.text == "\n"
+    }
+
+    pub(crate) fn joins_typographically(&self, next: &Self) -> bool {
+        if self.inline_box.is_some() || next.inline_box.is_some() {
+            return !(self.inline_box.is_some() && next.inline_box.is_some());
+        }
+        self.has_typographic_unit() && next.has_typographic_unit()
+    }
+
+    pub(crate) fn text_fragment(&self, text: String, owns_outgoing_boundary: bool) -> Self {
+        let mut fragment = self.clone();
+        fragment.text = text;
+        if !owns_outgoing_boundary {
+            fragment.metadata.boundary.mark_internal();
+        }
+        fragment
     }
 
     pub(crate) fn line_height_font_size(&self) -> f32 {
@@ -2069,14 +2190,25 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     {
         let root_ancestors = root.descendant_ancestors();
         if root.style().display == Display::Flex {
+            let root_selector = SelectorContext {
+                sibling_count: 1,
+                is_empty: root.element().children.is_empty(),
+                ..Default::default()
+            };
+            let generated_styles = super::inline_formatting::GeneratedContentStyles::resolve(
+                root.element(),
+                root.style(),
+                env.rules,
+                &root_selector,
+                env.fonts,
+            );
             layout_flex_container(
                 root.element(),
                 root.style(),
                 &root_ctx,
                 &mut elements,
                 &root_ancestors,
-                None,
-                None,
+                generated_styles.boxes(root.element()),
                 0,
                 &mut env,
             );
@@ -2473,15 +2605,12 @@ fn build_running_element(
     env: &mut LayoutEnv,
 ) -> Option<LayoutNode> {
     let mut runs = Vec::new();
-    collect_text_runs(
-        InlineContentSequence::new(&el.children),
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
+        &el.children,
         style,
         &mut runs,
         None,
-        env.rules,
-        env.fonts,
         ancestors,
-        env.counter_state,
     );
     if runs.is_empty() {
         let mut text = String::new();
@@ -2545,10 +2674,6 @@ fn build_running_element(
             alignment: style.text_align,
             writing_mode: style.writing_mode,
             indent: text_indent,
-            spacing: TextSpacing {
-                letter: style.letter_spacing,
-                word: style.word_spacing,
-            },
         },
         semantics: TextSemantics {
             heading_level: heading_level(el.tag),
@@ -4049,29 +4174,11 @@ pub(crate) fn flatten_element(
                 following_siblings: Vec::new(),
                 is_empty: false,
             };
-            let li_before = compute_pseudo_element_style_with_font_metrics(
-                &style,
-                env.rules,
-                el.tag_name(),
-                &classes,
-                el.id(),
-                &el.attributes,
-                &li_selector_ctx,
-                PseudoElement::Before,
-                env.font_metrics(),
-            );
-            let li_after = compute_pseudo_element_style_with_font_metrics(
-                &style,
-                env.rules,
-                el.tag_name(),
-                &classes,
-                el.id(),
-                &el.attributes,
-                &li_selector_ctx,
-                PseudoElement::After,
-                env.font_metrics(),
-            );
-            let custom_before = li_before.as_ref().filter(|style| !style.content.is_empty());
+            let generated_styles =
+                GeneratedContentStyles::resolve(el, &style, env.rules, &li_selector_ctx, env.fonts);
+            let custom_before = generated_styles
+                .before()
+                .filter(|style| !style.content.is_empty());
             let has_custom_before = custom_before.is_some();
             if let Some(ps) = custom_before {
                 let content_text =
@@ -4345,19 +4452,16 @@ pub(crate) fn flatten_element(
             }
 
             let runs_before_inline = runs.len();
-            collect_text_runs(
-                InlineContentSequence::new(&el.children),
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
+                &el.children,
                 &style,
                 &mut runs,
                 None,
-                env.rules,
-                env.fonts,
                 ancestors,
-                env.counter_state,
             );
             append_pseudo_inline_run(
                 &mut runs,
-                li_after.as_ref(),
+                generated_styles.after(),
                 el,
                 env.fonts,
                 env.counter_state,
@@ -4565,53 +4669,11 @@ pub(crate) fn flatten_element(
             return;
         }
 
-        // Compute ::before and ::after pseudo-element styles before any display-
-        // specific early returns so layout modes such as flex can still emit them.
-        let cls: Vec<&str> = classes.iter().map(|s| s.as_ref()).collect();
-        let before_style = compute_pseudo_element_style_with_font_metrics(
-            &style,
-            env.rules,
-            el.tag_name(),
-            &cls,
-            el.id(),
-            &el.attributes,
-            &selector_ctx,
-            PseudoElement::Before,
-            env.font_metrics(),
-        );
-        let after_style = compute_pseudo_element_style_with_font_metrics(
-            &style,
-            env.rules,
-            el.tag_name(),
-            &cls,
-            el.id(),
-            &el.attributes,
-            &selector_ctx,
-            PseudoElement::After,
-            env.font_metrics(),
-        );
-        let first_line_style = compute_pseudo_element_style_with_font_metrics(
-            &style,
-            env.rules,
-            el.tag_name(),
-            &cls,
-            el.id(),
-            &el.attributes,
-            &selector_ctx,
-            PseudoElement::FirstLine,
-            env.font_metrics(),
-        );
-        let first_letter_style = compute_pseudo_element_style_with_font_metrics(
-            &style,
-            env.rules,
-            el.tag_name(),
-            &cls,
-            el.id(),
-            &el.attributes,
-            &selector_ctx,
-            PseudoElement::FirstLetter,
-            env.font_metrics(),
-        );
+        // Resolve the principal box's pseudo family once before any display-
+        // specific early return. Every formatting context consumes the same
+        // computed generated and typographic pseudo styles.
+        let pseudo_styles =
+            PrincipalPseudoStyles::resolve(el, &style, env.rules, &selector_ctx, env.fonts);
 
         // Table fixup operates on the complete box-tree child sequence, which
         // includes generated ::before and ::after boxes. Dispatch only after
@@ -4624,11 +4686,7 @@ pub(crate) fn flatten_element(
                 el,
                 &style,
                 output,
-                super::inline_formatting::GeneratedInlineContent::new(
-                    el,
-                    before_style.as_ref(),
-                    after_style.as_ref(),
-                ),
+                pseudo_styles.generated().boxes(el),
                 env,
                 TableLayoutContext::new(
                     &layout_ctx,
@@ -4648,10 +4706,7 @@ pub(crate) fn flatten_element(
             ancestors,
             &child_ancestors,
             positioned_depth,
-            before_style,
-            after_style,
-            first_line_style,
-            first_letter_style,
+            &pseudo_styles,
             env,
         );
     })();
@@ -4711,16 +4766,8 @@ fn inline_loose_list_p(
                     &p_selector_ctx,
                     env.font_metrics(),
                 );
-                collect_text_runs(
-                    InlineContentSequence::new(&child_el.children),
-                    &p_style,
-                    runs,
-                    None,
-                    env.rules,
-                    env.fonts,
-                    child_ancestors,
-                    env.counter_state,
-                );
+                InlineRunCollector::new(env.rules, env.fonts, env.counter_state)
+                    .collect_box_content(&child_el.children, &p_style, runs, None, child_ancestors);
                 return (Some(raw_idx), p_style.margin.top, p_style.margin.bottom);
             }
             child_el_ordinal += 1;
@@ -4745,13 +4792,11 @@ fn route_element(
     ancestors: &[AncestorInfo],
     child_ancestors: &[AncestorInfo],
     positioned_depth: usize,
-    before_style: Option<ComputedStyle>,
-    after_style: Option<ComputedStyle>,
-    first_line_style: Option<ComputedStyle>,
-    first_letter_style: Option<ComputedStyle>,
+    pseudo_styles: &PrincipalPseudoStyles,
     env: &mut LayoutEnv,
 ) {
     let layout_ctx = *ctx;
+    let generated_styles = pseudo_styles.generated();
     // Flex container handling
     if matches!(style.display, Display::Flex | Display::InlineFlex) {
         let expanded_flex_el;
@@ -4770,8 +4815,7 @@ fn route_element(
             &layout_ctx,
             output,
             child_ancestors,
-            before_style.as_ref(),
-            after_style.as_ref(),
+            generated_styles.boxes(el),
             positioned_depth,
             env,
         );
@@ -4829,26 +4873,25 @@ fn route_element(
             ancestors,
             child_ancestors,
             positioned_depth,
-            before_style,
-            after_style,
-            first_line_style,
-            first_letter_style,
+            generated_styles,
+            pseudo_styles.first_line(),
+            pseudo_styles.first_letter(),
             env,
         );
         if early_exit {
             return;
         }
     } else {
-        let has_inline_target_placeholder = before_style.as_ref().is_some_and(|ps| {
+        let has_inline_target_placeholder = generated_styles.before().is_some_and(|ps| {
             !pseudo_is_block_like(ps) && content_items_include_target_placeholder(&ps.content)
-        }) || after_style.as_ref().is_some_and(|ps| {
+        }) || generated_styles.after().is_some_and(|ps| {
             !pseudo_is_block_like(ps) && content_items_include_target_placeholder(&ps.content)
         });
         if has_inline_target_placeholder {
             let mut runs = Vec::new();
             append_pseudo_inline_run(
                 &mut runs,
-                before_style.as_ref(),
+                generated_styles.before(),
                 el,
                 env.fonts,
                 env.counter_state,
@@ -4858,19 +4901,16 @@ fn route_element(
             } else {
                 None
             };
-            collect_text_runs(
-                InlineContentSequence::new(&el.children),
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
+                &el.children,
                 style,
                 &mut runs,
                 link_url,
-                env.rules,
-                env.fonts,
                 child_ancestors,
-                env.counter_state,
             );
             append_pseudo_inline_run(
                 &mut runs,
-                after_style.as_ref(),
+                generated_styles.after(),
                 el,
                 env.fonts,
                 env.counter_state,

@@ -274,8 +274,8 @@ pub(crate) fn inline_boundary_kerning_advance(
         || left.font_style != right.font_style
         || left.font_synthesis != right.font_synthesis
         || left.font_variant_position != right.font_variant_position
-        || left.metadata.letter_spacing != 0.0
-        || right.metadata.letter_spacing != 0.0
+        || left.metadata.spacing.letter != 0.0
+        || right.metadata.spacing.letter != 0.0
         || left.padding != crate::types::EdgeSizes::ZERO
         || right.padding != crate::types::EdgeSizes::ZERO
         || !matches!(

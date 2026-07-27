@@ -60,8 +60,6 @@ pub(super) fn render_text_child(
     let tb_transform = &tb_box_transform.value;
     let tb_radii = &child.paint.border_radii;
     let tb_text_indent = &child.text.indent;
-    let tb_letter_spacing = &child.text.spacing.letter;
-    let tb_word_spacing = &child.text.spacing.word;
     let tb_writing_mode = &child.text.writing_mode;
     let tb_containing_block = &child.positioning.containing_block;
     // Absolute-positioned children render at offset from the
@@ -623,15 +621,12 @@ pub(super) fn render_text_child(
         let line_width: f32 = merged
             .iter()
             .map(|run| {
-                let run_letter_spacing = effective_run_letter_spacing(*tb_letter_spacing, run);
                 if upright_vertical {
                     text_combine_advance(run, ctx.text.custom_fonts).unwrap_or_else(|| {
                         estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                            + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
                     })
                 } else {
                     estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                        + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
                 }
             })
             .sum();
@@ -678,9 +673,6 @@ pub(super) fn render_text_child(
             line_bottom_y
         };
         let mut lx = text_x;
-        if *tb_word_spacing != 0.0 {
-            content.push_str(&format!("{tb_word_spacing} Tw\n"));
-        }
         for (run_index, run) in merged.iter().enumerate() {
             // Atomic inline box (e.g. a `list-style-image` marker):
             // paint the box/image and advance by its outer width;
@@ -709,21 +701,17 @@ pub(super) fn render_text_child(
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                 );
-                lx += inline.outer_width();
+                lx += run.atomic_inline_advance().unwrap_or_default();
                 continue;
             }
             if run.text.is_empty() {
                 continue;
             }
-            let run_letter_spacing = effective_run_letter_spacing(*tb_letter_spacing, run);
             let run_width = if upright_vertical {
-                text_combine_advance(run, ctx.text.custom_fonts).unwrap_or_else(|| {
-                    estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                        + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
-                })
+                text_combine_advance(run, ctx.text.custom_fonts)
+                    .unwrap_or_else(|| estimate_run_width_with_fonts(run, ctx.text.custom_fonts))
             } else {
                 estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                    + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
             };
             // Per-run inline background (e.g. a `::first-letter`/
             // `::first-line` `background-color`, or a highlighted
@@ -780,7 +768,7 @@ pub(super) fn render_text_child(
                     crate::layout::text::line_primary_font_size(&merged),
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    *tb_word_spacing,
+                    0.0,
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                 );
@@ -814,7 +802,7 @@ pub(super) fn render_text_child(
                     crate::layout::text::line_primary_font_size(&merged),
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    *tb_word_spacing,
+                    0.0,
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                 )
@@ -829,7 +817,7 @@ pub(super) fn render_text_child(
                     crate::layout::text::line_primary_font_size(&merged),
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    *tb_word_spacing,
+                    0.0,
                     vertical_e,
                     vertical_f,
                     ctx.text.pdf_writer,
@@ -845,7 +833,7 @@ pub(super) fn render_text_child(
                         crate::layout::text::line_primary_font_size(&merged),
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
-                        *tb_word_spacing,
+                        0.0,
                         ctx.text.pdf_writer,
                         ctx.text.page_images,
                     )
@@ -858,7 +846,7 @@ pub(super) fn render_text_child(
                         crate::layout::text::line_primary_font_size(&merged),
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
-                        *tb_word_spacing,
+                        0.0,
                         ctx.text.pdf_writer,
                         ctx.text.page_images,
                     )
@@ -867,17 +855,7 @@ pub(super) fn render_text_child(
             if let Some(decoration) = &decoration {
                 decoration.paint_above_text(content);
             }
-            let advance_letter_spacing = if run.metadata.text_combine_upright.is_active()
-                || text_run_letter_spacing(run) != 0.0
-            {
-                0.0
-            } else {
-                *tb_letter_spacing
-            };
-            lx += rw + letter_spacing_extra(advance_letter_spacing, run.text.chars().count());
-        }
-        if *tb_word_spacing != 0.0 {
-            content.push_str("0 Tw\n");
+            lx += rw;
         }
     }
     if vertical {

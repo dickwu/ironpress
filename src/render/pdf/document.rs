@@ -826,7 +826,7 @@ pub(super) fn render_page_footnotes(
             HorizontalLinePaint {
                 origin: PdfPoint::new(margin.left + area.padding.left, baseline_y),
                 line_ascender: metrics.ascender,
-                word_spacing: 0.0,
+                justification_word_spacing: 0.0,
                 text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
             },
             custom_fonts,

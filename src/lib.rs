@@ -3134,11 +3134,15 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn pdf_text_justify_alignment() {
-        // Covers pdf.rs lines 363-374: text-align: justify with word spacing
         let html = r#"<p style="text-align: justify; width: 200pt">This is a long sentence with many words that should be justified across the width of the container for proper testing purposes here.</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
+        let pdf = HtmlConverter::new().compress(false).convert(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("Tw\n"));
+        assert!(
+            content
+                .lines()
+                .any(|line| line.ends_with("] TJ") && line.contains(" -")),
+            "justification must increase at least one inter-word advance"
+        );
     }
 
     #[test]
@@ -4093,14 +4097,18 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn html_to_pdf_text_justify() {
-        // Covers pdf.rs lines 372,393: text-align: justify with word spacing
         let html = r#"<p style="text-align: justify; width: 300pt;">
             This is a paragraph with justified text alignment that has multiple words
             and should produce word spacing adjustments in the PDF output stream.
         </p>"#;
-        let pdf = html_to_pdf(html).unwrap();
+        let pdf = HtmlConverter::new().compress(false).convert(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("Tw") || content.contains("This"));
+        assert!(
+            content
+                .lines()
+                .any(|line| line.ends_with("] TJ") && line.contains(" -")),
+            "justification must increase at least one inter-word advance"
+        );
     }
 
     #[test]

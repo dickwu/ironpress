@@ -1,7 +1,7 @@
 use crate::style::computed::VerticalAlign;
 use crate::types::Color;
 
-use super::support::{layout_pages, visible_runs};
+use super::support::{layout_pages, visible_inline_box_runs, visible_runs};
 
 #[test]
 fn nested_inline_runs_keep_their_real_sibling_selector_positions() {
@@ -41,6 +41,61 @@ fn anonymous_table_fixup_keeps_authored_ancestor_and_type_position() {
     assert_eq!(runs[0].text, "Ag");
     assert_eq!(runs[1].text, "Bb");
     assert_eq!(runs[1].color, Color::rgb(193, 18, 31));
+}
+
+#[test]
+fn table_cell_mixed_flow_uses_the_shared_complete_sibling_model() {
+    let runs = visible_runs(
+        r#"<style>
+            * { margin: 0; padding: 0; }
+            table { border-collapse: collapse; }
+            .host > .token:last-of-type { color: #c1121f; }
+        </style>
+        <table><tr><td class="host">
+            <span class="token">FIRST</span>
+            <div>BLOCK</div>
+            <span class="token">LAST</span>
+        </td></tr></table>"#,
+    );
+    let first = runs
+        .iter()
+        .find(|run| run.text.contains("FIRST"))
+        .expect("first table-cell inline run");
+    let last = runs
+        .iter()
+        .find(|run| run.text.contains("LAST"))
+        .expect("last table-cell inline run");
+
+    assert_ne!(first.color, Color::rgb(193, 18, 31), "runs: {runs:#?}");
+    assert_eq!(last.color, Color::rgb(193, 18, 31), "runs: {runs:#?}");
+}
+
+#[test]
+fn inline_block_mixed_flow_uses_the_shared_complete_sibling_model() {
+    let runs = visible_inline_box_runs(
+        r#"<style>
+            * { margin: 0; padding: 0; }
+            .host { display: inline-block; }
+            .host > .break { display: block; }
+            .host > .token:last-of-type { color: #c1121f; }
+        </style>
+        <div><span class="host">
+            <span class="token">FIRST</span>
+            <span class="break">BLOCK</span>
+            <span class="token">LAST</span>
+        </span></div>"#,
+    );
+    let first = runs
+        .iter()
+        .find(|run| run.text.contains("FIRST"))
+        .unwrap_or_else(|| panic!("missing first inline-block run: {runs:#?}"));
+    let last = runs
+        .iter()
+        .find(|run| run.text.contains("LAST"))
+        .unwrap_or_else(|| panic!("missing last inline-block run: {runs:#?}"));
+
+    assert_ne!(first.color, Color::rgb(193, 18, 31), "runs: {runs:#?}");
+    assert_eq!(last.color, Color::rgb(193, 18, 31), "runs: {runs:#?}");
 }
 
 #[test]

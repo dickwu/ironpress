@@ -22,7 +22,7 @@ pub(crate) fn coalesce_text_runs(runs: &[TextRun]) -> Vec<TextRun> {
         if can_coalesce {
             if let Some(previous) = coalesced.last_mut() {
                 previous.text.push_str(&run.text);
-                previous.metadata.trailing_shaping_advance = run.metadata.trailing_shaping_advance;
+                previous.metadata.boundary = run.metadata.boundary;
             }
         } else {
             coalesced.push(run.clone());
@@ -64,12 +64,12 @@ fn resolved_metric_matches(previous: f32, next: f32) -> bool {
 
 fn metadata_matches(previous: TextRunMetadata, next: TextRunMetadata) -> bool {
     previous.emphasis == next.emphasis
-        && previous.letter_spacing == next.letter_spacing
-        && previous.word_spacing == next.word_spacing
+        && previous.spacing == next.spacing
         && previous.is_drop_cap == next.is_drop_cap
-        // A non-zero outgoing boundary advance is already a resolved shaping
-        // boundary. Absorbing the next run would apply it inside a new buffer.
-        && previous.trailing_shaping_advance == 0.0
+        // A boundary can become ordinary intra-run tracking only when it
+        // carries the same spacing as the run and no separate pair-positioning
+        // adjustment.
+        && previous.boundary.can_be_absorbed_by(previous.spacing)
 }
 
 fn shadows_match(previous: &[BoxShadow], next: &[BoxShadow]) -> bool {
@@ -123,7 +123,7 @@ mod tests {
 
         let mut spacing = base.clone();
         spacing.text = "i".to_string();
-        spacing.metadata.letter_spacing = 1.0;
+        spacing.metadata.spacing.letter = 1.0;
         variants.push(spacing);
 
         let mut shadow = base.clone();

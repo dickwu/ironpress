@@ -8,15 +8,14 @@ use crate::layout::elements::{
 };
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{
-    AncestorInfo, CssRule, CssValue, PseudoElement, SelectorContext, parse_inline_style,
-    parse_length, selector_matches_with_context, specificity,
+    AncestorInfo, CssRule, CssValue, SelectorContext, parse_inline_style, parse_length,
+    selector_matches_with_context, specificity,
 };
 use crate::parser::dom::{DomNode, ElementNode};
 use crate::style::computed::{
     AlignContent, AlignItems, BoxSizing, ComputedStyle, ContentItem, Display, GridAlign, GridLine,
     GridTrack, JustifyContent, LengthPercent, Overflow, Position, WhiteSpace,
-    compute_pseudo_element_style_with_font_metrics, compute_style_with_context_with_font_metrics,
-    computed_length_percent,
+    compute_style_with_context_with_font_metrics, computed_length_percent,
 };
 use crate::style::font_metrics::FontMetrics;
 use crate::types::{EdgeSizes, Point, Size};
@@ -29,12 +28,12 @@ use super::engine::{
 };
 use super::inline::layout_inline_mixed_sequence_with_env;
 use super::inline_formatting::{
-    AnonymousInlineFormattingContext, GeneratedInlineContent, InlineContentSequence,
-    InlineFormattingContext, InlineFormattingRole,
+    AnonymousInlineFormattingContext, GeneratedContentStyles, GeneratedInlineContent,
+    InlineContentSequence, InlineFormattingContext, InlineFormattingRole,
 };
 use super::table::TableLayoutContext;
 use super::text::{
-    FlexTextRunCollector, TextWrapOptions, measure_text_intrinsic_widths, parent_line_strut,
+    InlineRunCollector, TextWrapOptions, measure_text_intrinsic_widths, parent_line_strut,
     resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
@@ -167,8 +166,7 @@ struct SubgridContext {
 #[derive(Debug, Clone)]
 struct GridItemStyle {
     principal: ComputedStyle,
-    before: Option<ComputedStyle>,
-    after: Option<ComputedStyle>,
+    generated: GeneratedContentStyles,
     source_position: ElementSiblingPosition,
 }
 
@@ -176,8 +174,7 @@ impl GridItemStyle {
     fn principal_only(principal: ComputedStyle) -> Self {
         Self {
             principal,
-            before: None,
-            after: None,
+            generated: GeneratedContentStyles::default(),
             source_position: ElementSiblingPosition::default(),
         }
     }
@@ -188,23 +185,14 @@ impl GridItemStyle {
         selector_context: &SelectorContext<'_>,
         env: &LayoutEnv,
     ) -> Self {
-        let classes = element.class_list();
-        let resolve = |pseudo| {
-            compute_pseudo_element_style_with_font_metrics(
+        Self {
+            generated: GeneratedContentStyles::resolve(
+                element,
                 &principal,
                 env.rules,
-                element.tag_name(),
-                &classes,
-                element.id(),
-                &element.attributes,
                 selector_context,
-                pseudo,
-                env.font_metrics(),
-            )
-        };
-        Self {
-            before: resolve(PseudoElement::Before),
-            after: resolve(PseudoElement::After),
+                env.fonts,
+            ),
             principal,
             source_position: ElementSiblingPosition::from_selector_context(selector_context),
         }
@@ -227,11 +215,7 @@ impl GridItemStyle {
         &'a self,
         element: &'a ElementNode,
     ) -> super::inline_formatting::GeneratedInlineContent<'a> {
-        super::inline_formatting::GeneratedInlineContent::new(
-            element,
-            self.before.as_ref(),
-            self.after.as_ref(),
-        )
+        self.generated.boxes(element)
     }
 }
 
@@ -1463,20 +1447,13 @@ fn collect_grid_item_runs(
 ) -> Vec<super::engine::TextRun> {
     let mut runs = Vec::new();
     let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
-    let generated = cs.generated_content(child_el);
-    generated.append_before(&mut runs, env.fonts, env.counter_state);
-    FlexTextRunCollector {
-        runs: &mut runs,
-        rules: env.rules,
-        fonts: env.fonts,
-    }
-    .collect_box_content(
-        &child_el.children,
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+        InlineContentSequence::with_generated(&child_el.children, cs.generated_content(child_el)),
         &cs.principal,
+        &mut runs,
         None,
         &descendant_ancestors,
     );
-    generated.append_after(&mut runs, env.fonts, env.counter_state);
     runs
 }
 
@@ -1503,16 +1480,13 @@ fn collect_grid_item_leading_runs(
     }
     let mut runs = Vec::new();
     let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
-    cs.generated_content(child_el)
-        .append_before(&mut runs, env.fonts, env.counter_state);
-    FlexTextRunCollector {
-        runs: &mut runs,
-        rules: env.rules,
-        fonts: env.fonts,
-    }
-    .collect_box_content(
-        &leading.children,
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+        InlineContentSequence::with_generated(
+            &leading.children,
+            GeneratedInlineContent::from_boxes(cs.generated_content(child_el).before(), None),
+        ),
         &cs.principal,
+        &mut runs,
         None,
         &descendant_ancestors,
     );
@@ -1872,8 +1846,7 @@ fn layout_grid_item_content_inner(
                     &child_ctx,
                     &mut out,
                     &child_ancestors,
-                    item_style.before.as_ref(),
-                    item_style.after.as_ref(),
+                    item_style.generated_content(item_el),
                     frame.descendants.positioned_depth,
                     env,
                 );
@@ -1899,8 +1872,8 @@ fn layout_grid_item_content_inner(
                     &mut out,
                     GeneratedInlineContent::new(
                         item_el,
-                        item_style.before.as_ref(),
-                        item_style.after.as_ref(),
+                        item_style.generated.before(),
+                        item_style.generated.after(),
                     ),
                     env,
                     TableLayoutContext::new(
@@ -2804,7 +2777,6 @@ fn layout_grid_container_inner(
     let mut element_children: Vec<ElementNode> = Vec::new();
     let mut child_styles: Vec<GridItemStyle> = Vec::new();
 
-    let container_classes = el.class_list();
     let container_selector_ctx = SelectorContext {
         ancestors: ancestors.to_vec(),
         child_index: 0,
@@ -2813,19 +2785,11 @@ fn layout_grid_container_inner(
         following_siblings: Vec::new(),
         is_empty: false,
     };
-    if let Some(before_style) = compute_pseudo_element_style_with_font_metrics(
-        style,
-        env.rules,
-        el.tag_name(),
-        &container_classes,
-        el.id(),
-        &el.attributes,
-        &container_selector_ctx,
-        PseudoElement::Before,
-        env.font_metrics(),
-    ) {
-        element_children.push(pseudo_element_node(&before_style));
-        child_styles.push(GridItemStyle::principal_only(before_style));
+    let generated_styles =
+        GeneratedContentStyles::resolve(el, style, env.rules, &container_selector_ctx, env.fonts);
+    if let Some(before_style) = generated_styles.before() {
+        element_children.push(pseudo_element_node(before_style));
+        child_styles.push(GridItemStyle::principal_only(before_style.clone()));
     }
 
     let mut element_idx = 0usize;
@@ -2908,19 +2872,9 @@ fn layout_grid_container_inner(
         }
     }
 
-    if let Some(after_style) = compute_pseudo_element_style_with_font_metrics(
-        style,
-        env.rules,
-        el.tag_name(),
-        &container_classes,
-        el.id(),
-        &el.attributes,
-        &container_selector_ctx,
-        PseudoElement::After,
-        env.font_metrics(),
-    ) {
-        element_children.push(pseudo_element_node(&after_style));
-        child_styles.push(GridItemStyle::principal_only(after_style));
+    if let Some(after_style) = generated_styles.after() {
+        element_children.push(pseudo_element_node(after_style));
+        child_styles.push(GridItemStyle::principal_only(after_style.clone()));
     }
     let auto_column_pattern = matched_grid_track_pattern(
         el,

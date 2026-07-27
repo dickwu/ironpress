@@ -501,7 +501,7 @@ use super::context::ContainingBlock;
 use super::elements::{
     BackgroundPaint, BlockFlow, BlockSize, BoxModel, BoxPaint, InlineSize, IntoLayoutNode,
     LayoutSize, OutlinePaint, Positioning, SizeConstraints, TextBlock, TextBlockStyle,
-    TextFragmentation, TextSemantics, TextSpacing,
+    TextFragmentation, TextSemantics,
 };
 use super::engine::{CounterState, InlineBox, LayoutBorder, LayoutElement, TextLine, TextRun};
 use super::images::build_raster_background_tree;
@@ -1708,8 +1708,9 @@ pub(crate) fn apply_first_letter_style(
         // (CSS Text 4 §8.7). Store the shaper-derived outgoing advance on the
         // first run so layout and PDF paint share it without cross-style
         // ligatures.
-        letter_run.metadata.trailing_shaping_advance =
-            crate::text::inline_boundary_kerning_advance(&letter_run, &rest_run, fonts);
+        letter_run.metadata.boundary.set_contextual_shaping(
+            crate::text::inline_boundary_kerning_advance(&letter_run, &rest_run, fonts),
+        );
         replacement.insert(0, letter_run);
         replacement.push(rest_run);
     } else {
@@ -1750,37 +1751,21 @@ pub(crate) fn measure_runs_width(runs: &[TextRun], fonts: &HashMap<String, TtfFo
     let mut widest = 0.0f32;
     for run in runs {
         if run.text.contains('\n') {
-            for (idx, segment) in run.text.split('\n').enumerate() {
-                if idx > 0 {
+            let mut segments = run.text.split('\n').peekable();
+            let mut segment_index = 0;
+            while let Some(segment) = segments.next() {
+                if segment_index > 0 {
                     widest = widest.max(current);
                     current = 0.0;
                 }
                 if !segment.is_empty() {
-                    current += estimate_word_width(
-                        segment,
-                        run.font_size,
-                        &run.font_family,
-                        run.bold,
-                        run.font_style.is_slanted(),
-                        fonts,
-                    );
+                    let fragment = run.text_fragment(segment.to_owned(), segments.peek().is_none());
+                    current += crate::layout::text::measure_text_run_advance(&fragment, fonts);
                 }
+                segment_index += 1;
             }
         } else {
-            // Atomic inline boxes (e.g. an image list marker) carry no text but
-            // occupy their outer width of inline advance.
-            if let Some(inline) = run.inline_box.as_deref() {
-                current += inline.outer_width();
-            } else {
-                current += estimate_word_width(
-                    &run.text,
-                    run.font_size,
-                    &run.font_family,
-                    run.bold,
-                    run.font_style.is_slanted(),
-                    fonts,
-                );
-            }
+            current += crate::layout::text::measure_text_run_advance(run, fonts);
         }
     }
     widest.max(current)
@@ -1916,12 +1901,6 @@ pub(crate) fn build_pseudo_block(
     let mut pseudo_style = pseudo_style.clone();
     let filter = crate::layout::filter::ResolvedFilter::from_style(&mut pseudo_style, filter_defs);
     let pseudo_style = &pseudo_style;
-    let content_text = resolve_content_with_quotes(
-        &pseudo_style.content,
-        &el.attributes,
-        counter_state,
-        pseudo_style.quotes.as_deref(),
-    );
     let mut block_w = available_width;
     if let Some(cb) = containing_block_info
         && let Some(percent) = pseudo_style.percentage_sizing.width
@@ -1951,65 +1930,53 @@ pub(crate) fn build_pseudo_block(
     let mut runs = Vec::new();
     let mut marker_hang = 0.0;
     let mut text_indent = pseudo_style.text_indent.resolve(inner_w);
-    if !content_text.is_empty() {
-        if list_item_marker {
-            let marker_start = runs.len();
-            let marker_text = format_list_marker(&pseudo_style.list_style_type, 0);
-            let marker_font = resolve_style_font_family(pseudo_style, fonts);
-            if let Some(bullet) = build_list_bullet_marker(
-                &pseudo_style.list_style_type,
-                used_font_size(pseudo_style, fonts),
-                pseudo_style.color,
-                GeometricBulletSlot::Default,
-            ) {
-                runs.push(TextRun {
-                    font_size: used_font_size(pseudo_style, fonts),
-                    color: pseudo_style.color,
-                    font_family: marker_font.clone(),
-                    line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
-                    inline_box: Some(Box::new(bullet)),
-                    text_shadow: pseudo_style.text_shadow.clone(),
-                    metadata: crate::layout::text::text_run_metadata(pseudo_style),
-                    ..Default::default()
-                });
-            } else {
-                push_text_run_with_fallback(
-                    TextRun {
-                        text: marker_text,
-                        font_size: used_font_size(pseudo_style, fonts),
-                        bold: pseudo_style.font_weight == FontWeight::Bold,
-                        font_style: pseudo_style.font_style,
-                        color: pseudo_style.color,
-                        font_family: marker_font,
-                        line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
-                        text_shadow: pseudo_style.text_shadow.clone(),
-                        metadata: crate::layout::text::text_run_metadata(pseudo_style),
-                        ..Default::default()
-                    },
-                    &mut runs,
-                    fonts,
-                );
-            }
-            marker_hang = measure_runs_width(&runs[marker_start..], fonts);
-        }
-        text_indent -= marker_hang;
-        push_text_run_with_fallback(
-            TextRun {
-                text: content_text,
+    if list_item_marker {
+        let marker_start = runs.len();
+        let marker_text = format_list_marker(&pseudo_style.list_style_type, 0);
+        let marker_font = resolve_style_font_family(pseudo_style, fonts);
+        if let Some(bullet) = build_list_bullet_marker(
+            &pseudo_style.list_style_type,
+            used_font_size(pseudo_style, fonts),
+            pseudo_style.color,
+            GeometricBulletSlot::Default,
+        ) {
+            runs.push(TextRun {
                 font_size: used_font_size(pseudo_style, fonts),
-                bold: pseudo_style.font_weight == FontWeight::Bold,
-                font_style: pseudo_style.font_style,
-                decorations: pseudo_style.text_decorations.active(pseudo_style.color),
                 color: pseudo_style.color,
-                font_family: resolve_style_font_family(pseudo_style, fonts),
+                font_family: marker_font.clone(),
                 line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
+                inline_box: Some(Box::new(bullet)),
                 text_shadow: pseudo_style.text_shadow.clone(),
                 metadata: crate::layout::text::text_run_metadata(pseudo_style),
                 ..Default::default()
-            },
-            &mut runs,
-            fonts,
-        );
+            });
+        } else {
+            push_text_run_with_fallback(
+                TextRun {
+                    text: marker_text,
+                    font_size: used_font_size(pseudo_style, fonts),
+                    bold: pseudo_style.font_weight == FontWeight::Bold,
+                    font_style: pseudo_style.font_style,
+                    color: pseudo_style.color,
+                    font_family: marker_font,
+                    line_height_factor: text_run_line_height_factor(pseudo_style, fonts),
+                    text_shadow: pseudo_style.text_shadow.clone(),
+                    metadata: crate::layout::text::text_run_metadata(pseudo_style),
+                    ..Default::default()
+                },
+                &mut runs,
+                fonts,
+            );
+        }
+        marker_hang = measure_runs_width(&runs[marker_start..], fonts);
+    }
+    text_indent -= marker_hang;
+
+    let generated_run = build_pseudo_inline_run(pseudo_style, el, fonts, counter_state);
+    if !generated_run.text.is_empty() || generated_run.inline_box.is_some() {
+        push_text_run_with_fallback(generated_run, &mut runs, fonts);
+    }
+    if !runs.is_empty() {
         lines = wrap_text_runs(
             runs.clone(),
             TextWrapOptions::new(
@@ -2201,10 +2168,6 @@ pub(crate) fn build_pseudo_block(
         text: TextBlockStyle {
             alignment: pseudo_style.text_align,
             indent: text_indent,
-            spacing: TextSpacing {
-                letter: pseudo_style.letter_spacing,
-                word: pseudo_style.word_spacing,
-            },
             ..TextBlockStyle::default()
         },
         semantics: TextSemantics::default(),

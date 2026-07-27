@@ -276,7 +276,7 @@ fn text_align_right_in_flex_cell() {
     assert!(pdf_str.contains("Right"), "Should contain the text 'Right'");
     // The text x-position should be offset from left (not at left margin)
     assert!(
-        pdf_str.contains("Td"),
+        pdf_str.contains("Td") || pdf_str.contains("Tm"),
         "Should have text positioning operator"
     );
 }
@@ -293,7 +293,7 @@ fn text_align_center_in_flex_cell() {
         "Should contain the text 'Center'"
     );
     assert!(
-        pdf_str.contains("Td"),
+        pdf_str.contains("Td") || pdf_str.contains("Tm"),
         "Should have text positioning operator"
     );
 }

@@ -70,10 +70,6 @@ impl TextBlock {
                 alignment: style.text_align,
                 writing_mode: style.writing_mode,
                 indent: style.text_indent.resolve(indent_basis),
-                spacing: super::TextSpacing {
-                    letter: style.letter_spacing,
-                    word: style.word_spacing,
-                },
             },
             ..Default::default()
         }

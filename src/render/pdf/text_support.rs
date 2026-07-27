@@ -47,21 +47,8 @@ pub(super) fn estimate_run_width(run: &TextRun) -> f32 {
     crate::fonts::str_width(&run.text, run.font_size, &run.font_family, run.bold)
 }
 
-pub(super) fn letter_spacing_extra(letter_spacing: f32, glyph_count: usize) -> f32 {
-    letter_spacing * glyph_count.saturating_sub(1) as f32
-}
-
 pub(super) fn text_run_letter_spacing(run: &TextRun) -> f32 {
-    run.metadata.letter_spacing
-}
-
-pub(super) fn effective_run_letter_spacing(block_letter_spacing: f32, run: &TextRun) -> f32 {
-    let run_letter_spacing = text_run_letter_spacing(run);
-    if run_letter_spacing != 0.0 {
-        run_letter_spacing
-    } else {
-        block_letter_spacing
-    }
+    run.metadata.spacing.letter
 }
 
 /// Resolve the PDF font resource name for a text run.
@@ -198,8 +185,8 @@ pub(super) fn estimate_run_width_with_fonts(
     run: &TextRun,
     custom_fonts: &HashMap<String, TtfFont>,
 ) -> f32 {
-    if let Some(inline) = run.inline_box.as_deref() {
-        return inline.outer_width();
+    if let Some(advance) = run.atomic_inline_advance() {
+        return advance;
     }
     if let Some(width) = crate::text::measure_text_width_with_shaping(
         &run.text,
@@ -210,10 +197,10 @@ pub(super) fn estimate_run_width_with_fonts(
         run.shaping,
         custom_fonts,
     ) {
-        return run.shaped_advance(width);
+        return run.text_advance(width, &run.text);
     }
 
-    run.shaped_advance(estimate_run_width(run))
+    run.text_advance(estimate_run_width(run), &run.text)
 }
 
 pub(crate) fn encode_pdf_hex_glyph(glyph_id: u16) -> String {

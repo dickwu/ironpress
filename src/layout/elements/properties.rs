@@ -816,10 +816,36 @@ impl Positioning {
 }
 
 /// Spacing that affects text advances rather than the surrounding box.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct TextSpacing {
     pub(crate) letter: f32,
     pub(crate) word: f32,
+}
+
+impl TextSpacing {
+    pub(crate) const fn new(letter: f32, word: f32) -> Self {
+        Self { letter, word }
+    }
+
+    pub(crate) const fn from_style(style: &crate::style::computed::ComputedStyle) -> Self {
+        Self::new(style.letter_spacing, style.word_spacing)
+    }
+
+    fn internal_letter_advance(self, unit_count: usize) -> f32 {
+        self.letter * unit_count.saturating_sub(1) as f32
+    }
+
+    /// Add tracking between the extended grapheme clusters in one paint run.
+    ///
+    /// CSS Text requires extended grapheme clusters as the baseline
+    /// typographic-character unit. The outgoing boundary is deliberately not
+    /// included here: it belongs to the nearest inline ancestor containing the
+    /// adjacent units and is carried separately by `TextRun`.
+    pub(crate) fn add_internal_advance(self, raw_width: f32, text: &str) -> f32 {
+        let unit_count = unicode_segmentation::UnicodeSegmentation::graphemes(text, true).count();
+        let spaces = text.chars().filter(|character| *character == ' ').count();
+        raw_width + self.internal_letter_advance(unit_count) + self.word * spaces as f32
+    }
 }
 
 /// Block-level text formatting kept separate from glyph-run styles.
@@ -828,7 +854,6 @@ pub(crate) struct TextBlockStyle {
     pub(crate) alignment: TextAlign,
     pub(crate) writing_mode: WritingMode,
     pub(crate) indent: f32,
-    pub(crate) spacing: TextSpacing,
 }
 
 impl Default for TextBlockStyle {
@@ -837,7 +862,6 @@ impl Default for TextBlockStyle {
             alignment: TextAlign::Left,
             writing_mode: WritingMode::HorizontalTb,
             indent: 0.0,
-            spacing: TextSpacing::default(),
         }
     }
 }

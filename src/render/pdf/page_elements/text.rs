@@ -47,8 +47,6 @@ pub(in crate::render::pdf) fn render_text_block(
     let outline_width = &element.paint.outline.width;
     let outline_color = &element.paint.outline.color;
     let tb_outline_offset = &element.paint.outline.offset;
-    let letter_spacing = &element.text.spacing.letter;
-    let css_word_spacing = &element.text.spacing.word;
     let text_indent = &element.text.indent;
     let heading_level = &element.semantics.heading_level;
     let writing_mode = &element.text.writing_mode;
@@ -300,8 +298,6 @@ pub(in crate::render::pdf) fn render_text_block(
             *padding,
             border,
             *text_align,
-            *letter_spacing,
-            *css_word_spacing,
             *text_indent,
             *background_blur_radius,
             ctx.text.pdf_writer.opts.raster_quality.filter_dpi,

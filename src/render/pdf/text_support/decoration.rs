@@ -28,7 +28,7 @@ pub(in crate::render::pdf) struct HorizontalRunDecorations<'a> {
 pub(in crate::render::pdf) struct HorizontalLinePaint {
     pub origin: PdfPoint,
     pub line_ascender: f32,
-    pub word_spacing: f32,
+    pub justification_word_spacing: f32,
     pub text_space: PdfTextSpace,
 }
 
@@ -50,15 +50,14 @@ pub(in crate::render::pdf) fn paint_horizontal_line_text(
     let mut x = paint.origin.x;
     let mut decorations = Vec::new();
     for (index, run) in runs.iter().enumerate() {
-        if let Some(inline) = run.inline_box.as_deref() {
-            x += inline.outer_width();
+        if let Some(advance) = run.atomic_inline_advance() {
+            x += advance;
             continue;
         }
         if run.text.is_empty() {
             continue;
         }
-        let width = estimate_run_width_with_fonts(run, custom_fonts)
-            + letter_spacing_extra(text_run_letter_spacing(run), run.text.chars().count());
+        let width = estimate_run_width_with_fonts(run, custom_fonts);
         let previous = runs[..index]
             .iter()
             .rev()
@@ -80,8 +79,8 @@ pub(in crate::render::pdf) fn paint_horizontal_line_text(
     }
     x = paint.origin.x;
     for run in runs {
-        if let Some(inline) = run.inline_box.as_deref() {
-            x += inline.outer_width();
+        if let Some(advance) = run.atomic_inline_advance() {
+            x += advance;
             continue;
         }
         if run.text.is_empty() {
@@ -97,13 +96,12 @@ pub(in crate::render::pdf) fn paint_horizontal_line_text(
             parent_font_size,
             custom_fonts,
             prepared_custom_fonts,
-            paint.word_spacing,
+            paint.justification_word_spacing,
             pdf_writer,
             page_images,
             paint.text_space,
         );
-        x += estimate_run_width_with_fonts(run, custom_fonts)
-            + letter_spacing_extra(text_run_letter_spacing(run), run.text.chars().count());
+        x += estimate_run_width_with_fonts(run, custom_fonts);
     }
     for (decoration, _) in &decorations {
         decoration.paint_below_text(content);
@@ -115,7 +113,7 @@ pub(in crate::render::pdf) fn paint_horizontal_line_text(
         paint.origin.y,
         custom_fonts,
         prepared_custom_fonts,
-        paint.word_spacing,
+        paint.justification_word_spacing,
         paint.line_ascender,
         pdf_writer,
         page_images,
@@ -389,11 +387,7 @@ impl<'a> HorizontalRunDecorations<'a> {
         if previous_decoration != decoration {
             return None;
         }
-        let previous_width = estimate_run_width_with_fonts(previous, self.custom_fonts)
-            + letter_spacing_extra(
-                text_run_letter_spacing(previous),
-                previous.text.chars().count(),
-            );
+        let previous_width = estimate_run_width_with_fonts(previous, self.custom_fonts);
         let previous_origin = self.origin - previous_width;
         crate::render::text_decoration::ink_skip_intervals(
             previous,

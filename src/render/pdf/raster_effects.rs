@@ -14,8 +14,6 @@ pub(super) fn paint_simple_text_block(
     padding: EdgeSizes,
     border: &crate::layout::engine::LayoutBorder,
     text_align: TextAlign,
-    letter_spacing: f32,
-    word_spacing: f32,
     text_indent: f32,
     custom_fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
@@ -23,8 +21,9 @@ pub(super) fn paint_simple_text_block(
     if width_pt <= 0.0
         || height_pt <= 0.0
         || border.has_visible()
-        || letter_spacing != 0.0
-        || word_spacing != 0.0
+        || lines.iter().flat_map(|line| &line.runs).any(|run| {
+            run.metadata.spacing != Default::default() || run.metadata.boundary.total() != 0.0
+        })
     {
         return None;
     }
@@ -131,8 +130,6 @@ pub(super) fn blurred_simple_text_block(
     padding: EdgeSizes,
     border: &crate::layout::engine::LayoutBorder,
     text_align: TextAlign,
-    letter_spacing: f32,
-    word_spacing: f32,
     text_indent: f32,
     blur_radius_pt: f32,
     filter_dpi: f32,
@@ -157,8 +154,6 @@ pub(super) fn blurred_simple_text_block(
         padding,
         border,
         text_align,
-        letter_spacing,
-        word_spacing,
         text_indent,
         custom_fonts,
         filter_dpi,
@@ -276,8 +271,10 @@ pub(super) fn blurred_simple_container_group(
                 || element.box_model.border.has_visible()
                 || !element.paint.border_radii.is_zero()
                 || element.paint.outline.width > 0.0
-                || element.text.spacing.letter != 0.0
-                || element.text.spacing.word != 0.0
+                || element.lines.iter().flat_map(|line| &line.runs).any(|run| {
+                    run.metadata.spacing != Default::default()
+                        || run.metadata.boundary.total() != 0.0
+                })
             {
                 self.valid = false;
                 return;

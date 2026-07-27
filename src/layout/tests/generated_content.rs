@@ -24,6 +24,74 @@ fn generated_content_survives_grid_item_block_content_layout() {
 }
 
 #[test]
+fn generated_content_is_source_ordered_as_flex_items() {
+    let runs = visible_runs(
+        r#"<style>
+            .flex { display: flex; width: 240pt; }
+            .flex::before { content: "BEFORE"; color: red; }
+            .flex::after { content: "AFTER"; color: green; }
+        </style>
+        <div class="flex"><strong>BODY</strong></div>"#,
+    );
+    let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+
+    assert_eq!(text, "BEFOREBODYAFTER");
+}
+
+#[test]
+fn absolute_generated_flex_child_does_not_replace_in_flow_items() {
+    let runs = visible_runs(
+        r#"<style>
+            .flex { display: flex; position: relative; width: 240pt; height: 80pt; }
+            .flex::before {
+                content: "ABSOLUTE";
+                position: absolute;
+                left: 0;
+                top: 0;
+            }
+        </style>
+        <div class="flex"><strong>FLOW</strong></div>"#,
+    );
+    let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+
+    assert!(
+        text.contains("ABSOLUTE"),
+        "missing generated child in {text:?}"
+    );
+    assert!(text.contains("FLOW"), "missing principal child in {text:?}");
+}
+
+#[test]
+fn flex_counter_traversal_follows_generated_and_out_of_flow_source_order() {
+    let runs = visible_runs(
+        r#"<style>
+            .flex { display: flex; position: relative; counter-reset: item; }
+            .flex::before {
+                counter-increment: item;
+                content: "B" counter(item);
+            }
+            .absolute {
+                position: absolute;
+                counter-increment: item;
+            }
+            .absolute::before { content: "X" counter(item); }
+            .flow { counter-increment: item; }
+            .flow::before { content: "F" counter(item); }
+            .flex::after {
+                counter-increment: item;
+                content: "A" counter(item);
+            }
+        </style>
+        <div class="flex"><span class="absolute"></span><span class="flow"></span></div>"#,
+    );
+    let text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+
+    for expected in ["B1", "X2", "F3", "A4"] {
+        assert!(text.contains(expected), "missing {expected:?} in {text:?}");
+    }
+}
+
+#[test]
 fn empty_string_generated_box_retains_absolute_background_and_filter() {
     #[derive(Default)]
     struct GeneratedBox {

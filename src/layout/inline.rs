@@ -3,13 +3,12 @@ use crate::layout::elements::{
     LayoutSize, LayoutVisitor, Positioning, Svg, TableRow, TextBlock,
 };
 use crate::layout::flow_metrics::BlockMargins;
-use crate::parser::css::{AncestorInfo, CssRule, PseudoElement, SelectorContext};
+use crate::parser::css::{AncestorInfo, CssRule, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
     BoxSizing, ComputedStyle, Display, GridTrack, IntrinsicWidthKeyword, OverflowWrap, TextAlign,
-    Transform, compute_pseudo_element_style_with_font_metrics,
-    compute_style_with_context_with_font_metrics,
+    Transform, compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
 use crate::types::{EdgeSizes, Size};
@@ -19,8 +18,8 @@ use super::box_model::ResolvedBoxDimensions;
 use super::cells::CellPaint;
 use super::context::{LayoutContext, LayoutEnv};
 use super::engine::{
-    ElementSiblingContext, FlexCell, FlexItemFragmentation, LayoutBorder, LayoutTreeContext,
-    TextLine, apply_direct_flex_item_filters, flatten_element, forward_siblings,
+    CounterState, ElementSiblingContext, FlexCell, FlexItemFragmentation, LayoutBorder,
+    LayoutTreeContext, TextLine, apply_direct_flex_item_filters, flatten_element, forward_siblings,
 };
 use super::flex::layout_flex_container;
 use super::grid::layout_grid_container;
@@ -28,13 +27,14 @@ use super::images::{
     InlineBaselineGapRounding, add_inline_replaced_baseline_gap, load_image_from_element,
 };
 use super::inline_formatting::{
-    AtomicInlineKind, GeneratedInlineContent, InlineContentSequence, InlineFormattingRole,
+    AtomicInlineKind, GeneratedContentStyles, IndependentFlowLayout, InlineContentSequence,
+    InlineFormattingChild, InlineFormattingRole, layout_mixed_flow_children,
 };
 use super::paginate::estimate_element_height;
 use super::roundoff::exceeds_with_roundoff;
 use super::table::{TableLayoutContext, flatten_table};
 use super::text::{
-    FlexTextRunCollector, LineStrut, TextWrapOptions, collect_text_runs, estimate_word_width,
+    InlineRunCollector, InlineTextSequence, LineStrut, TextWrapOptions, estimate_word_width,
     parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
     text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
@@ -202,110 +202,53 @@ fn inline_row_node(
     .boxed()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collect_inline_block_contents(
+struct InlineBlockChildLayout<'layout, 'dom> {
+    context: &'layout LayoutContext,
+    parent_style: &'layout ComputedStyle,
+    ancestors: &'layout [AncestorInfo<'dom>],
+    available_width: f32,
+    output: &'layout mut Vec<LayoutNode>,
+}
+
+impl IndependentFlowLayout for InlineBlockChildLayout<'_, '_> {
+    fn lays_out_independently(&self, element: &ElementNode, child: &InlineFormattingChild) -> bool {
+        inline_block_child_should_flatten(element, &child.style)
+    }
+
+    fn layout_independently(
+        &mut self,
+        element: &ElementNode,
+        child: &InlineFormattingChild,
+        env: &mut LayoutEnv<'_>,
+    ) {
+        let context = self
+            .context
+            .with_parent_and_basis(
+                self.available_width,
+                self.available_width,
+                None,
+                self.parent_style.font_size,
+            )
+            .with_containing_block(None);
+        flatten_element(
+            element,
+            LayoutTreeContext::new(self.parent_style, &context, self.ancestors)
+                .for_element(child.source().as_context()),
+            self.output,
+            env,
+        );
+    }
+}
+
+fn layout_inline_block_contents(
     nodes: &[DomNode],
     parent_style: &ComputedStyle,
-    ctx: &LayoutContext,
     runs: &mut Vec<crate::layout::engine::TextRun>,
-    nested_elements: &mut Vec<LayoutNode>,
     ancestors: &[AncestorInfo],
     env: &mut LayoutEnv,
-    available_width: f32,
+    layout: &mut InlineBlockChildLayout<'_, '_>,
 ) {
-    let available_width = available_width.max(0.0);
-    let element_count = nodes
-        .iter()
-        .filter(|node| matches!(node, DomNode::Element(_)))
-        .count();
-    let sibling_list: Vec<(String, Vec<String>)> = nodes
-        .iter()
-        .filter_map(|node| match node {
-            DomNode::Element(el) => Some((
-                el.tag_name().to_string(),
-                el.class_list().iter().map(|s| s.to_string()).collect(),
-            )),
-            _ => None,
-        })
-        .collect();
-    let mut element_index = 0usize;
-
-    let sequence = InlineContentSequence::new(nodes);
-    for (node_index, node) in nodes.iter().enumerate() {
-        let DomNode::Element(el) = node else {
-            collect_text_runs(
-                sequence.item(node_index),
-                parent_style,
-                runs,
-                None,
-                env.rules,
-                env.fonts,
-                ancestors,
-                env.counter_state,
-            );
-            continue;
-        };
-
-        let selector_ctx = SelectorContext {
-            ancestors: ancestors.to_vec(),
-            child_index: element_index,
-            sibling_count: element_count,
-            preceding_siblings: sibling_list[..element_index].to_vec(),
-            following_siblings: sibling_list[element_index + 1..].to_vec(),
-            is_empty: false,
-        };
-        let style = compute_style_with_context_with_font_metrics(
-            el.tag,
-            el.style_attr(),
-            parent_style,
-            env.rules,
-            el.tag_name(),
-            &el.class_list(),
-            el.id(),
-            &el.attributes,
-            &selector_ctx,
-            env.font_metrics(),
-        );
-
-        if style.display == Display::None {
-            element_index += 1;
-            continue;
-        }
-
-        if inline_block_child_should_flatten(el, &style) {
-            let child_ctx = ctx
-                .with_parent_and_basis(
-                    available_width,
-                    available_width,
-                    None,
-                    parent_style.font_size,
-                )
-                .with_containing_block(None);
-            flatten_element(
-                el,
-                LayoutTreeContext::new(parent_style, &child_ctx, ancestors).for_element(
-                    ElementSiblingContext::new(element_index, element_count).with_neighbors(
-                        &sibling_list[..element_index],
-                        &sibling_list[element_index + 1..],
-                    ),
-                ),
-                nested_elements,
-                env,
-            );
-        } else {
-            collect_text_runs(
-                sequence.item(node_index),
-                parent_style,
-                runs,
-                None,
-                env.rules,
-                env.fonts,
-                ancestors,
-                env.counter_state,
-            );
-        }
-        element_index += 1;
-    }
+    layout_mixed_flow_children(nodes, parent_style, runs, ancestors, env, layout);
 }
 
 /// Lay out consecutive atomic inline elements as `FlexRow`s.
@@ -355,7 +298,7 @@ pub(crate) fn layout_inline_block_group_with_env_and_spacing(
 }
 
 fn inline_text_cell(
-    runs: Vec<crate::layout::engine::TextRun>,
+    mut runs: Vec<crate::layout::engine::TextRun>,
     parent_style: &ComputedStyle,
     fonts: &HashMap<String, TtfFont>,
     x: f32,
@@ -363,6 +306,9 @@ fn inline_text_cell(
     if runs.is_empty() {
         return None;
     }
+    runs.as_mut_slice().resolve_unclaimed_boundaries(
+        crate::layout::elements::TextSpacing::from_style(parent_style),
+    );
     let lines = wrap_text_runs(
         runs,
         TextWrapOptions::new(
@@ -533,6 +479,13 @@ fn inline_atomic_cell(
     let (width, height, nested_elements, background_color, border, padding, y_offset) =
         match child_style.display {
             Display::InlineFlex => {
+                let generated_styles = GeneratedContentStyles::resolve(
+                    child_el,
+                    child_style,
+                    env.rules,
+                    selector_context,
+                    env.fonts,
+                );
                 let dimensions = ResolvedBoxDimensions::from_style(
                     child_style,
                     Size::new(ctx.available_width(), 0.0),
@@ -551,8 +504,7 @@ fn inline_atomic_cell(
                     &child_ctx,
                     &mut nested,
                     &child_ancestors,
-                    None,
-                    None,
+                    generated_styles.boxes(child_el),
                     0,
                     env,
                 );
@@ -635,28 +587,12 @@ fn inline_atomic_cell(
                 let mut table_style = child_style.clone();
                 table_style.display = Display::Table;
                 table_style.margin = Default::default();
-                let classes = child_el.class_list();
-                let before_style = compute_pseudo_element_style_with_font_metrics(
+                let generated_styles = GeneratedContentStyles::resolve(
+                    child_el,
                     child_style,
                     env.rules,
-                    child_el.tag_name(),
-                    &classes,
-                    child_el.id(),
-                    &child_el.attributes,
                     selector_context,
-                    PseudoElement::Before,
-                    env.font_metrics(),
-                );
-                let after_style = compute_pseudo_element_style_with_font_metrics(
-                    child_style,
-                    env.rules,
-                    child_el.tag_name(),
-                    &classes,
-                    child_el.id(),
-                    &child_el.attributes,
-                    selector_context,
-                    PseudoElement::After,
-                    env.font_metrics(),
+                    env.fonts,
                 );
                 let mut nested = Vec::new();
                 let ancestor_depth = ctx
@@ -670,11 +606,7 @@ fn inline_atomic_cell(
                     child_el,
                     &table_style,
                     &mut nested,
-                    GeneratedInlineContent::new(
-                        child_el,
-                        before_style.as_ref(),
-                        after_style.as_ref(),
-                    ),
+                    generated_styles.boxes(child_el),
                     env,
                     TableLayoutContext::new(
                         ctx,
@@ -707,15 +639,20 @@ fn inline_atomic_cell(
             Display::InlineBlock => {
                 let mut runs = Vec::new();
                 let mut nested_elements = Vec::new();
-                collect_inline_block_contents(
+                let mut child_layout = InlineBlockChildLayout {
+                    context: ctx,
+                    parent_style: child_style,
+                    ancestors: &child_ancestors,
+                    available_width: ctx.available_width().max(0.0),
+                    output: &mut nested_elements,
+                };
+                layout_inline_block_contents(
                     &child_el.children,
                     child_style,
-                    ctx,
                     &mut runs,
-                    &mut nested_elements,
                     &child_ancestors,
                     env,
-                    ctx.available_width(),
+                    &mut child_layout,
                 );
                 let lines = wrap_text_runs(
                     runs,
@@ -848,15 +785,12 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                 if last_item_was_atomic && text.chars().next().is_some_and(char::is_whitespace) {
                     pending_space_after_atomic = true;
                 }
-                collect_text_runs(
+                InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                     sequence.item(node_index),
                     parent_style,
                     &mut pending_runs,
                     None,
-                    env.rules,
-                    env.fonts,
                     ancestors,
-                    env.counter_state,
                 );
                 if pending_space_after_atomic && runs_have_visible_inline_content(&pending_runs) {
                     x += collapsed_inline_space_width(parent_style, env.fonts);
@@ -931,15 +865,12 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                         pending_trailing_space = false;
                     }
                     InlineFormattingRole::Text => {
-                        collect_text_runs(
+                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                             sequence.item(node_index),
                             parent_style,
                             &mut pending_runs,
                             None,
-                            env.rules,
-                            env.fonts,
                             ancestors,
-                            env.counter_state,
                         );
                         if pending_space_after_atomic
                             && runs_have_visible_inline_content(&pending_runs)
@@ -1222,6 +1153,13 @@ fn layout_inline_block_group_inner(
         if child_style.display == Display::InlineFlex
             && let Some(env) = env.as_deref_mut()
         {
+            let generated_styles = GeneratedContentStyles::resolve(
+                child_el,
+                &child_style,
+                rules,
+                &selector_ctx,
+                fonts,
+            );
             let dimensions = ResolvedBoxDimensions::from_style(
                 &child_style,
                 Size::new(available_width, child_h),
@@ -1240,8 +1178,7 @@ fn layout_inline_block_group_inner(
                 &child_ctx,
                 &mut nested_elements,
                 &child_ancestors,
-                None,
-                None,
+                generated_styles.boxes(child_el),
                 0,
                 env,
             );
@@ -1270,27 +1207,28 @@ fn layout_inline_block_group_inner(
         let mut runs = Vec::new();
         let mut nested_elements = Vec::new();
         if let Some(env) = env.as_deref_mut() {
-            collect_inline_block_contents(
+            let mut child_layout = InlineBlockChildLayout {
+                context: ctx,
+                parent_style: &child_style,
+                ancestors: &child_ancestors,
+                available_width: inner_width.max(0.0),
+                output: &mut nested_elements,
+            };
+            layout_inline_block_contents(
                 &child_el.children,
                 &child_style,
-                ctx,
                 &mut runs,
-                &mut nested_elements,
                 &child_ancestors,
                 env,
-                inner_width,
+                &mut child_layout,
             );
         } else {
-            FlexTextRunCollector {
-                runs: &mut runs,
-                rules,
-                fonts,
-            }
-            .collect(
+            let mut counter_state = CounterState::default();
+            InlineRunCollector::new(rules, fonts, &mut counter_state).collect_box_content(
                 &child_el.children,
                 &child_style,
+                &mut runs,
                 None,
-                EdgeSizes::ZERO,
                 &child_ancestors,
             );
         }

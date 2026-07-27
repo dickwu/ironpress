@@ -87,7 +87,7 @@ fn push_upright_line(
     if composition {
         // CSS Writing Modes §9.1.2 composes the text like a horizontal inline
         // block, ignoring author letter-spacing.
-        run.metadata.letter_spacing = 0.0;
+        run.metadata.spacing.letter = 0.0;
     } else {
         run.metadata.text_combine_upright = TextCombineUpright::None;
     }

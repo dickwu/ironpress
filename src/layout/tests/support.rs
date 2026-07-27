@@ -101,16 +101,32 @@ pub(super) fn layout_pages_at_with_fonts(
     )
 }
 
-pub(super) fn visible_runs(markup: &str) -> Vec<TextRun> {
+fn collected_runs(markup: &str) -> Vec<TextRun> {
     let mut collector = RunCollector::default();
     for page in layout_pages(markup) {
         for (_, element) in page.elements {
             visit_layout_tree(element.as_ref(), &mut collector);
         }
     }
-    collector
-        .0
+    collector.0
+}
+
+pub(super) fn visible_runs(markup: &str) -> Vec<TextRun> {
+    collected_runs(markup)
         .into_iter()
+        .filter(|run| !run.text.trim().is_empty())
+        .collect()
+}
+
+pub(super) fn visible_inline_box_runs(markup: &str) -> Vec<TextRun> {
+    collected_runs(markup)
+        .into_iter()
+        .flat_map(|run| {
+            run.inline_box
+                .into_iter()
+                .flat_map(|inline| inline.lines.into_iter())
+                .flat_map(|line| line.runs)
+        })
         .filter(|run| !run.text.trim().is_empty())
         .collect()
 }

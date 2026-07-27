@@ -34,13 +34,13 @@ use super::inline::{
     layout_inline_block_group_with_spacing, layout_inline_mixed_sequence_with_env,
 };
 use super::inline_formatting::{
-    AnonymousInlineFormattingContext, AtomicInlineEmission, GeneratedInlineContent,
+    AnonymousInlineFormattingContext, AtomicInlineEmission, GeneratedContentStyles,
     InlineContentSequence, InlineFormattingContext, InlineFormattingRole,
 };
 use super::paginate::estimate_element_height;
 use super::text::{
-    TextWrapOptions, apply_text_overflow_ellipsis, collect_text_runs, estimate_word_width,
-    parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
+    InlineRunCollector, InlineTextSequence, TextWrapOptions, apply_text_overflow_ellipsis,
+    estimate_word_width, parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
     text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 use super::vertical_text::upright_lines;
@@ -194,7 +194,7 @@ fn apply_first_line_letter_spacing(lines: &mut [TextLine], letter_spacing: f32) 
     };
     for run in &mut first.runs {
         if run.inline_box.is_none() {
-            run.metadata.letter_spacing = letter_spacing;
+            run.metadata.spacing.letter = letter_spacing;
             run.shaping.ligatures = false;
         }
     }
@@ -355,12 +355,13 @@ pub(crate) fn layout_block_element(
     ancestors: &[AncestorInfo],
     child_ancestors: &[AncestorInfo],
     positioned_depth: usize,
-    before_style: Option<ComputedStyle>,
-    after_style: Option<ComputedStyle>,
-    first_line_style: Option<ComputedStyle>,
-    first_letter_style: Option<ComputedStyle>,
+    generated_styles: &GeneratedContentStyles,
+    first_line_style: Option<&ComputedStyle>,
+    first_letter_style: Option<&ComputedStyle>,
     env: &mut LayoutEnv,
 ) -> bool {
+    let before_style = generated_styles.before();
+    let after_style = generated_styles.after();
     let output_start_len = output.len();
     if el.attributes.get("dir").is_some_and(|v| v == "auto") {
         let mut text = String::new();
@@ -715,12 +716,8 @@ pub(crate) fn layout_block_element(
     };
 
     // Emit block-level ::before pseudo-element.
-    let before_is_abs = before_style
-        .as_ref()
-        .is_some_and(|s| s.position.is_absolute());
-    let after_is_abs = after_style
-        .as_ref()
-        .is_some_and(|s| s.position.is_absolute());
+    let before_is_abs = before_style.is_some_and(|s| s.position.is_absolute());
+    let after_is_abs = after_style.is_some_and(|s| s.position.is_absolute());
     let pseudo_selector_ctx = SelectorContext {
         ancestors: ancestors.to_vec(),
         ..SelectorContext::default()
@@ -747,19 +744,15 @@ pub(crate) fn layout_block_element(
     // the element's content box as the first/last block, not as a sibling
     // before/after it (css-content-3 §1, css-display-3). It therefore forces the
     // Container wrapper path just like a real block child does.
-    let has_block_before = before_style
-        .as_ref()
-        .is_some_and(|s| pseudo_is_block_like(s) && !s.position.is_absolute());
-    let has_block_after = after_style
-        .as_ref()
-        .is_some_and(|s| pseudo_is_block_like(s) && !s.position.is_absolute());
-    let has_any_block_pseudo = before_style.as_ref().is_some_and(pseudo_is_block_like)
-        || after_style.as_ref().is_some_and(pseudo_is_block_like);
+    let has_block_before =
+        before_style.is_some_and(|s| pseudo_is_block_like(s) && !s.position.is_absolute());
+    let has_block_after =
+        after_style.is_some_and(|s| pseudo_is_block_like(s) && !s.position.is_absolute());
+    let has_any_block_pseudo = before_style.is_some_and(pseudo_is_block_like)
+        || after_style.is_some_and(pseudo_is_block_like);
     let has_inflow_block_pseudo = has_block_before || has_block_after;
-    let inline_sequence = InlineContentSequence::with_generated(
-        &el.children,
-        GeneratedInlineContent::new(el, before_style.as_ref(), after_style.as_ref()),
-    );
+    let inline_sequence =
+        InlineContentSequence::with_generated(&el.children, generated_styles.boxes(el));
     let inline_children =
         InlineFormattingContext::new(style, env.rules, child_ancestors, env.font_metrics())
             .children(inline_sequence);
@@ -807,7 +800,7 @@ pub(crate) fn layout_block_element(
                             && !collects_as_inline_text(e.tag))
                     })));
     let block_pseudo_via_wrapper = has_inflow_block_pseudo && has_block_kids_for_wrapper;
-    if let Some(ref ps) = before_style {
+    if let Some(ps) = before_style {
         if pseudo_is_block_like(ps) && !before_is_abs && !block_pseudo_via_wrapper {
             output.push(build_pseudo_block(
                 ps,
@@ -847,6 +840,8 @@ pub(crate) fn layout_block_element(
         if runs.is_empty() {
             return;
         }
+        runs.as_mut_slice()
+            .resolve_unclaimed_boundaries(crate::layout::elements::TextSpacing::from_style(style));
         let shrink_to_fit = style.width.is_none()
             && style.percentage_sizing.width.is_none()
             && (style.display == Display::InlineBlock
@@ -968,15 +963,12 @@ pub(crate) fn layout_block_element(
                 );
                 continue;
             }
-            collect_text_runs(
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                 inline_sequence.item(child_index),
                 style,
                 &mut runs,
                 None,
-                env.rules,
-                env.fonts,
                 child_ancestors,
-                env.counter_state,
             );
         }
         // Flush remaining text runs after math
@@ -1097,15 +1089,12 @@ pub(crate) fn layout_block_element(
             for (child_index, child) in el.children.iter().enumerate() {
                 match child {
                     DomNode::Text(_) => {
-                        collect_text_runs(
+                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                             inline_sequence.item(child_index),
                             style,
                             &mut runs,
                             None,
-                            env.rules,
-                            env.fonts,
                             child_ancestors,
-                            env.counter_state,
                         );
                     }
                     DomNode::Element(child_el)
@@ -1162,15 +1151,12 @@ pub(crate) fn layout_block_element(
                     }
                     DomNode::Element(_) => {
                         // Inline element: collect as text runs
-                        collect_text_runs(
+                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                             inline_sequence.item(child_index),
                             style,
                             &mut runs,
                             None,
-                            env.rules,
-                            env.fonts,
                             child_ancestors,
-                            env.counter_state,
                         );
                     }
                 }
@@ -1254,7 +1240,7 @@ pub(crate) fn layout_block_element(
                 if before_is_abs {
                     push_block_pseudo(
                         output,
-                        before_style.as_ref(),
+                        before_style,
                         el,
                         PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
                             .with_containing_block(pseudo_cb)
@@ -1265,7 +1251,7 @@ pub(crate) fn layout_block_element(
                 if after_is_abs {
                     push_block_pseudo(
                         output,
-                        after_style.as_ref(),
+                        after_style,
                         el,
                         PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
                             .with_containing_block(pseudo_cb)
@@ -1293,27 +1279,21 @@ pub(crate) fn layout_block_element(
             for (child_index, child) in el.children.iter().enumerate() {
                 match child {
                     DomNode::Text(_) => {
-                        collect_text_runs(
+                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                             inline_sequence.item(child_index),
                             style,
                             &mut runs,
                             None,
-                            env.rules,
-                            env.fonts,
                             child_ancestors,
-                            env.counter_state,
                         );
                     }
                     DomNode::Element(child_el) if inline_children.is_inline_text(child_el_idx) => {
-                        collect_text_runs(
+                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
                             inline_sequence.item(child_index),
                             style,
                             &mut runs,
                             None,
-                            env.rules,
-                            env.fonts,
                             child_ancestors,
-                            env.counter_state,
                         );
                     }
                     _ => {} // Block children handled by needs_wrapper
@@ -1342,15 +1322,12 @@ pub(crate) fn layout_block_element(
             mixed_inline_row_emitted = true;
         } else {
             inline_sequence.append_before(&mut runs, env.fonts, env.counter_state);
-            collect_text_runs(
-                InlineContentSequence::new(&el.children),
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
+                &el.children,
                 style,
                 &mut runs,
                 None,
-                env.rules,
-                env.fonts,
                 child_ancestors,
-                env.counter_state,
             );
         }
     }
@@ -1363,7 +1340,7 @@ pub(crate) fn layout_block_element(
     // glyph participates in wrapping. A dropped initial returns its complete
     // inline exclusion geometry for the lines it spans.
     let mut drop_cap: Option<crate::layout::helpers::DropCap> = None;
-    if let Some(ref fl) = first_letter_style {
+    if let Some(fl) = first_letter_style {
         let block_line_height = style.font_size * resolved_line_height_factor(style, env.fonts);
         let initial_letter_style;
         let fl = if fl.initial_letter > 1.0 {
@@ -1482,7 +1459,7 @@ pub(crate) fn layout_block_element(
         // A dropped initial letter reserves its kerned margin-box exclusion on
         // every line it overlaps (css-inline-3 §7.5–7.8).
         .with_drop_cap(drop_cap);
-        let mut lines = if let Some(ref fl) = first_line_style {
+        let mut lines = if let Some(fl) = first_line_style {
             wrap_text_runs_with_first_line_style(runs, wrap_options, fl, env.fonts)
         } else {
             wrap_text_runs(runs, wrap_options, env.fonts)
@@ -1490,7 +1467,7 @@ pub(crate) fn layout_block_element(
 
         // `::first-line` (css-pseudo-4 §2.1): restyle the runs that landed on
         // the dynamically-determined first formatted line.
-        if let Some(ref fl) = first_line_style {
+        if let Some(fl) = first_line_style {
             crate::layout::helpers::apply_first_line_style(&mut lines, fl, env.fonts);
             apply_first_line_letter_spacing(&mut lines, fl.letter_spacing);
         }
@@ -1718,7 +1695,7 @@ pub(crate) fn layout_block_element(
         // element's own inline content (css-content-3 §1).
         let mut child_elements: Vec<LayoutNode> = Vec::new();
         if has_block_before && !before_is_abs {
-            if let Some(ref ps) = before_style {
+            if let Some(ps) = before_style {
                 child_elements.push(build_pseudo_block(
                     ps,
                     el,
@@ -1890,7 +1867,7 @@ pub(crate) fn layout_block_element(
         // (css-content-3 §1). Appended before height measurement and margin
         // collapsing so it contributes to the box's height.
         if has_block_after && !after_is_abs {
-            if let Some(ref ps) = after_style {
+            if let Some(ps) = after_style {
                 child_elements.push(build_pseudo_block(
                     ps,
                     el,
@@ -2068,7 +2045,7 @@ pub(crate) fn layout_block_element(
         };
 
         // Add absolute-positioned ::before pseudo-element as a Container child.
-        if let Some(ref ps) = before_style {
+        if let Some(ps) = before_style {
             if pseudo_is_block_like(ps) && ps.position.is_absolute() {
                 let mut pseudo = build_pseudo_block(
                     ps,
@@ -2086,7 +2063,7 @@ pub(crate) fn layout_block_element(
             }
         }
         // Add absolute-positioned ::after pseudo-element as a Container child.
-        if let Some(ref ps) = after_style {
+        if let Some(ps) = after_style {
             if pseudo_is_block_like(ps) && ps.position.is_absolute() {
                 let mut pseudo = build_pseudo_block(
                     ps,
@@ -2340,7 +2317,7 @@ pub(crate) fn layout_block_element(
     if !block_pseudos_nested {
         push_block_pseudo(
             output,
-            after_style.as_ref(),
+            after_style,
             el,
             PseudoBoxContext::new(inner_width, env.fonts, env.filter_defs)
                 .with_containing_block(cb_info)

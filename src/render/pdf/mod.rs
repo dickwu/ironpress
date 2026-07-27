@@ -733,7 +733,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     HorizontalLinePaint {
                         origin: PdfPoint::new(text_x, text_y),
                         line_ascender: line_box.baseline_from_top,
-                        word_spacing: 0.0,
+                        justification_word_spacing: 0.0,
                         text_space: PdfTextSpace::page_css(pdf_writer.page_content_transform),
                     },
                     custom_fonts,

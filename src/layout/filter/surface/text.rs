@@ -255,16 +255,16 @@ impl SourcePainter<'_> {
 }
 
 fn apply_authored_spacing(run: &TextRun, glyphs: &mut [crate::text::ShapedGlyph]) {
-    if run.metadata.letter_spacing != 0.0 {
+    if run.metadata.spacing.letter != 0.0 {
         let spaced_glyphs = glyphs.len().saturating_sub(1);
         for glyph in glyphs.iter_mut().take(spaced_glyphs) {
-            glyph.x_advance += run.metadata.letter_spacing;
+            glyph.x_advance += run.metadata.spacing.letter;
         }
     }
-    if run.metadata.word_spacing != 0.0 {
+    if run.metadata.spacing.word != 0.0 {
         for glyph in glyphs {
             if glyph.unicode.as_slice() == [0x0020] {
-                glyph.x_advance += run.metadata.word_spacing;
+                glyph.x_advance += run.metadata.spacing.word;
             }
         }
     }
@@ -363,17 +363,7 @@ fn run_width(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> Option<f32> {
     if run.inline_box.is_some() {
         return None;
     }
-    let authored_spacing = || {
-        let letter_spacing =
-            run.metadata.letter_spacing * run.text.chars().count().saturating_sub(1) as f32;
-        let word_spacing = run.metadata.word_spacing
-            * run
-                .text
-                .chars()
-                .filter(|character| *character == ' ')
-                .count() as f32;
-        letter_spacing + word_spacing
-    };
+    let authored_spacing = || run.metadata.spacing.add_internal_advance(0.0, &run.text);
     crate::text::measure_text_width_with_shaping(
         &run.text,
         run.font_size,
@@ -383,9 +373,9 @@ fn run_width(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> Option<f32> {
         run.shaping,
         fonts,
     )
-    .map(|width| run.shaped_advance(width + authored_spacing()))
+    .map(|width| run.inline_advance(width + authored_spacing()))
     .or_else(|| {
-        Some(run.shaped_advance(
+        Some(run.inline_advance(
             crate::fonts::str_width(&run.text, run.font_size, &run.font_family, run.bold)
                 + authored_spacing(),
         ))
@@ -412,8 +402,7 @@ fn merged_runs(runs: &[TextRun]) -> Vec<TextRun> {
                 && previous.font_synthesis == run.font_synthesis
                 && previous.vertical_align == run.vertical_align
                 && previous.font_variant_position == run.font_variant_position
-                && previous.metadata.letter_spacing == run.metadata.letter_spacing
-                && previous.metadata.word_spacing == run.metadata.word_spacing
+                && previous.metadata.spacing == run.metadata.spacing
                 && previous.background_color == run.background_color
                 && previous.text_shadow.is_empty()
                 && run.text_shadow.is_empty()

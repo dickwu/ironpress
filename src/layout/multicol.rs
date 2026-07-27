@@ -58,9 +58,9 @@ use crate::layout::elements::{
     LayoutNode, LayoutSize, MulticolContainer, OverflowBehavior, PageBreak, Positioning,
 };
 use crate::layout::flow_metrics::BlockMargins;
-use crate::parser::css::{AncestorInfo, PseudoElement, SelectorContext};
+use crate::parser::css::{AncestorInfo, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode};
-use crate::style::computed::{ComputedStyle, compute_pseudo_element_style_with_font_metrics};
+use crate::style::computed::ComputedStyle;
 use crate::types::{Point, Size};
 
 use super::context::{LayoutContext, LayoutEnv};
@@ -68,6 +68,7 @@ use super::engine::{
     ElementSiblingContext, LayoutBorder, LayoutTreeContext, PageBreakSide, flatten_element,
 };
 use super::helpers::{PseudoBoxContext, build_pseudo_block};
+use super::inline_formatting::GeneratedContentStyles;
 use super::roundoff::is_positive_with_roundoff;
 
 /// Geometry of one principal multicol box fragment.
@@ -175,19 +176,9 @@ pub(crate) fn layout_multicol_container(
         ancestors: ancestors.to_vec(),
         ..Default::default()
     };
-    let container_classes = el.class_list();
-    let before_style = compute_pseudo_element_style_with_font_metrics(
-        style,
-        env.rules,
-        el.tag_name(),
-        &container_classes,
-        el.id(),
-        &el.attributes,
-        &container_selector_ctx,
-        PseudoElement::Before,
-        env.font_metrics(),
-    );
-    if let Some(pseudo_style) = before_style.as_ref() {
+    let generated_styles =
+        GeneratedContentStyles::resolve(el, style, env.rules, &container_selector_ctx, env.fonts);
+    if let Some(pseudo_style) = generated_styles.before() {
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,
@@ -247,18 +238,7 @@ pub(crate) fn layout_multicol_container(
         ));
         element_index += 1;
     }
-    let after_style = compute_pseudo_element_style_with_font_metrics(
-        style,
-        env.rules,
-        el.tag_name(),
-        &container_classes,
-        el.id(),
-        &el.attributes,
-        &container_selector_ctx,
-        PseudoElement::After,
-        env.font_metrics(),
-    );
-    if let Some(pseudo_style) = after_style.as_ref() {
+    if let Some(pseudo_style) = generated_styles.after() {
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,

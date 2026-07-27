@@ -408,8 +408,12 @@ fn half_leading_text_positioning() {
     let pages = layout(&nodes, PageSize::A4, Margin::default());
     let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
-    // Should contain Td operator for text positioning
-    assert!(pdf_str.contains("Td\n"), "Should have text positioning");
+    // The shared per-run path uses an absolute text matrix; either PDF text
+    // positioning operator is valid for this geometry assertion.
+    assert!(
+        pdf_str.contains("Td\n") || pdf_str.contains("Tm\n"),
+        "Should have text positioning"
+    );
     // Text should be rendered
     assert!(pdf_str.contains("(Test)"), "Should contain text content");
 }

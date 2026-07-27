@@ -580,7 +580,7 @@ fn margin_box_background_does_not_move_generated_text() {
         content[..marker_pos]
             .lines()
             .rev()
-            .find(|line| line.ends_with(" Td"))
+            .find(|line| line.ends_with(" Td") || line.ends_with(" Tm"))
             .expect("header text position")
             .to_string()
     }

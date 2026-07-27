@@ -1,20 +1,26 @@
-use crate::parser::css::{AncestorInfo, CssRule, SelectorContext};
+use crate::parser::css::{AncestorInfo, CssRule, PseudoElement, SelectorContext};
 use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
-    ComputedStyle, Display, compute_style_with_context_with_font_metrics,
+    ComputedStyle, Display, compute_pseudo_element_style_with_font_metrics,
+    compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
 use std::collections::HashMap;
 
 use super::elements::{BoxModel, IntoLayoutNode, LayoutNode, TextBlock};
 use super::engine::{
-    CounterState, TextRun, element_is_empty, element_sibling_list, forward_siblings,
+    CounterState, ElementSiblingPosition, TextRun, element_is_empty, element_sibling_list,
+    forward_siblings,
 };
 use super::helpers::{append_pseudo_inline_run, build_pseudo_inline_run};
 use super::text::{
-    TextWrapOptions, parent_line_strut, text_run_line_height_factor, used_font_size, wrap_text_runs,
+    InlineTextSequence, TextWrapOptions, parent_line_strut, text_run_line_height_factor,
+    used_font_size, wrap_text_runs,
 };
+
+mod flow;
+pub(crate) use flow::{IndependentFlowLayout, layout_mixed_flow_children};
 
 /// Source-order selector position for one inline sibling sequence.
 ///
@@ -27,10 +33,6 @@ pub(crate) struct InlineSiblingCursor {
 }
 
 impl InlineSiblingCursor {
-    pub(crate) fn new(nodes: &[DomNode]) -> Self {
-        Self::starting_at(nodes, 0)
-    }
-
     pub(crate) fn starting_at(nodes: &[DomNode], next_index: usize) -> Self {
         let siblings = element_sibling_list(nodes);
         Self {
@@ -125,6 +127,127 @@ impl<'a> GeneratedBox<'a> {
     }
 }
 
+/// Owned computed styles for an originating element's generated children.
+///
+/// Style resolution produces this value once. Formatting contexts then borrow
+/// [`GeneratedInlineContent`] from it instead of inventing their own
+/// before/after pairs and silently diverging in generated-content behavior.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GeneratedContentStyles {
+    before: Option<ComputedStyle>,
+    after: Option<ComputedStyle>,
+}
+
+impl GeneratedContentStyles {
+    pub(crate) fn resolve(
+        element: &ElementNode,
+        principal: &ComputedStyle,
+        rules: &[CssRule],
+        selector: &SelectorContext<'_>,
+        fonts: &HashMap<String, TtfFont>,
+    ) -> Self {
+        let classes = element.class_list();
+        let resolve = |pseudo| {
+            compute_pseudo_element_style_with_font_metrics(
+                principal,
+                rules,
+                element.tag_name(),
+                &classes,
+                element.id(),
+                &element.attributes,
+                selector,
+                pseudo,
+                FontMetrics::new(fonts),
+            )
+        };
+        Self {
+            before: resolve(PseudoElement::Before),
+            after: resolve(PseudoElement::After),
+        }
+    }
+
+    pub(crate) const fn boxes<'a>(
+        &'a self,
+        element: &'a ElementNode,
+    ) -> GeneratedInlineContent<'a> {
+        GeneratedInlineContent::new(element, self.before.as_ref(), self.after.as_ref())
+    }
+
+    pub(crate) const fn before(&self) -> Option<&ComputedStyle> {
+        self.before.as_ref()
+    }
+
+    pub(crate) const fn after(&self) -> Option<&ComputedStyle> {
+        self.after.as_ref()
+    }
+
+    /// Whether either generated child needs box-tree layout instead of the
+    /// inline-run path.
+    pub(crate) fn requires_box_layout(&self) -> bool {
+        [self.before(), self.after()]
+            .into_iter()
+            .flatten()
+            .any(|style| {
+                style.position.is_absolute()
+                    || matches!(style.display, Display::Block | Display::ListItem)
+            })
+    }
+}
+
+/// Pseudo styles attached to one principal box.
+///
+/// The generated children and typographic first-fragment styles are resolved
+/// together at the element boundary. Downstream formatting contexts borrow
+/// this proof instead of independently re-running part of the pseudo cascade.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PrincipalPseudoStyles {
+    generated: GeneratedContentStyles,
+    first_line: Option<ComputedStyle>,
+    first_letter: Option<ComputedStyle>,
+}
+
+impl PrincipalPseudoStyles {
+    pub(crate) fn resolve(
+        element: &ElementNode,
+        principal: &ComputedStyle,
+        rules: &[CssRule],
+        selector: &SelectorContext<'_>,
+        fonts: &HashMap<String, TtfFont>,
+    ) -> Self {
+        let classes = element.class_list();
+        let resolve = |pseudo| {
+            compute_pseudo_element_style_with_font_metrics(
+                principal,
+                rules,
+                element.tag_name(),
+                &classes,
+                element.id(),
+                &element.attributes,
+                selector,
+                pseudo,
+                FontMetrics::new(fonts),
+            )
+        };
+        Self {
+            generated: GeneratedContentStyles::resolve(element, principal, rules, selector, fonts),
+            first_line: resolve(PseudoElement::FirstLine),
+            first_letter: resolve(PseudoElement::FirstLetter),
+        }
+    }
+
+    pub(crate) const fn generated(&self) -> &GeneratedContentStyles {
+        &self.generated
+    }
+
+    pub(crate) const fn first_line(&self) -> Option<&ComputedStyle> {
+        self.first_line.as_ref()
+    }
+
+    pub(crate) const fn first_letter(&self) -> Option<&ComputedStyle> {
+        self.first_letter.as_ref()
+    }
+}
+
 /// Generated content at the two boundaries of an originating element's
 /// principal box.
 ///
@@ -132,7 +255,7 @@ impl<'a> GeneratedBox<'a> {
 /// originating element's real children. Keeping both boundaries together
 /// prevents a layout path from treating `::before` or `::after` as unrelated
 /// sibling blocks merely because the sequence also contains an atomic inline.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct GeneratedInlineContent<'a> {
     before: Option<GeneratedBox<'a>>,
     after: Option<GeneratedBox<'a>>,
@@ -154,6 +277,17 @@ impl<'a> GeneratedInlineContent<'a> {
                 None => None,
             },
         }
+    }
+
+    pub(crate) const fn from_boxes(
+        before: Option<GeneratedBox<'a>>,
+        after: Option<GeneratedBox<'a>>,
+    ) -> Self {
+        Self { before, after }
+    }
+
+    pub(crate) const fn is_empty(self) -> bool {
+        self.before.is_none() && self.after.is_none()
     }
 
     pub(crate) const fn before(self) -> Option<GeneratedBox<'a>> {
@@ -183,6 +317,28 @@ impl<'a> GeneratedInlineContent<'a> {
     ) {
         if let Some(after) = self.after {
             after.append_inline(runs, fonts, counter_state);
+        }
+    }
+
+    pub(crate) fn append_before_measurement(
+        self,
+        runs: &mut Vec<TextRun>,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        if let Some(before) = self.before {
+            before.append_measurement_run(runs, fonts, counter_state);
+        }
+    }
+
+    pub(crate) fn append_after_measurement(
+        self,
+        runs: &mut Vec<TextRun>,
+        fonts: &HashMap<String, TtfFont>,
+        counter_state: &mut CounterState,
+    ) {
+        if let Some(after) = self.after {
+            after.append_measurement_run(runs, fonts, counter_state);
         }
     }
 }
@@ -321,10 +477,14 @@ impl<'a> AnonymousInlineFormattingContext<'a> {
         }
     }
 
-    pub(crate) fn layout_runs(&self, runs: Vec<TextRun>) -> Option<LayoutNode> {
+    pub(crate) fn layout_runs(&self, mut runs: Vec<TextRun>) -> Option<LayoutNode> {
         if runs.is_empty() {
             return None;
         }
+        runs.as_mut_slice()
+            .resolve_unclaimed_boundaries(super::elements::TextSpacing::from_style(
+                self.parent_style,
+            ));
         let lines = wrap_text_runs(
             runs,
             TextWrapOptions::new(
@@ -399,6 +559,13 @@ impl AtomicInlineEmission {
 pub(crate) struct InlineFormattingChild {
     pub(crate) style: ComputedStyle,
     pub(crate) role: InlineFormattingRole,
+    source: ElementSiblingPosition,
+}
+
+impl InlineFormattingChild {
+    pub(crate) const fn source(&self) -> &ElementSiblingPosition {
+        &self.source
+    }
 }
 
 /// One authoritative style/classification pass for an inline sibling sequence.
@@ -406,6 +573,10 @@ pub(crate) struct InlineFormattingChild {
 pub(crate) struct InlineFormattingChildren(Vec<InlineFormattingChild>);
 
 impl InlineFormattingChildren {
+    pub(crate) fn get(&self, element_index: usize) -> Option<&InlineFormattingChild> {
+        self.0.get(element_index)
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = &InlineFormattingChild> {
         self.0.iter()
     }
@@ -558,6 +729,7 @@ impl<'a> InlineFormattingContext<'a> {
                 Some(InlineFormattingChild {
                     role: InlineFormattingRole::of(element, &style),
                     style,
+                    source: ElementSiblingPosition::from_selector_context(&selector_context),
                 })
             })
             .collect();

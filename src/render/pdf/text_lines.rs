@@ -223,8 +223,8 @@ pub(super) fn render_inline_box(
         let line_ascender = line_text_top(line, custom_fonts);
         let mut x = content_box.left;
         for (run_index, run) in merged.iter().enumerate() {
-            if let Some(inline) = run.inline_box.as_deref() {
-                x += inline.outer_width();
+            if let Some(advance) = run.atomic_inline_advance() {
+                x += advance;
                 continue;
             }
             if run.text.is_empty() {
@@ -277,111 +277,34 @@ pub(super) fn render_line_glyphs_without_shadows_in_space(
     // (surrounding) font size; resolve it once for the whole line.
     let parent_font_size = crate::layout::text::line_primary_font_size(runs);
 
-    // An inline box interrupts the glyph stream with a fixed advance, so the
-    // cursor must be positioned explicitly — force the per-run (mixed) path.
-    let has_inline_box = non_empty.iter().any(|r| r.inline_box.is_some());
-
-    // Check whether every run can be rendered with standard PDF fonts
-    // (no custom-font shaping needed).  Unicode-fallback runs also need
-    // shaping, so they count as non-standard.
-    let has_drop_cap = non_empty.iter().any(|run| is_drop_cap_run(run));
-    let all_standard = !has_inline_box
-        && !has_drop_cap
-        && non_empty.iter().all(|run| {
-            crate::text::resolve_custom_font(
-                &run.font_family,
-                run.bold,
-                run.font_style.is_slanted(),
-                custom_fonts,
-            )
-            .is_none()
-                && crate::text::shape_with_unicode_fallback(run, custom_fonts).is_none()
-        });
-
-    if all_standard {
-        // Simple path: single BT block, one Td to set initial position,
-        // then consecutive Tf/rg/Tj operators.  The viewer advances the
-        // text cursor after each Tj.
-        content.push_str("BT\n");
-        // The text cursor tracks the *current* baseline so a per-run
-        // sub/super shift can be applied (and undone) with a relative `Td`,
-        // leaving the next run on the normal baseline.
-        let mut cur_baseline = y;
-        let mut first = true;
-        let mut used_run_letter_spacing = false;
-        for run in &non_empty {
-            let (r, g, b) = run.color.to_f32_rgb();
-            let font_name = resolve_font_name(run, None, None, custom_fonts);
-            let letter_spacing = text_run_letter_spacing(run);
-            content.push_str(&PdfRgb::from((r, g, b)).fill_operator());
-            content.push_str(&format!("/{font_name} {} Tf\n", run.font_size));
-            if letter_spacing != 0.0 {
-                used_run_letter_spacing = true;
-                content.push_str(&format!("{letter_spacing} Tc\n"));
-            } else if used_run_letter_spacing {
-                content.push_str("0 Tc\n");
-            }
-            // css2 §10.8: `vertical-align: super`/`sub` raise/lower a text run
-            // off the line baseline by a fraction of its own font size. A floated
-            // `::first-letter` drop cap is additionally lowered so its glyph top
-            // sits on the line's text top (css-pseudo-4 §2.2).
-            let target_baseline = y
-                + run_vertical_align_shift(run, parent_font_size)
-                + text_emphasis_baseline_shift(run)
-                + drop_cap_baseline_shift(run, line_ascender, custom_fonts);
-            if first {
-                content.push_str(&format!(
-                    "{} {} Td\n",
-                    format_pdf_number(start_x),
-                    format_pdf_number(target_baseline),
-                ));
-                cur_baseline = target_baseline;
-                first = false;
-            } else if (target_baseline - cur_baseline).abs() > f32::EPSILON {
-                // Relative move from the previous run's baseline; the cursor's
-                // x has already advanced by the previous Tj, so dx = 0.
-                content.push_str(&format!(
-                    "0 {} Td\n",
-                    format_pdf_number(target_baseline - cur_baseline),
-                ));
-                cur_baseline = target_baseline;
-            }
-            let encoded = encode_pdf_text(&run.text);
-            content.push_str(&format!("({encoded}) Tj\n"));
+    // Every font family, inline box, and effect advances through the same
+    // explicit run path. Besides keeping fallback and custom-font behavior
+    // homogeneous, this avoids PDF `Tc` adding an unowned trailing advance
+    // when a standard-font run ends.
+    let mut x = start_x;
+    for run in &non_empty {
+        // Inline boxes are painted in Phase 1; here they only advance.
+        if let Some(advance) = run.atomic_inline_advance() {
+            x += advance;
+            continue;
         }
-        if used_run_letter_spacing {
-            content.push_str("0 Tc\n");
-        }
-        content.push_str("ET\n");
-    } else {
-        // Mixed path: some runs need custom-font shaping.
-        // Fall back to per-run rendering with individual BT/ET blocks.
-        let mut x = start_x;
-        for run in &non_empty {
-            // Inline boxes are painted in Phase 1; here they only advance.
-            if let Some(inline) = run.inline_box.as_deref() {
-                x += inline.outer_width();
-                continue;
-            }
-            // A floated `::first-letter` drop cap is lowered so its glyph top
-            // sits on the line's text top (css-pseudo-4 §2.2).
-            let run_y = y + drop_cap_baseline_shift(run, line_ascender, custom_fonts);
-            let run_width = render_run_glyph_layers_in_space(
-                content,
-                run,
-                x,
-                run_y,
-                parent_font_size,
-                custom_fonts,
-                prepared_custom_fonts,
-                word_spacing,
-                pdf_writer,
-                page_images,
-                text_space,
-                TextShadowPaint::Skip,
-            );
-            x += run_width;
-        }
+        // A floated `::first-letter` drop cap is lowered so its glyph top
+        // sits on the line's text top (css-pseudo-4 §2.2).
+        let run_y = y + drop_cap_baseline_shift(run, line_ascender, custom_fonts);
+        x += render_run_glyph_layers_in_space(
+            content,
+            run,
+            x,
+            run_y,
+            parent_font_size,
+            custom_fonts,
+            prepared_custom_fonts,
+            word_spacing,
+            pdf_writer,
+            page_images,
+            text_space,
+            TextShadowPaint::Skip,
+        );
     }
 }
 
@@ -406,8 +329,8 @@ pub(super) fn render_upright_vertical_line_text(
         .iter()
         .filter(|run| !run.text.is_empty() || run.inline_box.is_some())
     {
-        if let Some(inline) = run.inline_box.as_deref() {
-            x += inline.outer_width();
+        if let Some(advance) = run.atomic_inline_advance() {
+            x += advance;
             continue;
         }
         let run_y = position.composition_origin.y
@@ -514,7 +437,7 @@ fn render_upright_vertical_run(
         prepared_custom_fonts.get(shaped.font_key),
     );
     content.push_str("ET\n");
-    Some(run.font_size.max(0.0))
+    Some(run.inline_advance(run.font_size.max(0.0)))
 }
 
 pub(super) fn vertical_mixed_upright_run(run: &TextRun) -> bool {
@@ -584,8 +507,8 @@ pub(super) fn render_vertical_mixed_line_text(
         .iter()
         .filter(|r| !r.text.is_empty() || r.inline_box.is_some())
     {
-        if let Some(inline) = run.inline_box.as_deref() {
-            x += inline.outer_width();
+        if let Some(advance) = run.atomic_inline_advance() {
+            x += advance;
             continue;
         }
         let run_y = y + drop_cap_baseline_shift(run, line_ascender, custom_fonts);
@@ -688,8 +611,8 @@ pub(super) fn push_line_text_clip(
     } else {
         let mut x = start_x;
         for run in &non_empty {
-            if let Some(inline) = run.inline_box.as_deref() {
-                x += inline.outer_width();
+            if let Some(advance) = run.atomic_inline_advance() {
+                x += advance;
                 continue;
             }
             if run.text.is_empty() {

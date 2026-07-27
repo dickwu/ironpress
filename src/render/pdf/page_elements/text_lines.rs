@@ -15,8 +15,6 @@ pub(super) fn render_text_block_lines(
     let border = &element.box_model.border;
     let writing_mode = &element.text.writing_mode;
     let text_align = &element.text.alignment;
-    let letter_spacing = &element.text.spacing.letter;
-    let css_word_spacing = &element.text.spacing.word;
     let text_indent = &element.text.indent;
     let background_blur_radius = &element.paint.background.layers.blur_radius;
     let background_color = &element.paint.background.color;
@@ -155,8 +153,6 @@ pub(super) fn render_text_block_lines(
         } else {
             0.0
         };
-        let total_ws = justify_ws + *css_word_spacing;
-
         // CSS `text-indent` shifts the start of the FIRST line's
         // inline content. For start-edge alignment (left/justify)
         // it offsets the text origin; for center/right it consumes
@@ -198,12 +194,6 @@ pub(super) fn render_text_block_lines(
                 padding_box_x + padding_box_w - padding.right - line_width + first_pad
             }
         };
-        // Set word spacing (justify + CSS word-spacing). Like
-        // letter-spacing, word-spacing may be negative.
-        if total_ws != 0.0 {
-            content.push_str(&format!("{total_ws} Tw\n"));
-        }
-
         // Merge consecutive runs with the same style so
         // spaces between words stay in a single PDF text
         // string, preventing viewers from dropping them.
@@ -221,7 +211,7 @@ pub(super) fn render_text_block_lines(
                         text_y,
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
-                        total_ws,
+                        justify_ws,
                         line_text_top(line, ctx.text.custom_fonts),
                     ) {
                         if tb_bg_blended {
@@ -275,7 +265,7 @@ pub(super) fn render_text_block_lines(
                         text_y,
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
-                        total_ws,
+                        justify_ws,
                         line_text_top(line, ctx.text.custom_fonts),
                     ) {
                         if tb_bg_blended {
@@ -323,7 +313,7 @@ pub(super) fn render_text_block_lines(
                         text_y,
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
-                        total_ws,
+                        justify_ws,
                         line_text_top(line, ctx.text.custom_fonts),
                     ) {
                         if tb_bg_blended {
@@ -418,21 +408,17 @@ pub(super) fn render_text_block_lines(
                         ctx.text.page_images,
                     );
                 }
-                bg_x += inline.outer_width();
+                bg_x += run.atomic_inline_advance().unwrap_or_default();
                 continue;
             }
             if run.text.is_empty() {
                 continue;
             }
-            let run_letter_spacing = effective_run_letter_spacing(*letter_spacing, run);
             let run_width = if upright_vertical {
-                text_combine_advance(run, ctx.text.custom_fonts).unwrap_or_else(|| {
-                    estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                        + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
-                })
+                text_combine_advance(run, ctx.text.custom_fonts)
+                    .unwrap_or_else(|| estimate_run_width_with_fonts(run, ctx.text.custom_fonts))
             } else {
                 estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                    + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
             };
             // Draw background rectangle for inline spans
             if let Some(background) = run.background_color {
@@ -548,8 +534,8 @@ pub(super) fn render_text_block_lines(
             let mut lx = text_x;
             blurred_line = true;
             for run in &merged {
-                if let Some(inline) = run.inline_box.as_deref() {
-                    lx += inline.outer_width();
+                if run.inline_box.is_some() {
+                    lx += run.atomic_inline_advance().unwrap_or_default();
                     continue;
                 }
                 if run.text.is_empty() {
@@ -569,15 +555,12 @@ pub(super) fn render_text_block_lines(
                     blurred_line = false;
                     break;
                 }
-                let run_letter_spacing = effective_run_letter_spacing(*letter_spacing, run);
                 lx += if upright_vertical {
                     text_combine_advance(run, ctx.text.custom_fonts).unwrap_or_else(|| {
                         estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                            + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
                     })
                 } else {
                     estimate_run_width_with_fonts(run, ctx.text.custom_fonts)
-                        + letter_spacing_extra(run_letter_spacing, run.text.chars().count())
                 };
             }
         }
@@ -596,7 +579,7 @@ pub(super) fn render_text_block_lines(
                     ),
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    total_ws,
+                    justify_ws,
                     line_text_top(line, ctx.text.custom_fonts),
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
@@ -609,7 +592,7 @@ pub(super) fn render_text_block_lines(
                     text_y,
                     ctx.text.custom_fonts,
                     ctx.text.prepared_custom_fonts,
-                    total_ws,
+                    justify_ws,
                     line_text_top(line, ctx.text.custom_fonts),
                     vertical_e,
                     vertical_f,
@@ -623,7 +606,7 @@ pub(super) fn render_text_block_lines(
                     HorizontalLinePaint {
                         origin: PdfPoint::new(text_x, text_y),
                         line_ascender: line_text_top(line, ctx.text.custom_fonts),
-                        word_spacing: total_ws,
+                        justification_word_spacing: justify_ws,
                         text_space,
                     },
                     ctx.text.custom_fonts,
@@ -632,11 +615,6 @@ pub(super) fn render_text_block_lines(
                     ctx.text.page_images,
                 );
             }
-        }
-
-        // Reset word spacing after line
-        if total_ws != 0.0 {
-            content.push_str("0 Tw\n");
         }
     }
 

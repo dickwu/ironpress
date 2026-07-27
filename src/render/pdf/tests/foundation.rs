@@ -312,10 +312,7 @@ fn pdf_text_uses_typed_synthetic_weight_stroke() {
     let expected = SyntheticFontWeight::Auto
         .stroke_width(20.0)
         .expect("automatic synthetic weight has a finite stroke");
-    assert!(content.contains(&format!(
-        "{} w\n2 Tr\n",
-        format_pdf_number(expected)
-    )));
+    assert!(content.contains(&format!("{} w\n2 Tr\n", format_pdf_number(expected))));
     assert!(content.contains("0 Tr\n"));
 
     let suppressed = render_synthetic_weight(SyntheticFontWeight::Suppressed);
@@ -328,14 +325,15 @@ fn explicit_run_metadata_drives_decoration_and_drop_cap_state() {
     let mut run = test_text_run("Decorated");
     run.border_radii = CornerRadii::circular(6.0);
     run.line_height_factor = 1.25;
-    run.decorations.push(crate::style::computed::TextDecoration {
-        style: crate::style::computed::TextDecorationStyle::Wavy,
-        thickness: Some(1.25),
-        underline_offset: Some(2.5),
-        ..Default::default()
-    });
+    run.decorations
+        .push(crate::style::computed::TextDecoration {
+            style: crate::style::computed::TextDecorationStyle::Wavy,
+            thickness: Some(1.25),
+            underline_offset: Some(2.5),
+            ..Default::default()
+        });
     run.metadata.emphasis.mark = true;
-    run.metadata.letter_spacing = 0.375;
+    run.metadata.spacing.letter = 0.375;
     run.metadata.is_drop_cap = true;
 
     let decoration = &run.decorations[0];
@@ -353,11 +351,12 @@ fn explicit_run_metadata_drives_decoration_and_drop_cap_state() {
 fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     let mut run = test_text_run("thin");
     run.font_size = 1.0;
-    run.decorations.push(crate::style::computed::TextDecoration {
-        thickness: Some(0.075),
-        underline_offset: Some(-0.125),
-        ..Default::default()
-    });
+    run.decorations
+        .push(crate::style::computed::TextDecoration {
+            thickness: Some(0.075),
+            underline_offset: Some(-0.125),
+            ..Default::default()
+        });
 
     assert_eq!(
         decoration_thickness(&run, &run.decorations[0]),
@@ -412,15 +411,16 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
 #[test]
 fn shared_horizontal_decoration_painter_emits_wavy_line_and_shadow_layers() {
     let mut run = test_text_run("wave");
-    run.decorations.push(crate::style::computed::TextDecoration {
-        lines: crate::style::computed::TextDecorationLines {
-            underline: true,
+    run.decorations
+        .push(crate::style::computed::TextDecoration {
+            lines: crate::style::computed::TextDecorationLines {
+                underline: true,
+                ..Default::default()
+            },
+            color: Some(Color::rgb(239, 71, 111)),
+            style: crate::style::computed::TextDecorationStyle::Wavy,
             ..Default::default()
-        },
-        color: Some(Color::rgb(239, 71, 111)),
-        style: crate::style::computed::TextDecorationStyle::Wavy,
-        ..Default::default()
-    });
+        });
     run.text_shadow.push(crate::style::computed::BoxShadow {
         offset_x: 1.0,
         offset_y: 1.0,
@@ -446,15 +446,16 @@ fn shared_horizontal_decoration_painter_emits_wavy_line_and_shadow_layers() {
 #[test]
 fn horizontal_line_paints_underlines_below_glyphs_and_line_through_above() {
     let mut run = test_text_run("Decorated");
-    run.decorations.push(crate::style::computed::TextDecoration {
-        lines: crate::style::computed::TextDecorationLines {
-            underline: true,
-            line_through: true,
+    run.decorations
+        .push(crate::style::computed::TextDecoration {
+            lines: crate::style::computed::TextDecorationLines {
+                underline: true,
+                line_through: true,
+                ..Default::default()
+            },
+            color: Some(Color::rgb(239, 71, 111)),
             ..Default::default()
-        },
-        color: Some(Color::rgb(239, 71, 111)),
-        ..Default::default()
-    });
+        });
     let mut content = String::new();
     let mut writer = PdfWriter::new();
     let mut images = Vec::new();
@@ -465,7 +466,7 @@ fn horizontal_line_paints_underlines_below_glyphs_and_line_through_above() {
         HorizontalLinePaint {
             origin: PdfPoint::new(2.0, 10.0),
             line_ascender: 9.0,
-            word_spacing: 0.0,
+            justification_word_spacing: 0.0,
             text_space: PdfTextSpace::Points,
         },
         &HashMap::new(),
@@ -514,7 +515,7 @@ fn horizontal_line_preserves_independent_decoration_origins() {
         HorizontalLinePaint {
             origin: PdfPoint::new(2.0, 10.0),
             line_ascender: 9.0,
-            word_spacing: 0.0,
+            justification_word_spacing: 0.0,
             text_space: PdfTextSpace::Points,
         },
         &HashMap::new(),
@@ -539,23 +540,14 @@ fn automatic_decoration_thickness_uses_the_same_device_floor() {
         decoration_thickness(&run, &run.decorations[0]),
         crate::fonts::PT_PER_CSS_PX
     );
-    assert_eq!(
-        underline_center_y(&run, &run.decorations[0], 3.0),
-        1.875
-    );
+    assert_eq!(underline_center_y(&run, &run.decorations[0], 3.0), 1.875);
 
     run.font_size = 25.5;
     run.decorations[0].thickness = Some(4.5);
-    assert_eq!(
-        underline_center_y(&run, &run.decorations[0], 30.0),
-        25.5
-    );
+    assert_eq!(underline_center_y(&run, &run.decorations[0], 30.0), 25.5);
 
     run.decorations[0].underline_offset = Some(0.0);
-    assert_eq!(
-        underline_center_y(&run, &run.decorations[0], 30.0),
-        27.75
-    );
+    assert_eq!(underline_center_y(&run, &run.decorations[0], 30.0), 27.75);
     run.decorations[0].style = crate::style::computed::TextDecorationStyle::Wavy;
     assert_eq!(decoration_thickness(&run, &run.decorations[0]), 4.5);
 }
@@ -563,14 +555,15 @@ fn automatic_decoration_thickness_uses_the_same_device_floor() {
 #[test]
 fn emphasis_marks_keep_a_color_distinct_from_overline() {
     let mut run = test_text_run("AB");
-    run.decorations.push(crate::style::computed::TextDecoration {
-        lines: crate::style::computed::TextDecorationLines {
-            overline: true,
+    run.decorations
+        .push(crate::style::computed::TextDecoration {
+            lines: crate::style::computed::TextDecorationLines {
+                overline: true,
+                ..Default::default()
+            },
+            color: Some(Color::rgb(255, 0, 0)),
             ..Default::default()
-        },
-        color: Some(Color::rgb(255, 0, 0)),
-        ..Default::default()
-    });
+        });
     run.metadata.emphasis.mark = true;
     run.metadata.emphasis.color = Color::rgb(0, 0, 255);
 
@@ -696,7 +689,7 @@ fn text_shadow_does_not_move_foreground_text() {
         content[..marker_pos]
             .lines()
             .rev()
-            .find(|line| line.ends_with(" Td"))
+            .find(|line| line.ends_with(" Td") || line.ends_with(" Tm"))
             .expect("foreground text position")
             .to_string()
     }
