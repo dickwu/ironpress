@@ -9,7 +9,7 @@ use crate::layout::elements::{
 use crate::style::computed::{CssVector, PercentageAxes, Transform, TransformBox, TransformOrigin};
 use crate::types::{Color, Point};
 
-use super::{border_box_pixel, paint_source_graphic, test_anchor};
+use super::{border_box_pixel, paint_source_graphic, test_raster_space};
 
 #[test]
 fn transformed_descendant_is_part_of_the_ancestor_source_graphic() {
@@ -50,7 +50,7 @@ fn transformed_descendant_is_part_of_the_ancestor_source_graphic() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_anchor())
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_raster_space())
         .expect("ancestor source includes the transformed child");
 
     assert_eq!(source.geometry.paint_overflow().left, 7.0);
@@ -88,7 +88,7 @@ fn source_root_defers_its_transform_to_the_filtered_output_owner() {
         ..Default::default()
     };
 
-    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_anchor())
+    let source = paint_source_graphic(&root, &HashMap::new(), 72.0, test_raster_space())
         .expect("root source defers its post-filter transform");
 
     assert_eq!(

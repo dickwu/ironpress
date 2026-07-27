@@ -9,8 +9,8 @@ use crate::style::computed::BoxShadow;
 use crate::types::{Color, EdgeSizes, Point, Size};
 
 use super::{
-    border_box_pixel, paint_flex_cell_source, paint_source_graphic, source_geometry, test_anchor,
-    test_fonts,
+    border_box_pixel, paint_flex_cell_source, paint_source_graphic, source_geometry, test_fonts,
+    test_raster_space,
 };
 
 #[test]
@@ -50,8 +50,8 @@ fn table_filter_source_keeps_the_used_table_border_box_height() {
     );
     let table = pages[0].elements[0].1.as_ref();
     let geometry = source_geometry(table).expect("table principal source geometry");
-    let source =
-        paint_source_graphic(table, &fonts, 300.0, test_anchor()).expect("painted table source");
+    let source = paint_source_graphic(table, &fonts, 300.0, test_raster_space())
+        .expect("painted table source");
 
     assert_eq!(geometry.size.height, 51.0);
     assert_eq!(
@@ -84,7 +84,7 @@ fn flex_cell_source_includes_outset_shadow_overflow() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        test_anchor(),
+        test_raster_space(),
     )
     .expect("flex source with an outset shadow");
 
@@ -122,7 +122,7 @@ fn flex_cell_filter_source_clips_background_to_rounded_border_box() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        test_anchor(),
+        test_raster_space(),
     )
     .expect("rounded flex source");
 
@@ -159,7 +159,7 @@ fn flex_cell_source_includes_nested_principal_box_overflow() {
         Size::new(cell.width, cell.natural_height),
         &HashMap::new(),
         72.0,
-        test_anchor(),
+        test_raster_space(),
     )
     .expect("complex flex source with principal-box overflow");
 

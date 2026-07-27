@@ -10,7 +10,7 @@ use crate::style::computed::AlignItems;
 use crate::types::{EdgeSizes, Point, Size, Vector};
 
 use super::canvas::{PaintBounds, RasterCanvas, SurfaceRect};
-use super::geometry::{SourceGeometry, SourceGraphic, SourceRasterAnchor, SourceRasterGeometry};
+use super::geometry::{SourceGeometry, SourceGraphic, SourceRasterGeometry, SourceRasterSpace};
 use super::gradient::FilterBackground;
 use super::overflow::flex_cell_paint_overflow;
 use super::painter::{DescendantPaintArea, ElementPaintSpace, RootEffectHandling, SourcePainter};
@@ -259,14 +259,15 @@ pub(crate) fn paint_grid_cell_source(
     size: Size,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
-    anchor: SourceRasterAnchor,
+    raster_space: SourceRasterSpace,
 ) -> Option<SourceGraphic> {
     let layout = SourceGeometry {
         size,
         flow: crate::layout::flow_metrics::BlockFlowSpacing::default(),
         positioning: Positioning::default(),
     };
-    let geometry = SourceRasterGeometry::resolve(layout, EdgeSizes::ZERO, filter_dpi, anchor)?;
+    let geometry =
+        SourceRasterGeometry::resolve(layout, EdgeSizes::ZERO, filter_dpi, raster_space)?;
     let dimensions = geometry.dimensions();
     let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(
         dimensions.width,
@@ -342,7 +343,7 @@ pub(crate) fn paint_flex_cell_source(
     size: Size,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
-    anchor: SourceRasterAnchor,
+    raster_space: SourceRasterSpace,
 ) -> Option<SourceGraphic> {
     let layout = SourceGeometry {
         size,
@@ -353,7 +354,7 @@ pub(crate) fn paint_flex_cell_source(
         layout,
         flex_cell_paint_overflow(cell, size, filter_dpi)?,
         filter_dpi,
-        anchor,
+        raster_space,
     )?;
     let dimensions = geometry.dimensions();
     let mut pixels = crate::render::raster_pixels::PremultipliedRgba8::transparent(

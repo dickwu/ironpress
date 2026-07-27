@@ -14,6 +14,7 @@ use crate::parser::ttf::TtfFont;
 use crate::types::Size;
 
 use super::ResolvedFilter;
+use super::paint_space::{InheritedFilterPaintSpace, PageBoxAnchor};
 
 /// Retain a grid-item filter until pagination supplies the row's absolute
 /// device-space anchor.
@@ -25,9 +26,10 @@ pub(crate) fn retain_grid_cell_filter(cell: &mut GridCell, filter: ResolvedFilte
 
 /// Materialize filters retained on flattened flex items after pagination has
 /// established the concrete cell fragment sizes.
-pub(crate) fn materialize_flex_row(
+pub(super) fn materialize_flex_row(
     flex: &mut FlexRow,
-    anchor: super::surface::SourceRasterAnchor,
+    anchor: PageBoxAnchor,
+    inherited_space: InheritedFilterPaintSpace,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) {
@@ -36,10 +38,17 @@ pub(crate) fn materialize_flex_row(
         let Some(filter) = cell.cell_paint_mut().take_filter() else {
             continue;
         };
+        let cell_anchor = frame.page_anchor_in(anchor);
+        let paint_space = inherited_space.enter(
+            cell_anchor,
+            frame.size,
+            Some(&cell.cell_paint().group),
+            Some(cell),
+        );
         if composite_flex_cell(
             cell,
             frame.size,
-            frame.anchor_in(anchor),
+            paint_space.source_raster_space(filter.matrix_capability()),
             &filter,
             fonts,
             filter_dpi,
@@ -53,7 +62,7 @@ pub(crate) fn materialize_flex_row(
 fn composite_flex_cell(
     cell: &mut FlexCell,
     size: Size,
-    anchor: super::surface::SourceRasterAnchor,
+    raster_space: super::surface::SourceRasterSpace,
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
@@ -63,7 +72,7 @@ fn composite_flex_cell(
     }
     let compositing = super::FilterCompositing::from_group(&cell.cell_paint_mut().group);
     let Some(source) =
-        super::surface::paint_flex_cell_source(cell, size, fonts, filter_dpi, anchor)
+        super::surface::paint_flex_cell_source(cell, size, fonts, filter_dpi, raster_space)
     else {
         return false;
     };
@@ -78,9 +87,10 @@ fn composite_flex_cell(
 
 /// Materialize filters retained on grid items after pagination has established
 /// the concrete cell fragment sizes and device-space phase.
-pub(crate) fn materialize_grid_row(
+pub(super) fn materialize_grid_row(
     grid: &mut GridRow,
-    anchor: super::surface::SourceRasterAnchor,
+    anchor: PageBoxAnchor,
+    inherited_space: InheritedFilterPaintSpace,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) {
@@ -89,10 +99,17 @@ pub(crate) fn materialize_grid_row(
         let Some(filter) = cell.cell_paint_mut().take_filter() else {
             continue;
         };
+        let cell_anchor = frame.page_anchor_in(anchor);
+        let paint_space = inherited_space.enter(
+            cell_anchor,
+            frame.size,
+            Some(&cell.cell_paint().group),
+            Some(&cell.layout.box_model),
+        );
         if !composite_grid_cell(
             cell,
             frame.size,
-            frame.anchor_in(anchor),
+            paint_space.source_raster_space(filter.matrix_capability()),
             &filter,
             fonts,
             filter_dpi,
@@ -105,7 +122,7 @@ pub(crate) fn materialize_grid_row(
 fn composite_grid_cell(
     cell: &mut GridCell,
     size: Size,
-    anchor: super::surface::SourceRasterAnchor,
+    raster_space: super::surface::SourceRasterSpace,
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
@@ -115,7 +132,7 @@ fn composite_grid_cell(
     }
     let compositing = super::FilterCompositing::from_group(&cell.cell_paint_mut().group);
     let Some(source) =
-        super::surface::paint_grid_cell_source(cell, size, fonts, filter_dpi, anchor)
+        super::surface::paint_grid_cell_source(cell, size, fonts, filter_dpi, raster_space)
     else {
         return false;
     };

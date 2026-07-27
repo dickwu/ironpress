@@ -1,9 +1,10 @@
 //! Shared retained geometry for flex, grid, and table cells.
 
 use crate::layout::cells::CellBox;
+use crate::layout::filter::paint_space::PageBoxAnchor;
 use crate::types::{Point, Rect, Size, Vector};
 
-use super::super::geometry::{BlockChildSpace, SourceRasterAnchor};
+use super::super::geometry::BlockChildSpace;
 
 /// One cell border box relative to its formatting-context principal.
 ///
@@ -24,8 +25,8 @@ impl CellSourceFrame {
         }
     }
 
-    pub(crate) fn anchor_in(self, parent: SourceRasterAnchor) -> SourceRasterAnchor {
-        SourceRasterAnchor::at_border_origin(parent.border_origin() + self.border_offset)
+    pub(in crate::layout::filter) fn page_anchor_in(self, parent: PageBoxAnchor) -> PageBoxAnchor {
+        parent.offset(self.border_offset)
     }
 
     pub(crate) fn border_box_in(self, parent_origin: Point) -> Rect {

@@ -207,10 +207,15 @@ pub trait CellBoxHolder {
 
 /// Access to paint effects shared by every concrete cell representation.
 pub(crate) trait CellPaintHolder {
+    fn cell_paint(&self) -> &CellPaint;
     fn cell_paint_mut(&mut self) -> &mut CellPaint;
 }
 
 impl CellPaintHolder for CellBox {
+    fn cell_paint(&self) -> &CellPaint {
+        &self.paint
+    }
+
     fn cell_paint_mut(&mut self) -> &mut CellPaint {
         &mut self.paint
     }
@@ -322,6 +327,10 @@ impl TableRowCells for [TableCell] {
 }
 
 impl CellPaintHolder for TableCell {
+    fn cell_paint(&self) -> &CellPaint {
+        self.layout.cell_paint()
+    }
+
     fn cell_paint_mut(&mut self) -> &mut CellPaint {
         self.layout.cell_paint_mut()
     }
@@ -391,6 +400,10 @@ impl CellBoxHolder for GridCell {
 }
 
 impl CellPaintHolder for GridCell {
+    fn cell_paint(&self) -> &CellPaint {
+        self.layout.cell_paint()
+    }
+
     fn cell_paint_mut(&mut self) -> &mut CellPaint {
         self.layout.cell_paint_mut()
     }

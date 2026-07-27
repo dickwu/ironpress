@@ -17,7 +17,7 @@ pub(crate) use cells::{
     paint_grid_cell_source, table_cell_source_frames,
 };
 pub(crate) use geometry::{
-    BlockChildSpace, SourceGeometry, SourceGraphic, SourceRasterAnchor, block_child_frames,
+    BlockChildSpace, SourceGeometry, SourceGraphic, SourceRasterSpace, block_child_frames,
     source_geometry,
 };
 pub(crate) use source_graphic::paint_source_graphic;

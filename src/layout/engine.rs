@@ -633,6 +633,10 @@ impl FlexCell {
 }
 
 impl super::cells::CellPaintHolder for FlexCell {
+    fn cell_paint(&self) -> &super::cells::CellPaint {
+        &self.paint
+    }
+
     fn cell_paint_mut(&mut self) -> &mut super::cells::CellPaint {
         &mut self.paint
     }

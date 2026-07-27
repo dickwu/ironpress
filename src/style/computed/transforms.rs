@@ -2,9 +2,19 @@
 
 use crate::types::{Point, Rect};
 
-use super::CssAffineMatrix;
+use super::{CssAffineMatrix, CssVector};
 
 impl CssAffineMatrix {
+    /// Translate by one CSS-space displacement.
+    pub const fn translation(offset: CssVector) -> Self {
+        Self::new(CssVector::new(1.0, 0.0), CssVector::new(0.0, 1.0), offset)
+    }
+
+    /// Whether this matrix preserves the CSS axes without rotation or skew.
+    pub const fn is_scale_translate(self) -> bool {
+        self.x_axis.y == 0.0 && self.y_axis.x == 0.0
+    }
+
     /// Conjugate this affine transform around one point in the CSS top-down
     /// coordinate system.
     pub fn around(self, pivot: Point) -> Self {
@@ -55,5 +65,49 @@ impl CssAffineMatrix {
             .map(|point| point.y)
             .fold(f32::NEG_INFINITY, f32::max);
         Rect::from_xywh(left, top, right - left, bottom - top)
+    }
+}
+
+/// Matrix composition in visual application order: `parent * child` maps a
+/// point through `child` first and then through `parent`.
+impl std::ops::Mul for CssAffineMatrix {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let [a1, b1, c1, d1, e1, f1] = self.components();
+        let [a2, b2, c2, d2, e2, f2] = rhs.components();
+        Self::from_components(
+            a1 * a2 + c1 * b2,
+            b1 * a2 + d1 * b2,
+            a1 * c2 + c1 * d2,
+            b1 * c2 + d1 * d2,
+            a1 * e2 + c1 * f2 + e1,
+            b1 * e2 + d1 * f2 + f1,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn affine_composition_applies_child_before_parent() {
+        let child = CssAffineMatrix::translation(CssVector::new(2.0, 3.0));
+        let parent = CssAffineMatrix::from_components(2.0, 0.0, 0.0, 4.0, 0.0, 0.0);
+
+        assert_eq!(
+            (parent * child).transform_point(Point::new(5.0, 7.0)),
+            Point::new(14.0, 40.0)
+        );
+    }
+
+    #[test]
+    fn scale_translate_classification_rejects_rotation_and_skew() {
+        assert!(CssAffineMatrix::IDENTITY.is_scale_translate());
+        assert!(CssAffineMatrix::translation(CssVector::new(2.0, 3.0)).is_scale_translate());
+        assert!(
+            !CssAffineMatrix::from_components(1.0, 0.1, 0.0, 1.0, 0.0, 0.0).is_scale_translate()
+        );
     }
 }

@@ -8,6 +8,7 @@
 pub(crate) mod cells;
 mod fallback;
 mod materialize;
+mod paint_space;
 mod raster_frame;
 pub(crate) mod surface;
 mod vector_source;
@@ -44,6 +45,14 @@ pub(crate) struct ResolvedFilter {
     pub(crate) linear_rgb: bool,
     pub(crate) svg_region: Option<NormalizedFilterRegion>,
     pub(crate) isolates_source: bool,
+}
+
+/// Most image filters can consume only a scale-and-translate parameter matrix.
+/// Colour-only graphs are affine-local and can consume the complete matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FilterMatrixCapability {
+    ScaleTranslate,
+    Complex,
 }
 
 /// Effects applied after an element's filter has produced its composited
@@ -109,6 +118,28 @@ impl ResolvedFilter {
     pub(crate) const fn requires_source_surface(&self) -> bool {
         self.isolates_source
     }
+
+    pub(super) fn matrix_capability(&self) -> FilterMatrixCapability {
+        let is_color_operation = |operation: &FilterOperation| {
+            matches!(
+                operation,
+                FilterOperation::Grayscale(_)
+                    | FilterOperation::Sepia(_)
+                    | FilterOperation::Invert(_)
+                    | FilterOperation::Brightness(_)
+                    | FilterOperation::Contrast(_)
+                    | FilterOperation::Saturate(_)
+                    | FilterOperation::HueRotate(_)
+                    | FilterOperation::Opacity(_)
+                    | FilterOperation::Matrix(_)
+            )
+        };
+        if self.operations.iter().all(is_color_operation) {
+            FilterMatrixCapability::Complex
+        } else {
+            FilterMatrixCapability::ScaleTranslate
+        }
+    }
 }
 
 /// One renderer-owned filtered SourceGraphic, before it is reinserted into
@@ -165,7 +196,7 @@ pub(crate) fn composite_source(
     filter: &ResolvedFilter,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
-    anchor: surface::SourceRasterAnchor,
+    raster_space: surface::SourceRasterSpace,
 ) -> Option<FilteredGraphic> {
     let exact_vector = element.exact_vector_filter_source().is_some_and(|source| {
         !filter.linear_rgb && source.supports_exact_vector_filter(&filter.operations)
@@ -176,7 +207,7 @@ pub(crate) fn composite_source(
     let group = element
         .paint_group_owner()
         .map(crate::layout::elements::PaintGroupOwner::paint_group);
-    let source = surface::paint_source_graphic(element, fonts, filter_dpi, anchor)?;
+    let source = surface::paint_source_graphic(element, fonts, filter_dpi, raster_space)?;
     let (output, geometry) = composite_source_graphic(
         source,
         filter,

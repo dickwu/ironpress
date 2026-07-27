@@ -1,191 +1,24 @@
 //! Post-fragmentation materialization of retained CSS filters.
 //!
 //! Traversal is always performed through `LayoutElement::visit_child_nodes_mut`.
-//! Formatting contexts may refine the absolute raster anchors supplied to that
-//! traversal, but failure to resolve a refinement never suppresses a child.
+//! Formatting contexts refine child page geometry, while one inherited paint
+//! space carries graphical transforms through every nesting level.
 
 use std::collections::HashMap;
 
-use crate::layout::elements::{
-    Container, FlexRow, GridRow, LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut,
-    TableRow,
-};
+use crate::layout::elements::{FlexRow, GridRow, LayoutElement, LayoutNode, LayoutVisitorMut};
 use crate::parser::ttf::TtfFont;
-use crate::types::{EdgeSizes, Point, Rect};
+use crate::types::{EdgeSizes, Point};
 
-use super::surface::SourceRasterAnchor;
+use super::paint_space::{InheritedFilterPaintSpace, PageBoxAnchor};
 
-/// Absolute raster anchors for every direct node exposed by one layout
-/// element, in the same order as `visit_child_nodes_mut`.
-///
-/// An absent plan means only that this formatting context cannot refine child
-/// coordinates. It never changes whether those children are visited.
-struct ChildRasterAnchors(Option<Vec<SourceRasterAnchor>>);
+mod child_frames;
+#[cfg(test)]
+mod tests;
+mod traversal;
 
-impl ChildRasterAnchors {
-    fn resolve(
-        element: &dyn LayoutElement,
-        parent_anchor: SourceRasterAnchor,
-        fonts: &HashMap<String, TtfFont>,
-    ) -> Self {
-        struct Resolver<'a> {
-            parent_anchor: SourceRasterAnchor,
-            fonts: &'a HashMap<String, TtfFont>,
-            anchors: Option<Vec<SourceRasterAnchor>>,
-        }
-
-        impl Resolver<'_> {
-            fn block_anchors(
-                &self,
-                children: &[LayoutNode],
-                border_box: Rect,
-                border: EdgeSizes,
-                padding: EdgeSizes,
-            ) -> Option<Vec<SourceRasterAnchor>> {
-                let padding_box = border_box.inset(border);
-                let content_box = padding_box.inset(padding);
-                super::surface::block_child_frames(
-                    children,
-                    super::surface::BlockChildSpace::new(
-                        content_box,
-                        padding_box,
-                        Some(padding_box),
-                    ),
-                )
-                .map(|frames| {
-                    frames
-                        .into_iter()
-                        .map(|frame| SourceRasterAnchor::at_border_origin(frame.border_box.origin))
-                        .collect()
-                })
-            }
-        }
-
-        impl LayoutVisitor for Resolver<'_> {
-            fn visit_container(&mut self, element: &Container) {
-                let Some(geometry) = super::surface::source_geometry(element) else {
-                    return;
-                };
-                let border_box = Rect::new(self.parent_anchor.border_origin(), geometry.size);
-                self.anchors = self.block_anchors(
-                    &element.children,
-                    border_box,
-                    element.box_model.border.widths(),
-                    element.box_model.padding,
-                );
-            }
-
-            fn visit_flex_row(&mut self, element: &FlexRow) {
-                let frames = super::surface::flex_cell_source_frames(element, self.fonts);
-                let mut anchors = Vec::new();
-                for (cell, frame) in element.content.cells.iter().zip(frames) {
-                    let cell_anchor = frame.anchor_in(self.parent_anchor);
-                    let cell_box = Rect::new(cell_anchor.border_origin(), frame.size);
-                    let nested = self.block_anchors(
-                        &cell.nested_elements,
-                        cell_box,
-                        cell.border.widths(),
-                        cell.padding,
-                    );
-                    match nested {
-                        Some(nested) => anchors.extend(nested),
-                        None => anchors.extend(cell.nested_elements.iter().map(|_| cell_anchor)),
-                    }
-                }
-                self.anchors = Some(anchors);
-            }
-
-            fn visit_grid_row(&mut self, element: &GridRow) {
-                let frames = super::surface::grid_cell_source_frames(element);
-                let mut anchors = Vec::new();
-                for (cell, frame) in element.content.cells.iter().zip(frames) {
-                    let cell_anchor = frame.anchor_in(self.parent_anchor);
-                    let cell_box = Rect::new(cell_anchor.border_origin(), frame.size);
-                    let nested = self.block_anchors(
-                        &cell.layout.content.children,
-                        cell_box,
-                        cell.layout.box_model.border.widths(),
-                        cell.layout.box_model.padding(),
-                    );
-                    match nested {
-                        Some(nested) => anchors.extend(nested),
-                        None => {
-                            anchors.extend(cell.layout.content.children.iter().map(|_| cell_anchor))
-                        }
-                    }
-                }
-                self.anchors = Some(anchors);
-            }
-
-            fn visit_table_row(&mut self, element: &TableRow) {
-                if element.formatting.is_collapsed()
-                    || element.content.cells.iter().any(|cell| cell.span.rows > 1)
-                {
-                    return;
-                }
-                let frames = super::surface::table_cell_source_frames(element);
-                let baseline_shifts =
-                    super::surface::table_row_baseline_shifts(&element.content.cells, self.fonts);
-                let mut anchors = Vec::new();
-                for ((cell, frame), baseline_shift) in element
-                    .content
-                    .cells
-                    .iter()
-                    .zip(frames)
-                    .zip(baseline_shifts)
-                {
-                    let Some(frame) = frame else {
-                        continue;
-                    };
-                    let cell_anchor = frame.anchor_in(self.parent_anchor);
-                    let nested = super::surface::block_child_frames(
-                        &cell.layout.content.children,
-                        frame.nested_child_space(
-                            self.parent_anchor.border_origin(),
-                            &cell.layout,
-                            baseline_shift,
-                        ),
-                    );
-                    match nested {
-                        Some(nested) => anchors.extend(nested.into_iter().map(|frame| {
-                            SourceRasterAnchor::at_border_origin(frame.border_box.origin)
-                        })),
-                        None => {
-                            anchors.extend(cell.layout.content.children.iter().map(|_| cell_anchor))
-                        }
-                    }
-                }
-                self.anchors = Some(anchors);
-            }
-        }
-
-        let mut resolver = Resolver {
-            parent_anchor,
-            fonts,
-            anchors: None,
-        };
-        element.accept(&mut resolver);
-        Self(resolver.anchors)
-    }
-
-    fn into_iter(self, fallback: SourceRasterAnchor) -> ChildRasterAnchorIter {
-        ChildRasterAnchorIter {
-            resolved: self.0.unwrap_or_default().into_iter(),
-            fallback,
-        }
-    }
-}
-
-struct ChildRasterAnchorIter {
-    resolved: std::vec::IntoIter<SourceRasterAnchor>,
-    fallback: SourceRasterAnchor,
-}
-
-impl ChildRasterAnchorIter {
-    fn next(&mut self) -> SourceRasterAnchor {
-        self.resolved.next().unwrap_or(self.fallback)
-    }
-}
+use child_frames::ChildPaintFrames;
+use traversal::TraversalFrame;
 
 /// Materialize every retained filter after pagination, deepest descendants
 /// first. A single generic traversal applies to every concrete layout node.
@@ -198,17 +31,27 @@ pub(crate) fn materialize_page_filters(
     for page in pages {
         let margin = page.margin_override.unwrap_or(document_margin);
         for (y, element) in &mut page.elements {
+            let anchor =
+                page_border_box_anchor(element.as_ref(), Point::new(margin.left, margin.top + *y));
             materialize_node_filter(
                 element,
-                source_raster_anchor(element.as_ref(), Point::new(margin.left, margin.top + *y)),
+                TraversalFrame {
+                    anchor,
+                    inherited_space: Default::default(),
+                },
                 fonts,
                 filter_dpi,
             );
         }
         for element in page.running_elements.values_mut() {
+            let anchor =
+                page_border_box_anchor(element.as_ref(), Point::new(margin.left, margin.top));
             materialize_node_filter(
                 element,
-                source_raster_anchor(element.as_ref(), Point::new(margin.left, margin.top)),
+                TraversalFrame {
+                    anchor,
+                    inherited_space: Default::default(),
+                },
                 fonts,
                 filter_dpi,
             );
@@ -218,34 +61,53 @@ pub(crate) fn materialize_page_filters(
 
 fn materialize_node_filter(
     element: &mut LayoutNode,
-    anchor: SourceRasterAnchor,
+    frame: TraversalFrame,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
 ) {
-    let mut child_anchors =
-        ChildRasterAnchors::resolve(element.as_ref(), anchor, fonts).into_iter(anchor);
+    let element_space = frame.enter(element.as_ref());
+    let fallback = TraversalFrame {
+        anchor: frame.anchor,
+        inherited_space: element_space.descendant_space,
+    };
+    let mut child_frames =
+        ChildPaintFrames::resolve(element.as_ref(), element_space, fonts).into_iter(fallback);
     element.visit_child_nodes_mut(&mut |child| {
-        materialize_node_filter(child, child_anchors.next(), fonts, filter_dpi);
+        materialize_node_filter(child, child_frames.next(), fonts, filter_dpi);
     });
 
     struct CellFilterMaterializer<'a> {
-        anchor: SourceRasterAnchor,
+        anchor: PageBoxAnchor,
+        inherited_space: InheritedFilterPaintSpace,
         fonts: &'a HashMap<String, TtfFont>,
         filter_dpi: f32,
     }
 
     impl LayoutVisitorMut for CellFilterMaterializer<'_> {
         fn visit_flex_row(&mut self, element: &mut FlexRow) {
-            super::cells::materialize_flex_row(element, self.anchor, self.fonts, self.filter_dpi);
+            super::cells::materialize_flex_row(
+                element,
+                self.anchor,
+                self.inherited_space,
+                self.fonts,
+                self.filter_dpi,
+            );
         }
 
         fn visit_grid_row(&mut self, element: &mut GridRow) {
-            super::cells::materialize_grid_row(element, self.anchor, self.fonts, self.filter_dpi);
+            super::cells::materialize_grid_row(
+                element,
+                self.anchor,
+                self.inherited_space,
+                self.fonts,
+                self.filter_dpi,
+            );
         }
     }
 
     element.accept_mut(&mut CellFilterMaterializer {
-        anchor,
+        anchor: frame.anchor,
+        inherited_space: element_space.descendant_space,
         fonts,
         filter_dpi,
     });
@@ -256,8 +118,13 @@ fn materialize_node_filter(
     else {
         return;
     };
+    let Some(box_space) = element_space.box_space else {
+        filter.apply_primitive_fallback(std::slice::from_mut(element));
+        return;
+    };
+    let raster_space = box_space.source_raster_space(filter.matrix_capability());
     if let Some(graphic) =
-        super::composite_source(element.as_ref(), &filter, fonts, filter_dpi, anchor)
+        super::composite_source(element.as_ref(), &filter, fonts, filter_dpi, raster_space)
     {
         *element = graphic.into_layout_node();
     } else {
@@ -265,7 +132,7 @@ fn materialize_node_filter(
     }
 }
 
-fn source_raster_anchor(element: &dyn LayoutElement, flow_origin: Point) -> SourceRasterAnchor {
+fn page_border_box_anchor(element: &dyn LayoutElement, flow_origin: Point) -> PageBoxAnchor {
     let insets = super::surface::source_geometry(element)
         .map(|geometry| geometry.positioning.insets)
         .or_else(|| {
@@ -274,7 +141,7 @@ fn source_raster_anchor(element: &dyn LayoutElement, flow_origin: Point) -> Sour
                 .map(|owner| owner.positioning().insets)
         })
         .unwrap_or(EdgeSizes::ZERO);
-    SourceRasterAnchor::at_border_origin(Point::new(
+    PageBoxAnchor::at(Point::new(
         flow_origin.x + insets.left,
         flow_origin.y + insets.top,
     ))

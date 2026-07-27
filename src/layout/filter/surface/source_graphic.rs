@@ -8,7 +8,7 @@ use crate::render::raster_pixels::PremultipliedRgba8;
 use crate::types::EdgeSizes;
 
 use super::canvas::{PaintBounds, RasterCanvas, SurfaceRect};
-use super::geometry::{SourceGraphic, SourceRasterAnchor, SourceRasterGeometry, source_geometry};
+use super::geometry::{SourceGraphic, SourceRasterGeometry, SourceRasterSpace, source_geometry};
 use super::overflow::source_paint_overflow;
 use super::painter::{ElementPaintSpace, RootEffectHandling, paint_element};
 
@@ -66,12 +66,12 @@ pub(crate) fn paint_source_graphic(
     element: &dyn LayoutElement,
     fonts: &HashMap<String, TtfFont>,
     filter_dpi: f32,
-    anchor: SourceRasterAnchor,
+    raster_space: SourceRasterSpace,
 ) -> Option<SourceGraphic> {
     let layout = source_geometry(element)?;
     let authored_overflow = source_paint_overflow(element, layout.size, filter_dpi)?;
     let provisional =
-        SourceRasterGeometry::resolve(layout.clone(), authored_overflow, filter_dpi, anchor)?;
+        SourceRasterGeometry::resolve(layout.clone(), authored_overflow, filter_dpi, raster_space)?;
     let first_pass = SourcePaintPass::paint(element, &provisional, fonts, filter_dpi)?;
     let required_overflow = first_pass.paint_bounds.map_or(EdgeSizes::ZERO, |bounds| {
         provisional.required_overflow_for(bounds)
@@ -87,7 +87,7 @@ pub(crate) fn paint_source_graphic(
         layout,
         authored_overflow.max_each(required_overflow),
         filter_dpi,
-        anchor,
+        raster_space,
     )?;
     SourcePaintPass::paint(element, &geometry, fonts, filter_dpi)
         .map(|paint| paint.into_source(geometry))
