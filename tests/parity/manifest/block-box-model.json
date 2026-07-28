@@ -622,10 +622,6 @@
     "file": "cases/block-box-model/paragraph-splits-across-pages.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Fragmentation requires this paragraph to break at line boxes, but does not prescribe a cross-engine font-baseline quantization. Chrome, WeasyPrint 69, and Ironpress all paginate eight lines on each of three pages. Chrome places the first baseline at 12.75pt; WeasyPrint preserves the fractional 13.154297pt position. The Chrome raster is retained, but is not a unique normative geometry reference."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"

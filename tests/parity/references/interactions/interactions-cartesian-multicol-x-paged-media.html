@@ -5,8 +5,9 @@
   CSS Break 3 section 4.3 requires the inner break-before:page to break
   through the multicol fragmentation context. CSS Multicol 1 sections 2 and
   8.2 require the subsequent column box to move to the next page, while the
-  multicol principal box continues there. Section 4 paints a rule between the
-  two columns occupied by the balanced fragments of the fixed-height .own box.
+  multicol principal box continues there. Sections 2 and 4 require the two
+  columns to use the multicol content box's 50px used height and paint a rule
+  of that same length between them.
 
   Chromium 150 instead leaves the inner box in page 2's second column and
   therefore produces only three pages. This source materializes the specified
@@ -74,7 +75,7 @@
     left: 60px;
     top: 7px;
     width: 2px;
-    height: 19.2px;
+    height: 50px;
     background: #577590;
   }
   .own { height: 22px; white-space: nowrap; }

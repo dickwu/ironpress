@@ -103,10 +103,6 @@
     "file": "cases/inline-text/inline-text-white-space-pre-wrap.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines preserve the authored spaces and use the same three wrapped lines. The raw signal is baseline placement (Chrome 22.611327pt; WeasyPrint 23.018297pt; Ironpress 23.363999pt), not pre-wrap behavior. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -172,10 +168,6 @@
     "file": "cases/inline-text/inline-text-text-align-justify.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines justify the first line to both content edges and leave the final line unexpanded. The raw difference is baseline placement (Chrome 22.611327pt; WeasyPrint 23.018297pt; Ironpress 23.363999pt), not a justification failure. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -202,10 +194,6 @@
     "file": "cases/inline-text/inline-text-inline-block-baseline.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS2 §10.8.1 uses an inline-block's last in-flow line baseline. Ironpress, Chrome, and WeasyPrint put the blue inline block at the same top and preserve the Text / bb / Text baseline relationship. Ironpress's line background is 209 shared-pdftoppm device pixels high, between WeasyPrint's 208 and Chrome's 206; Ironpress is closer to WeasyPrint in raw AE (7,176 versus Chrome/WeasyPrint 10,733). This tiny font-metric line-box variance and CID TrueType versus Chrome Type 3 contour coverage do not show a missing inline-block baseline rule. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box"
@@ -220,10 +208,6 @@
     "file": "cases/inline-text/inline-text-wrapping-normal.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines produce the same four normal-wrap lines. The raw signal is baseline placement (Chrome 21.111327pt; WeasyPrint 21.518297pt; Ironpress 21.863999pt), not a wrapping failure. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -321,10 +305,6 @@
     "file": "cases/inline-text/inline-text-white-space-normal.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines collapse the source whitespace and wrap the identical two lines. The raw signal is baseline placement (Chrome 22.611327pt; WeasyPrint 23.018297pt; Ironpress 23.363999pt), not white-space: normal behavior. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -351,10 +331,6 @@
     "file": "cases/inline-text/inline-text-white-space-break-spaces.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and Chrome both preserve the spaces and wrap after the preserved run into the same three lines. WeasyPrint 69 explicitly rejects break-spaces, so it is not an oracle for this value. The remaining Chrome raster difference is baseline placement (22.611327pt versus 23.363999pt). Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -368,10 +344,6 @@
     "file": "cases/inline-text/inline-text-text-indent-length.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines indent only the first line by 40px and preserve the same wrapping. The remaining signal is baseline placement (Chrome 24.111327pt; WeasyPrint 24.518297pt; Ironpress 24.863999pt), which CSS Text does not prescribe across engines. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -424,10 +396,6 @@
     "file": "cases/inline-text/inline-text-line-height-length.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines use the required 32px/24pt line-to-line interval and the same line breaks. The raw difference is baseline placement (Chrome 27.111327pt; WeasyPrint 27.518297pt; Ironpress 27.863999pt), not a fixed-line-height failure. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]
@@ -532,10 +500,6 @@
     "file": "cases/inline-text/inline-text-text-align-justify-multiline.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All non-final lines reach both content edges with matching line breaks and near-identical word advances. The raw signal is chiefly baseline placement (Chrome 24.111327pt; WeasyPrint 24.518297pt; Ironpress 24.863999pt); CSS Text does not require an engine-specific baseline quantization. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline"
     ]

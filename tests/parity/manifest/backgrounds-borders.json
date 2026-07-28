@@ -244,10 +244,6 @@
     "subfeature": "solid-offset",
     "description": "Square-corner outline with a positive offset. Exact outline geometry is user-agent-defined; this fixture is a Chromium compatibility canary.",
     "file": "cases/backgrounds-borders/outline-solid.html",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Basic UI Level 4 leaves exact outline placement and shape implementation-defined; this Chromium oracle is retained as a compatibility canary rather than a normative pixel oracle."
-    },
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [

@@ -4,17 +4,20 @@
   <meta charset="utf-8">
   <style>
     @page { size: 160px 120px; margin: 0; background: #ffffff; }
+    @page :left { background: #ef476f; }
     @page :blank { background: #ffd166; }
     html { font-family: ParitySans; line-height: 1.5; }
     * { margin: 0; box-sizing: border-box; }
-    .block { width: 160px; height: 120px; }
+    .block { width: 64px; height: 48px; }
     .first { background: #1d4ed8; break-after: right; }
     .second { background: #06d6a0; }
-    .mark { width: 32px; height: 32px; background: #f8fafc; }
+    .third { background: #7c3aed; break-before: page; }
+    .mark { width: 16px; height: 16px; background: #111827; }
   </style>
 </head>
 <body>
   <div class="block first"><div class="mark"></div></div>
-  <div class="block second"></div>
+  <div class="block second"><div class="mark"></div></div>
+  <div class="block third"><div class="mark"></div></div>
 </body>
 </html>

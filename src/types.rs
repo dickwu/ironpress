@@ -251,7 +251,7 @@ pub struct Margin {
 
 impl Margin {
     /// Create margins with individual values for each side.
-    pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+    pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
         Self {
             top,
             right,
@@ -261,7 +261,7 @@ impl Margin {
     }
 
     /// Create margins with the same value on all sides.
-    pub fn uniform(v: f32) -> Self {
+    pub const fn uniform(v: f32) -> Self {
         Self::new(v, v, v, v)
     }
 
@@ -273,6 +273,19 @@ impl Margin {
     /// Sum the top and bottom page margins.
     pub const fn vertical(self) -> f32 {
         self.top + self.bottom
+    }
+}
+
+impl std::ops::Add for Margin {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(
+            self.top + rhs.top,
+            self.right + rhs.right,
+            self.bottom + rhs.bottom,
+            self.left + rhs.left,
+        )
     }
 }
 

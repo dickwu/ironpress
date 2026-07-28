@@ -6578,13 +6578,13 @@ fn apply_style_map_with_percentage_basis(
     // CSS Paged Media 3 §3.4 `page: <name>` — the named page a box belongs to.
     // Only set when the property is present so it accumulates across cascade
     // layers (a later layer without `page` leaves the prior value). `auto`
-    // resets to the default page. Names are stored lowercased to match the
-    // case-insensitive `@page <name>` lookup.
+    // resets to the default page. Page type names are case-sensitive CSS
+    // identifiers, so their authored case survives to page-selector matching.
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "page") {
         style.page_name = if k.eq_ignore_ascii_case("auto") {
             None
         } else {
-            Some(k.to_ascii_lowercase())
+            Some(k.clone())
         };
     }
 

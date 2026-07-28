@@ -329,10 +329,6 @@
     "file": "cases/lists-counters/ol-continues-across-page-break.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "Chrome, WeasyPrint, and Ironpress all produce two pages and continuously number the markers 1 through 10. The raw shared-pdftoppm difference is glyph placement/antialiasing; Ironpress is closer to WeasyPrint on both pages (8,292 and 8,143 changed pixels) than Chrome and WeasyPrint are to one another (12,613 and 12,131). Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow",
@@ -363,10 +359,6 @@
     "file": "cases/lists-counters/lists-counters-counter-set.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress, Chrome, and WeasyPrint render the required counter sequence 1, 7, 8 with the same row backgrounds and marker colouring. Ironpress's normal-text geometry is close to WeasyPrint (text x=29.989675pt versus 29.987549pt) and its shared-pdftoppm raw AE is lower against Chrome than Chrome is against WeasyPrint (8,902 versus 10,936 pixels). Chrome's Type 3 marker boxes differ from Ironpress/WeasyPrint CID TrueType bounds, causing contour-only raw residue; this is not a counter-set semantic failure. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-text-baseline"
@@ -399,10 +391,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Chrome, WeasyPrint, and Ironpress all emit the required CJK decimal markers 一、, 二、, 三、. Ironpress uses the same Noto Sans CJK JP fallback as Chrome, but the PDFs use different CJK font representations (Ironpress/Chrome Type 3, WeasyPrint CID), so raw outline pixels are not a list-style semantic failure. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -437,10 +425,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and Chrome correctly apply ol start=8 plus the custom extends-decimal counter style, producing [08], [09], [10] with the requested pad, prefix, and suffix. WeasyPrint 69 instead produces [01], [02], [03], so it is not a semantic counter-oracle. The Chrome raw diff is contour-only Type 3 versus CID TrueType coverage, not a missing custom counter-style descriptor. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -458,10 +442,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress, Chrome, and WeasyPrint render the required custom negative-counter labels (2), (1), and 0 with the same text and row sequence. Ironpress's normal-text geometry is close to WeasyPrint, and its shared-pdftoppm raw AE against Chrome (12,356 pixels) is lower than Chrome versus WeasyPrint (14,581 pixels). Chrome's Type 3 marker glyph boxes differ from Ironpress/WeasyPrint CID TrueType bounds, causing contour-only raw residue rather than a custom negative descriptor failure. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -551,10 +531,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and Chrome correctly apply <li value='7'>, producing 1, 7, 8. WeasyPrint 69 instead renders 1, 2, 3, contrary to the authored value override, so it is not a semantic counter-oracle. The remaining Chrome raw evidence is Type 3 versus CID TrueType contour coverage; marker/text positions and row sequence are otherwise the same. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

@@ -167,7 +167,7 @@ impl AbsoluteFlexContext<'_, '_> {
             env,
         );
         if let Some(containing_block) = self.containing_block {
-            crate::layout::helpers::patch_absolute_children_containing_block(
+            crate::layout::helpers::resolve_absolute_descendants_containing_block(
                 &mut children,
                 containing_block,
             );

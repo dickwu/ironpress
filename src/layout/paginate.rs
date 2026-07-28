@@ -183,10 +183,8 @@ fn footnote_block_policy_requires_break(
 
 fn extract_page_state_markers(
     element: &mut dyn LayoutElement,
-    running_elements: &mut HashMap<String, LayoutNode>,
-    running_started: &mut HashSet<String>,
-    named_strings: &mut HashMap<String, String>,
-    named_strings_first: &mut HashMap<String, String>,
+    generated_content: &mut super::page_values::PageGeneratedContent,
+    at_page_start: bool,
     pending_target_anchors: &mut Vec<String>,
 ) {
     struct MarkerExtraction {
@@ -205,10 +203,8 @@ fn extract_page_state_markers(
     }
 
     struct ContainerMarkerExtractor<'a> {
-        running_elements: &'a mut HashMap<String, LayoutNode>,
-        running_started: &'a mut HashSet<String>,
-        named_strings: &'a mut HashMap<String, String>,
-        named_strings_first: &'a mut HashMap<String, String>,
+        generated_content: &'a mut super::page_values::PageGeneratedContent,
+        at_page_start: bool,
         pending_target_anchors: &'a mut Vec<String>,
     }
 
@@ -222,27 +218,26 @@ fn extract_page_state_markers(
                 };
                 child.accept(&mut marker);
                 if let Some((name, running)) = marker.running {
-                    self.running_started.insert(name.clone());
-                    self.running_elements.insert(name, running);
+                    self.generated_content
+                        .capture_running(name, running, self.at_page_start);
                     continue;
                 }
                 if let Some((name, value)) = marker.named {
                     if target_anchor_id(&name).is_some() {
                         self.pending_target_anchors.push(name);
                     } else {
-                        self.named_strings_first
-                            .entry(name.clone())
-                            .or_insert_with(|| value.clone());
-                        self.named_strings.insert(name, value);
+                        self.generated_content.capture_named_string(
+                            name,
+                            value,
+                            self.at_page_start,
+                        );
                     }
                     continue;
                 }
                 extract_page_state_markers(
                     &mut child,
-                    self.running_elements,
-                    self.running_started,
-                    self.named_strings,
-                    self.named_strings_first,
+                    self.generated_content,
+                    self.at_page_start,
                     self.pending_target_anchors,
                 );
                 kept.push(child);
@@ -252,22 +247,19 @@ fn extract_page_state_markers(
     }
 
     element.accept_mut(&mut ContainerMarkerExtractor {
-        running_elements,
-        running_started,
-        named_strings,
-        named_strings_first,
+        generated_content,
+        at_page_start,
         pending_target_anchors,
     });
 }
 
 fn apply_pending_target_anchors(
     pending_target_anchors: &mut Vec<String>,
-    named_strings: &mut HashMap<String, String>,
-    named_strings_first: &mut HashMap<String, String>,
+    generated_content: &mut super::page_values::PageGeneratedContent,
+    at_page_start: bool,
 ) {
     for name in pending_target_anchors.drain(..) {
-        named_strings_first.entry(name.clone()).or_default();
-        named_strings.insert(name, String::new());
+        generated_content.capture_named_string(name, String::new(), at_page_start);
     }
 }
 
@@ -412,13 +404,9 @@ pub(crate) fn move_overflow_footnotes_to_next_page(
                 elements: Vec::new(),
                 print_content_scale: Default::default(),
                 document_svg_defs: Default::default(),
-                running_elements: pages[index].running_elements.clone(),
-                running_elements_started: HashSet::new(),
-                named_strings: pages[index].named_strings.clone(),
-                named_strings_first: HashMap::new(),
+                generated_content: pages[index].generated_content.following_page(),
                 footnotes,
-                margin_override: pages[index].margin_override,
-                page_size_override: pages[index].page_size_override,
+                geometry: pages[index].geometry,
                 page_name: pages[index].page_name.clone(),
                 is_blank: false,
             };
@@ -2103,79 +2091,79 @@ fn split_table_node(
     Some((Table::new(before).boxed(), Table::new(after).boxed()))
 }
 
-/// Geometry override for the first page (CSS Paged Media 3 §3.3 `@page :first`).
-/// `content_height` is the page-1 content box height (page height minus the
-/// first-page top/bottom margins); `margin` is the full first-page margin used
-/// to tag the emitted [`Page`] so the renderer positions it correctly.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FirstPageGeom {
-    pub content_height: f32,
-    pub margin: Margin,
+/// Page-dependent state needed by fragmentation.
+///
+/// Geometry remains a cascade until a physical page exists. This prevents
+/// `:first`, spread, `:blank`, and named selectors from taking separate paths
+/// that can disagree about the same page.
+#[derive(Debug, Clone)]
+pub(crate) struct PaginationContext {
+    pub(crate) geometry: super::page_context::PageGeometryContext,
+    pub(crate) footnote_area: FootnoteAreaLayout,
+    pub(crate) root_margin_top: f32,
 }
 
-/// Spread margins for the `:left` / `:right` page pseudo-classes (CSS Paged Media
-/// 3 §3.2). Each is the full page margin to tag pages of that spread side with,
-/// resolved from the default margin plus the side's declared `margin-*`. In LTR
-/// page 1 is a `:right` page, so odd 1-based pages are `:right` and even are
-/// `:left`. `None` keeps the document-global margin for that side (the universal
-/// corpus case), so behaviour is unchanged when no spread rule is present.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct SpreadMargins {
-    pub left: Option<Margin>,
-    pub right: Option<Margin>,
-}
-
-/// Resolved declarations for a named `@page <name>` rule before pagination. The
-/// margin always starts from the document-global margin; `page_size` is present
-/// only when that named rule declares `size`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct NamedPageOverride {
-    pub margin: Margin,
-    pub page_size: Option<PageSize>,
-}
-
-/// All per-page margin overrides resolved from `@page` pseudo-class rules (CSS
-/// Paged Media 3 §3.2–3.4), bundled so the layout entry point threads one value
-/// instead of several. `first` is the `:first` margin (page 1); `spread` carries
-/// the `:left`/`:right` margins applied by page parity; `named` maps each
-/// `@page <name>` to its margin (CSS Paged Media 3 §3.4 named pages), applied to
-/// the page started by a `page: <name>` box. A `Default` value reproduces the
-/// document-global margin on every page.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PageMarginOverrides {
-    pub first: Option<Margin>,
-    pub spread: SpreadMargins,
-    pub named: HashMap<String, NamedPageOverride>,
-    pub footnote_area: FootnoteAreaLayout,
-}
-
-/// Geometry of a named page (CSS Paged Media 3 §3.4), pre-resolved at the layout
-/// entry point where the page size and document-default margin are known. The
-/// `margin` tags the page so the renderer positions content against the named
-/// margin; `content_height` is the resulting fragmentainer height (page height
-/// minus the named top/bottom margin).
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct NamedPageGeom {
-    pub content_height: f32,
-    pub margin: Margin,
-    pub page_size: PageSize,
-}
-
-/// Document page geometry that stays constant outside named-page overrides.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DocumentPageGeometry {
-    pub content_height: f32,
-    pub page_height: f32,
-    pub root_margin_top: f32,
-}
-
-impl DocumentPageGeometry {
-    pub(crate) const fn new(content_height: f32, page_height: f32, root_margin_top: f32) -> Self {
+impl PaginationContext {
+    pub(crate) fn new(
+        geometry: super::page_context::PageGeometryContext,
+        footnote_area: FootnoteAreaLayout,
+        root_margin_top: f32,
+    ) -> Self {
         Self {
-            content_height,
-            page_height,
+            geometry,
+            footnote_area,
             root_margin_top,
         }
+    }
+
+    pub(crate) fn with_root_margin_top(mut self, root_margin_top: f32) -> Self {
+        self.root_margin_top = root_margin_top;
+        self
+    }
+
+    pub(crate) fn with_footnote_content_width(mut self, content_width: f32) -> Self {
+        self.footnote_area.content_width = content_width;
+        self
+    }
+
+    fn uniform(content_height: f32, root_margin_top: f32) -> Self {
+        Self::new(
+            super::page_context::PageGeometryContext::uniform(
+                PageSize::new(content_height, content_height),
+                Margin::uniform(0.0),
+            ),
+            FootnoteAreaLayout::default(),
+            root_margin_top,
+        )
+    }
+}
+
+/// Named-page identity active at the current fragmentation position.
+///
+/// Page identity is independent from geometry: `page: Appendix` still makes
+/// `@page Appendix:right` match even when no plain `@page Appendix` rule
+/// supplies a margin or size override.
+#[derive(Debug, Clone, Default)]
+struct ActivePageType {
+    name: Option<String>,
+}
+
+impl ActivePageType {
+    fn select(name: Option<String>) -> Self {
+        Self { name }
+    }
+
+    fn geometry(
+        &self,
+        cascade: &super::page_context::PageGeometryContext,
+        page_number: usize,
+        is_blank: bool,
+    ) -> super::page_context::PageGeometry {
+        cascade.resolve(crate::parser::css::PageSelectorContext {
+            page_number,
+            is_blank,
+            page_name: self.name.as_deref(),
+        })
     }
 }
 
@@ -2207,6 +2195,37 @@ impl PendingElement {
             is_fragment_continuation: true,
             avoid_group: None,
         }
+    }
+}
+
+#[derive(Default)]
+struct RepeatedPageDecorations {
+    elements: Vec<(f32, LayoutNode)>,
+}
+
+impl RepeatedPageDecorations {
+    fn capture(&mut self, block_offset: f32, element: &LayoutNode) {
+        self.elements.push((block_offset, element.clone()));
+    }
+
+    fn append_to(
+        &self,
+        page: &mut Vec<(f32, LayoutNode)>,
+        geometry: super::page_context::PageGeometry,
+    ) {
+        page.extend(self.elements.iter().map(|(block_offset, element)| {
+            let mut repeated = element.clone();
+            if let Some(background) = repeated.page_area_background_mut() {
+                background.fit_page_area(geometry.page_area_in_flow_space());
+            }
+            (*block_offset, repeated)
+        }));
+    }
+
+    fn page_elements(&self, geometry: super::page_context::PageGeometry) -> Vec<(f32, LayoutNode)> {
+        let mut elements = Vec::with_capacity(self.elements.len());
+        self.append_to(&mut elements, geometry);
+        elements
     }
 }
 
@@ -2619,83 +2638,35 @@ fn element_flow_geometry(element: &dyn LayoutElement) -> ElementFlowGeometry {
     geometry
 }
 
-/// Paginate with a single global content height (no per-page geometry). Thin
-/// wrapper over [`paginate_with_first_page`]; used by unit tests and any caller
-/// that does not need an `@page :first`/`:left`/`:right` override.
+/// Paginate with one uniform physical-page geometry.
 #[allow(dead_code)]
 pub(crate) fn paginate(
     elements: Vec<LayoutNode>,
     content_height: f32,
     root_margin_top: f32,
 ) -> Vec<Page> {
-    paginate_with_first_page(
+    paginate_with_context(
         elements,
-        DocumentPageGeometry::new(content_height, content_height, root_margin_top),
-        None,
-        SpreadMargins::default(),
-        HashMap::new(),
-        FootnoteAreaLayout::default(),
+        PaginationContext::uniform(content_height, root_margin_top),
         &HashMap::new(),
     )
 }
 
-/// Paginate with an optional first-page geometry override and optional
-/// `:left`/`:right` spread margins. When `first_page` is `None` and `spread` is
-/// empty this is identical to a single global `content_height`/margin for every
-/// page (the default path used by the whole corpus).
-pub(crate) fn paginate_with_first_page(
+/// Paginate after resolving each physical page against the complete `@page`
+/// selector cascade.
+pub(crate) fn paginate_with_context(
     elements: Vec<LayoutNode>,
-    default_geometry: DocumentPageGeometry,
-    first_page: Option<FirstPageGeom>,
-    spread: SpreadMargins,
-    named_pages: HashMap<String, NamedPageGeom>,
-    footnote_area: FootnoteAreaLayout,
+    context: PaginationContext,
     fonts: &HashMap<String, crate::parser::ttf::TtfFont>,
 ) -> Vec<Page> {
-    // The content height in force for the page currently being filled. Page 1
-    // uses the first-page override (if any); every page after page 1 reverts to
-    // the default. Updated to `default_content_height` immediately after the
-    // first page is finalized.
-    let mut content_height = first_page
-        .map(|f| f.content_height)
-        .unwrap_or(default_geometry.content_height);
-    let default_content_height = default_geometry.content_height;
-    let default_page_height = default_geometry.page_height;
-    let root_margin_top = default_geometry.root_margin_top;
-    // The margin tag applied to the FIRST emitted page (page 1).
-    let first_margin_override = first_page.map(|f| f.margin);
-    // The per-page margin override for the page about to be pushed, chosen by
-    // 1-based page number: `:first` wins on page 1, otherwise the spread side by
-    // parity (odd = `:right`, even = `:left` in LTR). `None` => document-global
-    // margin. `already_pushed` is `pages.len()` at the push site, so the new
-    // page's number is `already_pushed + 1`.
-    let page_margin_override = move |already_pushed: usize| -> Option<Margin> {
-        let page_no = already_pushed + 1;
-        if page_no == 1 {
-            if let Some(m) = first_margin_override {
-                return Some(m);
-            }
-        }
-        if page_no % 2 == 1 {
-            spread.right
-        } else {
-            spread.left
-        }
-    };
-    // CSS Paged Media 3 §3.4 named-page margin (`page: <name>`) currently in
-    // force. Set when a named `PageBreak` is consumed; it overrides the
-    // parity/`:first` margin for every page pushed while active (the page the
-    // named box starts and any continuation it overflows onto), and reverts
-    // when a different named break — or the document end — is reached. `None`
-    // means the default page geometry.
-    let mut pending_named_page: Option<NamedPageGeom> = None;
-    let mut pending_named_page_name: Option<String> = None;
+    let footnote_area = context.footnote_area;
+    let root_margin_top = context.root_margin_top;
+    let mut active_page_type = ActivePageType::default();
+    let mut current_page_geometry = active_page_type.geometry(&context.geometry, 1, false);
+    let mut content_height = current_page_geometry.content_height();
     let mut pages: Vec<Page> = Vec::new();
     let mut current_elements: Vec<(f32, LayoutNode)> = Vec::new();
-    let mut current_running_elements: HashMap<String, LayoutNode> = HashMap::new();
-    let mut current_running_elements_started: HashSet<String> = HashSet::new();
-    let mut current_named_strings: HashMap<String, String> = HashMap::new();
-    let mut current_named_strings_first: HashMap<String, String> = HashMap::new();
+    let mut current_generated_content = super::page_values::PageGeneratedContent::default();
     let mut pending_target_anchors: Vec<String> = Vec::new();
     let mut current_footnotes: Vec<FootnoteItem> = Vec::new();
     // Page 1 starts with body/html margin-top applied; continuation pages
@@ -2716,7 +2687,7 @@ pub(crate) fn paginate_with_first_page(
 
     // Collect synthetic full-page background elements that should be repeated
     // across every page during pagination.
-    let mut absolute_backgrounds: Vec<(f32, LayoutNode)> = Vec::new();
+    let mut repeated_decorations = RepeatedPageDecorations::default();
     // Track the y-position of positioned ancestors by depth so absolute descendants
     // resolve against the nearest positioned ancestor rather than the most recent one.
     let mut positioned_y_by_depth: HashMap<usize, f32> = HashMap::new();
@@ -2779,27 +2750,21 @@ pub(crate) fn paginate_with_first_page(
         }
         let marker = page_state_marker(element.as_ref());
         if let Some((name, running)) = marker.running {
-            current_running_elements_started.insert(name.clone());
-            current_running_elements.insert(name, running);
+            current_generated_content.capture_running(name, running, first_on_page);
             continue;
         }
         if let Some((name, value)) = marker.named {
             if target_anchor_id(&name).is_some() {
                 pending_target_anchors.push(name);
             } else {
-                current_named_strings_first
-                    .entry(name.clone())
-                    .or_insert_with(|| value.clone());
-                current_named_strings.insert(name, value);
+                current_generated_content.capture_named_string(name, value, first_on_page);
             }
             continue;
         }
         extract_page_state_markers(
             &mut element,
-            &mut current_running_elements,
-            &mut current_running_elements_started,
-            &mut current_named_strings,
-            &mut current_named_strings_first,
+            &mut current_generated_content,
+            first_on_page,
             &mut pending_target_anchors,
         );
 
@@ -2974,56 +2939,34 @@ pub(crate) fn paginate_with_first_page(
             });
             if !page_has_content {
                 // A named box that opens the document (no preceding content)
-                // still selects its page geometry: the leading break is
-                // suppressed but the first page adopts the named margin.
-                if let Some(geom) = name.as_ref().and_then(|n| named_pages.get(n)) {
-                    pending_named_page = Some(*geom);
-                    pending_named_page_name = name.clone();
-                    content_height = geom.content_height;
+                // still selects its page type: the leading break is suppressed,
+                // but the current physical page adopts its full selector context.
+                if name.is_some() {
+                    active_page_type = ActivePageType::select(name);
+                    current_page_geometry =
+                        active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+                    content_height = current_page_geometry.content_height();
                 }
                 continue;
             }
             let consumed_height = y;
             extend_open_column_flex_decoration_to_break(&mut current_elements, content_height);
-            // The page being finalized adopts the named margin in force while
-            // it was filled (if any), else the parity/`:first` override.
-            let margin_override = pending_named_page
-                .map(|geom| geom.margin)
-                .or_else(|| page_margin_override(pages.len()));
-            let page_size_override = pending_named_page.map(|geom| geom.page_size);
             pages.push(Page {
                 elements: std::mem::take(&mut current_elements),
                 print_content_scale: Default::default(),
                 document_svg_defs: Default::default(),
-                running_elements: current_running_elements.clone(),
-                running_elements_started: std::mem::take(&mut current_running_elements_started),
-                named_strings: current_named_strings.clone(),
-                named_strings_first: current_named_strings_first.clone(),
+                generated_content: current_generated_content.snapshot_and_advance(),
                 footnotes: std::mem::take(&mut current_footnotes),
-                margin_override,
-                page_size_override,
-                page_name: pending_named_page_name.clone(),
+                geometry: Some(current_page_geometry),
+                page_name: active_page_type.name.clone(),
                 is_blank: false,
             });
-            current_named_strings_first.clear();
-            // After page 1 is finalized, page 2+ use the default geometry —
-            // unless this break starts a named page (resolved just below).
-            content_height = default_content_height;
-            // Duplicate root background onto the new page.
-            for bg in &absolute_backgrounds {
-                current_elements.push(bg.clone());
-            }
-            // CSS Paged Media 3 §3.4: a `page: <name>` break starts a page
-            // whose geometry is the matching `@page <name>` rule. Switch the
-            // active named margin (and fragmentainer height) to it; a break
-            // back to the default flow clears it.
-            pending_named_page = None;
-            pending_named_page_name = None;
-            if let Some(geom) = name.as_ref().and_then(|n| named_pages.get(n)) {
-                pending_named_page = Some(*geom);
-                pending_named_page_name = name.clone();
-                content_height = geom.content_height;
-            }
+            // CSS Paged Media 3 §3.4: a `page: <name>` break changes the page
+            // type before resolving the next physical page.
+            active_page_type = ActivePageType::select(name);
+            current_page_geometry =
+                active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+            content_height = current_page_geometry.content_height();
             // Sided break (`break-*: left|right|recto|verso`): force the
             // following content onto a page of the requested parity. Page 1
             // is a right/recto page (LTR), so odd 1-based pages are right and
@@ -3041,31 +2984,24 @@ pub(crate) fn paginate_with_first_page(
                 let wants_right = matches!(side, PageBreakSide::Right | PageBreakSide::Recto);
                 let next_is_right = next_page_no % 2 == 1;
                 if wants_right != next_is_right {
-                    let mut blank: Vec<(f32, LayoutNode)> = Vec::new();
-                    for bg in &absolute_backgrounds {
-                        blank.push(bg.clone());
-                    }
-                    let margin_override = pending_named_page
-                        .map(|geom| geom.margin)
-                        .or_else(|| page_margin_override(pages.len()));
-                    let page_size_override = pending_named_page.map(|geom| geom.page_size);
+                    let blank_geometry =
+                        active_page_type.geometry(&context.geometry, next_page_no, true);
                     pages.push(Page {
-                        elements: blank,
+                        elements: repeated_decorations.page_elements(blank_geometry),
                         print_content_scale: Default::default(),
                         document_svg_defs: Default::default(),
-                        running_elements: current_running_elements.clone(),
-                        running_elements_started: HashSet::new(),
-                        named_strings: current_named_strings.clone(),
-                        named_strings_first: current_named_strings_first.clone(),
+                        generated_content: current_generated_content.snapshot_and_advance(),
                         footnotes: Vec::new(),
-                        margin_override,
-                        page_size_override,
-                        page_name: pending_named_page_name.clone(),
+                        geometry: Some(blank_geometry),
+                        page_name: active_page_type.name.clone(),
                         is_blank: true,
                     });
-                    current_named_strings_first.clear();
+                    current_page_geometry =
+                        active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+                    content_height = current_page_geometry.content_height();
                 }
             }
+            repeated_decorations.append_to(&mut current_elements, current_page_geometry);
             y = 0.0;
             prev_margin_bottom = 0.0;
             first_on_page = true;
@@ -3129,9 +3065,7 @@ pub(crate) fn paginate_with_first_page(
                 footnote_area,
                 fonts,
             );
-        let physical_page_height = pending_named_page
-            .map(|geom| geom.page_size.height)
-            .unwrap_or(default_page_height);
+        let physical_page_height = current_page_geometry.size.height;
         let empty_fixed_height_box = is_empty_fixed_height_box(element.as_ref());
         // An empty definite-height box can extend into page margins when its
         // border box still fits on the physical sheet. Once it exceeds that
@@ -3154,8 +3088,11 @@ pub(crate) fn paginate_with_first_page(
             if elem_positioned_depth > 0 {
                 positioned_y_by_depth.insert(elem_positioned_depth, abs_y);
             }
+            if let Some(background) = element.page_area_background_mut() {
+                background.fit_page_area(current_page_geometry.page_area_in_flow_space());
+            }
             if repeats_on_each_page(element.as_ref()) {
-                absolute_backgrounds.push((abs_y, element.clone()));
+                repeated_decorations.capture(abs_y, &element);
             }
             collect_footnotes_from_element(&element, &mut current_footnotes);
             current_elements.push((abs_y, element));
@@ -3258,33 +3195,20 @@ pub(crate) fn paginate_with_first_page(
                     collect_footnotes_from_element(&first, &mut current_footnotes);
                     current_elements.push((y, first));
                     let consumed_height = content_height;
-                    let margin_override = pending_named_page
-                        .map(|geom| geom.margin)
-                        .or_else(|| page_margin_override(pages.len()));
-                    let page_size_override = pending_named_page.map(|geom| geom.page_size);
                     pages.push(Page {
                         elements: std::mem::take(&mut current_elements),
                         print_content_scale: Default::default(),
                         document_svg_defs: Default::default(),
-                        running_elements: current_running_elements.clone(),
-                        running_elements_started: std::mem::take(
-                            &mut current_running_elements_started,
-                        ),
-                        named_strings: current_named_strings.clone(),
-                        named_strings_first: current_named_strings_first.clone(),
+                        generated_content: current_generated_content.snapshot_and_advance(),
                         footnotes: std::mem::take(&mut current_footnotes),
-                        margin_override,
-                        page_size_override,
-                        page_name: pending_named_page_name.clone(),
+                        geometry: Some(current_page_geometry),
+                        page_name: active_page_type.name.clone(),
                         is_blank: false,
                     });
-                    current_named_strings_first.clear();
-                    content_height = pending_named_page
-                        .map(|geom| geom.content_height)
-                        .unwrap_or(default_content_height);
-                    for bg in &absolute_backgrounds {
-                        current_elements.push(bg.clone());
-                    }
+                    current_page_geometry =
+                        active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+                    content_height = current_page_geometry.content_height();
+                    repeated_decorations.append_to(&mut current_elements, current_page_geometry);
                     y = 0.0;
                     prev_margin_bottom = 0.0;
                     first_on_page = true;
@@ -3308,33 +3232,20 @@ pub(crate) fn paginate_with_first_page(
                     collect_footnotes_from_element(&first, &mut current_footnotes);
                     current_elements.push((y, first));
                     let consumed_height = content_height;
-                    let margin_override = pending_named_page
-                        .map(|geom| geom.margin)
-                        .or_else(|| page_margin_override(pages.len()));
-                    let page_size_override = pending_named_page.map(|geom| geom.page_size);
                     pages.push(Page {
                         elements: std::mem::take(&mut current_elements),
                         print_content_scale: Default::default(),
                         document_svg_defs: Default::default(),
-                        running_elements: current_running_elements.clone(),
-                        running_elements_started: std::mem::take(
-                            &mut current_running_elements_started,
-                        ),
-                        named_strings: current_named_strings.clone(),
-                        named_strings_first: current_named_strings_first.clone(),
+                        generated_content: current_generated_content.snapshot_and_advance(),
                         footnotes: std::mem::take(&mut current_footnotes),
-                        margin_override,
-                        page_size_override,
-                        page_name: pending_named_page_name.clone(),
+                        geometry: Some(current_page_geometry),
+                        page_name: active_page_type.name.clone(),
                         is_blank: false,
                     });
-                    current_named_strings_first.clear();
-                    content_height = pending_named_page
-                        .map(|geom| geom.content_height)
-                        .unwrap_or(default_content_height);
-                    for bg in &absolute_backgrounds {
-                        current_elements.push(bg.clone());
-                    }
+                    current_page_geometry =
+                        active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+                    content_height = current_page_geometry.content_height();
+                    repeated_decorations.append_to(&mut current_elements, current_page_geometry);
                     y = 0.0;
                     prev_margin_bottom = 0.0;
                     first_on_page = true;
@@ -3362,35 +3273,21 @@ pub(crate) fn paginate_with_first_page(
                 }
             }
             let consumed_height = y;
-            // A natural (overflow) break inside named content keeps the active
-            // named margin on the continuation page.
-            let margin_override = pending_named_page
-                .map(|geom| geom.margin)
-                .or_else(|| page_margin_override(pages.len()));
-            let page_size_override = pending_named_page.map(|geom| geom.page_size);
             pages.push(Page {
                 elements: std::mem::take(&mut current_elements),
                 print_content_scale: Default::default(),
                 document_svg_defs: Default::default(),
-                running_elements: current_running_elements.clone(),
-                running_elements_started: std::mem::take(&mut current_running_elements_started),
-                named_strings: current_named_strings.clone(),
-                named_strings_first: current_named_strings_first.clone(),
+                generated_content: current_generated_content.snapshot_and_advance(),
                 footnotes: std::mem::take(&mut current_footnotes),
-                margin_override,
-                page_size_override,
-                page_name: pending_named_page_name.clone(),
+                geometry: Some(current_page_geometry),
+                page_name: active_page_type.name.clone(),
                 is_blank: false,
             });
-            current_named_strings_first.clear();
-            // Continuations inside named content keep that named fragmentainer.
-            content_height = pending_named_page
-                .map(|geom| geom.content_height)
-                .unwrap_or(default_content_height);
+            current_page_geometry =
+                active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+            content_height = current_page_geometry.content_height();
             // Duplicate root background onto the new page.
-            for bg in &absolute_backgrounds {
-                current_elements.push(bg.clone());
-            }
+            repeated_decorations.append_to(&mut current_elements, current_page_geometry);
             y = 0.0;
             on_first_page = false;
             // prev_margin_bottom and first_on_page are reset at the bottom of
@@ -3446,8 +3343,8 @@ pub(crate) fn paginate_with_first_page(
             }
             apply_pending_target_anchors(
                 &mut pending_target_anchors,
-                &mut current_named_strings,
-                &mut current_named_strings_first,
+                &mut current_generated_content,
+                first_on_page,
             );
             collect_footnotes_from_element(&element, &mut current_footnotes);
             current_elements.push((y, element));
@@ -3512,40 +3409,28 @@ pub(crate) fn paginate_with_first_page(
                 y += effective_margin_top;
                 apply_pending_target_anchors(
                     &mut pending_target_anchors,
-                    &mut current_named_strings,
-                    &mut current_named_strings_first,
+                    &mut current_generated_content,
+                    first_on_page,
                 );
                 collect_footnotes_from_element(&first, &mut current_footnotes);
                 current_elements.push((y, first));
                 // Close the page (the fragmentainer is full) and reset flow state
                 // for the continuation, mirroring a normal mid-loop page break.
                 let consumed_height = content_height;
-                let margin_override = pending_named_page
-                    .map(|geom| geom.margin)
-                    .or_else(|| page_margin_override(pages.len()));
-                let page_size_override = pending_named_page.map(|geom| geom.page_size);
                 pages.push(Page {
                     elements: std::mem::take(&mut current_elements),
                     print_content_scale: Default::default(),
                     document_svg_defs: Default::default(),
-                    running_elements: current_running_elements.clone(),
-                    running_elements_started: std::mem::take(&mut current_running_elements_started),
-                    named_strings: current_named_strings.clone(),
-                    named_strings_first: current_named_strings_first.clone(),
+                    generated_content: current_generated_content.snapshot_and_advance(),
                     footnotes: std::mem::take(&mut current_footnotes),
-                    margin_override,
-                    page_size_override,
-                    page_name: pending_named_page_name.clone(),
+                    geometry: Some(current_page_geometry),
+                    page_name: active_page_type.name.clone(),
                     is_blank: false,
                 });
-                current_named_strings_first.clear();
-                // Continuations inside named content keep that named fragmentainer.
-                content_height = pending_named_page
-                    .map(|geom| geom.content_height)
-                    .unwrap_or(default_content_height);
-                for bg in &absolute_backgrounds {
-                    current_elements.push(bg.clone());
-                }
+                current_page_geometry =
+                    active_page_type.geometry(&context.geometry, pages.len() + 1, false);
+                content_height = current_page_geometry.content_height();
+                repeated_decorations.append_to(&mut current_elements, current_page_geometry);
                 y = 0.0;
                 prev_margin_bottom = 0.0;
                 first_on_page = true;
@@ -3584,8 +3469,8 @@ pub(crate) fn paginate_with_first_page(
 
         apply_pending_target_anchors(
             &mut pending_target_anchors,
-            &mut current_named_strings,
-            &mut current_named_strings_first,
+            &mut current_generated_content,
+            first_on_page,
         );
         collect_footnotes_from_element(&element, &mut current_footnotes);
         current_elements.push((effective_y, element));
@@ -3606,41 +3491,28 @@ pub(crate) fn paginate_with_first_page(
         .iter()
         .any(|(_, element)| element.page_content_role().retains_page());
     if !current_elements.is_empty() && (has_real_content || pages.is_empty()) {
-        // The last page keeps the active named margin (a `page: <name>` block at
-        // the document end, the common cover-page case).
-        let margin_override = pending_named_page
-            .map(|geom| geom.margin)
-            .or_else(|| page_margin_override(pages.len()));
-        let page_size_override = pending_named_page.map(|geom| geom.page_size);
         pages.push(Page {
             elements: current_elements,
             print_content_scale: Default::default(),
             document_svg_defs: Default::default(),
-            running_elements: current_running_elements.clone(),
-            running_elements_started: std::mem::take(&mut current_running_elements_started),
-            named_strings: current_named_strings.clone(),
-            named_strings_first: current_named_strings_first.clone(),
+            generated_content: current_generated_content.clone(),
             footnotes: std::mem::take(&mut current_footnotes),
-            margin_override,
-            page_size_override,
-            page_name: pending_named_page_name.clone(),
+            geometry: Some(current_page_geometry),
+            page_name: active_page_type.name.clone(),
             is_blank: false,
         });
     }
 
     if pages.is_empty() {
+        let geometry = active_page_type.geometry(&context.geometry, 1, false);
         pages.push(Page {
             elements: Vec::new(),
             print_content_scale: Default::default(),
             document_svg_defs: Default::default(),
-            running_elements: current_running_elements,
-            running_elements_started: current_running_elements_started,
-            named_strings: current_named_strings,
-            named_strings_first: current_named_strings_first,
+            generated_content: current_generated_content,
             footnotes: current_footnotes,
-            margin_override: page_margin_override(0),
-            page_size_override: None,
-            page_name: None,
+            geometry: Some(geometry),
+            page_name: active_page_type.name,
             is_blank: false,
         });
     }
@@ -4261,13 +4133,16 @@ mod break_tests {
 
     #[test]
     fn empty_fixed_height_blocks_can_extend_into_page_margins() {
-        let pages = paginate_with_first_page(
+        let pages = paginate_with_context(
             vec![block(100.0), block(100.0)],
-            DocumentPageGeometry::new(98.0, 100.0, 0.0),
-            None,
-            SpreadMargins::default(),
-            HashMap::new(),
-            FootnoteAreaLayout::default(),
+            PaginationContext::new(
+                super::super::page_context::PageGeometryContext::uniform(
+                    PageSize::new(100.0, 100.0),
+                    Margin::new(1.0, 0.0, 1.0, 0.0),
+                ),
+                FootnoteAreaLayout::default(),
+                0.0,
+            ),
             &HashMap::new(),
         );
 
@@ -4277,13 +4152,16 @@ mod break_tests {
 
     #[test]
     fn empty_fixed_height_continuations_keep_fragmenting_to_the_content_box() {
-        let pages = paginate_with_first_page(
+        let pages = paginate_with_context(
             vec![block(220.0)],
-            DocumentPageGeometry::new(64.0, 104.0, 0.0),
-            None,
-            SpreadMargins::default(),
-            HashMap::new(),
-            FootnoteAreaLayout::default(),
+            PaginationContext::new(
+                super::super::page_context::PageGeometryContext::uniform(
+                    PageSize::new(104.0, 104.0),
+                    Margin::new(20.0, 0.0, 20.0, 0.0),
+                ),
+                FootnoteAreaLayout::default(),
+                0.0,
+            ),
             &HashMap::new(),
         );
 
@@ -5010,16 +4888,8 @@ mod break_tests {
         // adopts the matching `@page <name>` margin; the page before it keeps the
         // default geometry.
         let named_margin = crate::types::Margin::uniform(5.0);
-        let mut named = HashMap::new();
-        named.insert(
-            "wide".to_string(),
-            NamedPageGeom {
-                content_height: 990.0,
-                margin: named_margin,
-                page_size: PageSize::A4,
-            },
-        );
-        let pages = paginate_with_first_page(
+        let rules = crate::parser::css::parse_page_rules("@page wide { margin: 5pt; }");
+        let pages = paginate_with_context(
             vec![
                 block(100.0),
                 PageBreak {
@@ -5029,30 +4899,36 @@ mod break_tests {
                 .boxed(),
                 block(100.0),
             ],
-            DocumentPageGeometry::new(1000.0, 1000.0, 0.0),
-            None,
-            SpreadMargins::default(),
-            named,
-            FootnoteAreaLayout::default(),
+            PaginationContext::new(
+                super::super::page_context::PageGeometryContext::from_rules(
+                    PageSize::new(1000.0, 1000.0),
+                    Margin::uniform(0.0),
+                    &rules,
+                ),
+                FootnoteAreaLayout::default(),
+                0.0,
+            ),
             &HashMap::new(),
         );
         assert_eq!(pages.len(), 2);
         assert_eq!(
-            pages[0].margin_override, None,
+            pages[0].geometry.map(|geometry| geometry.margin),
+            Some(Margin::uniform(0.0)),
             "page 1 keeps default margin"
         );
         assert_eq!(
-            pages[1].margin_override,
+            pages[1].geometry.map(|geometry| geometry.margin),
             Some(named_margin),
             "page 2 adopts the @page wide margin"
         );
     }
 
     #[test]
-    fn named_page_break_to_unknown_name_keeps_default_margin() {
-        // A `page: <name>` with no matching `@page <name>` rule still forces the
-        // break, but the started page keeps the default geometry (no override).
-        let pages = paginate_with_first_page(
+    fn named_page_break_without_geometry_retains_page_identity() {
+        // A page type exists independently from an @page geometry rule. Its
+        // identity must remain available to compound selectors such as
+        // `@page ghost:right`, while its geometry stays at the default.
+        let pages = paginate_with_context(
             vec![
                 block(100.0),
                 PageBreak {
@@ -5062,15 +4938,22 @@ mod break_tests {
                 .boxed(),
                 block(100.0),
             ],
-            DocumentPageGeometry::new(1000.0, 1000.0, 0.0),
-            None,
-            SpreadMargins::default(),
-            HashMap::new(),
-            FootnoteAreaLayout::default(),
+            PaginationContext::new(
+                super::super::page_context::PageGeometryContext::uniform(
+                    PageSize::new(1000.0, 1000.0),
+                    Margin::uniform(0.0),
+                ),
+                FootnoteAreaLayout::default(),
+                0.0,
+            ),
             &HashMap::new(),
         );
         assert_eq!(pages.len(), 2);
-        assert_eq!(pages[1].margin_override, None);
+        assert_eq!(
+            pages[1].geometry.map(|geometry| geometry.margin),
+            Some(Margin::uniform(0.0))
+        );
+        assert_eq!(pages[1].page_name.as_deref(), Some("ghost"));
     }
 
     #[test]

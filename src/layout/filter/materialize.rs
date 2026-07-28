@@ -29,7 +29,10 @@ pub(crate) fn materialize_page_filters(
     filter_dpi: f32,
 ) {
     for page in pages {
-        let margin = page.margin_override.unwrap_or(document_margin);
+        let margin = page
+            .geometry
+            .map(crate::layout::page_context::PageGeometry::flow_margin)
+            .unwrap_or(document_margin);
         for (y, element) in &mut page.elements {
             let anchor =
                 page_border_box_anchor(element.as_ref(), Point::new(margin.left, margin.top + *y));
@@ -43,7 +46,7 @@ pub(crate) fn materialize_page_filters(
                 filter_dpi,
             );
         }
-        for element in page.running_elements.values_mut() {
+        for element in page.generated_content.running_elements_mut() {
             let anchor =
                 page_border_box_anchor(element.as_ref(), Point::new(margin.left, margin.top));
             materialize_node_filter(

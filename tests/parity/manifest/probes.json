@@ -52,10 +52,6 @@
     "file": "cases/probes/probe-text-baseline.html",
     "kind": "probe",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS 2.1 section 10.8.1 defines a line box from its inline boxes and does not require a CSS-pixel ceiling. Here WeasyPrint 69 and Ironpress preserve the fractional 30.230469pt line bottom, while Chromium's PDF expands it to 30.75pt. Chromium remains a compatibility canary; its exact raster is not a unique normative geometry oracle."
-    },
     "depends_on": []
   },
   {

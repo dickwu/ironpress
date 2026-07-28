@@ -401,14 +401,13 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
     register_used_custom_fonts(&mut pdf_writer, custom_fonts, &prepared_custom_fonts);
 
     for (page_idx, page) in pages.iter().enumerate() {
-        // Per-page physical page-size override (CSS Paged Media 3 §3.4 named
-        // pages). Shadowing `page_size` makes all downstream coordinate math and
-        // the PDF MediaBox use this page's selected dimensions.
-        let page_size = page.page_size_override.unwrap_or(page_size);
-        let page_content_transform =
-            PageContentTransform::print(PdfVector::new(page_size.width, page_size.height))
-                .with_content_scale(page.print_content_scale);
-        pdf_writer.page_content_transform = page_content_transform;
+        let page_geometry =
+            page.geometry
+                .unwrap_or(crate::layout::page_context::PageGeometry::new(
+                    page_size, margin,
+                ));
+        // Per-page physical page size selected by the page-context cascade.
+        let page_size = page_geometry.size;
         let sheet = decoration.map_or_else(PageSheet::default, |dec| dec.sheet);
         let media_size = sheet.media_size(page_size);
         // Transparency Form XObjects clip to their /BBox. Use the exact visible
@@ -416,15 +415,19 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
         // descendants may leave their untransformed element box, but anything
         // outside this rectangle cannot contribute to the output page.
         let page_paint_box = sheet.paint_box(page_size);
-        // Per-page margin override (CSS Paged Media 3 §3 page-context cascade,
-        // e.g. an `@page :first` first-page margin, or `:left`/`:right` spread
-        // margins). Shadowing `margin` here makes every downstream position
-        // computation in this loop use the page's own content box; `None` (the
-        // universal case for the corpus) keeps the document-global margin, so
-        // behavior is unchanged.
-        let margin = page.margin_override.unwrap_or(margin);
-        let available_width = page_size.width - margin.horizontal();
+        let page_margin = page_geometry.margin;
+        let flow_margin = page_geometry.flow_margin();
+        let physical_page_transform =
+            PageContentTransform::print(PdfVector::new(page_size.width, page_size.height));
+        let page_content_transform = physical_page_transform.with_content_scale(
+            page.print_content_scale,
+            PdfPoint::new(page_margin.left, page_size.height - page_margin.top),
+        );
+        pdf_writer.page_content_transform = page_content_transform;
+        let available_width = page_geometry.content_size().width;
         let mut content = String::new();
+        let mut page_background_content = String::new();
+        let mut document_canvas_content = String::new();
         let mut annotations: Vec<LinkAnnotation> = Vec::new();
         let mut page_images: Vec<ImageRef> = Vec::new();
         let mut page_ext_gstates: Vec<(String, f32)> = Vec::new();
@@ -435,7 +438,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
         // Optional occlusion culling (default off): rectangles of fully-opaque
         // coverers, used to skip rasters that a later opaque element fully hides.
         let occlusion_coverers = if pdf_writer.opts.occlusion_cull {
-            collect_opaque_coverers(page, page_size, margin, available_width)
+            collect_opaque_coverers(page, page_size, flow_margin, available_width)
         } else {
             Vec::new()
         };
@@ -454,8 +457,13 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 page_paint_box,
                 page_size.height,
             )
-            .with_initial_fixed_origin(PdfPoint::new(margin.left, page_size.height - margin.top));
+            .with_initial_fixed_origin(PdfPoint::new(
+                flow_margin.left,
+                page_size.height - flow_margin.top,
+            ));
             let mut stacking_plan = StackingPaintPlan::default();
+            let mut page_background_plan = StackingPaintPlan::default();
+            let mut document_canvas_plan = StackingPaintPlan::default();
             for planned in plan_page_elements(&page.elements) {
                 let elem_idx = planned.index;
                 let (y_pos, element) = &page.elements[elem_idx];
@@ -468,7 +476,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 let element_frame = PageElementFrame {
                     occlusion_coverers: &occlusion_coverers,
                     page_size,
-                    margin,
+                    margin: flow_margin,
                     available_width,
                     y_pos: *y_pos,
                     element_index: elem_idx,
@@ -477,8 +485,16 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 let marker = ctx.stacking.marker();
                 let annotation_marker = ctx.text.annotation_marker();
                 let paint_only = element.is_page_paint_continuation();
+                let page_area_paint_space = element
+                    .page_area_background()
+                    .map(crate::layout::elements::PageAreaBackground::paint_space);
+                let physical_page_background = page_area_paint_space
+                    == Some(crate::layout::elements::PageAreaPaintSpace::PhysicalPage);
                 let mut element_content = String::new();
                 let mut discarded_bookmarks = Vec::new();
+                if physical_page_background {
+                    ctx.text.pdf_writer.page_content_transform = physical_page_transform;
+                }
                 element.accept(&mut PageElementRenderer {
                     content: &mut element_content,
                     frame: element_frame,
@@ -490,14 +506,26 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     },
                     ctx: &mut ctx,
                 });
+                if physical_page_background {
+                    ctx.text.pdf_writer.page_content_transform = page_content_transform;
+                }
                 if paint_only {
                     ctx.text.discard_annotations_since(annotation_marker);
                 }
                 let descendants = ctx.stacking.take_since(marker);
+                let (destination, plan) = match page_area_paint_space {
+                    Some(crate::layout::elements::PageAreaPaintSpace::PhysicalPage) => {
+                        (&mut page_background_content, &mut page_background_plan)
+                    }
+                    Some(crate::layout::elements::PageAreaPaintSpace::FittedDocumentCanvas) => {
+                        (&mut document_canvas_content, &mut document_canvas_plan)
+                    }
+                    None => (&mut content, &mut stacking_plan),
+                };
                 ctx.stacking.commit(
                     StackingScope::Local,
-                    &mut content,
-                    &mut stacking_plan,
+                    destination,
+                    plan,
                     layout_element_paint_order(element.as_ref()).with_in_flow_phase(
                         planned.phase.paints_decoration(),
                         planned.phase.paints_contents(),
@@ -506,6 +534,10 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     descendants,
                 );
             }
+            ctx.stacking
+                .paint_plan(page_background_plan, &mut page_background_content);
+            ctx.stacking
+                .paint_plan(document_canvas_plan, &mut document_canvas_content);
             ctx.stacking.paint_plan(stacking_plan, &mut content);
         }
 
@@ -513,7 +545,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
             &mut content,
             &page.footnotes,
             page_size,
-            margin,
+            page_margin,
             decoration.map(|dec| dec.footnote_area).unwrap_or_default(),
             custom_fonts,
             &prepared_custom_fonts,
@@ -539,7 +571,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     .replace("{page}", &page_num.to_string())
                     .replace("{pages}", &total_pages.to_string());
                 let encoded = encode_pdf_text(&text);
-                let header_y = page_size.height - margin.top / 2.0;
+                let header_y = page_size.height - page_margin.top / 2.0;
                 decoration_content.push_str("BT\n");
                 decoration_content.push_str("/Helvetica 9 Tf\n");
                 decoration_content.push_str("0.4 0.4 0.4 rg\n");
@@ -553,7 +585,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     .replace("{page}", &page_num.to_string())
                     .replace("{pages}", &total_pages.to_string());
                 let encoded = encode_pdf_text(&text);
-                let footer_y = margin.bottom / 2.0;
+                let footer_y = page_margin.bottom / 2.0;
                 decoration_content.push_str("BT\n");
                 decoration_content.push_str("/Helvetica 9 Tf\n");
                 decoration_content.push_str("0.4 0.4 0.4 rg\n");
@@ -596,32 +628,14 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                             text_fragments
                                 .push((total_pages.to_string(), margin_text.font_family.clone()));
                         }
-                        MarginContentToken::Element(name) => {
-                            let (name, policy) = name
-                                .split_once('|')
-                                .map_or((name.as_str(), None), |(name, policy)| {
-                                    (name, Some(policy))
-                                });
-                            if policy == Some("first-except")
-                                && page.running_elements_started.contains(name)
-                            {
-                                running_element = None;
-                            } else {
-                                running_element = page.running_elements.get(name).map(Box::as_ref);
-                            }
+                        MarginContentToken::Element(reference) => {
+                            running_element = page.generated_content.running_element(reference);
                         }
-                        MarginContentToken::NamedString(name, policy) => {
-                            let value = match policy.as_deref() {
-                                Some("start") | Some("first") => page
-                                    .named_strings_first
-                                    .get(name)
-                                    .or_else(|| page.named_strings.get(name)),
-                                Some("last") => page.named_strings.get(name),
-                                _ => page.named_strings.get(name),
-                            };
+                        MarginContentToken::NamedString(reference) => {
+                            let value = page.generated_content.named_string(reference);
                             if let Some(value) = value {
                                 text_fragments
-                                    .push((value.clone(), margin_text.font_family.clone()));
+                                    .push((value.to_string(), margin_text.font_family.clone()));
                             }
                         }
                     }
@@ -634,7 +648,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                             mb.position.align(),
                             band,
                             page_size,
-                            margin,
+                            page_margin,
                             mb.background_color,
                             custom_fonts,
                             &prepared_custom_fonts,
@@ -662,15 +676,15 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     .iter()
                     .map(|run| estimate_run_width_with_fonts(run, custom_fonts))
                     .sum();
-                let margin_frame = PageMarginBoxFrame::new(page_size, margin);
+                let margin_frame = PageMarginBoxFrame::new(page_size, page_margin);
                 let margin_layout = margin_frame.layout(
                     mb.position,
                     mb.width,
                     text_w,
                     page_margin_box_center_fills_band(&dec.margin_boxes, mb_idx, page, page_num),
                 );
-                let plain_top_center = margin.top / 2.0;
-                let plain_bottom_center = margin.bottom / 2.0;
+                let plain_top_center = page_margin.top / 2.0;
+                let plain_bottom_center = page_margin.bottom / 2.0;
                 let y = match mb.position {
                     crate::parser::css::MarginBoxPosition::TopLeftCorner
                     | crate::parser::css::MarginBoxPosition::TopLeft
@@ -688,12 +702,12 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                     }
                     crate::parser::css::MarginBoxPosition::LeftTop
                     | crate::parser::css::MarginBoxPosition::RightTop => {
-                        page_size.height - margin.top
+                        page_size.height - page_margin.top
                     }
                     crate::parser::css::MarginBoxPosition::LeftMiddle
                     | crate::parser::css::MarginBoxPosition::RightMiddle => page_size.height / 2.0,
                     crate::parser::css::MarginBoxPosition::LeftBottom
-                    | crate::parser::css::MarginBoxPosition::RightBottom => margin.bottom,
+                    | crate::parser::css::MarginBoxPosition::RightBottom => page_margin.bottom,
                 };
                 let line_box = crate::render::pdf::document::PageMarginLineBox::from_runs(
                     &margin_runs,
@@ -701,7 +715,7 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
                 );
                 let text_y = band.map_or_else(
                     || y - (line_box.baseline_from_top - line_box.height / 2.0),
-                    |band| page_margin_text_baseline(band, page_size, margin, line_box),
+                    |band| page_margin_text_baseline(band, page_size, page_margin, line_box),
                 );
                 let text_x =
                     crate::layout::units::LayoutUnit::from_points_floor(margin_layout.text_x)
@@ -737,12 +751,28 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
 
         sheet.paint_marks(&mut decoration_content, page_size);
         let page_matrix = sheet.page_matrix(page_size).cm_operator();
+        let page_area = PdfRect::new(
+            page_margin.left,
+            page_margin.bottom,
+            page_geometry.page_area_size().width,
+            page_geometry.page_area_size().height,
+        );
 
-        // CSS Page paints document content before page-margin boxes. Preserve
-        // those semantic layers as separate PDF streams with independently
-        // balanced graphics states.
+        // CSS Page paints the physical page backdrop, the propagated document
+        // canvas, then document contents. The canvas participates in print
+        // fitting but remains outside the page-area clip; its inverse-sized
+        // geometry covers the page area with Chromium's device quantization.
+        // The clip slices transformed contents only after pagination, so
+        // transferred paint reaches its owning page without leaking from
+        // adjacent pages.
         let document_content = format!(
-            "q 1 0 0 1 0 0 cm\nq {page_matrix}q {}{content}Q\nQ\nQ\n",
+            "q 1 0 0 1 0 0 cm\nq {page_matrix}\
+             q {}{page_background_content}Q\n\
+             q {}{document_canvas_content}Q\n\
+             q {}W n\nq {}{content}Q\nQ\nQ\nQ\n",
+            physical_page_transform.operator(),
+            page_content_transform.operator(),
+            page_area.rect_path(),
             page_content_transform.operator(),
         );
         let decoration_stream = (!decoration_content.is_empty())

@@ -8,10 +8,6 @@
     "file": "cases/text-advanced/text-advanced-white-space-normal.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "The source uses a 21.6px line-height and produces an 80.8px border box. Ironpress and WeasyPrint preserve the fractional line positions and box height; Chromium's PDF serializes 22/21px line gaps and an 81px box. CSS Values 4 permits implementation-defined numeric precision, so this Chromium PDF is a compatibility canary rather than a unique pixel oracle."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box"
@@ -110,10 +106,6 @@
     "file": "cases/text-advanced/text-advanced-overflow-wrap-break-word.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "The source has three 21.6px lines and an 80.8px border box. Ironpress and WeasyPrint preserve those fractional CSS coordinates; Chromium's PDF serializes 22/21px line steps and an 81px box. CSS Values 4 treats dimensions as real values but permits implementation-defined supported precision, so this Chromium PDF is a compatibility canary rather than a unique pixel oracle."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box"
@@ -254,10 +246,6 @@
     "file": "cases/text-advanced/text-advanced-overflow-wrap-anywhere.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "The source has three 21.6px lines and an 80.8px border box. Ironpress and WeasyPrint preserve those fractional CSS coordinates; Chromium's PDF serializes 22/21px line steps and an 81px box. CSS Values 4 treats dimensions as real values but permits implementation-defined supported precision, so this Chromium PDF is a compatibility canary rather than a unique pixel oracle."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box"
@@ -314,10 +302,6 @@
     "file": "cases/text-advanced/text-advanced-hyphens-manual-soft-hyphen.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines break at the soft hyphen and paint the discretionary hyphen at the first-line end. The remaining raw difference is baseline and hyphen-glyph representation (Ironpress–WeasyPrint 6,303 changed pixels; Chrome–WeasyPrint 8,289), not manual hyphenation behavior. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box"
@@ -360,10 +344,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines wrap after the existing U+002D hyphen-minus and retain it on the first line. The raw signal is glyph placement (Ironpress–WeasyPrint 5,531 changed pixels; Chrome–WeasyPrint 7,073), not a wrap opportunity failure. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -381,10 +361,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Text 3 requires keep-all to suppress ordinary breaks within the CJK sequence. Chromium and Ironpress both keep all eight ideographs on one overflowing line with the same baseline and 24px advance. Chromium writes Type 3 glyphs while Ironpress embeds the same NotoSansCJKjp CFF face; their sub-1/256pt outline quantization differs, so this PDF is a line-breaking compatibility canary rather than a unique pixel oracle."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -436,10 +412,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "All engines keep the soft-hyphen word unbroken under hyphens:none. The raw signal is baseline and invisible-soft-hyphen representation (Ironpress–WeasyPrint 6,009 changed pixels; Chrome–WeasyPrint 7,957), not a prohibited line break. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

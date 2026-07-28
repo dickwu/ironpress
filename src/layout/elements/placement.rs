@@ -189,6 +189,10 @@ impl LayoutElement for FragmentBox {
         self.source.box_paint_owner()
     }
 
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
+        self.source.box_paint_owner_mut()
+    }
+
     fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         self.source.in_flow_paint_phase_owner()
     }
@@ -207,6 +211,14 @@ impl LayoutElement for FragmentBox {
 
     fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
         self.source.box_fragmentation_owner_mut()
+    }
+
+    fn page_area_background_mut(&mut self) -> Option<&mut dyn super::PageAreaBackground> {
+        self.source.page_area_background_mut()
+    }
+
+    fn page_area_background(&self) -> Option<&dyn super::PageAreaBackground> {
+        self.source.page_area_background()
     }
 
     fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
@@ -245,5 +257,9 @@ impl LayoutElement for FragmentBox {
 
     fn has_page_spanning_graphical_effect(&self) -> bool {
         self.source.has_page_spanning_graphical_effect()
+    }
+
+    fn retain_page_spanning_paint(&mut self) -> bool {
+        self.source.retain_page_spanning_paint()
     }
 }

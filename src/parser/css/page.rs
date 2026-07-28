@@ -1,10 +1,11 @@
 use super::{
-    CssValue, FontFaceRule, MarginBox, MarginBoxPosition, MarginContentToken, PageRule,
-    PageSelector, PageTextStyle, SpecifiedColor, extract_url_path,
+    CssValue, FontFaceRule, MarginBox, MarginBoxPosition, MarginContentToken, PageContentReference,
+    PageRule, PageSelector, PageTextStyle, SpecifiedColor, extract_url_path,
     model::{FontFaceSource, FontStretch, FootnoteAreaStyle, PageCounterControl, UnicodeRange},
     preprocess_media_queries,
 };
 use super::{PageBleed, PageOrientation, PrinterMarks};
+use cssparser::{Parser, ParserInput};
 
 /// Parse a CSS stylesheet and extract `@page` rules.
 pub fn parse_page_rules(css: &str) -> Vec<PageRule> {
@@ -233,60 +234,44 @@ fn parse_unicode_range(raw: &str) -> Option<UnicodeRange> {
     })
 }
 
-/// Classify the text between `@page` and `{` into a [`PageSelector`]
-/// (CSS Paged Media 3 §3). A bare `@page { }` is [`PageSelector::None`]; a
-/// leading page name yields [`PageSelector::Named`]; otherwise the pseudo-class
-/// (`:first`/`:left`/`:right`/`:blank`) is recognised.
-pub(crate) fn classify_page_selector(text: &str) -> PageSelector {
+/// Parse the comma-separated selector list between `@page` and `{`.
+///
+/// Each list item becomes an independent rule in source order, matching the
+/// CSS cascade model. Invalid selectors are discarded at this parse boundary
+/// instead of being weakened into a universal selector.
+pub(crate) fn parse_page_selector_list(text: &str) -> Vec<PageSelector> {
     let text = text.trim();
     if text.is_empty() {
-        return PageSelector::None;
+        return vec![PageSelector::universal()];
     }
-    // Preserve legacy selector-list classification: the current page geometry
-    // consumer has subtle list behavior that is regression-covered separately.
-    if text.contains(',') {
-        return classify_legacy_page_selector(text);
-    }
-    // A page name (if any) is the leading identifier before any pseudo-class.
-    let name = text.split(':').next().unwrap_or("").trim();
-    let pseudo = text.split_once(':').map(|(_, pseudo)| pseudo.trim());
-    if !name.is_empty() {
-        // The downstream enum/consumer cannot represent name+pseudo compounds;
-        // keep the pseudo side so spread-specific page geometry can still apply.
-        if let Some(selector) = pseudo.and_then(classify_page_pseudo) {
-            return selector;
-        }
-        return PageSelector::Named(name.to_string());
-    }
-    // No name — classify the first pseudo-class.
-    pseudo
-        .and_then(classify_page_pseudo)
-        .unwrap_or(PageSelector::None)
+
+    text.split(',')
+        .map(parse_page_selector)
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
-fn classify_legacy_page_selector(text: &str) -> PageSelector {
-    let text = text.trim();
-    let name = text.split(':').next().unwrap_or("").trim();
-    if !name.is_empty() {
-        return PageSelector::Named(name.to_string());
-    }
-    // No name — classify the first pseudo-class.
-    classify_page_pseudo(text.trim_start_matches(':').trim()).unwrap_or(PageSelector::None)
-}
+fn parse_page_selector(text: &str) -> Option<PageSelector> {
+    let mut input = ParserInput::new(text.trim());
+    let mut parser = Parser::new(&mut input);
+    let name = parser
+        .try_parse(|parser| parser.expect_ident_cloned())
+        .ok()
+        .map(|name| name.to_string());
+    let mut selector = name.map_or_else(PageSelector::universal, PageSelector::named);
 
-fn classify_page_pseudo(text: &str) -> Option<PageSelector> {
-    match text
-        .trim_start_matches(':')
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "first" => Some(PageSelector::First),
-        "left" => Some(PageSelector::Left),
-        "right" => Some(PageSelector::Right),
-        "blank" => Some(PageSelector::Blank),
-        _ => None,
+    while !parser.is_exhausted() {
+        parser.expect_colon().ok()?;
+        let pseudo = parser.expect_ident_cloned().ok()?;
+        selector = match pseudo.to_ascii_lowercase().as_str() {
+            "first" => selector.with_first(),
+            "blank" => selector.with_blank(),
+            "left" => selector.with_left(),
+            "right" => selector.with_right(),
+            _ => return None,
+        };
     }
+    Some(selector)
 }
 
 /// Extract @page rules from preprocessed CSS.
@@ -337,38 +322,41 @@ pub(crate) fn extract_page_rules(css: &str) -> Vec<PageRule> {
         // Pull nested page-context rules out before `;`-splitting the ordinary
         // declarations. This preserves both page-margin boxes and the GCPM
         // footnote area without treating a top-level `@footnote` as valid CSS.
-        let selector = classify_page_selector(selector_text);
+        let selectors = parse_page_selector_list(selector_text);
         let (mut margin_boxes, footnote_area, clean_decls) = split_page_at_rules(declarations);
         match parse_page_declarations(&clean_decls) {
             Some(mut rule) => {
-                rule.selector = selector.clone();
                 rule.footnote_area = footnote_area;
-                for mb in &mut margin_boxes {
-                    mb.selector = selector.clone();
-                    mb.page_counter = rule.page_counter;
+                for selector in selectors {
+                    rule.selector = selector.clone();
+                    for margin_box in &mut margin_boxes {
+                        margin_box.selector = selector.clone();
+                        margin_box.page_counter = rule.page_counter;
+                    }
+                    rule.margin_boxes.clone_from(&margin_boxes);
+                    page_rules.push(rule.clone());
                 }
-                rule.margin_boxes = margin_boxes.clone();
-                page_rules.push(rule);
             }
             None if !margin_boxes.is_empty() || footnote_area.is_some() => {
-                for mb in &mut margin_boxes {
-                    mb.selector = selector.clone();
+                for selector in selectors {
+                    for margin_box in &mut margin_boxes {
+                        margin_box.selector = selector.clone();
+                    }
+                    // A `@page` rule carrying only nested page-context rules
+                    // must still be retained so generated content is not
+                    // dropped.
+                    page_rules.push(PageRule {
+                        selector,
+                        margin_boxes: margin_boxes.clone(),
+                        footnote_area,
+                        ..PageRule::default()
+                    });
                 }
-                // A `@page` rule carrying only nested page-context rules must
-                // still be retained so the generated content is not dropped.
-                page_rules.push(PageRule {
-                    selector: selector.clone(),
-                    margin_boxes: margin_boxes.clone(),
-                    footnote_area,
-                    ..PageRule::default()
-                });
             }
             None => {}
         }
         remaining = &after_brace[close_pos + 1..];
     }
-
-    synthesize_first_page_spread_cascade(&mut page_rules);
 
     page_rules
 }
@@ -467,92 +455,6 @@ fn parse_footnote_border_top(value: &str, style: &mut FootnoteAreaStyle) {
     }
 }
 
-fn synthesize_first_page_spread_cascade(page_rules: &mut Vec<PageRule>) {
-    type PageSpecificity = (u8, u8, u8);
-    type CascadedMargin = Option<(f32, PageSpecificity, usize)>;
-
-    // Page 1 is both :first and :right. The layout resolver asks for :first
-    // margins exclusively, so append the cascaded union it should see there.
-    let mut has_first = false;
-    let mut has_right = false;
-    let mut margins: [CascadedMargin; 4] = [None; 4];
-
-    for (source_order, rule) in page_rules.iter().enumerate() {
-        let specificity = match rule.selector {
-            PageSelector::First => {
-                has_first = true;
-                (0, 1, 0)
-            }
-            PageSelector::Right => {
-                has_right = true;
-                (0, 0, 1)
-            }
-            _ => continue,
-        };
-        cascade_page_margin(&mut margins[0], rule.margin_top, specificity, source_order);
-        cascade_page_margin(
-            &mut margins[1],
-            rule.margin_right,
-            specificity,
-            source_order,
-        );
-        cascade_page_margin(
-            &mut margins[2],
-            rule.margin_bottom,
-            specificity,
-            source_order,
-        );
-        cascade_page_margin(&mut margins[3], rule.margin_left, specificity, source_order);
-    }
-
-    if !(has_first && has_right) {
-        return;
-    }
-
-    let mut rule = PageRule {
-        selector: PageSelector::First,
-        ..PageRule::default()
-    };
-    let mut any = false;
-    if let Some((value, _, _)) = margins[0] {
-        rule.margin_top = Some(value);
-        any = true;
-    }
-    if let Some((value, _, _)) = margins[1] {
-        rule.margin_right = Some(value);
-        any = true;
-    }
-    if let Some((value, _, _)) = margins[2] {
-        rule.margin_bottom = Some(value);
-        any = true;
-    }
-    if let Some((value, _, _)) = margins[3] {
-        rule.margin_left = Some(value);
-        any = true;
-    }
-    if any {
-        page_rules.push(rule);
-    }
-}
-
-fn cascade_page_margin(
-    slot: &mut Option<(f32, (u8, u8, u8), usize)>,
-    value: Option<f32>,
-    specificity: (u8, u8, u8),
-    source_order: usize,
-) {
-    let Some(value) = value else {
-        return;
-    };
-    let should_replace = slot.is_none_or(|(_, previous_specificity, previous_order)| {
-        specificity > previous_specificity
-            || (specificity == previous_specificity && source_order > previous_order)
-    });
-    if should_replace {
-        *slot = Some((value, specificity, source_order));
-    }
-}
-
 /// Split nested at-rules from an `@page` declaration block. The returned
 /// declaration text has every recognized page-context rule removed and remains
 /// safe to `;`-split.
@@ -606,7 +508,7 @@ pub(crate) fn split_page_at_rules(
             {
                 boxes.push(MarginBox {
                     position,
-                    selector: PageSelector::None,
+                    selector: PageSelector::universal(),
                     page_counter: PageCounterControl::default(),
                     color,
                     background_color,
@@ -738,13 +640,8 @@ pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
                 let mut parts = rest[8..end].split(',').map(str::trim);
                 let name = parts.next().unwrap_or("");
                 let policy = parts.next().filter(|s| !s.is_empty());
-                if !name.is_empty() {
-                    let mut encoded = name.to_ascii_lowercase();
-                    if let Some(policy) = policy {
-                        encoded.push('|');
-                        encoded.push_str(&policy.to_ascii_lowercase());
-                    }
-                    tokens.push(MarginContentToken::Element(encoded));
+                if let Some(reference) = PageContentReference::parse(name, policy) {
+                    tokens.push(MarginContentToken::Element(reference));
                 }
                 i += end + 1;
             } else {
@@ -755,11 +652,8 @@ pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
                 let mut parts = rest[7..end].split(',').map(str::trim);
                 let name = parts.next().unwrap_or("");
                 let policy = parts.next().filter(|s| !s.is_empty());
-                if !name.is_empty() {
-                    tokens.push(MarginContentToken::NamedString(
-                        name.to_ascii_lowercase(),
-                        policy.map(|s| s.to_ascii_lowercase()),
-                    ));
+                if let Some(reference) = PageContentReference::parse(name, policy) {
+                    tokens.push(MarginContentToken::NamedString(reference));
                 }
                 i += end + 1;
             } else {
@@ -1306,67 +1200,88 @@ mod tests {
             r#"@page :first { @bottom-right { content: "x" }; margin: 0 } @page { margin: 3cm }"#,
         );
         assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].selector, PageSelector::First);
+        assert_eq!(rules[0].selector, PageSelector::first());
         assert_eq!(rules[0].margin_top, Some(0.0));
-        assert_eq!(rules[1].selector, PageSelector::None);
+        assert_eq!(rules[1].selector, PageSelector::universal());
         assert!((rules[1].margin_top.unwrap() - 3.0 * 28.3465).abs() < 0.01);
     }
 
     #[test]
     fn extract_page_rules_captures_selector() {
         let first = extract_page_rules("@page :first { margin: 0 }");
-        assert_eq!(first[0].selector, PageSelector::First);
+        assert_eq!(first[0].selector, PageSelector::first());
 
         let left = extract_page_rules("@page :left { margin-left: 2cm }");
-        assert_eq!(left[0].selector, PageSelector::Left);
+        assert_eq!(left[0].selector, PageSelector::left());
 
         let right = extract_page_rules("@page :right { margin-right: 2cm }");
-        assert_eq!(right[0].selector, PageSelector::Right);
+        assert_eq!(right[0].selector, PageSelector::right());
 
         let blank = extract_page_rules("@page :blank { margin: 1cm }");
-        assert_eq!(blank[0].selector, PageSelector::Blank);
+        assert_eq!(blank[0].selector, PageSelector::blank());
 
         let named = extract_page_rules("@page cover { size: a4; margin: 1cm }");
-        assert_eq!(named[0].selector, PageSelector::Named("cover".to_string()));
+        assert_eq!(named[0].selector, PageSelector::named("cover"));
 
         let named_left = extract_page_rules("@page chapter:left { margin-left: 2cm }");
-        assert_eq!(named_left[0].selector, PageSelector::Left);
+        assert_eq!(
+            named_left[0].selector,
+            PageSelector::named("chapter").with_left()
+        );
 
         let default = extract_page_rules("@page { margin: 1cm }");
-        assert_eq!(default[0].selector, PageSelector::None);
+        assert_eq!(default[0].selector, PageSelector::universal());
     }
 
     #[test]
-    fn classify_page_selector_cases() {
-        assert_eq!(classify_page_selector(""), PageSelector::None);
-        assert_eq!(classify_page_selector("  "), PageSelector::None);
-        assert_eq!(classify_page_selector(":first"), PageSelector::First);
-        assert_eq!(classify_page_selector(" :left "), PageSelector::Left);
-        assert_eq!(classify_page_selector(":RIGHT"), PageSelector::Right);
+    fn parse_page_selector_list_preserves_compounds_and_lists() {
         assert_eq!(
-            classify_page_selector("cover"),
-            PageSelector::Named("cover".to_string())
+            parse_page_selector_list(""),
+            vec![PageSelector::universal()]
         );
-        assert_eq!(classify_page_selector("chapter:left"), PageSelector::Left);
-        assert_eq!(classify_page_selector("chapter:right"), PageSelector::Right);
         assert_eq!(
-            classify_page_selector("title, chapter"),
-            PageSelector::Named("title, chapter".to_string())
+            parse_page_selector_list(":first"),
+            vec![PageSelector::first()]
         );
+        assert_eq!(
+            parse_page_selector_list(" :left "),
+            vec![PageSelector::left()]
+        );
+        assert_eq!(
+            parse_page_selector_list(":RIGHT"),
+            vec![PageSelector::right()]
+        );
+        assert_eq!(
+            parse_page_selector_list("cover"),
+            vec![PageSelector::named("cover")]
+        );
+        assert_eq!(
+            parse_page_selector_list("chapter:left:first"),
+            vec![PageSelector::named("chapter").with_left().with_first()]
+        );
+        assert_eq!(
+            parse_page_selector_list("title, chapter:right"),
+            vec![
+                PageSelector::named("title"),
+                PageSelector::named("chapter").with_right()
+            ]
+        );
+        assert_eq!(
+            parse_page_selector_list(":left:left")[0].specificity(),
+            (0, 0, 2)
+        );
+        assert!(parse_page_selector_list(":unknown").is_empty());
     }
 
     #[test]
-    fn extract_page_rules_synthesizes_first_right_cascade() {
+    fn extract_page_rules_keeps_first_and_right_as_independent_cascade_inputs() {
         let rules = extract_page_rules(
             "@page{margin:0}@page :right{margin-left:40pt}@page :first{margin-top:20pt}",
         );
-        let first_rules: Vec<&PageRule> = rules
-            .iter()
-            .filter(|rule| rule.selector == PageSelector::First)
-            .collect();
-        let synthesized = first_rules.last().expect("synthetic first rule");
-        assert_eq!(synthesized.margin_top, Some(20.0));
-        assert_eq!(synthesized.margin_left, Some(40.0));
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].selector, PageSelector::universal());
+        assert_eq!(rules[1].selector, PageSelector::right());
+        assert_eq!(rules[2].selector, PageSelector::first());
     }
 
     #[test]
@@ -1539,7 +1454,10 @@ mod tests {
         let toks = parse_margin_box_content("element(runhead)");
         assert_eq!(
             toks,
-            vec![MarginContentToken::Element("runhead".to_string())]
+            vec![MarginContentToken::Element(PageContentReference::new(
+                "runhead".to_string(),
+                crate::parser::css::PageContentPolicy::First,
+            ))]
         );
     }
 

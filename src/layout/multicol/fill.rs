@@ -15,6 +15,57 @@ enum ColumnFillMode {
     Sequential,
 }
 
+/// Content-box sizing inputs shared by column distribution and decoration.
+///
+/// An automatic block size remains content-dependent, but its measured size
+/// must still pass through `min-height`/`max-height`. A definite `height`
+/// instead establishes the preferred column size before fragmentation.
+#[derive(Clone, Copy)]
+struct MulticolContentSizing {
+    constraints: SizeConstraints,
+    preferred: Option<f32>,
+    border_box_edges: f32,
+}
+
+impl MulticolContentSizing {
+    fn from_style(style: &ComputedStyle) -> Self {
+        let border_box_edges = style.padding.vertical() + style.border.vertical_width();
+        let to_content_box = |size: f32| match style.box_sizing {
+            BoxSizing::BorderBox => (size - border_box_edges).max(0.0),
+            BoxSizing::ContentBox => size.max(0.0),
+        };
+        let constraints =
+            SizeConstraints::new(style.min_height, style.max_height).map(to_content_box);
+        let preferred = style
+            .height
+            .map(to_content_box)
+            .map(|height| constraints.constrain(height));
+
+        Self {
+            constraints,
+            preferred,
+            border_box_edges,
+        }
+    }
+
+    fn fragmentation_limit(self) -> Option<f32> {
+        self.preferred.or_else(|| {
+            self.constraints
+                .maximum()
+                .map(|maximum| maximum.max(self.constraints.minimum().unwrap_or_default()))
+        })
+    }
+
+    fn preferred_border_box(self) -> Option<f32> {
+        self.preferred.map(|height| height + self.border_box_edges)
+    }
+
+    fn column_block_size(self, measured: f32) -> f32 {
+        self.preferred
+            .unwrap_or_else(|| self.constraints.constrain(measured))
+    }
+}
+
 /// Resolved block-axis behavior of one multi-column formatting context.
 ///
 /// The fragmentainer limit is content-box geometry. Keeping it beside the
@@ -23,44 +74,23 @@ enum ColumnFillMode {
 #[derive(Clone, Copy)]
 pub(super) struct MulticolBlockFlow {
     mode: ColumnFillMode,
-    content_limit: Option<f32>,
-    preferred_content: Option<f32>,
-    preferred_border_box: Option<f32>,
+    sizing: MulticolContentSizing,
 }
 
 impl MulticolBlockFlow {
     pub(super) fn from_style(style: &ComputedStyle) -> Self {
-        let edges = style.padding.vertical() + style.border.vertical_width();
-        let to_content_box = |size: f32| match style.box_sizing {
-            BoxSizing::BorderBox => (size - edges).max(0.0),
-            BoxSizing::ContentBox => size.max(0.0),
-        };
-        let constraints =
-            SizeConstraints::new(style.min_height, style.max_height).map(to_content_box);
-        let preferred_content = style
-            .height
-            .map(to_content_box)
-            .map(|height| constraints.constrain(height));
-        let content_limit = preferred_content.or_else(|| {
-            constraints
-                .maximum()
-                .map(|maximum| maximum.max(constraints.minimum().unwrap_or_default()))
-        });
-
         Self {
             mode: if style.column_fill_auto {
                 ColumnFillMode::Sequential
             } else {
                 ColumnFillMode::Balance
             },
-            content_limit,
-            preferred_content,
-            preferred_border_box: preferred_content.map(|height| height + edges),
+            sizing: MulticolContentSizing::from_style(style),
         }
     }
 
-    pub(super) const fn preferred_border_box(self) -> Option<f32> {
-        self.preferred_border_box
+    pub(super) fn preferred_border_box(self) -> Option<f32> {
+        self.sizing.preferred_border_box()
     }
 
     pub(super) fn fragment(
@@ -69,7 +99,7 @@ impl MulticolBlockFlow {
         indices: &[usize],
         column_count: usize,
     ) -> FragmentedColumns {
-        match (self.mode, self.content_limit) {
+        match (self.mode, self.sizing.fragmentation_limit()) {
             (ColumnFillMode::Sequential, Some(limit)) => fragment_columns(
                 items,
                 indices,
@@ -109,7 +139,7 @@ impl MulticolBlockFlow {
             .map(|&index| items[index].height)
             .collect::<Vec<_>>();
         let balanced = || balance_columns(&heights, column_count);
-        match (self.mode, self.content_limit) {
+        match (self.mode, self.sizing.fragmentation_limit()) {
             (ColumnFillMode::Sequential, Some(limit)) => {
                 fill_columns(&heights, column_count, limit)
             }
@@ -126,12 +156,11 @@ impl MulticolBlockFlow {
     }
 
     /// Column rules are as tall as their anonymous column boxes. A definite
-    /// `height` establishes that column height; `max-height` only caps a taller
-    /// content-dependent column and never stretches a shorter one.
+    /// `height` establishes that column height and `max-height` can cap it.
+    /// `min-height` and `max-height` constrain the used content-box height, and
+    /// every anonymous column in the multicol line has that same height.
     pub(super) fn rule_block_size(self, measured: f32) -> f32 {
-        self.preferred_content
-            .or_else(|| self.content_limit.map(|limit| measured.min(limit)))
-            .unwrap_or(measured)
+        self.sizing.column_block_size(measured)
     }
 }
 
@@ -172,5 +201,17 @@ mod tests {
         assert_eq!(capped.preferred_border_box(), None);
         assert_eq!(capped.rule_block_size(47.0), 40.0);
         assert_eq!(capped.rule_block_size(22.0), 22.0);
+    }
+
+    #[test]
+    fn minimum_height_stretches_automatic_column_rules() {
+        let floored = MulticolBlockFlow::from_style(&ComputedStyle {
+            min_height: Some(68.0),
+            ..bordered_style()
+        });
+
+        assert_eq!(floored.preferred_border_box(), None);
+        assert_eq!(floored.rule_block_size(22.0), 50.0);
+        assert_eq!(floored.rule_block_size(56.0), 56.0);
     }
 }

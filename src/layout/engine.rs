@@ -13,7 +13,9 @@ use crate::style::computed::{
     compute_style_with_context_with_font_metrics,
 };
 use crate::style::font_metrics::FontMetrics;
-use crate::types::{CornerRadii, EdgeSizes, Margin, PageSize, PhysicalEdges, PhysicalSide, Size};
+use crate::types::{
+    CornerRadii, EdgeSizes, Margin, PageSize, PhysicalEdges, PhysicalSide, Point, Size,
+};
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -26,8 +28,8 @@ use super::block::layout_block_element;
 use super::cells::CellBoxHolder;
 pub use super::cells::{GridCell, TableCell};
 pub(crate) use super::elements::{
-    AvoidPageBreak, BackgroundBoxGeometry, BoxFragmentation, BoxModel, BoxPaint, Container,
-    FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
+    AvoidPageBreak, BackgroundBox, BackgroundBoxGeometry, BoxFragmentation, BoxModel, BoxPaint,
+    Container, FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
     LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, LineFragmentation,
     MathBlock, NamedString, PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedContent,
     ReplacedFragment, ReplacedGeometry, RunningElement, Svg, SvgPaint, TableRow, TextBlock,
@@ -52,6 +54,7 @@ use super::list_markers::{
 };
 #[cfg(test)]
 use super::list_markers::{to_alpha_lower, to_roman_lower};
+use super::paginate::FootnoteAreaLayout;
 use super::print_scale::{PrintContentScale, assign_page_print_scales};
 use super::root_formatting::{DocumentRootStyles, RootFormattingContext};
 use super::table::{
@@ -1526,26 +1529,15 @@ pub struct Page {
     /// entry point stores the complete collection on the first page so it has a
     /// single owner even when pagination produces many pages.
     pub document_svg_defs: crate::parser::svg::SvgDefs,
-    /// Running elements active on this page, keyed by `position: running(name)`.
-    pub running_elements: HashMap<String, LayoutNode>,
-    /// Running element names captured on this page, used by
-    /// `element(name, first-except)` to suppress the defining page.
-    pub running_elements_started: std::collections::HashSet<String>,
-    /// Named strings active on this page, keyed by `string-set` name.
-    pub named_strings: HashMap<String, String>,
-    /// First named-string assignment that occurred on this page.
-    pub named_strings_first: HashMap<String, String>,
+    /// GCPM running elements and named strings, including the distinct entry,
+    /// first, start, and exit states for this physical page.
+    pub(crate) generated_content: super::page_values::PageGeneratedContent,
     /// CSS GCPM footnotes collected while laying out this page.
     pub footnotes: Vec<FootnoteItem>,
-    /// Per-page margin override (CSS Paged Media 3 §3 page-context cascade).
-    /// `None` means the page uses the document's global margin; `Some(m)` is
-    /// applied at render time instead (e.g. an `@page :first` first-page
-    /// margin). Layout positions inside `elements` are relative to this page's
-    /// own content box.
-    pub margin_override: Option<Margin>,
-    /// Per-page physical page-size override selected by a named `@page` rule.
-    /// `None` means the document-global page size is used.
-    pub page_size_override: Option<PageSize>,
+    /// Selected physical page geometry and root-flow insets. Keeping the two
+    /// coordinate spaces together prevents body gutters from becoming
+    /// physical `@page` clips.
+    pub(crate) geometry: Option<super::page_context::PageGeometry>,
     /// Active named page, when selected by the CSS `page` property.
     pub page_name: Option<String>,
     /// True for an inserted blank page from a forced left/right/recto/verso break.
@@ -1732,20 +1724,22 @@ impl PageMarginTextContext {
         }
 
         // The context owns one root style and clones it only when a physical
-        // page actually needs a cascade. Applying selectors from least to most
-        // specific preserves source order among equal-specificity rules.
+        // page actually needs a cascade. Merge specified declarations before
+        // computing them so `!important`, specificity, and source order remain
+        // one coherent cascade.
         let mut style = self.root_style.clone();
-        for specificity in [(0, 0, 0), (0, 0, 1), (0, 1, 0), (1, 0, 0)] {
-            for rule in &self.page_rules {
-                if rule.selector.specificity() == specificity && rule.selector.applies_to(page) {
-                    crate::style::computed::apply_style_map(
-                        &mut style,
-                        &rule.style.declarations,
-                        &self.root_style,
-                    );
-                }
-            }
+        let mut matching: Vec<_> = self
+            .page_rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| rule.selector.applies_to(page))
+            .collect();
+        matching.sort_by_key(|(source_order, rule)| (rule.selector.specificity(), *source_order));
+        let mut page_declarations = crate::parser::css::StyleMap::new();
+        for (_, rule) in matching {
+            page_declarations.merge(&rule.style.declarations);
         }
+        crate::style::computed::apply_style_map(&mut style, &page_declarations, &self.root_style);
         crate::style::computed::apply_style_map(
             &mut style,
             &margin_style.declarations,
@@ -1836,7 +1830,7 @@ pub fn layout_with_rules(
         &HashMap::new(),
         None,
         0.0,
-        super::paginate::PageMarginOverrides::default(),
+        FootnoteAreaLayout::default(),
     )
 }
 
@@ -1903,16 +1897,24 @@ pub fn layout_with_rules_and_fonts(
     custom_fonts: &HashMap<String, TtfFont>,
     page_background: Option<&ComputedStyle>,
     page_bleed: f32,
-    page_margin_overrides: super::paginate::PageMarginOverrides,
+    footnote_area: FootnoteAreaLayout,
 ) -> Vec<Page> {
+    let page_background = super::page_context::PageBackgroundContext::uniform(
+        page_background,
+        page_bleed,
+        crate::style::raster_quality::RasterQuality::default(),
+    );
     layout_with_rules_and_fonts_raster_quality(
         nodes,
         DocumentGeometry::new(page_size, margin),
         rules,
         custom_fonts,
-        page_background,
-        page_bleed,
-        page_margin_overrides,
+        &page_background,
+        super::paginate::PaginationContext::new(
+            super::page_context::PageGeometryContext::uniform(page_size, margin),
+            footnote_area,
+            0.0,
+        ),
         crate::style::raster_quality::RasterQuality::default(),
     )
 }
@@ -1925,9 +1927,8 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     geometry: DocumentGeometry,
     rules: &[CssRule],
     custom_fonts: &HashMap<String, TtfFont>,
-    page_background: Option<&ComputedStyle>,
-    page_bleed: f32,
-    page_margin_overrides: super::paginate::PageMarginOverrides,
+    page_background: &super::page_context::PageBackgroundContext,
+    pagination_context: super::paginate::PaginationContext,
     raster_quality: crate::style::raster_quality::RasterQuality,
 ) -> Vec<Page> {
     let DocumentGeometry {
@@ -1951,79 +1952,39 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     let html_style = root_styles.html;
     let body_style = root_styles.body;
     let mut parent_style = body_style.clone();
+    // The conversion boundary has already projected horizontal body padding
+    // into `content_margin`. Direct body children must therefore resolve
+    // percentages against that content width itself, not subtract the authored
+    // padding a second time through their parent style.
+    parent_style.padding = EdgeSizes::ZERO;
     parent_style.width = Some(available_width);
 
     // First, flatten DOM into layout elements
     let mut elements = Vec::new();
 
-    // If the body/html has a background SVG (or gradient/color), emit a full-content-area
-    // background block at the very start so it renders behind all content.
-    //
-    // Chrome's print model paints body background across the entire body box —
-    // including through the body padding, up to the body border edge (i.e. the
-    // page margin edge). Since `compute_root_padding` folded the body padding
-    // into the effective page margin, `available_width`/`content_height` here
-    // describe only the inner content area AFTER padding. We extend the bg
-    // block outward by the body padding so it visually fills the padding zone
-    // too — matching Chrome's behaviour.
-    // CSS Paged Media 3 §3.1 (page backgrounds & painting order): a background
-    // declared on the `@page` rule paints the page's *bleed area* — the ENTIRE
-    // page box, INCLUDING its margins — at the very bottom of the paint order,
-    // beneath the document canvas. (The propagated root/body background below is
-    // the document canvas and is confined to the content box.) Emit it FIRST so
-    // it sits below every other layer, spanning the full sheet on each page:
-    // an absolute block sized to `page_size` and offset by `-margin` renders at
-    // the sheet origin (0,0) (the renderer adds `margin` back), and
-    // `repeat_on_each_page` paints it edge-to-edge on every page.
-    if let Some(page_bg) = page_background {
-        if has_background_paint(page_bg) {
-            elements.push(
-                TextBlock::background_box(
-                    page_bg,
-                    BackgroundBoxGeometry {
-                        size: Size::new(
-                            page_size.width + 2.0 * page_bleed,
-                            page_size.height + 2.0 * page_bleed,
-                        ),
-                        origin: crate::types::Point::new(
-                            -margin.left - page_bleed,
-                            -margin.top - page_bleed,
-                        ),
-                        z_index: -2,
-                        repeat_on_each_page: true,
-                    },
-                )
-                .boxed(),
-            );
-        }
-    }
-
+    // Propagated root backgrounds cover the selected physical page area on
+    // every fragment. Pagination later expresses that area relative to the
+    // root flow origin, which may be inset by body padding or centering.
     let html_has_bg = has_background_paint(&html_style);
     let body_has_bg = has_background_paint(&body_style);
     let canvas_background_style = if html_has_bg {
         Some(&html_style)
-    } else if has_background_paint(&parent_style) {
-        Some(&parent_style)
+    } else if has_background_paint(&body_style) {
+        Some(&body_style)
     } else {
         None
     };
     if let Some(canvas_style) = canvas_background_style {
-        let bp_left = canvas_style.padding.left;
-        let bp_right = canvas_style.padding.right;
-        let bp_top = canvas_style.padding.top;
-        let bp_bottom = canvas_style.padding.bottom;
         elements.push(
-            TextBlock::background_box(
+            BackgroundBox::new(
                 canvas_style,
-                BackgroundBoxGeometry {
-                    size: Size::new(
-                        available_width + bp_left + bp_right,
-                        content_height + bp_top + bp_bottom,
+                BackgroundBoxGeometry::repeated_page_area(
+                    super::elements::PageAreaInFlowSpace::new(
+                        Point::default(),
+                        Size::new(available_width, content_height),
                     ),
-                    origin: crate::types::Point::new(-bp_left, -bp_top),
-                    z_index: -1,
-                    repeat_on_each_page: true,
-                },
+                    -1,
+                ),
             )
             .boxed(),
         );
@@ -2036,14 +1997,13 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
             body_style.height.unwrap_or(content_height).max(0.0) + body_style.padding.vertical();
         let body_offset_top = first_root_child_margin_top(nodes, &parent_style, rules);
         elements.push(
-            TextBlock::background_box(
+            BackgroundBox::new(
                 &body_style,
-                BackgroundBoxGeometry {
-                    size: Size::new(body_w, body_h),
-                    origin: crate::types::Point::new(0.0, body_offset_top),
-                    z_index: -1,
-                    repeat_on_each_page: true,
-                },
+                BackgroundBoxGeometry::repeated_canvas(
+                    Size::new(body_w, body_h),
+                    crate::types::Point::new(0.0, body_offset_top),
+                    -1,
+                ),
             )
             .boxed(),
         );
@@ -2127,68 +2087,29 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         );
     }
 
-    // Then paginate. Pass the body/html margin-top (plus padding-top, which
-    // acts as an additional inner gutter on page 1 when the body has padding)
-    // so the first in-flow block on each page can collapse through the root.
-    //
-    // An `@page :first` margin override (CSS Paged Media 3 §3.3) gives page 1 a
-    // different content box: its content height shrinks/grows by the margin
-    // delta and the page is tagged with the override so the renderer positions
-    // it against the first-page margin. Page 2+ keep the default geometry.
-    let first_page = page_margin_overrides
-        .first
-        .map(|m| super::paginate::FirstPageGeom {
-            content_height: page_size.height - m.top - m.bottom,
-            margin: m,
-        });
-    // CSS Paged Media 3 §3.4: pre-resolve each `@page <name>` margin/size into
-    // page geometry here, where the document-default page size is known, so
-    // pagination only does a name → geometry lookup.
-    let named_pages: std::collections::HashMap<String, super::paginate::NamedPageGeom> =
-        page_margin_overrides
-            .named
-            .iter()
-            .map(|(name, named)| {
-                let named_page_size = named.page_size.unwrap_or(page_size);
-                (
-                    name.clone(),
-                    super::paginate::NamedPageGeom {
-                        content_height: named_page_size.height
-                            - named.margin.top
-                            - named.margin.bottom,
-                        margin: named.margin,
-                        page_size: named_page_size,
-                    },
-                )
-            })
-            .collect();
-    let mut footnote_area = page_margin_overrides.footnote_area;
-    footnote_area.content_width = available_width;
-    let mut pages = super::paginate::paginate_with_first_page(
-        elements,
-        super::paginate::DocumentPageGeometry::new(
-            content_height,
-            page_size.height,
-            parent_style.margin.top + parent_style.padding.top,
-        ),
-        first_page,
-        page_margin_overrides.spread,
-        named_pages,
-        footnote_area,
-        custom_fonts,
-    );
+    // Pagination is the first point where page number, spread side, blank
+    // state, and named-page identity all exist. Resolve geometry there from one
+    // cascade rather than precomputing independent special-case buckets.
+    let pagination_context = pagination_context
+        .with_footnote_content_width(available_width)
+        .with_root_margin_top(body_style.margin.top + body_style.padding.top);
+    let mut pages =
+        super::paginate::paginate_with_context(elements, pagination_context, custom_fonts);
+    page_background.apply(&mut pages, page_size, margin, custom_fonts);
     super::filter::materialize_page_filters(
         &mut pages,
         margin,
         custom_fonts,
         raster_quality.filter_dpi,
     );
+    assign_page_print_scales(&mut pages, page_size, margin);
     super::fragmentation::transfer_page_spanning_graphical_effects(&mut pages, page_size, margin);
-    pages[0].document_svg_defs = document_svg_defs;
+    if let Some(first_page) = pages.first_mut() {
+        first_page.document_svg_defs = document_svg_defs;
+    }
     let mut dom_targets = HashMap::new();
     collect_dom_targets(nodes, &mut dom_targets);
     resolve_target_placeholders(&mut pages, &dom_targets);
-    assign_page_print_scales(&mut pages, page_size);
     pages
 }
 
@@ -2382,7 +2303,7 @@ fn resolve_target_placeholders(pages: &mut [Page], dom_targets: &HashMap<String,
     }
     let mut page_by_id = HashMap::new();
     for (idx, page) in pages.iter().enumerate() {
-        for name in page.named_strings.keys() {
+        for name in page.generated_content.named_string_names() {
             if let Some(id) = target_anchor_id(name) {
                 page_by_id.entry(id.to_string()).or_insert(idx + 1);
             }
@@ -2408,8 +2329,8 @@ fn resolve_target_placeholders(pages: &mut [Page], dom_targets: &HashMap<String,
 }
 
 fn page_has_target_anchor_marker(page: &Page) -> bool {
-    page.named_strings
-        .keys()
+    page.generated_content
+        .named_string_names()
         .any(|name| target_anchor_id(name).is_some())
 }
 
@@ -9340,12 +9261,12 @@ mod tests {
         let pages = layout_with_rules(&nodes, PageSize::A4, Margin::default(), &rules);
 
         assert_eq!(
-            pages[0].named_strings.get("chapter"),
-            Some(&"Running Head".to_string())
+            pages[0].generated_content.named_string_exit("chapter"),
+            Some("Running Head")
         );
         assert_eq!(
-            pages[0].named_strings_first.get("chapter"),
-            Some(&"Running Head".to_string())
+            pages[0].generated_content.named_string_first("chapter"),
+            Some("Running Head")
         );
     }
 
@@ -9356,10 +9277,13 @@ mod tests {
             parse_html(r#"<h2 data-title="ALPHA">ignored text</h2><p>Body text</p>"#).unwrap();
         let pages = layout_with_rules(&nodes, PageSize::A4, Margin::default(), &rules);
 
-        assert_eq!(pages[0].named_strings.get("section"), Some(&"ALPHA".into()));
         assert_eq!(
-            pages[0].named_strings_first.get("section"),
-            Some(&"ALPHA".into())
+            pages[0].generated_content.named_string_exit("section"),
+            Some("ALPHA")
+        );
+        assert_eq!(
+            pages[0].generated_content.named_string_first("section"),
+            Some("ALPHA")
         );
     }
 
@@ -9372,8 +9296,11 @@ mod tests {
         let pages = layout_with_rules(&nodes, PageSize::A4, Margin::default(), &rules);
 
         pages[0]
-            .running_elements
-            .get("runhead")
+            .generated_content
+            .running_element(&crate::parser::css::PageContentReference::new(
+                "runhead".into(),
+                crate::parser::css::PageContentPolicy::Last,
+            ))
             .and_then(|element| {
                 element.inspect_text(|block| {
                     assert!(
@@ -9497,12 +9424,16 @@ mod tests {
             &rules,
             &std::collections::HashMap::new(),
             Some(&page_bg),
-            0.0,
-            crate::layout::paginate::PageMarginOverrides::default(),
+            6.0,
+            FootnoteAreaLayout::default(),
         );
 
         // elements[0]: the @page bleed background — full sheet, offset by -margin
         // so it renders at the sheet origin, z=-2, repeated on each page.
+        assert_eq!(
+            pages[0].elements[0].0, -26.0,
+            "post-pagination page backgrounds retain their resolved block offset"
+        );
         pages[0].elements[0]
             .1
             .inspect_text(|block| {
@@ -9519,20 +9450,20 @@ mod tests {
                     .used()
                     .expect("full-bleed height");
                 assert!(
-                    (w - PageSize::A4.width).abs() < 0.1,
-                    "full page width, got {w}"
+                    (w - PageSize::A4.width - 12.0).abs() < 0.1,
+                    "full bleed width, got {w}"
                 );
                 assert!(
-                    (h - PageSize::A4.height).abs() < 0.1,
-                    "full page height, got {h}"
+                    (h - PageSize::A4.height - 12.0).abs() < 0.1,
+                    "full bleed height, got {h}"
                 );
                 assert!(
-                    (block.positioning.insets.left + 20.0).abs() < 0.1,
-                    "offset_left == -margin.left"
+                    (block.positioning.insets.left + 26.0).abs() < 0.1,
+                    "offset_left includes margin and bleed"
                 );
                 assert!(
-                    (block.positioning.insets.top + 20.0).abs() < 0.1,
-                    "offset_top == -margin.top"
+                    (block.positioning.insets.top + 26.0).abs() < 0.1,
+                    "offset_top includes margin and bleed"
                 );
                 assert_eq!(
                     block.paint.group.stacking.z_index.value(),
@@ -12411,7 +12342,7 @@ line 3</pre>
             &HashMap::new(),
             None,
             300.0,
-            super::super::paginate::PageMarginOverrides::default(),
+            FootnoteAreaLayout::default(),
         );
         let composited_surface = pages[0].elements.iter().any(|(_, element)| {
             element
@@ -12454,7 +12385,7 @@ line 3</pre>
             &HashMap::new(),
             None,
             300.0,
-            super::super::paginate::PageMarginOverrides::default(),
+            FootnoteAreaLayout::default(),
         );
         let image = pages[0]
             .elements
@@ -12495,7 +12426,7 @@ line 3</pre>
             &HashMap::new(),
             None,
             300.0,
-            super::super::paginate::PageMarginOverrides::default(),
+            FootnoteAreaLayout::default(),
         );
         let rendered_source = pages[0]
             .elements
@@ -13049,7 +12980,7 @@ line 3</pre>
 
     #[test]
     fn helpers_patch_abs_children_cb_resolves_offsets() {
-        use crate::layout::helpers::patch_absolute_children_containing_block;
+        use crate::layout::helpers::resolve_absolute_descendants_containing_block;
 
         let cb = ContainingBlock {
             x: 0.0,
@@ -13073,7 +13004,7 @@ line 3</pre>
                 .boxed(),
             ];
 
-        patch_absolute_children_containing_block(&mut elements, cb);
+        resolve_absolute_descendants_containing_block(&mut elements, cb);
 
         elements[0]
             .inspect_text(|block| {

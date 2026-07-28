@@ -1,7 +1,35 @@
-use crate::style::computed::VerticalAlign;
+use crate::layout::elements::{LayoutVisitor, TextBlock};
+use crate::layout::engine::visit_layout_tree;
+use crate::style::computed::{Position, VerticalAlign};
 use crate::types::Color;
 
 use super::support::{layout_pages, visible_inline_box_runs, visible_runs};
+
+fn positioned_text(markup: &str) -> Vec<(String, crate::layout::elements::Positioning)> {
+    #[derive(Default)]
+    struct Collector(Vec<(String, crate::layout::elements::Positioning)>);
+
+    impl LayoutVisitor for Collector {
+        fn visit_text_block(&mut self, block: &TextBlock) {
+            let text = block
+                .lines
+                .iter()
+                .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
+                .collect::<String>();
+            if !text.is_empty() {
+                self.0.push((text, block.positioning.clone()));
+            }
+        }
+    }
+
+    let mut collector = Collector::default();
+    for page in layout_pages(markup) {
+        for (_, element) in page.elements {
+            visit_layout_tree(element.as_ref(), &mut collector);
+        }
+    }
+    collector.0
+}
 
 #[test]
 fn nested_inline_runs_keep_their_real_sibling_selector_positions() {
@@ -100,34 +128,7 @@ fn inline_block_mixed_flow_uses_the_shared_complete_sibling_model() {
 
 #[test]
 fn positioned_inline_is_out_of_flow_and_resolves_against_its_ancestor() {
-    use crate::layout::elements::{LayoutElement, LayoutVisitor, TextBlock};
-
-    #[derive(Debug)]
-    struct Snapshot {
-        text: String,
-        positioning: crate::layout::elements::Positioning,
-    }
-
-    #[derive(Default)]
-    struct Collector(Vec<Snapshot>);
-
-    impl LayoutVisitor for Collector {
-        fn visit_text_block(&mut self, block: &TextBlock) {
-            let text = block
-                .lines
-                .iter()
-                .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
-                .collect::<String>();
-            if !text.is_empty() {
-                self.0.push(Snapshot {
-                    text,
-                    positioning: block.positioning.clone(),
-                });
-            }
-        }
-    }
-
-    let pages = layout_pages(
+    let snapshots = positioned_text(
         r#"<style>
             .cb { position: relative; width: 126px; height: 68px; }
             .own { height: 22px; }
@@ -135,77 +136,64 @@ fn positioned_inline_is_out_of_flow_and_resolves_against_its_ancestor() {
         </style>
         <div class="cb"><div class="own"><span class="token">Ag</span><span class="token">Bb</span></div></div>"#,
     );
-    fn collect_tree(
-        element: &dyn LayoutElement,
-        depth: usize,
-        snapshots: &mut Vec<(usize, Snapshot)>,
-    ) {
-        let mut collector = Collector::default();
-        element.accept(&mut collector);
-        for snapshot in collector.0 {
-            snapshots.push((depth, snapshot));
-        }
-        element.visit_children(&mut |child| collect_tree(child, depth + 1, snapshots));
-    }
-
-    let mut snapshots = Vec::new();
-    for page in pages {
-        for (_, element) in page.elements {
-            collect_tree(element.as_ref(), 0, &mut snapshots);
-        }
-    }
     assert_eq!(snapshots.len(), 2, "snapshots: {snapshots:#?}");
 
-    let (_, in_flow) = &snapshots[0];
-    assert_eq!(in_flow.text, "Ag");
-    assert_eq!(
-        in_flow.positioning.scheme,
-        crate::style::computed::Position::Static
-    );
+    let (text, in_flow) = &snapshots[0];
+    assert_eq!(text, "Ag");
+    assert_eq!(in_flow.scheme, Position::Static);
 
-    let (_, positioned) = &snapshots[1];
-    assert_eq!(positioned.text, "Bb");
-    assert_eq!(
-        positioned.positioning.scheme,
-        crate::style::computed::Position::Absolute
-    );
+    let (text, positioned) = &snapshots[1];
+    assert_eq!(text, "Bb");
+    assert_eq!(positioned.scheme, Position::Absolute);
     let containing_block = positioned
-        .positioning
         .containing_block
         .expect("absolute inline containing block");
     assert!((containing_block.width - 94.5).abs() < 0.001);
     assert!((containing_block.height - 51.0).abs() < 0.001);
-    assert!((positioned.positioning.insets.left - 77.496).abs() < 0.001);
-    assert!((positioned.positioning.insets.top - 33.0).abs() < 0.001);
+    assert!((positioned.insets.left - 77.496).abs() < 0.001);
+    assert!((positioned.insets.top - 33.0).abs() < 0.001);
+}
+
+#[test]
+fn nested_absolute_bottom_uses_final_min_height_containing_block() {
+    let snapshots = positioned_text(
+        r#"<style>
+            * { box-sizing: border-box; margin: 0; }
+            .cb {
+                position: relative;
+                width: 152px;
+                min-height: 96px;
+                padding: 7px;
+                border: 2px solid;
+            }
+            .own { height: 22px; }
+            .inner { height: 48px; }
+            .token:last-of-type {
+                position: absolute;
+                right: 4px;
+                bottom: 4px;
+            }
+        </style>
+        <div class="cb">
+            <div class="own"><span class="token">Ag</span><span class="token">Bb</span></div>
+            <div class="inner"></div>
+        </div>"#,
+    );
+    let (_, positioned) = snapshots
+        .iter()
+        .find(|(text, _)| text == "Bb")
+        .expect("nested absolute text");
+    let containing_block = positioned.containing_block.expect("final containing block");
+
+    // CSS Positioned Layout: the containing block is the positioned
+    // ancestor's used padding box. 96px border-box minus two 2px borders.
+    assert!((containing_block.height - 69.0).abs() < 0.001);
+    assert!(positioned.insets.top > 50.0, "positioning: {positioned:#?}");
 }
 
 #[test]
 fn positioned_inline_inside_flex_item_uses_the_general_item_context() {
-    use crate::layout::elements::{LayoutElement, LayoutVisitor, TextBlock};
-    use crate::style::computed::Position;
-
-    #[derive(Default)]
-    struct Collector(Vec<(String, crate::layout::elements::Positioning)>);
-
-    impl LayoutVisitor for Collector {
-        fn visit_text_block(&mut self, block: &TextBlock) {
-            let text = block
-                .lines
-                .iter()
-                .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
-                .collect::<String>();
-            if !text.is_empty() {
-                self.0.push((text, block.positioning.clone()));
-            }
-        }
-    }
-
-    fn collect(element: &dyn LayoutElement, snapshots: &mut Collector) {
-        element.accept(snapshots);
-        element.visit_children(&mut |child| collect(child, snapshots));
-    }
-
-    let pages = layout_pages(
+    let snapshots = positioned_text(
         r#"<style>
             .cb {
                 display: flex;
@@ -224,20 +212,12 @@ fn positioned_inline_inside_flex_item_uses_the_general_item_context() {
         </style>
         <div class="cb"><div class="own"><span class="token">Ag</span><span class="token">Bb</span></div></div>"#,
     );
-    let mut snapshots = Collector::default();
-    for page in pages {
-        for (_, element) in page.elements {
-            collect(element.as_ref(), &mut snapshots);
-        }
-    }
 
     let in_flow = snapshots
-        .0
         .iter()
         .find(|(text, _)| text == "Ag")
         .expect("in-flow flex item text");
     let positioned = snapshots
-        .0
         .iter()
         .find(|(text, _)| text == "Bb")
         .expect("positioned flex descendant");
@@ -245,12 +225,10 @@ fn positioned_inline_inside_flex_item_uses_the_general_item_context() {
     assert_eq!(positioned.1.scheme, Position::Absolute);
     assert!(
         positioned.1.insets.left > in_flow.1.insets.left + 40.0,
-        "snapshots: {:#?}",
-        snapshots.0
+        "snapshots: {snapshots:#?}"
     );
     assert!(
         positioned.1.insets.top > in_flow.1.insets.top + 20.0,
-        "snapshots: {:#?}",
-        snapshots.0
+        "snapshots: {snapshots:#?}"
     );
 }

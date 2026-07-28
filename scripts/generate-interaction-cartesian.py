@@ -5,7 +5,8 @@ Each unordered pair, including the diagonal, gets its own fixture.  A fixture
 contains three compositions: both families on one element, A outside B, and B
 outside A.  The source manifest is derived from the non-generated feature
 manifests, so adding a supported family makes this generator fail until a
-representative is defined.
+representative is defined. Cross-cutting page context is included explicitly
+because it cannot be represented by an element-level feature category.
 
 Usage:
     scripts/generate-interaction-cartesian.py
@@ -48,6 +49,7 @@ IMAGE_DATA = (
 class Family:
     slug: str
     css: str
+    forces_pagination: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,16 @@ FAMILIES = {
         Family("lists-counters", "counter-reset:pair-item;"),
         Family("multicol", "column-count:2;column-gap:7px;column-rule:2px solid #577590;"),
         Family("overflow-clipping", "overflow:hidden;max-height:58px;border-radius:9px;"),
-        Family("paged-media", "break-before:page;break-inside:avoid;"),
+        Family(
+            "page-margins",
+            "",
+            forces_pagination=True,
+        ),
+        Family(
+            "paged-media",
+            "break-before:page;break-inside:avoid;",
+            forces_pagination=True,
+        ),
         Family("positioning", "position:relative;"),
         Family("selectors-cascade", ""),
         Family("tables", "display:table;border-collapse:separate;border-spacing:3px;"),
@@ -112,6 +123,8 @@ FAMILIES = {
         Family("units-values", "width:calc(100% - 9px);padding-left:5%;"),
     )
 }
+
+CROSS_CUTTING_FAMILIES = {"page-margins"}
 
 
 ATOMIC_MULTICOL_REFERENCES = {
@@ -220,6 +233,20 @@ PAIR_REFERENCE_ASSESSMENTS = {
             "geometry oracle, and the raw shared-pdftoppm evidence remains reported."
         ),
     ),
+    ("page-margins", "paged-media"): ReferenceAssessment(
+        status="disputed",
+        note=(
+            "CSS Fragmentation 3 sections 3.1 and 4.3 require break-before:page "
+            "on the nested in-flow block to force a class-A page break and move "
+            "the ensuing content into the next page fragmentainer. Ironpress "
+            "therefore emits four pages and slices the outer box across pages "
+            "2 and 3. Chromium 150 Foundation ignores that forced break, emits "
+            "three pages, and overlaps the nested text with its preceding "
+            "sibling on page 2. Its PDF remains a compatibility canary rather "
+            "than a normative fragmentation oracle; the complete shared-"
+            "pdftoppm page-count and raster evidence remains reported."
+        ),
+    ),
 }
 
 
@@ -314,7 +341,7 @@ def source_families() -> set[str]:
 
 
 def validate_registry(families: set[str]) -> None:
-    registered = set(FAMILIES)
+    registered = set(FAMILIES) - CROSS_CUTTING_FAMILIES
     if families != registered:
         missing = sorted(families - registered)
         stale = sorted(registered - families)
@@ -355,10 +382,33 @@ def interaction_stages(first: Family, second: Family) -> list[str]:
     ]
 
 
-def document(title: str, pair_css: str, stages: list[str], paged: bool = False) -> str:
+def page_rule(families: tuple[Family, ...]) -> str:
+    slugs = {family.slug for family in families}
+    if "page-margins" in slugs:
+        return """@page {
+    size: 192px 200px;
+    margin: 16px;
+    background: #ffd6d6;
+  }
+  @page :left { margin: 8px 32px 24px 8px; }
+  @page :right { margin: 16px 8px 8px 32px; }
+  @page :first { margin: 32px 8px 16px 24px; }"""
+    if any(family.forces_pagination for family in families):
+        return "@page { size: 192px 200px; margin: 0; }"
+    return "@page { size: 520px 200px; margin: 0; }"
+
+
+def document(
+    title: str,
+    pair_css: str,
+    stages: list[str],
+    families: tuple[Family, ...] = (),
+) -> str:
     # Integer CSS-pixel dimensions must be multiples of eight to map exactly at
     # the pinned 300 DPI (one CSS pixel is 3.125 raster pixels).
-    page_rule = "@page { size: 192px 200px; margin: 0; }" if paged else "@page { size: 520px 200px; margin: 0; }"
+    document_page_rule = page_rule(families)
+    paged = any(family.forces_pagination for family in families)
+    has_page_margins = "page-margins" in {family.slug for family in families}
     # Keep paged interactions in ordinary block flow. A flex carrier would add
     # flex fragmentation to every nominally pairwise paged-media fixture, and
     # CSS Flexbox deliberately leaves that exact fragmented layout undefined.
@@ -368,14 +418,33 @@ def document(title: str, pair_css: str, stages: list[str], paged: bool = False) 
   .stage > .node { min-height: 68px; margin: 47px auto 0; }
   .stage > .node.outer { margin-top: 33px; }
 """ if paged else ""
+    page_margin_css = """
+  /* The three compositions occupy first/right, left, and later-right pages.
+     Their asymmetric page areas expose side selection, cascade, content
+     origin, bottom capacity, and paint that crosses a page-area edge.
+     Horizontal body padding is a distinct root-flow gutter: each stage
+     deliberately shifts through it to the physical page-area start edge. */
+  body { padding-left: 8px; padding-right: 8px; }
+  .stage {
+    width: 152px;
+    height: 128px;
+    min-height: 128px;
+    margin-left: -8px;
+    border: 0;
+    background: #d8f3dc;
+  }
+  .node { width: 100%; }
+  .stage > .node,
+  .stage > .node.outer { margin: 0; }
+""" if has_page_margins else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
 <style>
-  {page_rule}
-{shared_css(paged)}{paged_css}{pair_css}</style>
+  {document_page_rule}
+{shared_css(paged)}{paged_css}{page_margin_css}{pair_css}</style>
 </head>
 <body>
   <div class="stage">{stages[0]}</div>
@@ -394,7 +463,7 @@ def fixture_html(first: Family, second: Family) -> str:
         f"{first.slug} x {second.slug} interaction",
         pair_css,
         interaction_stages(first, second),
-        paged="paged-media" in {first.slug, second.slug},
+        families=(first, second),
     )
 
 
@@ -418,7 +487,7 @@ def oblique_reference_html(first: Family, second: Family) -> str:
         f"{first.slug} x {second.slug} interaction — standards-derived reference",
         pair_css,
         interaction_stages(first, second),
-        paged="paged-media" in {first.slug, second.slug},
+        families=(first, second),
     )
 
 
@@ -442,6 +511,7 @@ def atomic_multicol_reference_html(first: Family, second: Family) -> str:
         f"{first.slug} x {second.slug} interaction — standards-derived reference",
         pair_css,
         interaction_stages(first, second),
+        families=(first, second),
     )
 
 
@@ -472,20 +542,43 @@ def carrier_html() -> str:
 def manifest_entry(first: Family, second: Family) -> dict[str, object]:
     fixture_id = f"{PREFIX}{first.slug}-x-{second.slug}"
     pair = (first.slug, second.slug)
-    detail = PAIR_DESCRIPTION_DETAILS.get(
-        pair,
-        "Paged-media representatives force actual page breaks.",
-    )
+    if "page-margins" in pair:
+        other = second if first.slug == "page-margins" else first
+        if other.slug == "page-margins":
+            description = (
+                "Page-margin self-interaction across first/right, left, and "
+                "later-right physical pages. Intentionally asymmetric margins "
+                "make page-side selection, cascade, content origins, available "
+                "block size, page-area paint boundaries, and root-flow gutters "
+                "conspicuous."
+            )
+        else:
+            description = (
+                f"Physical-page-context interaction for page-margins and {other.slug}: "
+                f"the {other.slug} representative is exercised on the stage subject "
+                "and at both nesting depths across first/right, left, and later-right "
+                "physical pages. Intentionally asymmetric margins put layout and "
+                "graphical effects directly against conspicuous page-area boundaries; "
+                "stages also shift through root padding to detect conflated clips."
+            )
+        subfeature = "physical-page-context-and-nested-feature-depths"
+    else:
+        detail = PAIR_DESCRIPTION_DETAILS.get(
+            pair,
+            "Paged-media representatives force actual page breaks.",
+        )
+        description = (
+            f"Cartesian family interaction for {first.slug} and {second.slug}: "
+            "both representatives compose on one element and in both outer/inner orders. "
+            f"{detail}"
+        )
+        subfeature = "same-element-and-bidirectional-nesting"
     entry: dict[str, object] = {
         "id": fixture_id,
         "category": "interactions",
         "feature": "supported-family-cartesian-product",
-        "subfeature": "same-element-and-bidirectional-nesting",
-        "description": (
-            f"Cartesian family interaction for {first.slug} and {second.slug}: "
-            "both representatives compose on one element and in both outer/inner orders. "
-            f"{detail}"
-        ),
+        "subfeature": subfeature,
+        "description": description,
         "file": f"cases/interactions/{fixture_id}.html",
         "interaction_of": [first.slug, second.slug],
         "kind": "interaction",
@@ -520,7 +613,7 @@ def generated_files() -> dict[Path, str]:
             if entry.get("id") != CONTROL_ID
             and not str(entry.get("id", "")).startswith(PREFIX)
         )
-    ordered = [FAMILIES[slug] for slug in sorted(families)]
+    ordered = [FAMILIES[slug] for slug in sorted(FAMILIES)]
     for first, second in itertools.combinations_with_replacement(ordered, 2):
         entry = manifest_entry(first, second)
         path = PARITY / str(entry["file"])

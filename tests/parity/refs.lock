@@ -5170,7 +5170,7 @@
       "category": "fonts-advanced",
       "file": "cases/fonts-advanced/fonts-advanced-font-face-size-adjust.html",
       "html_sha256": "8c8be28c69626e7ae454e475c2b41b39e029009a1a2e5282803f69803922116d",
-      "manifest_sha256": "7c4116e195b84eb7ae5d499bf88d50e4e932cf82db5579f390841051dde3d6cf",
+      "manifest_sha256": "4963571523516723b61cdac57fc70c9106f85dabd298dbe134e109e5206b7da9",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/fonts-advanced/fonts-advanced-font-face-size-adjust.pdf",
@@ -5268,7 +5268,7 @@
       "category": "fonts-advanced",
       "file": "cases/fonts-advanced/fonts-advanced-font-size-adjust.html",
       "html_sha256": "58535dcc8b58843fcab6358e1a5d34822b5e38a87d370883a095f1189a15037f",
-      "manifest_sha256": "c50c99249378386cafde089d36dc3f870899cc44e0538342019ce2d80f5d3744",
+      "manifest_sha256": "82a29da8542f6690811435259dc4b44ade2fc3b473e696bab5ad96b223a27f1d",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/fonts-advanced/fonts-advanced-font-size-adjust.pdf",
@@ -5394,7 +5394,7 @@
       "category": "fonts-advanced",
       "file": "cases/fonts-advanced/fonts-advanced-font-variant-ligatures-none.html",
       "html_sha256": "3d98e234460c68abbcdee94219d162e6a8e3322bc60e057f65dd5bb20b7f619a",
-      "manifest_sha256": "a6d738692dd1531761ca03ae0a26e7bea2ff092411a87fb2e1d001cff7ae3d68",
+      "manifest_sha256": "8677380322a0f0148dc4a64949372d92907f89ed2fccc1250d9a9a89d6a880b3",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/fonts-advanced/fonts-advanced-font-variant-ligatures-none.pdf",
@@ -5604,7 +5604,7 @@
       "category": "generated-content",
       "file": "cases/generated-content/generated-content-before-list-item-marker.html",
       "html_sha256": "05588565e6dbee67739e35e148e0cef02d7e27f32a370f897cf8031135b083ef",
-      "manifest_sha256": "b3aef35b5629fdb355b1dbf53594c15428da6ae93f6266f18bb61c449c52985b",
+      "manifest_sha256": "9d23b81971fd19d72bfda1c0ff31788f0d3aefd16b0c5400e302a010d3906600",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/generated-content/generated-content-before-list-item-marker.pdf",
@@ -5800,7 +5800,7 @@
       "category": "generated-content",
       "file": "cases/generated-content/generated-content-first-letter-transform.html",
       "html_sha256": "391e5f209b881b8c5ba1fa2e5ca50504e8b1384e48d41819f7f69cff59dea201",
-      "manifest_sha256": "ee4c917935e0316697fb2780a9818d88f72dcd10d6029246f6a6aeb3b742aa1a",
+      "manifest_sha256": "f8741003c5166c46e5015e105ffcf580caa4a93925dd9aa7015667586c52e5af",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/generated-content/generated-content-first-letter-transform.pdf",
@@ -5814,7 +5814,7 @@
       "category": "generated-content",
       "file": "cases/generated-content/generated-content-first-line.html",
       "html_sha256": "8ba24bcdd11137c29a6a21f2b47503ae3f6dd03dde93e543a1470903a20eeb1b",
-      "manifest_sha256": "a7c06ccb72054fdd97f3c7da05a461a6cd3ff0201deb1ff6d9c1e3269c339b9a",
+      "manifest_sha256": "375131aa33d911ff8fe973059afd1a62b4bc0373078256e9950acd42a8c009e2",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/generated-content/generated-content-first-line.pdf",
@@ -5828,7 +5828,7 @@
       "category": "generated-content",
       "file": "cases/generated-content/generated-content-first-line-background.html",
       "html_sha256": "787e4bf01138bb3adf2362baa8df82b87710a5d4d21c06b6986d235d067b5ed0",
-      "manifest_sha256": "7a183ed38fcbf10a1d75d80968049d05f2e04d11266e9d71529f571d9b52de36",
+      "manifest_sha256": "c76724cfe211cad1c4717a48382fafa28feb4a54628c5ad36454371d213dfc78",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/generated-content/generated-content-first-line-background.pdf",
@@ -6462,9 +6462,9 @@
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/grid/grid-fit-content-percentage-basis-boxes.pdf",
-        "sha256": "49356e46331b6cee87779a3098d0b4ed475b015f7f2d12f2c7dba668e01f2060"
+        "sha256": "3bc8dcef991bbd563e94e54327f18506c0e49d55d1ab4ca3caae03dae2791314"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
       "reference_file": "cases/grid/grid-fit-content-percentage-basis-boxes.html",
       "reference_html_sha256": "f8bbed29d1f6e89cc8c5695a667196c4e50bd209b04552280e08922565fe24cc"
     },
@@ -7718,7 +7718,7 @@
       "category": "images-replaced",
       "file": "cases/images-replaced/img-object-position-far-edge-length.html",
       "html_sha256": "22b80278cd5eb72655a73c4428b1b1c7173db088b569a4bc4dc3aac2e73237da",
-      "manifest_sha256": "9055ad907f181b17e39f11b4e8d7244d53386557018ea4021a9417f407a8c00e",
+      "manifest_sha256": "bdff92963a425f429dae11400ba6fe98efb2b7270ecc2e5ab3bc847477c20609",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/images-replaced/img-object-position-far-edge-length.pdf",
@@ -7774,7 +7774,7 @@
       "category": "images-replaced",
       "file": "cases/images-replaced/img-percent-width.html",
       "html_sha256": "df515610b458fcf8db0ba4d2a9043e68dc121173cae55ba33779d84338f56a39",
-      "manifest_sha256": "a4e32c21c97f673fe71a182fbd029f8a949a4e529b89ff45479095dc47881006",
+      "manifest_sha256": "b2ce0a90fbfb06da7473b4867690a2f852dc8ff7561c9dc28f742eb1d6ef94c1",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/images-replaced/img-percent-width.pdf",
@@ -7872,7 +7872,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-inline-block-baseline.html",
       "html_sha256": "25935fb9069bf41db34441e0b5ca965c2e05faf4c105106f8ffbd2e83ae83691",
-      "manifest_sha256": "791b4bad079367d0bd45b98e29cb094673b9dd5870adb8d74de966f89904a07a",
+      "manifest_sha256": "91f1831c61d64e6479a5350e42f42d3fad0046e9809a135f046699fbf2cb33e8",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-inline-block-baseline.pdf",
@@ -7942,7 +7942,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-line-height-length.html",
       "html_sha256": "c00cc8146febf3a9efbd40d3b6161198859eb6b7ea52bed5bbaf40edec92501c",
-      "manifest_sha256": "471079ad0fc00f95980e4776c8a76d26220394f6f5a46382b3497a98aa818e60",
+      "manifest_sha256": "5f30b42b2dd7baad9b371ec43e41ab0dd79bd933ced4679b42b4e451ee95d03a",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-line-height-length.pdf",
@@ -8026,7 +8026,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-text-align-justify.html",
       "html_sha256": "7b56db17cb3a7d1034b11be21dab65bd81c70a1dd089f810461c3a11a6c096ed",
-      "manifest_sha256": "ea11e1d0bf039a5cce5b03636220ad6186fd273853fed68e8b9c4483ac4608e7",
+      "manifest_sha256": "c55ebe33df75097099c177a809c869bf47ed29eb473d9b6a02e16b8444102c37",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-text-align-justify.pdf",
@@ -8040,7 +8040,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-text-align-justify-multiline.html",
       "html_sha256": "76874de3c7ee4413793f5f8cf7ba92c5f3c740d78ba71d1347c29d082fa6a21a",
-      "manifest_sha256": "74effdb6f8a57f8c50db012c0b7e4eeecf52a52dc7e72f3b52abe1a2aafc178a",
+      "manifest_sha256": "cfc21a788d36c9ec04b81a6a010c65c5ebc71a614851afdc8cd8959cb96fde11",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-text-align-justify-multiline.pdf",
@@ -8166,7 +8166,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-text-indent-length.html",
       "html_sha256": "3ef226b0714995f122685f9f0ea5a4d401ad6ea794f86fcfbf37e6401038df02",
-      "manifest_sha256": "6467cd72bd67811c8083b70975dbdbe526eac27832b23e6b9af90d7f9a71820c",
+      "manifest_sha256": "5a459e2907548179824d485eaf8a2f71d61fba9ee188319da82b591708086751",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-text-indent-length.pdf",
@@ -8390,7 +8390,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-white-space-break-spaces.html",
       "html_sha256": "0f401ba98c1fca6ebfcb6531982ad629caa95c31e0a01c19b01df8fcd3ddc299",
-      "manifest_sha256": "8386ddacd88569ab09b7a39c1b7dac148795be0ccefffb30baf6558569a61446",
+      "manifest_sha256": "6345215fda8228558f4a0aa57d30428fe303d5c276f97d53a29e76ce086f1d5e",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-white-space-break-spaces.pdf",
@@ -8404,7 +8404,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-white-space-normal.html",
       "html_sha256": "8071ee62545682e98b4e1e68c8f1bac1d05099557a16d94d828deb27af913e0b",
-      "manifest_sha256": "b5bc9a576b8567fa250e2319bc21430562bf2d8c2fa6542d94131adcf195a638",
+      "manifest_sha256": "05063e6355d7e7137b1e3a66ac57df27cfa8e57e8d80890372c7ac2ba28c49e4",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-white-space-normal.pdf",
@@ -8460,7 +8460,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-white-space-pre-wrap.html",
       "html_sha256": "12439339a7a23761e51faaa54c0c9c83902d30b22b462e6f77abc686d215ec3b",
-      "manifest_sha256": "3379015e9e8d9c8d40fbb83a18bdf8b94ef6280249286575b0b2c7542e66743c",
+      "manifest_sha256": "5927cf23c32c68172f071adc26250bdc96a0ab0edcca81a8c3b4bb4f737dc277",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-white-space-pre-wrap.pdf",
@@ -8530,7 +8530,7 @@
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-wrapping-normal.html",
       "html_sha256": "c2370ae5f276b107dad151ef44aa4bbbf8f2e83457705c8d742cf53b903add08",
-      "manifest_sha256": "0ae1c71b8acdfc714680a04471ca4d188bbd22dcdc5db26a96b8587fc19bbcf1",
+      "manifest_sha256": "26a50215ce07fbc3121eec3a6c6d13f0af24306aa0b1da3b98c8ae29befb72ba",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/inline-text/inline-text-wrapping-normal.pdf",
@@ -8791,6 +8791,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-overflow-clipping.html",
       "reference_html_sha256": "db858d701020b0227fc1455eef2989eff65daa162fbf0421da833e40e9c43766"
+    },
+    "interactions-cartesian-backgrounds-borders-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-page-margins.html",
+      "html_sha256": "9bc8f5bbe1b475e976169fd1c5ca8724757ab24062b7a29fcc380fd97e002e81",
+      "manifest_sha256": "085642a802cc2e30497cf66a38af3745dd2da60fb93506d8adb8a760f2fcddfe",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-backgrounds-borders-x-page-margins.pdf",
+        "sha256": "5e35db1d60e7fccc3a78d250101f9ff3fcd220a0dfe350b182114bffe9331eea"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-page-margins.html",
+      "reference_html_sha256": "9bc8f5bbe1b475e976169fd1c5ca8724757ab24062b7a29fcc380fd97e002e81"
     },
     "interactions-cartesian-backgrounds-borders-x-paged-media": {
       "category": "interactions",
@@ -9114,6 +9128,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-overflow-clipping.html",
       "reference_html_sha256": "1bc6404cfaac9b8f0a79163d6f1243efdfaa0eebcbf6bbe7018086c9794e6a68"
     },
+    "interactions-cartesian-backgrounds-gradients-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-page-margins.html",
+      "html_sha256": "b0a4ad03d59083908588f47b2032c3dd73beb7f3a435814fe90be55ec18aa774",
+      "manifest_sha256": "cdf83a2e931bbce2a60caf6dc6155e8e9f33d9777a83233ab3868ebb98d5986e",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-backgrounds-gradients-x-page-margins.pdf",
+        "sha256": "e7d3d7d06e1a500d248725350bee69decb215dcbb914fd91da0a4d8a2ef4ae11"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-page-margins.html",
+      "reference_html_sha256": "b0a4ad03d59083908588f47b2032c3dd73beb7f3a435814fe90be55ec18aa774"
+    },
     "interactions-cartesian-backgrounds-gradients-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-paged-media.html",
@@ -9422,6 +9450,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-block-box-model-x-overflow-clipping.html",
       "reference_html_sha256": "fbdd6e6c86872abba6c63dccac0e5ecd7ad71546eb6b37de877fd9345b97fac1"
     },
+    "interactions-cartesian-block-box-model-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-block-box-model-x-page-margins.html",
+      "html_sha256": "ebfcfe2f7167eac31dd7ed6a3fc3ddf1e65fa75a7c62c2acc6957bf4ff8b1a86",
+      "manifest_sha256": "cf45a54eaa50487afe81aec2087be9c49385fe05dcc08b504f68addecb09f08f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-block-box-model-x-page-margins.pdf",
+        "sha256": "693eb1d6293765636d50fe95d4a36f59fbca149fa76b7deffa4e0c489fc50968"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-block-box-model-x-page-margins.html",
+      "reference_html_sha256": "ebfcfe2f7167eac31dd7ed6a3fc3ddf1e65fa75a7c62c2acc6957bf4ff8b1a86"
+    },
     "interactions-cartesian-block-box-model-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-block-box-model-x-paged-media.html",
@@ -9716,6 +9758,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-clip-mask-x-overflow-clipping.html",
       "reference_html_sha256": "abee821fcf57063284f3b13f2cd57e65b9e0c12704ec6fffcfcffef00ac50bb8"
     },
+    "interactions-cartesian-clip-mask-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-clip-mask-x-page-margins.html",
+      "html_sha256": "1f0663a629697a2e6ee6f5f1be74a364a3d873f4f9719072789597dc6466f1ae",
+      "manifest_sha256": "7e1b3dd5c3448a9feea9815d11c4c1ac8ba54a840fd1b7908835ee68b68fa328",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-clip-mask-x-page-margins.pdf",
+        "sha256": "bdf5e7502d6882f711b20f95a27eb87f5647202c8c0bf0cd69a2b52fb35268a0"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-clip-mask-x-page-margins.html",
+      "reference_html_sha256": "1f0663a629697a2e6ee6f5f1be74a364a3d873f4f9719072789597dc6466f1ae"
+    },
     "interactions-cartesian-clip-mask-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-clip-mask-x-paged-media.html",
@@ -9996,6 +10052,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-color-opacity-x-overflow-clipping.html",
       "reference_html_sha256": "fdfa3de00b87c553736da58baebcdf88324f0506d8df888fe77e32f21f8fad7f"
     },
+    "interactions-cartesian-color-opacity-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-color-opacity-x-page-margins.html",
+      "html_sha256": "3c47ce71c3805be85227343338ee9f1803c60991670148cbe457443e22c0bbb5",
+      "manifest_sha256": "6fb4af4883083a44586086af5f1f986c9a0db1162c061905fad5a507558c4e26",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-color-opacity-x-page-margins.pdf",
+        "sha256": "76fa38b45ce97413559997d29c882030ce9acdf06b5ee345ab4f6ba4f26a5208"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-color-opacity-x-page-margins.html",
+      "reference_html_sha256": "3c47ce71c3805be85227343338ee9f1803c60991670148cbe457443e22c0bbb5"
+    },
     "interactions-cartesian-color-opacity-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-color-opacity-x-paged-media.html",
@@ -10262,6 +10332,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-effects-x-overflow-clipping.html",
       "reference_html_sha256": "1a0cc23bc5403434d1ecfd5dcfb824696758424f70c556fbbcd4891024e99183"
     },
+    "interactions-cartesian-effects-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-effects-x-page-margins.html",
+      "html_sha256": "3563cbc47af74927f5b1bf6bc29cabb8f709bf21b8e206776bac7ba1f8425f29",
+      "manifest_sha256": "41967c09063fec4e5da13e6cc267b16168ce22672eed1aa5eccd6f9114a71cad",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-effects-x-page-margins.pdf",
+        "sha256": "26d3bcb6454951540670492a8bfe3688fca84ad03c51ba538e5213603310fbaa"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-effects-x-page-margins.html",
+      "reference_html_sha256": "3563cbc47af74927f5b1bf6bc29cabb8f709bf21b8e206776bac7ba1f8425f29"
+    },
     "interactions-cartesian-effects-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-effects-x-paged-media.html",
@@ -10514,6 +10598,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-filters-x-overflow-clipping.html",
       "reference_html_sha256": "4a73a35474ba22efd5a41eaf88fea45474b14a55d24c33420145ab289312a2c9"
     },
+    "interactions-cartesian-filters-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-filters-x-page-margins.html",
+      "html_sha256": "227cc7a0718fc5a46eb7b8c8aae4dc289e28af1f39f228cfdf11c68ef7222f12",
+      "manifest_sha256": "977dde4bfd1430a2fe528a5d285a77d91190cbdb62897a506a83c708e8f4debc",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-filters-x-page-margins.pdf",
+        "sha256": "b2f5305b9c375baeb175f644c049ac24dd0903541ad8dc999f287a8470f4eefb"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-filters-x-page-margins.html",
+      "reference_html_sha256": "227cc7a0718fc5a46eb7b8c8aae4dc289e28af1f39f228cfdf11c68ef7222f12"
+    },
     "interactions-cartesian-filters-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-filters-x-paged-media.html",
@@ -10752,6 +10850,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-flexbox-x-overflow-clipping.html",
       "reference_html_sha256": "4086ae8dd3006508befdaa6aa62aa0ebc94228eaae51f7b0f33866b2e9b0dff8"
     },
+    "interactions-cartesian-flexbox-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-flexbox-x-page-margins.html",
+      "html_sha256": "dd76f8415ce63de4e66dc3d2144ffd984cfe6f15b51142cefacb9afeefa2f55f",
+      "manifest_sha256": "efb8d2c9676a61a018e334b578ccb7559401c76eeaff58e7b8b1ae76237b626d",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-flexbox-x-page-margins.pdf",
+        "sha256": "69f5a64bd7aef164f75794e238eb60e3fafeeb666ecbb3ad438e6e79e47c3d9d"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-flexbox-x-page-margins.html",
+      "reference_html_sha256": "dd76f8415ce63de4e66dc3d2144ffd984cfe6f15b51142cefacb9afeefa2f55f"
+    },
     "interactions-cartesian-flexbox-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-flexbox-x-paged-media.html",
@@ -10976,6 +11088,20 @@
       "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html",
       "reference_html_sha256": "7bfeb27a626672f56ccf299c7bd325c92504c6bc8e57254049de6a3e495964c3"
     },
+    "interactions-cartesian-fonts-advanced-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-page-margins.html",
+      "html_sha256": "7b7c5423cd0fe852b3e0f196d80ce529e00f53967f09a32b7b6b56fbf0281277",
+      "manifest_sha256": "d49e3389c786d7c9eaf4176a8793a519b2352fff407f53de8193e136db5a2332",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-fonts-advanced-x-page-margins.pdf",
+        "sha256": "eb70d3736bf21c6d8fb30a162b7f43cf60d92ce391e0fdfe370006b99124faa8"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-page-margins.html",
+      "reference_html_sha256": "01e2c0f225eea3c8d3ef61772f020974e83e76ab509243dcbbfb55029c6552e7"
+    },
     "interactions-cartesian-fonts-advanced-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-paged-media.html",
@@ -11186,6 +11312,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-generated-content-x-overflow-clipping.html",
       "reference_html_sha256": "5e3615050be92f2895c68ab00e87a91b4f38dfbf03da7a781063ee2d288fcfc8"
     },
+    "interactions-cartesian-generated-content-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-generated-content-x-page-margins.html",
+      "html_sha256": "dfe964e2b6174f25c8d3819bf8a7d21e5a014a05952cbb3e835a6ca1e9e69e17",
+      "manifest_sha256": "a5bd960233a94bc7c9f4f801d3a452df1261fd833bbdd11fb83c340c1fe3416c",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-generated-content-x-page-margins.pdf",
+        "sha256": "ea2c969b7924de497b1b48de755f2f78332d97e0122a8be8e8d042d65cba8150"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-generated-content-x-page-margins.html",
+      "reference_html_sha256": "dfe964e2b6174f25c8d3819bf8a7d21e5a014a05952cbb3e835a6ca1e9e69e17"
+    },
     "interactions-cartesian-generated-content-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-generated-content-x-paged-media.html",
@@ -11382,6 +11522,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-grid-x-overflow-clipping.html",
       "reference_html_sha256": "5a0022e2194b751d89e985b83b1c5b1016e445489e98c6712644ef6f2b3f3162"
     },
+    "interactions-cartesian-grid-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-grid-x-page-margins.html",
+      "html_sha256": "b9cd297b50b1486a807610b997633837ea5a47aea1d5c69efc524893cd71592d",
+      "manifest_sha256": "07dbd44f23750d6a8fc314c36d1a7faf2b330ee048770b8d432e5d5e32a882e9",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-grid-x-page-margins.pdf",
+        "sha256": "ec838dfceebca95b872d2730bd3f3698d8c1c40e5c546e0a0e40b87fba7be0fb"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-grid-x-page-margins.html",
+      "reference_html_sha256": "b9cd297b50b1486a807610b997633837ea5a47aea1d5c69efc524893cd71592d"
+    },
     "interactions-cartesian-grid-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-grid-x-paged-media.html",
@@ -11564,6 +11718,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-images-replaced-x-overflow-clipping.html",
       "reference_html_sha256": "94c6283af9d1939e447d4fde89d075df44d863a870ca005abdaad169e47d4b84"
     },
+    "interactions-cartesian-images-replaced-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-images-replaced-x-page-margins.html",
+      "html_sha256": "81652b71bf308b4a5aff58e10b7be62a80e3e8f0be528552f59e8878206f1374",
+      "manifest_sha256": "77f95a5ade9e9498bd42ec4e450bc7a0c3d745a8e76fcf7229c4f9320398635a",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-images-replaced-x-page-margins.pdf",
+        "sha256": "dcd0740d3f775e64dd97afb5113ef9be0030c901398db50ae411cf0e0afa5716"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-images-replaced-x-page-margins.html",
+      "reference_html_sha256": "81652b71bf308b4a5aff58e10b7be62a80e3e8f0be528552f59e8878206f1374"
+    },
     "interactions-cartesian-images-replaced-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-images-replaced-x-paged-media.html",
@@ -11732,6 +11900,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-inline-text-x-overflow-clipping.html",
       "reference_html_sha256": "c719f27d5dc5309aa63afb46cdd888c1afc7d02cbc8c799c343d5cbb0d0afa53"
     },
+    "interactions-cartesian-inline-text-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-inline-text-x-page-margins.html",
+      "html_sha256": "7557b04a1da6491b5b3d52067033ea1100cfbe047ace91063b8405269f591176",
+      "manifest_sha256": "a543b0f35184670359f10f9a2283b894f280e36db794784b2be61193ee01005b",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-inline-text-x-page-margins.pdf",
+        "sha256": "7e89342a331192717d663e4b23ada1e8d6a8062c9672e2c64e9b541b18ad6845"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-inline-text-x-page-margins.html",
+      "reference_html_sha256": "7557b04a1da6491b5b3d52067033ea1100cfbe047ace91063b8405269f591176"
+    },
     "interactions-cartesian-inline-text-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-inline-text-x-paged-media.html",
@@ -11886,6 +12068,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-lists-counters-x-overflow-clipping.html",
       "reference_html_sha256": "062b3b658537809ca15dcf7c7bca3de684f700c4914385c15887937286261f55"
     },
+    "interactions-cartesian-lists-counters-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-lists-counters-x-page-margins.html",
+      "html_sha256": "ab29a0dcfeafc538c6532a64fd6b84a6b7f62e5b01ec6334576bbb44c4f700d9",
+      "manifest_sha256": "1209747acef9a6d8f1648ecdae7c46ff2c3565e0d720d56859f800de997d6862",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-lists-counters-x-page-margins.pdf",
+        "sha256": "2213b8578603cfd20ae91cddba26c8c8bea6eb02f7ef221d3bf666a672f96ca5"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-lists-counters-x-page-margins.html",
+      "reference_html_sha256": "ab29a0dcfeafc538c6532a64fd6b84a6b7f62e5b01ec6334576bbb44c4f700d9"
+    },
     "interactions-cartesian-lists-counters-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-lists-counters-x-paged-media.html",
@@ -12026,6 +12222,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-multicol-x-overflow-clipping.html",
       "reference_html_sha256": "8ebaba98f13f664ca9b9240ad27cddff45de4d4383a4ec4650101918bea6280a"
     },
+    "interactions-cartesian-multicol-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-multicol-x-page-margins.html",
+      "html_sha256": "f0264c264b87235819f7d3265de5d7cb16c5f67c1c9aeabcddcf06dac51056b0",
+      "manifest_sha256": "a3d4e899e54d39ffc91b19725a5e36b4bc985186a96c7128a1b9060d09c65e7a",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-multicol-x-page-margins.pdf",
+        "sha256": "842d2a67fbed2985d250d2e61396350168a488db2905f9ba7639535a1e33c19c"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-multicol-x-page-margins.html",
+      "reference_html_sha256": "f0264c264b87235819f7d3265de5d7cb16c5f67c1c9aeabcddcf06dac51056b0"
+    },
     "interactions-cartesian-multicol-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-multicol-x-paged-media.html",
@@ -12034,11 +12244,11 @@
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/interactions/interactions-cartesian-multicol-x-paged-media.pdf",
-        "sha256": "41f47b6b3da781a6d80787b3e07a2dcbbe8d3f8138975ce6fc3cf72232da6bf4"
+        "sha256": "549257679d3e1c688f2fe40503c6c0bd4f67c819536d812f8e4a40ca3f00339b"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
       "reference_file": "references/interactions/interactions-cartesian-multicol-x-paged-media.html",
-      "reference_html_sha256": "2cae9c76bfbaf9a086190917e74163d581e891871f0be4c1e92bd6e64823437e"
+      "reference_html_sha256": "ce39b1b5de8a22c1fe252da7709a461b03d80ce53ca0d09e47dbe735586da625"
     },
     "interactions-cartesian-multicol-x-positioning": {
       "category": "interactions",
@@ -12152,6 +12362,20 @@
       "reference_file": "cases/interactions/interactions-cartesian-overflow-clipping-x-overflow-clipping.html",
       "reference_html_sha256": "cac0e35500803d0f021eafe5f9773a2160711b2b593de0a7bf24f83f2c4014ce"
     },
+    "interactions-cartesian-overflow-clipping-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-overflow-clipping-x-page-margins.html",
+      "html_sha256": "7aab1fe53e90c9c8fc4c2150157043ce587a607938d4d0b239ca05809470490f",
+      "manifest_sha256": "56b9a9ed8157f464379f00de0df061b77110aa211f543b10d50b161437ca2e0c",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-overflow-clipping-x-page-margins.pdf",
+        "sha256": "7a0bf03a07e7521e6a263aac23603fabc51011af88b99b8114291d7b0f7ba95b"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-overflow-clipping-x-page-margins.html",
+      "reference_html_sha256": "7aab1fe53e90c9c8fc4c2150157043ce587a607938d4d0b239ca05809470490f"
+    },
     "interactions-cartesian-overflow-clipping-x-paged-media": {
       "category": "interactions",
       "file": "cases/interactions/interactions-cartesian-overflow-clipping-x-paged-media.html",
@@ -12263,6 +12487,132 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/interactions/interactions-cartesian-overflow-clipping-x-units-values.html",
       "reference_html_sha256": "a4584c8f9d657a0634bfb871e1d15958a99f67e38597ba3d21ab3e91c957d095"
+    },
+    "interactions-cartesian-page-margins-x-page-margins": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-page-margins.html",
+      "html_sha256": "42d412a9c452f0509f8e0f54aaa21d3d926a5495c5c1debf4440d96bcdf0a301",
+      "manifest_sha256": "9fcc905a5d7455a4e661722b9b1aa5e62a9e05f0b94edf305c1de1494bd307a3",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-page-margins.pdf",
+        "sha256": "40195c03044cd8a3bce5c92e243de13e09517699b5ecf851e306be2034ee779d"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-page-margins.html",
+      "reference_html_sha256": "42d412a9c452f0509f8e0f54aaa21d3d926a5495c5c1debf4440d96bcdf0a301"
+    },
+    "interactions-cartesian-page-margins-x-paged-media": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-paged-media.html",
+      "html_sha256": "8a652d758967c4fe4cf6ec757f55f434982bb7e3b54f944382c32bbfcd79b7d8",
+      "manifest_sha256": "af773bbac6385be252e6826bce9d4b0d0972751f5588f7b8710fd27aff04d70f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-paged-media.pdf",
+        "sha256": "7255b329c8ea07afab15fd66fee9dbedc7c06a841cf3ae804de14dcfd01fe44e"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-paged-media.html",
+      "reference_html_sha256": "8a652d758967c4fe4cf6ec757f55f434982bb7e3b54f944382c32bbfcd79b7d8"
+    },
+    "interactions-cartesian-page-margins-x-positioning": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-positioning.html",
+      "html_sha256": "122182e8b591e8fcbbaa02ef6ef137e1d9498f44ca24035af28eca1303b01063",
+      "manifest_sha256": "c7ecce148b7d98a8292940ebf2fd1d625a868c9cdc4d26fd71a117d63420be79",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-positioning.pdf",
+        "sha256": "d1a3e78cee588e25844069adee89dc7dbea357025ade61223a56289a803aa8dd"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-positioning.html",
+      "reference_html_sha256": "122182e8b591e8fcbbaa02ef6ef137e1d9498f44ca24035af28eca1303b01063"
+    },
+    "interactions-cartesian-page-margins-x-selectors-cascade": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-selectors-cascade.html",
+      "html_sha256": "2ac3f864b989d5ed4fde2dd90d70d418048fba60021ac9e619ed7e14781162e8",
+      "manifest_sha256": "ee4b52c409442ae039c304907919737d546fcee90615bd87123705450450efe3",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-selectors-cascade.pdf",
+        "sha256": "7d3a2a7ca46acea5a717f071a983a7793c6ff3c1d73626acc3a7f08fd3c8ccb0"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-selectors-cascade.html",
+      "reference_html_sha256": "2ac3f864b989d5ed4fde2dd90d70d418048fba60021ac9e619ed7e14781162e8"
+    },
+    "interactions-cartesian-page-margins-x-tables": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-tables.html",
+      "html_sha256": "0c68752eaec23c360d86bcdfa58f68cb8bff7a0ed188851bddb68891dbd46db6",
+      "manifest_sha256": "23e3d7e047b57730a80a6ba2afeb5c8af0cc6748eb0b732c3f999ebb876413fb",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-tables.pdf",
+        "sha256": "388b3c5879a8bf67501b55a0f65dab3a0a7396832839d0499c9b1bab3739615f"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-tables.html",
+      "reference_html_sha256": "0c68752eaec23c360d86bcdfa58f68cb8bff7a0ed188851bddb68891dbd46db6"
+    },
+    "interactions-cartesian-page-margins-x-text-advanced": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-text-advanced.html",
+      "html_sha256": "0987b9b135fe26a9dfda9e49ecd204929b73427f24a0385b7f856b1129362f32",
+      "manifest_sha256": "3d86b742b93ce3dbe39e52059d2cf382d598985dd74a4cfc5078ee3c230a8f28",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-text-advanced.pdf",
+        "sha256": "0771591f7b74040c8e0123d897db22a45f0c1e6500838e3cf72ed595b48cb565"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-text-advanced.html",
+      "reference_html_sha256": "0987b9b135fe26a9dfda9e49ecd204929b73427f24a0385b7f856b1129362f32"
+    },
+    "interactions-cartesian-page-margins-x-transforms": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-transforms.html",
+      "html_sha256": "937d771b5f3a2fb4d4562ac7417e6b77df327342769b4f160dccac0824d07584",
+      "manifest_sha256": "f0f4f896ec054116f77d35a1e0d4c2e215b5fc208e73745dc586476fce2c779f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-transforms.pdf",
+        "sha256": "79c4a509e3e97093e9cbc1e49b422a862f35a70c84e0ff41b8678eacb7df677b"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-transforms.html",
+      "reference_html_sha256": "937d771b5f3a2fb4d4562ac7417e6b77df327342769b4f160dccac0824d07584"
+    },
+    "interactions-cartesian-page-margins-x-typography": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-typography.html",
+      "html_sha256": "f89e070ef4e33f9a9cdfc99f239172c3498942f171885c9412dc835b9ab66026",
+      "manifest_sha256": "4bfe04ca5439ee96af0c81c7af56eba320f4520fd77f0526e84f9acfe1e83ac7",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-typography.pdf",
+        "sha256": "1ccee71393ccb7c0f5e84c5b9eb35f0350897dab08a5a06947064daf06f15311"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-typography.html",
+      "reference_html_sha256": "f89e070ef4e33f9a9cdfc99f239172c3498942f171885c9412dc835b9ab66026"
+    },
+    "interactions-cartesian-page-margins-x-units-values": {
+      "category": "interactions",
+      "file": "cases/interactions/interactions-cartesian-page-margins-x-units-values.html",
+      "html_sha256": "29a47564a400a4c73f591c4a0359289cf45a64279e420086cbb943c711dd89c0",
+      "manifest_sha256": "5521b6055149019ed7c3d7a8ec0146cbb0708e07d37624cf1042662b156e8403",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/interactions/interactions-cartesian-page-margins-x-units-values.pdf",
+        "sha256": "88359b4b613d0b1253de2d4827fa643282e973746b850bea115f208b37a0893c"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/interactions/interactions-cartesian-page-margins-x-units-values.html",
+      "reference_html_sha256": "29a47564a400a4c73f591c4a0359289cf45a64279e420086cbb943c711dd89c0"
     },
     "interactions-cartesian-paged-media-x-paged-media": {
       "category": "interactions",
@@ -13472,7 +13822,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/lists-counters-counter-set.html",
       "html_sha256": "b88def6f035a22afd343d484b744e14548e99ca3bd7db20fdbae174e7d7d58d7",
-      "manifest_sha256": "b30a5ef6759c85143bc19866d48d819784ae4977c9ba2a28d50c4f321a094504",
+      "manifest_sha256": "c647d62754edab3b46e4e8b8011008e43860761e599b020337008c70c0bd3ea8",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/lists-counters-counter-set.pdf",
@@ -13500,7 +13850,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/lists-counters-counter-style-negative.html",
       "html_sha256": "f2084483eb7e4ff1ec7a977d4b1015fc54d506f860c50e06bdda3c597463b7b6",
-      "manifest_sha256": "1e1d9ad03b6ea96c99cecf931cd8c19e469df9a73e0ea4d45e0e8145860e9ca4",
+      "manifest_sha256": "c7ee32d108a6b627a64d7d5dc4d5a9cdf71c463260425f0b3530636bb4ba9777",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/lists-counters-counter-style-negative.pdf",
@@ -13514,7 +13864,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/lists-counters-counter-style-pad-prefix-suffix.html",
       "html_sha256": "e31806e7420b700501cf1c3850ad50ce3c28ce62c309c2d01079c26db4bbe4c7",
-      "manifest_sha256": "92aea45c8dec89431bd12b22bff0113fed312d9e6d314f66fe6b9046a3b3be9d",
+      "manifest_sha256": "82ae172964d1a3aa2bbaa8e85c5f5ad98a5741b15901c844b953b59fdb3cec8f",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/lists-counters-counter-style-pad-prefix-suffix.pdf",
@@ -13528,7 +13878,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/lists-counters-li-value.html",
       "html_sha256": "59902778d38e434949b1789409eaa2e33d91c498fcf2adfcc7da4a985652a77d",
-      "manifest_sha256": "6d0e5d009cb79bc6265a16348e8d065e97bda7161022ae681429659369a03ab5",
+      "manifest_sha256": "9f174af704471585c579bb055d0a8743575fd8971fdff760680715639facfb18",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/lists-counters-li-value.pdf",
@@ -13570,7 +13920,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/lists-counters-list-style-type-cjk-decimal.html",
       "html_sha256": "ae2380ed539843940017ac17dd5a0370611711c7b6200414f249806482c87297",
-      "manifest_sha256": "517e00ffd2b0d67ac520722fe880470b1e1dd017419e0bf79e10ec59d86c087a",
+      "manifest_sha256": "c1b6b4f5079a1d96893e045b393dc338d23a54f01e0400efc0ce187ab383b275",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/lists-counters-list-style-type-cjk-decimal.pdf",
@@ -14326,7 +14676,7 @@
       "category": "paged-media",
       "file": "cases/paged-media/multicol-span-all-page-break.html",
       "html_sha256": "f740631706e19ba2a7808f773177f4a38e94922157b1e207a17e8ed07129c40d",
-      "manifest_sha256": "3df8e9062aac01ae00fc3ff4529c812f60d7155c1245c9026509ab402f3e06b1",
+      "manifest_sha256": "3548f9d136fba0200a71fefac56d13f7337131622007ebcfe6e5f6ed02d17e6d",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/paged-media/multicol-span-all-page-break.pdf",
@@ -14410,7 +14760,7 @@
       "category": "lists-counters",
       "file": "cases/lists-counters/ol-continues-across-page-break.html",
       "html_sha256": "a81d6061429fa530ed754e83d82becd6cfaae79ab1052e6c1fb96ff7dd6bfe3a",
-      "manifest_sha256": "03c3ff65d805e21de139d3dc68f2aaade08a9dbe5a5a811f960d4a0e1ad3ef13",
+      "manifest_sha256": "9628e87fe259646367d6c665c6911f7be5972d5216a963f6713e638b21e88e46",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/lists-counters/ol-continues-across-page-break.pdf",
@@ -14606,7 +14956,7 @@
       "category": "backgrounds-borders",
       "file": "cases/backgrounds-borders/outline-solid.html",
       "html_sha256": "476433241e03b97c9236a79b0dde42c3cb8fe8f4386fe5dcfd03177b2b210a2c",
-      "manifest_sha256": "97b7b349adffa009062522964693c8a0c9b6eef4bfa3af513804d058e976da91",
+      "manifest_sha256": "3d95b2ded901b270c2725f755d4d71473af15da3cfb96a407aa866eb0eedad9b",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/backgrounds-borders/outline-solid.pdf",
@@ -14924,6 +15274,34 @@
       "reference_file": "cases/paged-media/page-break-inside-avoid-table-straddle.html",
       "reference_html_sha256": "0bf694a4bf20c499e02445fe95197f488ab08c9d894921cddd2b2371178f3db0"
     },
+    "paged-background-named-compound-list": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-background-named-compound-list.html",
+      "html_sha256": "7b3a2ca8a95a642b48055b3f8fe71cf181d94afaaab83a840556bf5c051a0bdb",
+      "manifest_sha256": "04166c7e376fac5f27c44e4681aed33bbfe842eac50fbc6abd784a9a57378328",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-background-named-compound-list.pdf",
+        "sha256": "6400c4b90fe6b2b91348cc4908c84535bce00ed4481e7dce871f0c25be2920a5"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-background-named-compound-list.html",
+      "reference_html_sha256": "a97e2b52a8904462313edec75360b5d50a5a4a938f2a1865a946b9b63d7d854d"
+    },
+    "paged-background-physical-page-cascade": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-background-physical-page-cascade.html",
+      "html_sha256": "6c26310eef49da2ebfae7601fbcea393a09a18b3c3d37b91c09783081eff7d3a",
+      "manifest_sha256": "7f82f9fad52a3ba1261bcae7c7203867f7ec20e41d6b1f2bdc14f547dc1b670f",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-background-physical-page-cascade.pdf",
+        "sha256": "72268898e30bd776f798539f5c55ded4123764687db0da7c546f8b8e05dea730"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/paged-media/paged-background-physical-page-cascade.html",
+      "reference_html_sha256": "6c26310eef49da2ebfae7601fbcea393a09a18b3c3d37b91c09783081eff7d3a"
+    },
     "paged-blank-margin-box-specificity": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-blank-margin-box-specificity.html",
@@ -14941,16 +15319,16 @@
     "paged-blank-selector-background": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-blank-selector-background.html",
-      "html_sha256": "76e804976bd7c170efe49933d61bfad14e5ff1be01a998416d38577fda54d485",
-      "manifest_sha256": "6d9aa2585829d9a00056719aebe9a4a868bfed1a9f889d30da6f4799c9d540b9",
-      "oracle": "weasyprint",
+      "html_sha256": "86a785e3ef1aee0bdb6126b0cb1e637f35d69f8ff0df4d6ed30a27178dcccd3a",
+      "manifest_sha256": "ee00f9f7ecdbc8f9b23de3715c6b1cd0ed3b16ee2c95b2317276c0e5d0734c24",
+      "oracle": "chrome",
       "pdf": {
         "file": "oracles/paged-media/paged-blank-selector-background.pdf",
-        "sha256": "24f1d1a95ab45628132f44d9f464477870234a20ffc3023957b181dfbcba7e92"
+        "sha256": "92a94e6a5bb28ceb1e2c47bcb4214be9a6a730451a6e9c016593e234008def04"
       },
-      "provenance": "17490e7f67ba6703325ce685296cbc49e79b5683d9c7d38364b3c6fa8c35f90d",
-      "reference_file": "cases/paged-media/paged-blank-selector-background.html",
-      "reference_html_sha256": "76e804976bd7c170efe49933d61bfad14e5ff1be01a998416d38577fda54d485"
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-blank-selector-background.html",
+      "reference_html_sha256": "5a35e2385a5902e4c41ee8ec72429a787c3802bb614072a54bf8815b1a02f5df"
     },
     "paged-bleed-crop-background": {
       "category": "paged-media",
@@ -15698,15 +16076,15 @@
       "category": "paged-media",
       "file": "cases/paged-media/paged-page-selector-list-named.html",
       "html_sha256": "7b8d2144b5a0ee24f4f1bdf3a84160b3575e21f3305a71750fcd042647d54f55",
-      "manifest_sha256": "6c6bb4f848a2ff8b7abfebf2a6b67a4e67e76c13c9deb4d646c45e0e0cf9f412",
+      "manifest_sha256": "818d16a1773400058a08fb026364cd70c6f0fe02cb5bfe1cae3da33c9cb63eb4",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/paged-media/paged-page-selector-list-named.pdf",
-        "sha256": "b208956ff2581c065f6cd12e6a64a22f8116ece49932f9c39997229d98832b18"
+        "sha256": "80795b23fc4c30a7983164e9bb6d6baa930008a395177acef0c87b19011d3580"
       },
-      "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
-      "reference_file": "cases/paged-media/paged-page-selector-list-named.html",
-      "reference_html_sha256": "7b8d2144b5a0ee24f4f1bdf3a84160b3575e21f3305a71750fcd042647d54f55"
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-page-selector-list-named.html",
+      "reference_html_sha256": "20b830c5d2ef6f01fb56ef21a144178a73c0d4eab06785efe8893734c79410b5"
     },
     "paged-pages-counter-immutable": {
       "category": "paged-media",
@@ -15739,16 +16117,16 @@
     "paged-running-named-page-margin-box": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-running-named-page-margin-box.html",
-      "html_sha256": "7ef2ced58f7ad931a3912c8dbfdea8866e2774f18518da59f7dfa32839f640c1",
-      "manifest_sha256": "ab6bf7b4faecebe57a72453fbca46b04fb66f8e31721b4b714440548c6b7076b",
-      "oracle": "weasyprint",
+      "html_sha256": "4b0534cb69db30d9297db793c7e9bd3fb0a230d7f42470012e51a6297e578ee9",
+      "manifest_sha256": "ee6cde1c3f365cd3e219a16c7c8243fc794ade5b2098466512188892fac1aec6",
+      "oracle": "chrome",
       "pdf": {
         "file": "oracles/paged-media/paged-running-named-page-margin-box.pdf",
-        "sha256": "0b87e68eb3ea02b1a65d968efa9614b2e09642f268294dc5ade608ed26faf9e3"
+        "sha256": "016d8c1a52aa80213a441bbfaf4881d6de8963a631ef46d782a7332222867c4b"
       },
-      "provenance": "17490e7f67ba6703325ce685296cbc49e79b5683d9c7d38364b3c6fa8c35f90d",
-      "reference_file": "cases/paged-media/paged-running-named-page-margin-box.html",
-      "reference_html_sha256": "7ef2ced58f7ad931a3912c8dbfdea8866e2774f18518da59f7dfa32839f640c1"
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-running-named-page-margin-box.html",
+      "reference_html_sha256": "696773df3f8b09d7def23600eb21efc4d83701b3e4529ee65e25245834be41d5"
     },
     "paged-side-margin-boxes": {
       "category": "paged-media",
@@ -15809,16 +16187,16 @@
     "paged-string-set-attr-start": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-string-set-attr-start.html",
-      "html_sha256": "3964d5dd0ea3b53dde07e2e2fa66f7e3e013f19732d3b732b144da72f810506c",
-      "manifest_sha256": "f081a30cc43bcd0a245c52a25a11f8d9f2f211e098d63f5b20af69b269f821b7",
-      "oracle": "weasyprint",
+      "html_sha256": "12cbccef06117e27273478dcd93e202ab8d76554a77a2005f5ed98fb96765a43",
+      "manifest_sha256": "ca7613ce5dc0d12f45081224625070923032c1f20b0aa6ea5a314cb135e290d4",
+      "oracle": "chrome",
       "pdf": {
         "file": "oracles/paged-media/paged-string-set-attr-start.pdf",
-        "sha256": "fedfd10459b58000c952a58142bf721fb3b608ea9bd8a22345a5e5c845b074fe"
+        "sha256": "0f390ec1578cb13289db8a7e5e6baddab78c0af45ce97bc4087225f7088e1f22"
       },
-      "provenance": "17490e7f67ba6703325ce685296cbc49e79b5683d9c7d38364b3c6fa8c35f90d",
-      "reference_file": "cases/paged-media/paged-string-set-attr-start.html",
-      "reference_html_sha256": "3964d5dd0ea3b53dde07e2e2fa66f7e3e013f19732d3b732b144da72f810506c"
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "references/paged-media/paged-string-set-attr-start.html",
+      "reference_html_sha256": "ddaaefc4ef0b71487c7eb0eccfda3e9ef051acd3ac8d2219b1d67a103cacaf7b"
     },
     "paged-table-header-footer-repeat": {
       "category": "paged-media",
@@ -15866,7 +16244,7 @@
       "category": "block-box-model",
       "file": "cases/block-box-model/paragraph-splits-across-pages.html",
       "html_sha256": "6a04eac7f20d5b041ab8e93b6dac807ba32877e7493a15f89236de608a1ff6cc",
-      "manifest_sha256": "04274cc552d15a6ced7a36c0f7c07b2dc633c168311d1db3bd03c9a8c70d9f28",
+      "manifest_sha256": "3dedcc7944912789bbf7c78f0f0ab9e75688e8e7a46ec725c41095e3b53cdc1e",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/block-box-model/paragraph-splits-across-pages.pdf",
@@ -16300,7 +16678,7 @@
       "category": "probes",
       "file": "cases/probes/probe-text-baseline.html",
       "html_sha256": "0e00f8252c709c7661b3581027497b18ca704f7a2089aaeb88be949056187e86",
-      "manifest_sha256": "4668f768b32172945fc7b1e4783bacfc853ac123b9c8d8cca092b34f22ca54db",
+      "manifest_sha256": "b6bd78f0eae8dea9056826a074bd7f6d00e8d5c333d82fe4e78852294ca00fa5",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/probes/probe-text-baseline.pdf",
@@ -20612,7 +20990,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-hyphen-minus-wrap.html",
       "html_sha256": "12b5c8949cd152e407b5295c48aa6a565731fe7894ff0569cab5d57aa902e749",
-      "manifest_sha256": "1c01c7934737b33b6b6b3306e4d0121c49346730179d6b3171e05f8fadc24c8a",
+      "manifest_sha256": "c0619e6f858c01461b3184ff9733675fcc95092802b2d421ff5c57a92e7e92cf",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-hyphen-minus-wrap.pdf",
@@ -20640,7 +21018,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-hyphens-manual-soft-hyphen.html",
       "html_sha256": "6efbec971c959bc50524872610dc25ded5391da1abf0a4cb3e1ad03c999495c5",
-      "manifest_sha256": "d797ae99d8fa8ac95798ac31080c35ea3c82579a760d4d2021d6afe1e3848b9e",
+      "manifest_sha256": "7e1530501442f39b272c3a6d89ea64c34dd27c50207212648bf8a54c15c58513",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-hyphens-manual-soft-hyphen.pdf",
@@ -20654,7 +21032,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-hyphens-none-soft-hyphen.html",
       "html_sha256": "7b69e9616a6e844bf95f7dff0bff108755d0b620aa1521f571410c346ecb3313",
-      "manifest_sha256": "09df443d385eed69693598fe32f385372372825f5bc0baf8f6b1d1d277eebc2d",
+      "manifest_sha256": "7ce2f5259df543e6942e9db710d23771cfe873f5fb3ee97e9506b60d6fb607e7",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-hyphens-none-soft-hyphen.pdf",
@@ -20710,7 +21088,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-overflow-wrap-anywhere.html",
       "html_sha256": "f15a3c9bb0d403a78df77babe85bcd052e7864333ccf0c69bbd694bf90b0454c",
-      "manifest_sha256": "2cdf97ec19435a8482b9a0f2d4b05dc23acd6936ff5deade67febfce999ebce2",
+      "manifest_sha256": "31cfb704833d65b7044eb6d0c88b12f4b88d1c21a840577ef1a49b3fba374cc3",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-overflow-wrap-anywhere.pdf",
@@ -20738,7 +21116,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-overflow-wrap-break-word.html",
       "html_sha256": "20c2df849be7c0cf2d660ebfda745831a3a88751fac5954066f99fa079e4a5eb",
-      "manifest_sha256": "bc8bdf21866ebaacd8850a05166e892751c155acd1fa37b4d7c8f993b14c922e",
+      "manifest_sha256": "06d66840c816cc29441c3d152b8efbf46981fc4277227b060f36b410aadead67",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-overflow-wrap-break-word.pdf",
@@ -21074,7 +21452,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-white-space-normal.html",
       "html_sha256": "c7b9174bd88c43d0c2e2aa5c65a7ecc6f1525ae69c9e61f71fc31f2404289421",
-      "manifest_sha256": "bd2fa9d55ea2af3d095d08a35f5622a1b0e997c3fb229ed0c0ea782596a01bf7",
+      "manifest_sha256": "fb9c38eb459dda57ecf61aea5404ef82a3b54aedd333405036bf06ad1e316a93",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-white-space-normal.pdf",
@@ -21172,7 +21550,7 @@
       "category": "text-advanced",
       "file": "cases/text-advanced/text-advanced-word-break-keep-all-cjk.html",
       "html_sha256": "541f4c288319691044fd3a4d00df31a66318dfacc8f3aab6b00d85c5d98a3bbd",
-      "manifest_sha256": "67d99148df6367728f1da0f5331eb29354b6c9d4f77d8c73541ecf99604fd698",
+      "manifest_sha256": "ccd9d1290fa08e86ba00fac672dfb174184ef81b9c5662e71d458601c5a878a0",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/text-advanced/text-advanced-word-break-keep-all-cjk.pdf",
@@ -22138,7 +22516,7 @@
       "category": "typography",
       "file": "cases/typography/typography-mixed-inline-font-size-linebox.html",
       "html_sha256": "b779853c7ec4903b8150e799f578a60ba1cfe456526aa8c78fbe6b89637e5b35",
-      "manifest_sha256": "30e8e2f726df248d9a3c59720dea1b17a8816a7bf2ee0fb4553173af57117b24",
+      "manifest_sha256": "9b438972746e760ee0ed9b49b82e4c0fba69a34561ced1fcbf37cffc5f497cb7",
       "oracle": "chrome",
       "pdf": {
         "file": "oracles/typography/typography-mixed-inline-font-size-linebox.pdf",

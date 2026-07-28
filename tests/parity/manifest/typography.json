@@ -230,10 +230,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress renders the same taller first line around BIG and the same following normal line as Chrome. Its word geometry is closer to WeasyPrint under the shared pdftoppm comparison (candidate/WeasyPrint AE 9,035 versus Chrome/WeasyPrint 11,869). The remaining raw residue is contour coverage from Ironpress CID TrueType versus Chrome Type 3 glyph programs, not clipping, overlap, or a missing mixed-inline line-box contribution. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

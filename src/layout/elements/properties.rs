@@ -791,6 +791,27 @@ impl Positioning {
         self.containing_block = Some(containing_block);
     }
 
+    /// Re-resolve an absolute box when its owning containing block reaches its
+    /// final used size.
+    ///
+    /// A provisional block at the same positioned depth is replaceable.
+    /// Geometry from a different depth belongs to a nearer positioned ancestor
+    /// and must remain intact.
+    pub(crate) fn resolve_final_containing_block(
+        &mut self,
+        containing_block: ContainingBlock,
+        extent: crate::types::Size,
+    ) {
+        if !self.scheme.is_absolute()
+            || self
+                .containing_block
+                .is_some_and(|current| current.depth != containing_block.depth)
+        {
+            return;
+        }
+        self.resolve_against(containing_block, extent);
+    }
+
     /// Re-resolve the block coordinate against a fragmented containing block's
     /// continuous padding box, then express it in one fragment's local space.
     /// Returns the continuous block-start coordinate for fragment selection.

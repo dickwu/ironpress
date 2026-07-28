@@ -554,7 +554,7 @@ pub(crate) fn parse_property_value(property: &str, val: &str) -> Option<CssValue
     // record the named page; otherwise it would fall through to `parse_length`
     // and be dropped.
     if property == "page" {
-        return Some(CssValue::Keyword(lower));
+        return Some(CssValue::Keyword(val.trim().to_string()));
     }
 
     if matches!(

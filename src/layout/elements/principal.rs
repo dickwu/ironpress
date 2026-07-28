@@ -44,9 +44,9 @@ impl<T: PrincipalBox> BlockFlowParticipant for T {
 }
 
 impl<T: PrincipalBox> ContainingBlockConsumer for T {
-    fn attach_missing_containing_block(&mut self, containing_block: ContainingBlock) {
+    fn resolve_containing_block(&mut self, containing_block: ContainingBlock) {
         self.principal_mut()
-            .attach_missing_containing_block(containing_block);
+            .resolve_containing_block(containing_block);
     }
 }
 
@@ -207,6 +207,12 @@ macro_rules! impl_principal_layout_element {
             }
 
             fn box_paint_owner(&self) -> Option<&dyn super::BoxPaintOwner> {
+                Some(self)
+            }
+
+            fn box_paint_owner_mut(
+                &mut self,
+            ) -> Option<&mut dyn super::BoxPaintOwner> {
                 Some(self)
             }
 

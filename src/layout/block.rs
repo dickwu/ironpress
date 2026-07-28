@@ -25,10 +25,10 @@ use super::helpers::{
     authored_overflow_axes, authored_overflow_clip_margin, authored_pseudo_keyword_property,
     authored_scrollbar_gutter, build_pseudo_block, collects_as_inline_text,
     establishes_bfc_with_overflow, has_background_paint, heading_level, measure_lines_width,
-    patch_absolute_children_containing_block, pseudo_is_block_like, push_block_pseudo,
-    recurses_as_layout_child, resolve_abs_containing_block, resolve_content_box_height,
-    resolve_inset, resolve_padding_box_height, resolve_relative_offsets,
-    selector_attributes_with_has, selector_context_from_ancestors,
+    pseudo_is_block_like, push_block_pseudo, recurses_as_layout_child,
+    resolve_abs_containing_block, resolve_absolute_descendants_containing_block,
+    resolve_content_box_height, resolve_inset, resolve_padding_box_height,
+    resolve_relative_offsets, selector_attributes_with_has, selector_context_from_ancestors,
 };
 use super::inline::{
     layout_inline_block_group_with_spacing, layout_inline_mixed_sequence_with_env,
@@ -2080,7 +2080,7 @@ pub(crate) fn layout_block_element(
         // Patch absolute children with the now-known containing block,
         // and resolve bottom/right offsets into top/left.
         if let Some(cb) = cb_info {
-            patch_absolute_children_containing_block(&mut child_elements, cb);
+            resolve_absolute_descendants_containing_block(&mut child_elements, cb);
         }
 
         if (style.opacity < 1.0 || style.isolation.isolates())

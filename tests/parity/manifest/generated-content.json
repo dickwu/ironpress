@@ -120,10 +120,6 @@
     "file": "cases/generated-content/generated-content-first-line.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Pseudo-Elements defines the first formatted line and its allowed styling, not a cross-engine font-baseline quantization. Chrome, WeasyPrint 69, and Ironpress wrap and style the same first-line text. WeasyPrint and Ironpress place its baseline at 43.437158pt, while Chrome uses 42.75pt. The Chrome raster is retained, but is not a unique normative geometry reference."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch",
@@ -305,10 +301,6 @@
     "file": "cases/generated-content/generated-content-first-letter-transform.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and both oracles render the same orange uppercase T, lowercase remainder, line breaks, border, and background. Ironpress's first-line word origin matches WeasyPrint to 0.000002pt (30.027444pt versus 30.027446pt), and candidate/WeasyPrint shared-pdftoppm AE is 5,996 compared with Chrome/WeasyPrint 23,472. Chrome's Type 3 glyph program leaves contour-only raw residue against Ironpress CID TrueType; this is not a first-letter text-transform failure. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch",
@@ -325,10 +317,6 @@
     "file": "cases/generated-content/generated-content-first-line-background.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Pseudo-Elements permits background styling on the first formatted line, but does not prescribe a cross-engine font-baseline quantization. Chrome, WeasyPrint 69, and Ironpress paint the same first-line highlight and text. WeasyPrint and Ironpress place its baseline at 43.437158pt, while Chrome uses 42.75pt. The Chrome raster is retained, but is not a unique normative geometry reference."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-color-swatch",
@@ -623,10 +611,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and Chrome render the required red square marker, Generated item text, and Body text with the same layout. WeasyPrint 69 incorrectly substitutes a bullet for the requested square marker, so it is not the semantic reference; even so, Ironpress/WeasyPrint shared-pdftoppm AE is 3,255 versus Chrome/WeasyPrint 11,658. The Chrome diff is limited to Type 3 text contours, not missing generated list-item marker support. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

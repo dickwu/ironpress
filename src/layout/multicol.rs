@@ -627,7 +627,7 @@ fn emit_multicol_wrapper(
             geometry.size.width.fixed_value().unwrap_or_default(),
             geometry.size.height.used().unwrap_or_default(),
         );
-        crate::layout::helpers::patch_absolute_descendants_containing_block(
+        crate::layout::helpers::resolve_absolute_descendants_containing_block(
             &mut column_children,
             crate::layout::engine::ContainingBlock {
                 x: 0.0,

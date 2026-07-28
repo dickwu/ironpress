@@ -168,6 +168,10 @@ impl LayoutElement for TableBoxDecoration {
         Some(&self.block)
     }
 
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn super::BoxPaintOwner> {
+        Some(&mut self.block)
+    }
+
     fn table_box_decoration_owner(&self) -> Option<&dyn TableBoxDecorationOwner> {
         Some(self)
     }

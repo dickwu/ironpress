@@ -461,10 +461,6 @@
     "file": "cases/paged-media/multicol-span-all-page-break.html",
     "kind": "feature",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "Ironpress and Chrome have the same two-page fragmentation, span-all interruption, paragraph assignment, and background geometry. The raw overlay contains text contours only: Chrome places the first text at 27.003661pt, while Ironpress 27.266009pt matches WeasyPrint's 27.266010pt for the common layout. CSS Multicol does not prescribe Chrome-specific baseline quantization. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-block-flow"
@@ -505,9 +501,41 @@
     "category": "paged-media",
     "feature": "page-selector",
     "subfeature": "blank-background",
-    "description": "@page :blank must style the blank page inserted by a sided break; catches implementations that insert the parity page but leave it with the default page rule.",
+    "description": "A sided break inserts a blank left page whose :blank background wins over :left, while a later non-blank left page retains its :left background. Small opaque content markers leave every physical-page background visible, catching both missing selection and selector leakage onto unrelated pages. Chromium does not insert the required sided blank page, so the Foundation reference materializes the specified four-page result.",
     "file": "cases/paged-media/paged-blank-selector-background.html",
-    "oracle": "weasyprint",
+    "reference_file": "references/paged-media/paged-blank-selector-background.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "paged-background-physical-page-cascade",
+    "category": "paged-media",
+    "feature": "page-selector",
+    "subfeature": "background-physical-page-cascade",
+    "description": "Four pages expose their complete page backgrounds: :first wins over :right on page 1, a later equal-specificity :left rule wins on pages 2 and 4, and :right applies to page 3. Catches implementations that flatten selected @page backgrounds into one document-global style.",
+    "file": "cases/paged-media/paged-background-physical-page-cascade.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "paged-background-named-compound-list",
+    "category": "paged-media",
+    "feature": "page-selector",
+    "subfeature": "background-named-compound-list",
+    "description": "Five complete page backgrounds exercise case-sensitive named pages, comma-separated selector lists, named-plus-spread compounds, :first specificity, unmatched named pages, and source order. Any selector, identity, or global-flattening defect changes most of at least one page. Chromium does not apply one named-plus-spread compound, so the Foundation reference materializes the standard cascade.",
+    "file": "cases/paged-media/paged-background-named-compound-list.html",
+    "reference_file": "references/paged-media/paged-background-named-compound-list.html",
+    "oracle": "chrome",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -907,8 +935,9 @@
     "category": "paged-media",
     "feature": "page-selector",
     "subfeature": "named-selector-list",
-    "description": "A comma-separated @page selector list applies one margin rule to title and chapter named pages; catches selector classifiers that store the whole list as one page name.",
+    "description": "A comma-separated @page selector list applies one margin rule to title and chapter named pages; catches selector classifiers that store the whole list as one page name. Chromium omits both named-list margins, so the Foundation reference materializes the specified two-page result.",
     "file": "cases/paged-media/paged-page-selector-list-named.html",
+    "reference_file": "references/paged-media/paged-page-selector-list-named.html",
     "oracle": "chrome",
     "kind": "feature",
     "expected_support": "implemented",
@@ -1115,13 +1144,10 @@
     "category": "paged-media",
     "feature": "running-element",
     "subfeature": "named-page-margin-box",
-    "description": "position:running() referenced from a named @page chapter margin box appears only on chapter pages; catches named-page geometry support that discards named margin boxes.",
+    "description": "position:running() referenced from a named @page chapter margin box appears only on chapter pages and retains the heading's explicitly authored bold weight. Chromium does not implement GCPM element(), so the Foundation-Chromium reference materializes the same complete styled running box with literal margin content.",
     "file": "cases/paged-media/paged-running-named-page-margin-box.html",
-    "oracle": "weasyprint",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS GCPM requires position:running() to remove the element from normal flow and element() to place it in the selected named-page margin box. Both PDFs put the complete CHAPTER HEAD only in the chapter-page header, with identical page-2 green body and yellow margin-box vector geometry. WeasyPrint additionally emits an explicit page-edge clip, leaving one raster column at the far-right boundary; Ironpress relies on the PDF page clip. CSS Paged Media does not prescribe that equivalent PDF encoding or its contour coverage, so the WeasyPrint PDF is not a unique pixel oracle; raw shared-pdftoppm evidence remains reported."
-    },
+    "reference_file": "references/paged-media/paged-running-named-page-margin-box.html",
+    "oracle": "chrome",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [
@@ -1262,13 +1288,10 @@
     "category": "paged-media",
     "feature": "running-header",
     "subfeature": "string-set-attr-start",
-    "description": "string-set with attr() feeds string(section,start) in the page header; catches margin header renderers without named strings or attr() support.",
+    "description": "string-set with attr() feeds string(section,start) in the page header when the assigning heading starts page 1, and the entry value continues on page 2. Chromium does not implement GCPM string-set, so the Foundation-Chromium reference materializes the required ALPHA margin content while preserving the same pagination.",
     "file": "cases/paged-media/paged-string-set-attr-start.html",
-    "oracle": "weasyprint",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS GCPM requires string-set to accept attr() and string(name,start) to use the first assignment only when its element starts the page, otherwise the entry value. Both PDFs render the complete ALPHA header on both pages; page 2 rasterizes byte-identically, and page 1 has identical yellow header-background vector bounds. The remaining page-1 signal is glyph contour coverage plus one raster row at the shared background edge, neither of which GCPM prescribes, so the WeasyPrint PDF is not a unique pixel oracle; raw shared-pdftoppm evidence remains reported."
-    },
+    "reference_file": "references/paged-media/paged-string-set-attr-start.html",
+    "oracle": "chrome",
     "kind": "feature",
     "expected_support": "implemented",
     "depends_on": [

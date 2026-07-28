@@ -6,7 +6,7 @@
 //! and must not change the scale of unrelated flow content.
 
 use super::engine::{LayoutElement, Page};
-use crate::types::PageSize;
+use crate::types::{Margin, PageSize, Point, Size};
 
 /// A uniform scale applied to page content around the physical page's top-left
 /// corner by the PDF renderer. It owns the print-fit decision so render paths
@@ -35,6 +35,19 @@ impl PrintContentScale {
     pub(crate) const fn is_identity(self) -> bool {
         self.0 == 1.0
     }
+
+    /// Layout-space size whose fitted physical result has `physical` extent.
+    pub(crate) fn layout_size_for_physical(self, physical: Size) -> Size {
+        Size::new(
+            physical.width / self.factor(),
+            physical.height / self.factor(),
+        )
+    }
+
+    /// Layout-space offset whose fitted physical result has `physical` offset.
+    pub(crate) fn layout_point_for_physical(self, physical: Point) -> Point {
+        Point::new(physical.x / self.factor(), physical.y / self.factor())
+    }
 }
 
 impl Default for PrintContentScale {
@@ -43,23 +56,45 @@ impl Default for PrintContentScale {
     }
 }
 
-/// Compute the per-page print scale after pagination, when page-specific
-/// `@page` dimensions and margins are known.
-pub(crate) fn assign_page_print_scales(pages: &mut [Page], default_page_size: PageSize) {
+/// Compute Chromium's document-wide print-fit scale after pagination.
+///
+/// Each physical page contributes its selected page-area width and normal-flow
+/// scrollable overflow. The narrowest resulting factor applies to every page,
+/// while rendering anchors it at each page area's own origin.
+pub(crate) fn assign_page_print_scales(
+    pages: &mut [Page],
+    default_page_size: PageSize,
+    default_margin: Margin,
+) {
+    let document_scale = pages
+        .iter()
+        .map(|page| {
+            let geometry = page
+                .geometry
+                .unwrap_or(super::page_context::PageGeometry::new(
+                    default_page_size,
+                    default_margin,
+                ));
+            let flow_right_edge = page
+                .elements
+                .iter()
+                .filter_map(|(_, element)| element.print_fit_right_edge())
+                .fold(0.0_f32, f32::max);
+            PrintContentScale::from_flow_width(
+                geometry.page_area_size().width,
+                geometry.flow_right_in_page_area(flow_right_edge),
+            )
+        })
+        .map(PrintContentScale::factor)
+        .fold(1.0_f32, f32::min);
     for page in pages {
-        let page_size = page.page_size_override.unwrap_or(default_page_size);
-        let flow_right_edge = page
-            .elements
-            .iter()
-            .filter_map(|(_, element)| normal_flow_right_edge(element.as_ref()))
-            .fold(0.0_f32, f32::max);
-        page.print_content_scale =
-            PrintContentScale::from_flow_width(page_size.width, flow_right_edge);
+        page.print_content_scale = PrintContentScale(document_scale);
+        for (_, element) in &mut page.elements {
+            if let Some(background) = element.page_area_background_mut() {
+                background.apply_print_content_scale(page.print_content_scale);
+            }
+        }
     }
-}
-
-fn normal_flow_right_edge(element: &dyn LayoutElement) -> Option<f32> {
-    element.inline_flow_extent()?.normal_flow_right_edge()
 }
 
 #[cfg(test)]

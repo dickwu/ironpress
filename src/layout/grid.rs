@@ -3606,7 +3606,7 @@ fn layout_grid_container_inner(
                 &mut buf,
                 env,
             );
-            crate::layout::helpers::patch_absolute_children_containing_block(&mut buf, cb);
+            crate::layout::helpers::resolve_absolute_descendants_containing_block(&mut buf, cb);
             if !abs_area_translation.is_identity() {
                 translate_absolute_offsets(&mut buf, abs_area_translation);
             }

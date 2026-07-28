@@ -14,17 +14,16 @@ mod values;
 #[cfg(test)]
 mod values_tests;
 
+pub(crate) use imports::resolve_imports_with_resources;
 pub(crate) use imports::{extract_svg_data_uri, extract_url_path};
-#[allow(unused_imports)]
-pub use imports::{is_path_within, parse_import_rules, resolve_imports};
 pub use inline::parse_inline_style;
 pub(crate) use math::{CssMathExpression, LengthPercent, MathUnitContext};
 pub(crate) use media::{preprocess_media_queries, preprocess_media_queries_with_context};
 pub use model::{
     AncestorInfo, BackgroundLayerSource, CssRule, CssValue, FontFaceRule, FontStretch, ImportRule,
     MarginBox, MarginBoxAlign, MarginBoxBand, MarginBoxPosition, MarginContentToken, MediaContext,
-    PageRule, PageSelector, PageSelectorContext, PageTextStyle, PseudoElement, SelectorContext,
-    SpecifiedColor, StyleMap,
+    PageContentPolicy, PageContentReference, PageRule, PageSelector, PageSelectorContext,
+    PageTextStyle, PseudoElement, SelectorContext, SpecifiedColor, StyleMap,
 };
 #[cfg(test)]
 #[allow(unused_imports)]

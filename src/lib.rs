@@ -247,8 +247,7 @@ pub struct HtmlConverter {
     margin: Margin,
     sanitize: bool,
     custom_fonts: std::collections::HashMap<String, Vec<u8>>,
-    /// Base directory for resolving relative paths in `@import` and `@font-face` rules.
-    base_path: Option<std::path::PathBuf>,
+    resources: ResourcePaths,
     /// Optional header text rendered at the top of each page.
     header: Option<String>,
     /// Optional footer text rendered at the bottom of each page.
@@ -265,6 +264,12 @@ pub struct HtmlConverter {
     occlusion_cull: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ResourcePaths {
+    base: Option<std::path::PathBuf>,
+    authorized_root: Option<std::path::PathBuf>,
+}
+
 impl HtmlConverter {
     /// Create a new converter with default settings (A4, 1-inch margins, sanitization enabled).
     pub fn new() -> Self {
@@ -273,7 +278,7 @@ impl HtmlConverter {
             margin: Margin::default(),
             sanitize: true,
             custom_fonts: std::collections::HashMap::new(),
-            base_path: None,
+            resources: ResourcePaths::default(),
             header: None,
             footer: None,
             // On by default for production output (FlateDecode is lossless and
@@ -423,7 +428,19 @@ impl HtmlConverter {
     ///     .unwrap();
     /// ```
     pub fn base_path(mut self, path: &std::path::Path) -> Self {
-        self.base_path = Some(path.to_path_buf());
+        self.resources.base = Some(path.to_path_buf());
+        self
+    }
+
+    /// Set the directory boundary authorized for document-local resources.
+    ///
+    /// By default, [`base_path`](Self::base_path) is both the URL base and the
+    /// authorization boundary. Set a broader root when a document legitimately
+    /// references shared assets in an ancestor directory. The base path must
+    /// remain inside this canonical root; traversal and symlink escapes are
+    /// denied.
+    pub fn resource_root(mut self, path: &std::path::Path) -> Self {
+        self.resources.authorized_root = Some(path.to_path_buf());
         self
     }
 
@@ -474,27 +491,39 @@ impl HtmlConverter {
         html: &str,
         writer: &mut W,
     ) -> Result<(), IronpressError> {
+        let resource_access = if self.sanitize {
+            security::resources::ResourceAccess::Sanitized
+        } else {
+            security::resources::ResourceAccess::Trusted
+        };
+        let resources = security::resources::DocumentResources::new(
+            resource_access,
+            self.resources.base.as_deref(),
+            self.resources.authorized_root.as_deref(),
+        );
+
         // Step 1: Sanitize
         let sanitized_html = if self.sanitize {
-            Some(security::sanitizer::sanitize_html(html)?)
+            Some(security::sanitizer::sanitize_html_with_resources(
+                html, &resources,
+            )?)
         } else {
             None
         };
         let html = sanitized_html.as_deref().unwrap_or(html);
 
         // Step 2: Parse HTML and extract stylesheets
-        let result = parser::html::parse_html_with_styles(html)?;
+        let mut result = parser::html::parse_html_with_styles(html)?;
+        security::sanitizer::sanitize_dom_resources(&mut result.nodes, &resources);
 
-        // Step 2b: Resolve @import rules in stylesheets (if base_path is set)
-        let stylesheets: Vec<String> = if let Some(ref base) = self.base_path {
-            result
-                .stylesheets
-                .iter()
-                .map(|css| parser::css::resolve_imports(css, base, 0))
-                .collect()
-        } else {
-            result.stylesheets
-        };
+        // Step 2b: Resolve every stylesheet URL against its CSS base URL.
+        // Imported sheets change that base to their own directory, while the
+        // canonical resource root remains the authorization boundary.
+        let stylesheets: Vec<String> = result
+            .stylesheets
+            .iter()
+            .map(|css| parser::css::resolve_imports_with_resources(css, &resources))
+            .collect();
 
         // Step 3: Parse @page rules first (they affect page dimensions for media queries)
         let mut page_rules = Vec::new();
@@ -506,17 +535,16 @@ impl HtmlConverter {
         // Step 3b: Apply @page rules to override page size and margins.
         //
         // Only UNSELECTED `@page { }` rules (CSS Paged Media 3 §3
-        // `PageSelector::None`) fold into the document-global geometry. A
+        // universal selector) fold into the document-global geometry. A
         // pseudo-class/named rule (`:first`/`:left`/`:right`/`:blank`/name)
         // must NOT be applied to every page — previously an `@page :first {
         // margin: 0 }` was mis-folded here and wrongly applied to all pages.
         // The `:first` override is collected separately below as a per-page-1
         // geometry change.
-        use parser::css::PageSelector;
         let mut effective_page_size = self.page_size;
         let mut effective_margin = self.margin;
         for pr in &page_rules {
-            if pr.selector != PageSelector::None {
+            if !pr.selector.is_universal() {
                 continue;
             }
             if let (Some(w), Some(h)) = (pr.width, pr.height) {
@@ -600,118 +628,38 @@ impl HtmlConverter {
         );
         effective_margin.left += body_center_gutter;
         effective_margin.right += body_center_gutter;
-
-        // Step 3e: Resolve the `@page :first` per-page-1 margin override (CSS
-        // Paged Media 3 §3.3). It starts from the folded default margin and
-        // applies any `:first` margin declarations, so page 1 gets a different
-        // content box (a larger top margin on a title page is the common case)
-        // while page 2+ keep the default. The override is rendered correctly
-        // for vertical (top/bottom) margins; horizontal `:first` margins shift
-        // the content origin but text keeps the default wrap width (per-page
-        // re-layout for changed widths is a documented follow-up).
-        // Resolve a page-context margin override: start from the folded default
-        // margin and apply every declared `margin-*` longhand on the @page rules
-        // matching `sel`. Returns `None` when the selector declares no margin (so
-        // that side keeps the document-global margin). Shared by `:first` and the
-        // `:left`/`:right` spread selectors.
-        let resolve_page_margin = |sel: PageSelector| -> Option<Margin> {
-            let mut m = effective_margin;
-            let mut any = false;
-            for pr in &page_rules {
-                if pr.selector == sel {
-                    if let Some(v) = pr.margin_top {
-                        m.top = v;
-                        any = true;
-                    }
-                    if let Some(v) = pr.margin_right {
-                        m.right = v;
-                        any = true;
-                    }
-                    if let Some(v) = pr.margin_bottom {
-                        m.bottom = v;
-                        any = true;
-                    }
-                    if let Some(v) = pr.margin_left {
-                        m.left = v;
-                        any = true;
-                    }
-                }
-            }
-            any.then_some(m)
-        };
-        let first_page_margin: Option<Margin> = resolve_page_margin(PageSelector::First);
-        let mut initial_page_area_margin = default_page_area_margin;
-        for pr in &page_rules {
-            if pr.selector != PageSelector::First {
-                continue;
-            }
-            if let Some(value) = pr.margin_top {
-                initial_page_area_margin.top = value;
-            }
-            if let Some(value) = pr.margin_right {
-                initial_page_area_margin.right = value;
-            }
-            if let Some(value) = pr.margin_bottom {
-                initial_page_area_margin.bottom = value;
-            }
-            if let Some(value) = pr.margin_left {
-                initial_page_area_margin.left = value;
-            }
-        }
-        let initial_containing_block = types::Size::new(
-            effective_page_size.width - initial_page_area_margin.horizontal(),
-            effective_page_size.height
-                - initial_page_area_margin.top
-                - initial_page_area_margin.bottom,
+        let root_flow_insets = types::Margin::new(
+            effective_margin.top - default_page_area_margin.top,
+            effective_margin.right - default_page_area_margin.right,
+            effective_margin.bottom - default_page_area_margin.bottom,
+            effective_margin.left - default_page_area_margin.left,
         );
 
-        // Step 3e-bis: Resolve the `@page :left` / `@page :right` spread margins
-        // (CSS Paged Media 3 §3.2). In LTR the first page is a `:right` page; the
-        // engine tags pages by parity so the content box shifts toward the gutter
-        // on each spread (e.g. a wide left margin on right pages, a wide right
-        // margin on left pages). Chrome's `--print-to-pdf` honors these, so they
-        // are required for spread parity.
-        let left_page_margin: Option<Margin> = resolve_page_margin(PageSelector::Left);
-        let right_page_margin: Option<Margin> = resolve_page_margin(PageSelector::Right);
-
-        // Step 3e-ter: Resolve named-page geometry (CSS Paged Media 3 §3.4).
-        // Each `@page <name> { margin…; size… }` rule maps a page name to a full
-        // margin (default margin + the rule's declared `margin-*`) and optional
-        // physical page size. A `page: <name>` box forces a break and the page it
-        // starts adopts this geometry. Names are lowercased to match the
-        // case-insensitive `page` property lookup.
-        let mut named_page_overrides: std::collections::HashMap<
-            String,
-            layout::paginate::NamedPageOverride,
-        > = std::collections::HashMap::new();
-        for pr in &page_rules {
-            if let PageSelector::Named(name) = &pr.selector {
-                let mut m = effective_margin;
-                if let Some(v) = pr.margin_top {
-                    m.top = v;
-                }
-                if let Some(v) = pr.margin_right {
-                    m.right = v;
-                }
-                if let Some(v) = pr.margin_bottom {
-                    m.bottom = v;
-                }
-                if let Some(v) = pr.margin_left {
-                    m.left = v;
-                }
-                let page_size = match (pr.width, pr.height) {
-                    (Some(width), Some(height)) => Some(PageSize { width, height }),
-                    _ => None,
-                };
-                named_page_overrides.insert(
-                    name.to_ascii_lowercase(),
-                    layout::paginate::NamedPageOverride {
-                        margin: m,
-                        page_size,
-                    },
-                );
-            }
-        }
+        // Step 3e: Retain page geometry as a physical-page-aware cascade.
+        // Page number, spread side, blank state, and named-page identity are
+        // only all known during pagination; resolving separate buckets here
+        // causes compound selectors to disagree with page backgrounds.
+        let first_page = parser::css::PageSelectorContext {
+            page_number: 1,
+            is_blank: false,
+            page_name: None,
+        };
+        let initial_page_area_geometry = layout::page_context::PageGeometryContext::from_rules(
+            effective_page_size,
+            default_page_area_margin,
+            &page_rules,
+        )
+        .resolve(first_page);
+        let initial_containing_block = types::Size::new(
+            initial_page_area_geometry.size.width - initial_page_area_geometry.margin.horizontal(),
+            initial_page_area_geometry.content_height(),
+        );
+        let page_geometry = layout::page_context::PageGeometryContext::from_rules(
+            effective_page_size,
+            default_page_area_margin,
+            &page_rules,
+        )
+        .with_root_flow_insets(root_flow_insets);
         let footnote_area = resolve_footnote_area(&page_rules);
 
         // Step 4: Parse custom fonts (API-registered + @font-face from CSS)
@@ -725,52 +673,25 @@ impl HtmlConverter {
             &requested_font_rules,
             &mut parsed_fonts,
         );
-        load_font_face_rules(
-            &font_face_rules,
-            self.base_path.as_deref(),
-            &mut parsed_fonts,
-        );
+        load_font_face_rules(&font_face_rules, &resources, &mut parsed_fonts);
         // Load system CJK font BEFORE bundled fallbacks so it gets UNICODE_FALLBACK_KEY
         system_fonts::load_unicode_fallback_font(&mut parsed_fonts);
         system_fonts::load_emoji_fallback_font(&mut parsed_fonts);
 
-        // Step 4c: Resolve an `@page` background (CSS Paged Media 3 §3.1 bleed
-        // area). Apply every @page rule's declarations, in cascade order, onto a
-        // throwaway ComputedStyle and reuse the standard background machinery
-        // (color/gradient/SVG/raster, data-URI `;` preserved by the CSS-aware
-        // `parse_inline_style`). The result is painted full-bleed — the entire
-        // page box including its margins — beneath the document canvas; the
-        // propagated root/body background stays confined to the content box.
-        let mut page_bg_style =
-            crate::style::computed::ComputedStyle::with_raster_quality(self.raster_quality);
-        let mut any_page_decls = false;
-        for pr in &page_rules {
-            if let Some(raw) = &pr.raw_declarations {
-                let map = parser::css::parse_inline_style(raw);
-                crate::style::computed::apply_style_map_with_font_metrics(
-                    &mut page_bg_style,
-                    &map,
-                    &crate::style::computed::ComputedStyle::with_raster_quality(
-                        self.raster_quality,
-                    ),
-                    crate::style::font_metrics::FontMetrics::new(&parsed_fonts),
-                );
-                any_page_decls = true;
-            }
-        }
-        let page_bg = (any_page_decls
-            && crate::layout::helpers::has_background_paint(&page_bg_style))
-        .then_some(&page_bg_style);
-
         let mut page_sheet_descriptors = parser::css::PageSheetDescriptors::default();
         for pr in &page_rules {
-            if pr.selector != PageSelector::None {
+            if !pr.selector.is_universal() {
                 continue;
             }
             page_sheet_descriptors.cascade(pr.sheet);
         }
         let page_sheet = render::pdf::PageSheet::resolve(page_sheet_descriptors);
         let page_bleed = page_sheet.bleed();
+        let page_background = layout::page_context::PageBackgroundContext::from_rules(
+            &page_rules,
+            self.raster_quality,
+            page_bleed,
+        );
 
         // Step 5: Layout
         let mut pages = layout::engine::layout_with_rules_and_fonts_raster_quality(
@@ -779,22 +700,13 @@ impl HtmlConverter {
                 .with_initial_containing_block(initial_containing_block),
             &rules,
             &parsed_fonts,
-            page_bg,
-            page_bleed,
-            layout::paginate::PageMarginOverrides {
-                first: first_page_margin,
-                spread: layout::paginate::SpreadMargins {
-                    left: left_page_margin,
-                    right: right_page_margin,
-                },
-                named: named_page_overrides,
-                footnote_area,
-            },
+            &page_background,
+            layout::paginate::PaginationContext::new(page_geometry, footnote_area, 0.0),
             self.raster_quality,
         );
         let mut footnote_area_for_overflow = footnote_area;
         footnote_area_for_overflow.content_width =
-            effective_page_size.width - effective_margin.horizontal();
+            effective_page_size.width - default_page_area_margin.horizontal();
         layout::paginate::move_overflow_footnotes_to_next_page(
             &mut pages,
             footnote_area_for_overflow,
@@ -848,7 +760,7 @@ impl HtmlConverter {
         render::pdf::render_pdf_to_writer_full_opts(
             &pages,
             effective_page_size,
-            effective_margin,
+            default_page_area_margin,
             writer,
             &parsed_fonts,
             decoration.as_ref(),
@@ -939,7 +851,11 @@ fn resolve_footnote_area(
     page_rules: &[parser::css::PageRule],
 ) -> layout::paginate::FootnoteAreaLayout {
     let mut resolved = layout::paginate::FootnoteAreaLayout::default();
-    for area in page_rules.iter().filter_map(|rule| rule.footnote_area) {
+    for area in page_rules
+        .iter()
+        .filter(|rule| rule.selector.is_universal())
+        .filter_map(|rule| rule.footnote_area)
+    {
         if let Some(max_height) = area.max_height {
             resolved.max_height = Some(max_height);
         }
@@ -985,11 +901,11 @@ fn rules_with_font_face_local_sources(
 
 fn load_font_face_rules(
     font_face_rules: &[parser::css::FontFaceRule],
-    base_path: Option<&std::path::Path>,
+    resources: &security::resources::DocumentResources,
     fonts: &mut std::collections::HashMap<String, parser::ttf::TtfFont>,
 ) {
     for (index, rule) in font_face_rules.iter().enumerate() {
-        let Some(mut font) = resolve_font_face_source(rule, base_path, fonts) else {
+        let Some(mut font) = resolve_font_face_source(rule, resources, fonts) else {
             continue;
         };
         apply_font_face_descriptors(rule, &mut font);
@@ -1013,7 +929,7 @@ fn load_font_face_rules(
 
 fn resolve_font_face_source(
     rule: &parser::css::FontFaceRule,
-    base_path: Option<&std::path::Path>,
+    resources: &security::resources::DocumentResources,
     fonts: &std::collections::HashMap<String, parser::ttf::TtfFont>,
 ) -> Option<parser::ttf::TtfFont> {
     for (is_local, value) in rule.source_entries() {
@@ -1031,28 +947,13 @@ fn resolve_font_face_source(
                 return Some(font.clone());
             }
         } else {
-            let is_remote = value.starts_with("http://") || value.starts_with("https://");
-            let ttf_data = if is_remote {
-                fetch_remote_bytes(value)
-            } else if let Some(base) = base_path {
-                // Resolve the (relative) `src: url(...)` against the document
-                // base directory, exactly as a browser resolves a font URL
-                // against the stylesheet location. A relative URL may legitimately
-                // climb out of the immediate directory (e.g. `../fonts/F.ttf`), so
-                // we do NOT subtree-jail it the way `@import` is jailed; instead we
-                // reject ABSOLUTE `src` paths (which untrusted CSS could otherwise
-                // point at arbitrary files) and rely on the readable-file +
-                // `parse_ttf` validation below to discard anything that is not a
-                // genuine font. The base directory itself is caller-controlled, so
-                // resolving relative URLs against it is the trusted-input contract.
-                let src = std::path::Path::new(value);
-                if src.is_absolute() {
-                    None
-                } else {
-                    std::fs::read(base.join(src)).ok()
-                }
+            let Some(resolved) = resources.resolve(value, resources.base_path()) else {
+                continue;
+            };
+            let ttf_data = if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                fetch_remote_bytes(&resolved)
             } else {
-                None
+                std::fs::read(resolved).ok()
             };
 
             if let Some(data) = ttf_data
@@ -1227,6 +1128,16 @@ mod tests {
             crate::types::Color::rgb(255, 0, 0)
         );
         assert_eq!(resolved.max_height, Some(20.0));
+    }
+
+    #[test]
+    fn selected_footnote_area_does_not_leak_to_every_page() {
+        let rules = parser::css::parse_page_rules(
+            "@page { @footnote { padding-top: 2pt } }\
+             @page :first { @footnote { padding-top: 20pt } }",
+        );
+        let resolved = resolve_footnote_area(&rules);
+        assert_eq!(resolved.style.padding.top, 2.0);
     }
 
     /// Enabling compression shrinks the PDF and wraps the content stream in a
@@ -3741,7 +3652,10 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         use std::path::Path;
         let converter = HtmlConverter::new().base_path(Path::new("/tmp/test"));
         // Verify base_path is set
-        assert_eq!(converter.base_path.as_deref(), Some(Path::new("/tmp/test")));
+        assert_eq!(
+            converter.resources.base.as_deref(),
+            Some(Path::new("/tmp/test"))
+        );
     }
 
     #[test]

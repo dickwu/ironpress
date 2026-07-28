@@ -347,10 +347,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Images 3 requires pixelated scaling at a non-integer ratio to use nearest-neighbor to the closest positive integer multiple, followed by smooth scaling to the target. Both PDFs resolve the image to the required 100x50 CSS px at the same 22.5pt origin. Ironpress embeds the resulting 100x50 two-stage raster; Chromium embeds the original 8x4 raster with /Interpolate false under a 12.5x matrix, which is pure nearest-neighbor sampling and is not the specified pixelated operation. The Chromium PDF is therefore not a conforming pixel oracle for this geometry test; the raw shared-pdftoppm difference remains reported."
-    },
     "sanitize": true,
     "depends_on": [
       "probe-fill-box",
@@ -419,10 +415,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "Both PDFs implement the same 180x90 CSS px cover image, clip it to the same 120x90 CSS px content box, and place it at x=-37.5pt, y=15pt, which is the specified right 20px bottom 10px position. At the non-integer 22.5x image scale, CSS Images 3 requires pixelated to use nearest-neighbor to the closest positive integer multiple and then smooth scaling to the target. Ironpress embeds that two-stage result; Chromium embeds a source crop with /Interpolate false and scales it directly by 22.5x. The remaining edge samples come from Chromium's pure nearest-neighbor path, not an object-position error, so this Chromium PDF is not a conforming pixel oracle; raw evidence remains reported."
-    },
     "depends_on": [
       "probe-fill-box",
       "probe-image-render"

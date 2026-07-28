@@ -4,6 +4,7 @@
 //! structs own their data, capability traits expose shared behavior, and the
 //! object-safe visitor is the one intentional dispatch boundary.
 
+mod background;
 mod container;
 mod flex;
 mod fragmentation;
@@ -21,6 +22,7 @@ mod table;
 pub(crate) mod test_support;
 mod text;
 
+pub(crate) use background::{BackgroundBox, BackgroundBoxGeometry, PageAreaInFlowSpace};
 pub(crate) use container::Container;
 pub(crate) use flex::{FlexContent, FlexRow};
 pub(crate) use fragmentation::*;
@@ -44,7 +46,7 @@ pub(crate) use table::{
 };
 #[cfg(test)]
 pub(crate) use test_support::{LayoutElementTestExt, LayoutElementTestMutExt};
-pub(crate) use text::{BackgroundBoxGeometry, TextBlock};
+pub(crate) use text::TextBlock;
 
 use std::fmt::Debug;
 
@@ -78,6 +80,75 @@ pub(crate) trait LayoutElement: Debug {
 
     fn inline_flow_extent(&self) -> Option<&dyn InlineFlowExtent> {
         None
+    }
+
+    /// Inline-end edge used by the document print-fit calculation.
+    ///
+    /// Descendant normal-flow geometry participates recursively. Transforms
+    /// extend the scrollable overflow of in-flow boxes, while positioned
+    /// graphical overflow remains clipped instead of shrinking the document.
+    fn print_fit_right_edge(&self) -> Option<f32> {
+        let normal_right = self.inline_flow_extent()?.normal_flow_right_edge()?;
+        let positioning = self.positioning_owner().map(PositioningOwner::positioning);
+        if positioning.is_some_and(|positioning| !positioning.is_in_normal_flow()) {
+            return None;
+        }
+
+        let inline_offset = positioning.map_or(0.0, |positioning| positioning.insets.left);
+        let content_left = inline_offset
+            + self
+                .box_reference_geometry()
+                .map_or(0.0, |geometry| geometry.content_insets().left);
+        let mut overflow_right = normal_right;
+        self.visit_children(&mut |child| {
+            if let Some(child_right) = child.print_fit_right_edge() {
+                overflow_right = overflow_right.max(content_left + child_right);
+            }
+        });
+
+        let Some(fragmentation) = self.box_fragmentation_owner() else {
+            return Some(overflow_right);
+        };
+        let Some(block_source) = self.block_fragmentation_source() else {
+            return Some(overflow_right);
+        };
+        let Some(group) = self.paint_group_owner() else {
+            return Some(overflow_right);
+        };
+        let Some(width) = fragmentation
+            .fragmentation_box_model()
+            .size
+            .width
+            .fixed_value()
+        else {
+            return Some(overflow_right);
+        };
+        let left = inline_offset;
+        let border_box =
+            crate::types::Rect::from_xywh(left, 0.0, width, block_source.block_extent());
+        let content_insets = self
+            .box_reference_geometry()
+            .map_or(crate::types::EdgeSizes::default(), |geometry| {
+                geometry.content_insets()
+            });
+        let Some(transform) = group
+            .paint_group()
+            .transform
+            .resolve(border_box, content_insets)
+        else {
+            return Some(overflow_right);
+        };
+        let overflow_box = crate::types::Rect::from_xywh(
+            left,
+            0.0,
+            (overflow_right - left).max(0.0),
+            border_box.size.height,
+        );
+        Some(
+            overflow_right
+                .max(transform.enclosing_rect(overflow_box).right())
+                .max(0.0),
+        )
     }
 
     fn atomic_inline_baseline(&self) -> Option<&dyn AtomicInlineBaseline> {
@@ -131,6 +202,10 @@ pub(crate) trait LayoutElement: Debug {
         None
     }
 
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
+        None
+    }
+
     /// A box whose recursive in-flow renderer can paint decoration and
     /// contents in separate CSS stacking phases.
     fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
@@ -170,6 +245,14 @@ pub(crate) trait LayoutElement: Debug {
     }
 
     fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
+        None
+    }
+
+    fn page_area_background_mut(&mut self) -> Option<&mut dyn PageAreaBackground> {
+        None
+    }
+
+    fn page_area_background(&self) -> Option<&dyn PageAreaBackground> {
         None
     }
 
@@ -243,6 +326,29 @@ pub(crate) trait LayoutElement: Debug {
             descendant_has_effect |= child.has_page_spanning_graphical_effect();
         });
         descendant_has_effect
+    }
+
+    /// Project this subtree to paint that can cross a fragmentainer edge.
+    ///
+    /// An element with its own graphical effect retains its complete subtree,
+    /// because transforms, filters, and shadows operate on the assembled
+    /// SourceGraphic. Structural ancestors instead retain geometry while
+    /// suppressing their unrelated decoration, then recursively project their
+    /// descendants. This prevents a transformed grandchild from duplicating
+    /// an untransformed ancestor background on adjacent pages.
+    fn retain_page_spanning_paint(&mut self) -> bool {
+        if self.has_own_page_spanning_graphical_effect() {
+            return true;
+        }
+
+        if let Some(owner) = self.box_paint_owner_mut() {
+            owner.box_paint_mut().visible = false;
+        }
+        let mut retained_descendant = false;
+        self.visit_child_nodes_mut(&mut |child| {
+            retained_descendant |= child.retain_page_spanning_paint();
+        });
+        retained_descendant
     }
 
     /// Whether this node contributes paint only, without creating duplicate
@@ -369,6 +475,10 @@ impl LayoutElement for LayoutNode {
         self.as_ref().box_paint_owner()
     }
 
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
+        self.as_mut().box_paint_owner_mut()
+    }
+
     fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         self.as_ref().in_flow_paint_phase_owner()
     }
@@ -387,6 +497,14 @@ impl LayoutElement for LayoutNode {
 
     fn box_fragmentation_owner_mut(&mut self) -> Option<&mut dyn BoxFragmentationOwner> {
         self.as_mut().box_fragmentation_owner_mut()
+    }
+
+    fn page_area_background_mut(&mut self) -> Option<&mut dyn PageAreaBackground> {
+        self.as_mut().page_area_background_mut()
+    }
+
+    fn page_area_background(&self) -> Option<&dyn PageAreaBackground> {
+        self.as_ref().page_area_background()
     }
 
     fn filter_holder_mut(&mut self) -> Option<&mut dyn FilterHolder> {
@@ -417,6 +535,10 @@ impl LayoutElement for LayoutNode {
 
     fn has_own_page_spanning_graphical_effect(&self) -> bool {
         self.as_ref().has_own_page_spanning_graphical_effect()
+    }
+
+    fn retain_page_spanning_paint(&mut self) -> bool {
+        self.as_mut().retain_page_spanning_paint()
     }
 
     fn is_page_paint_continuation(&self) -> bool {
@@ -487,10 +609,10 @@ pub(crate) trait BlockFlowParticipant: crate::layout::flow_metrics::MarginHolder
     fn is_in_flow_block(&self) -> bool;
 }
 
-/// A positioned node that can consume a containing block after flattened
-/// children are attached to their structural parent.
+/// An absolute node whose authored constraints can be resolved after its
+/// containing block reaches its final used size.
 pub(crate) trait ContainingBlockConsumer {
-    fn attach_missing_containing_block(
+    fn resolve_containing_block(
         &mut self,
         containing_block: crate::layout::engine::ContainingBlock,
     );
@@ -591,6 +713,23 @@ pub(crate) trait BoxFragmentationOwner {
     fn fragmentation_box_model(&self) -> &BoxModel;
     fn box_fragmentation(&self) -> &BoxFragmentation;
     fn box_fragmentation_mut(&mut self) -> &mut BoxFragmentation;
+}
+
+/// Paint space of a background tied to one selected physical page area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageAreaPaintSpace {
+    /// `@page` decoration is independent of document print fitting.
+    PhysicalPage,
+    /// The propagated document canvas participates in print fitting, while its
+    /// inverse-sized geometry continues to cover the physical page area.
+    FittedDocumentCanvas,
+}
+
+/// A paint-only box whose used size follows the selected physical page area.
+pub(crate) trait PageAreaBackground {
+    fn fit_page_area(&mut self, page_area: PageAreaInFlowSpace);
+    fn apply_print_content_scale(&mut self, scale: crate::layout::print_scale::PrintContentScale);
+    fn paint_space(&self) -> PageAreaPaintSpace;
 }
 
 /// Formatting-context spacing that is present between siblings but disappears

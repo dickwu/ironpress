@@ -9,16 +9,7 @@ use super::{
 use crate::layout::engine::TextLine;
 use crate::layout::flow_metrics::{BlockMargins, MarginHolder};
 use crate::style::computed::ComputedStyle;
-use crate::types::{Point, Size};
-
-/// Geometry and page-layer identity of a document-canvas background box.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BackgroundBoxGeometry {
-    pub(crate) size: Size,
-    pub(crate) origin: Point,
-    pub(crate) z_index: i32,
-    pub(crate) repeat_on_each_page: bool,
-}
+use crate::types::Size;
 
 /// A laid-out block of text and the semantic property groups that govern it.
 #[derive(Debug, Clone, Default)]
@@ -91,45 +82,6 @@ impl TextBlock {
             .resolve(self.natural_padding_box_block_extent())
             + self.box_model.border.vertical_width()
     }
-
-    pub(crate) fn background_box(style: &ComputedStyle, geometry: BackgroundBoxGeometry) -> Self {
-        let size = super::LayoutSize::fixed(geometry.size.width, Some(geometry.size.height));
-        let role = if geometry.repeat_on_each_page && geometry.z_index < 0 {
-            super::StackingRole::PageBackdrop
-        } else {
-            super::StackingRole::Ordinary
-        };
-        Self {
-            box_model: super::BoxModel {
-                size,
-                ..Default::default()
-            },
-            paint: super::BoxPaint {
-                background: super::BackgroundPaint::from_style(style),
-                group: super::PaintGroup {
-                    stacking: super::Stacking {
-                        z_index: crate::style::computed::ZIndex::integer(geometry.z_index),
-                        role,
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            positioning: super::Positioning::absolute_at(geometry.origin),
-            fragmentation: super::TextFragmentation {
-                box_fragmentation: super::BoxFragmentation {
-                    content_role: if geometry.repeat_on_each_page {
-                        super::PageContentRole::RepeatedDecoration
-                    } else {
-                        super::PageContentRole::MainFlow
-                    },
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
 }
 
 impl MarginHolder for TextBlock {
@@ -165,14 +117,10 @@ impl BlockFlowParticipant for TextBlock {
 }
 
 impl ContainingBlockConsumer for TextBlock {
-    fn attach_missing_containing_block(
+    fn resolve_containing_block(
         &mut self,
         containing_block: crate::layout::engine::ContainingBlock,
     ) {
-        if !self.positioning.scheme.is_absolute() || self.positioning.containing_block.is_some() {
-            return;
-        }
-
         let width = self.box_model.size.width.fixed_value().unwrap_or_else(|| {
             self.lines
                 .iter()
@@ -192,7 +140,7 @@ impl ContainingBlockConsumer for TextBlock {
                 .fold(0.0, f32::max)
         });
 
-        self.positioning.resolve_against(
+        self.positioning.resolve_final_containing_block(
             containing_block,
             Size::new(width, self.border_box_block_extent()),
         );
@@ -314,6 +262,10 @@ impl LayoutElement for TextBlock {
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
         Some(self)
     }
 

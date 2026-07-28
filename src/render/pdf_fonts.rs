@@ -211,7 +211,7 @@ fn collect_font_usage_with_additional_runs(
                 collect_font_usage_from_run(run, custom_fonts, &mut usage);
             }
         }
-        for element in page.running_elements.values() {
+        for element in page.generated_content.running_elements() {
             collect_font_usage_from_element(element, custom_fonts, &mut usage);
         }
         for footnote in &page.footnotes {

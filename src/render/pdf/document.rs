@@ -459,7 +459,7 @@ mod page_margin_text_tests {
 
 pub(super) fn page_selector_specificity(
     selector: &crate::parser::css::PageSelector,
-) -> (u8, u8, u8) {
+) -> (u32, u32, u32) {
     selector.specificity()
 }
 
@@ -847,15 +847,8 @@ fn margin_box_font_usage_text(
                 text.push_str(&page_counter_value(margin_box, page_number).to_string())
             }
             MarginContentToken::PageCount => text.push_str(&page_count.to_string()),
-            MarginContentToken::NamedString(name, policy) => {
-                let value = match policy.as_deref() {
-                    Some("start") | Some("first") => page
-                        .named_strings_first
-                        .get(name)
-                        .or_else(|| page.named_strings.get(name)),
-                    Some("last") => page.named_strings.get(name),
-                    _ => page.named_strings.get(name),
-                };
+            MarginContentToken::NamedString(reference) => {
+                let value = page.generated_content.named_string(reference);
                 if let Some(value) = value {
                     text.push_str(value);
                 }

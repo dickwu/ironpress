@@ -1,5 +1,8 @@
 use std::path::Path;
 
+use crate::security::resources::DocumentResources;
+#[cfg(test)]
+use crate::security::resources::ResourceAccess;
 use crate::util::decode_base64;
 
 use super::{ImportRule, preprocess_media_queries};
@@ -70,14 +73,32 @@ pub fn parse_import_rules(css: &str) -> Vec<ImportRule> {
 ///
 /// The `base_dir` is the directory relative to which import paths are resolved.
 /// Recursion is limited to [`MAX_IMPORT_DEPTH`] levels to prevent infinite loops.
-pub fn resolve_imports(css: &str, base_dir: &Path, depth: usize) -> String {
+#[cfg(test)]
+pub(crate) fn resolve_imports(css: &str, base_dir: &Path, depth: usize) -> String {
+    let resources = DocumentResources::new(ResourceAccess::Trusted, Some(base_dir), None);
     let mut total_imported = 0usize;
-    resolve_imports_inner(
+    resolve_imports_authorized(
         css,
         base_dir,
         depth,
         &mut total_imported,
         MAX_IMPORT_TOTAL_SIZE,
+        &resources,
+    )
+}
+
+pub(crate) fn resolve_imports_with_resources(css: &str, resources: &DocumentResources) -> String {
+    let Some(base_dir) = resources.base_path() else {
+        return resources.rewrite_css_urls(css, None);
+    };
+    let mut total_imported = 0usize;
+    resolve_imports_authorized(
+        css,
+        base_dir,
+        0,
+        &mut total_imported,
+        MAX_IMPORT_TOTAL_SIZE,
+        resources,
     )
 }
 
@@ -160,6 +181,7 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_imports_inner(
     css: &str,
     base_dir: &Path,
@@ -167,13 +189,26 @@ pub(crate) fn resolve_imports_inner(
     total_imported: &mut usize,
     max_total: usize,
 ) -> String {
+    let resources = DocumentResources::new(ResourceAccess::Trusted, Some(base_dir), None);
+    resolve_imports_authorized(css, base_dir, depth, total_imported, max_total, &resources)
+}
+
+fn resolve_imports_authorized(
+    css: &str,
+    base_dir: &Path,
+    depth: usize,
+    total_imported: &mut usize,
+    max_total: usize,
+    resources: &DocumentResources,
+) -> String {
+    let css = resources.rewrite_css_urls(css, Some(base_dir));
     if depth >= MAX_IMPORT_DEPTH {
-        return css.to_string();
+        return css;
     }
 
-    let import_rules = parse_import_rules(css);
+    let import_rules = parse_import_rules(&css);
     if import_rules.is_empty() {
-        return css.to_string();
+        return css;
     }
 
     let mut result = String::new();
@@ -190,19 +225,20 @@ pub(crate) fn resolve_imports_inner(
             }
 
             let imported_base = path.parent().unwrap_or(base_dir);
-            let resolved = resolve_imports_inner(
+            let resolved = resolve_imports_authorized(
                 &imported_css,
                 imported_base,
                 depth + 1,
                 total_imported,
                 max_total,
+                resources,
             );
             result.push_str(&resolved);
             result.push('\n');
         }
     }
 
-    result.push_str(&strip_import_rules(css));
+    result.push_str(&strip_import_rules(&css));
     result
 }
 
@@ -464,6 +500,30 @@ mod tests {
         );
         assert!(result.contains("p { font-size: 10pt; }"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn imported_stylesheet_assets_use_their_own_base_with_one_root_boundary() {
+        let directory = tempfile::tempdir().expect("temporary resource root");
+        let styles = directory.path().join("styles");
+        let images = directory.path().join("images");
+        std::fs::create_dir(&styles).expect("styles directory");
+        std::fs::create_dir(&images).expect("images directory");
+        let image = images.join("allowed.png");
+        std::fs::write(&image, b"png").expect("image fixture");
+        std::fs::write(
+            styles.join("nested.css"),
+            "a{background:url(../images/allowed.png)}",
+        )
+        .expect("imported stylesheet");
+        let resources =
+            DocumentResources::new(ResourceAccess::Sanitized, Some(directory.path()), None);
+
+        let resolved = resolve_imports_with_resources("@import \"styles/nested.css\";", &resources);
+        assert!(
+            resolved.contains(&image.to_string_lossy().replace('\\', "\\\\")),
+            "resolved stylesheet: {resolved}"
+        );
     }
 
     #[test]

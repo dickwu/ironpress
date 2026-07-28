@@ -10,6 +10,7 @@ use crate::layout::elements::{
     LayoutElement, LayoutNode, LayoutVisitor, LayoutVisitorMut, PageContentRole,
 };
 use crate::layout::engine::Page;
+use crate::layout::print_scale::PrintContentScale;
 use crate::types::{Margin, PageSize};
 
 /// Paint-only view of a fragment whose graphical output can reach another
@@ -22,8 +23,13 @@ struct GraphicalOverflowContinuation {
 }
 
 impl GraphicalOverflowContinuation {
-    fn new(source: LayoutNode) -> Self {
-        Self { source }
+    fn from_source(mut source: LayoutNode) -> Option<Self> {
+        if !source.has_page_spanning_graphical_effect() {
+            return None;
+        }
+        source
+            .retain_page_spanning_paint()
+            .then_some(Self { source })
     }
 }
 
@@ -66,26 +72,30 @@ impl LayoutElement for GraphicalOverflowContinuation {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PageStackGeometry {
+struct FragmentainerStackGeometry {
+    /// Physical block offset before page boxes are separated.
     block_start: f32,
-    margin: Margin,
+    /// Layout-to-physical print fitting applied inside this page area.
+    content_scale: PrintContentScale,
 }
 
-impl PageStackGeometry {
+impl FragmentainerStackGeometry {
     fn content_y_on(self, target: Self, source_content_y: f32) -> f32 {
-        self.block_start + self.margin.top + source_content_y
-            - target.block_start
-            - target.margin.top
+        let source_physical_y = self.block_start + source_content_y * self.content_scale.factor();
+        (source_physical_y - target.block_start) / target.content_scale.factor()
     }
 }
 
 /// Copy each fragment with potentially page-spanning paint onto every other
-/// existing page, translated into that page's content coordinate system.
+/// existing page, translated into that page's fragmentainer coordinate system.
 ///
-/// Pages clip the copied operators to their media box, so only the slice that
-/// actually crosses a boundary remains visible. Contributions from earlier
-/// pages precede local content in document order; contributions from later
-/// pages follow it. No comparison or source raster is involved.
+/// CSS Fragmentation applies graphical effects before physically separating
+/// page boxes. The continuous stack therefore concatenates page-area block
+/// extents at their fragmentation edges; paper margins are not gaps in that
+/// flow. Pages clip the copied operators to their page area, so only the slice
+/// that actually crosses a boundary remains visible. Contributions from
+/// earlier pages precede local content in document order; contributions from
+/// later pages follow it. No comparison or source raster is involved.
 pub(crate) fn transfer_page_spanning_graphical_effects(
     pages: &mut [Page],
     default_page_size: PageSize,
@@ -99,12 +109,17 @@ pub(crate) fn transfer_page_spanning_graphical_effects(
     let geometries = pages
         .iter()
         .map(|page| {
-            let size = page.page_size_override.unwrap_or(default_page_size);
-            let geometry = PageStackGeometry {
+            let page_geometry =
+                page.geometry
+                    .unwrap_or(crate::layout::page_context::PageGeometry::new(
+                        default_page_size,
+                        default_margin,
+                    ));
+            let geometry = FragmentainerStackGeometry {
                 block_start,
-                margin: page.margin_override.unwrap_or(default_margin),
+                content_scale: page.print_content_scale,
             };
-            block_start += size.height;
+            block_start += page_geometry.content_height().max(0.0);
             geometry
         })
         .collect::<Vec<_>>();
@@ -114,11 +129,13 @@ pub(crate) fn transfer_page_spanning_graphical_effects(
         .map(|page| {
             page.elements
                 .iter()
-                .filter(|(_, element)| {
-                    element.page_content_role() != PageContentRole::RepeatedDecoration
-                        && element.has_page_spanning_graphical_effect()
+                .filter_map(|(y, element)| {
+                    if element.page_content_role() == PageContentRole::RepeatedDecoration {
+                        return None;
+                    }
+                    GraphicalOverflowContinuation::from_source(element.clone())
+                        .map(|continuation| (*y, continuation))
                 })
-                .cloned()
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -138,10 +155,10 @@ pub(crate) fn transfer_page_spanning_graphical_effects(
                 &mut after
             };
             let source_geometry = geometries[source_index];
-            destination.extend(source_elements.iter().map(|(y, element)| {
+            destination.extend(source_elements.iter().map(|(y, continuation)| {
                 (
                     source_geometry.content_y_on(target_geometry, *y),
-                    Box::new(GraphicalOverflowContinuation::new(element.clone())) as LayoutNode,
+                    Box::new(continuation.clone()) as LayoutNode,
                 )
             }));
         }
@@ -182,18 +199,38 @@ mod tests {
     }
 
     #[test]
+    fn projection_suppresses_unaffected_ancestor_paint() {
+        let mut container = Container {
+            children: vec![transformed_text()],
+            ..Default::default()
+        };
+
+        assert!(container.retain_page_spanning_paint());
+        assert!(!container.paint.visible);
+        assert!(
+            container.children[0]
+                .box_paint_owner()
+                .is_some_and(|owner| owner.box_paint().visible)
+        );
+    }
+
+    #[test]
     fn transfers_effect_paint_in_document_order_and_page_coordinates() {
         let mut pages = vec![
             Page {
                 elements: vec![(80.0, transformed_text())],
-                page_size_override: Some(PageSize::new(100.0, 100.0)),
-                margin_override: Some(Margin::uniform(10.0)),
+                geometry: Some(crate::layout::page_context::PageGeometry::new(
+                    PageSize::new(100.0, 100.0),
+                    Margin::uniform(10.0),
+                )),
                 ..Default::default()
             },
             Page {
                 elements: vec![(4.0, TextBlock::default().boxed())],
-                page_size_override: Some(PageSize::new(100.0, 120.0)),
-                margin_override: Some(Margin::uniform(20.0)),
+                geometry: Some(crate::layout::page_context::PageGeometry::new(
+                    PageSize::new(100.0, 120.0),
+                    Margin::uniform(20.0),
+                )),
                 ..Default::default()
             },
         ];
@@ -201,11 +238,42 @@ mod tests {
         transfer_page_spanning_graphical_effects(&mut pages, PageSize::A4, Margin::default());
 
         assert_eq!(pages[1].elements.len(), 2);
-        assert_eq!(pages[1].elements[0].0, -30.0);
+        assert_eq!(pages[1].elements[0].0, 0.0);
         assert_eq!(
             pages[1].elements[0].1.page_content_role(),
             PageContentRole::OverflowContinuation
         );
         assert_eq!(pages[1].elements[1].0, 4.0);
+    }
+
+    #[test]
+    fn asymmetric_page_margins_do_not_separate_fragmentainer_edges() {
+        let first = FragmentainerStackGeometry {
+            block_start: 0.0,
+            content_scale: PrintContentScale::default(),
+        };
+        let second = FragmentainerStackGeometry {
+            block_start: 80.0,
+            content_scale: PrintContentScale::default(),
+        };
+
+        assert_eq!(second.content_y_on(first, 0.0), 80.0);
+        assert_eq!(first.content_y_on(second, 80.0), 0.0);
+    }
+
+    #[test]
+    fn print_fitting_keeps_the_physical_fragmentainer_boundary_fixed() {
+        let scale = PrintContentScale::from_flow_width(80.0, 100.0);
+        let first = FragmentainerStackGeometry {
+            block_start: 0.0,
+            content_scale: scale,
+        };
+        let second = FragmentainerStackGeometry {
+            block_start: 80.0,
+            content_scale: scale,
+        };
+
+        assert_eq!(second.content_y_on(first, 0.0), 100.0);
+        assert_eq!(first.content_y_on(second, 100.0), 0.0);
     }
 }

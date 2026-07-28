@@ -11,6 +11,7 @@ use super::manifest::ManifestEntry;
 use super::report::FixtureResult;
 
 pub(crate) const CARTESIAN_FIXTURE_PREFIX: &str = "interactions-cartesian-";
+const CROSS_CUTTING_FAMILIES: &[&str] = &["page-margins"];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct FamilyPair {
@@ -104,7 +105,7 @@ pub(crate) struct InteractionProductCoverage {
 }
 
 fn supported_families<T: InteractionSubject>(subjects: &[T]) -> BTreeSet<String> {
-    subjects
+    let mut families: BTreeSet<_> = subjects
         .iter()
         .filter(|subject| {
             subject.kind() == "feature"
@@ -112,7 +113,18 @@ fn supported_families<T: InteractionSubject>(subjects: &[T]) -> BTreeSet<String>
                 && !matches!(subject.category(), "interactions" | "probes")
         })
         .map(|subject| subject.category().to_string())
-        .collect()
+        .collect();
+    if subjects
+        .iter()
+        .any(|subject| subject.id().starts_with(CARTESIAN_FIXTURE_PREFIX))
+    {
+        families.extend(
+            CROSS_CUTTING_FAMILIES
+                .iter()
+                .map(|family| family.to_string()),
+        );
+    }
+    families
 }
 
 fn expected_pairs(families: &BTreeSet<String>) -> BTreeSet<FamilyPair> {
@@ -277,5 +289,23 @@ mod tests {
         assert_eq!(coverage.required_pair_count, 3);
         assert_eq!(coverage.covered_pair_count, 2);
         assert_eq!(coverage.missing_pairs, ["beta × beta"]);
+    }
+
+    #[test]
+    fn generated_product_includes_cross_cutting_page_context() {
+        let results = vec![
+            fixture("a", "alpha", "feature", &[]),
+            fixture(
+                "interactions-cartesian-alpha-x-page-margins",
+                "interactions",
+                "interaction",
+                &["alpha", "page-margins"],
+            ),
+        ];
+        let families = supported_families(&results.iter().collect::<Vec<_>>());
+        assert_eq!(
+            families,
+            BTreeSet::from(["alpha".to_string(), "page-margins".to_string()])
+        );
     }
 }

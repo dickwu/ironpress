@@ -180,6 +180,10 @@ impl LayoutElement for FlexRow {
         Some(self)
     }
 
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
+        Some(self)
+    }
+
     fn in_flow_paint_phase_owner(&self) -> Option<&dyn BoxPaintOwner> {
         Some(self)
     }

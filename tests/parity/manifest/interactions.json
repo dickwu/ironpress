@@ -1181,6 +1181,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-backgrounds-borders-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and backgrounds-borders: the backgrounds-borders representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-backgrounds-borders-x-page-margins.html",
+    "interaction_of": [
+      "backgrounds-borders",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-backgrounds-borders-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -1665,6 +1686,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-backgrounds-gradients-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and backgrounds-gradients: the backgrounds-gradients representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-backgrounds-gradients-x-page-margins.html",
+    "interaction_of": [
+      "backgrounds-gradients",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-backgrounds-gradients-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -2128,6 +2170,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-block-box-model-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and block-box-model: the block-box-model representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-block-box-model-x-page-margins.html",
+    "interaction_of": [
+      "block-box-model",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-block-box-model-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -2571,6 +2634,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-clip-mask-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and clip-mask: the clip-mask representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-clip-mask-x-page-margins.html",
+    "interaction_of": [
+      "clip-mask",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-clip-mask-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -2992,6 +3076,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-color-opacity-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and color-opacity: the color-opacity representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-color-opacity-x-page-margins.html",
+    "interaction_of": [
+      "color-opacity",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-color-opacity-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -3392,6 +3497,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-effects-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and effects: the effects representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-effects-x-page-margins.html",
+    "interaction_of": [
+      "effects",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-effects-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -3775,6 +3901,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-filters-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and filters: the filters representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-filters-x-page-margins.html",
+    "interaction_of": [
+      "filters",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-filters-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -4134,6 +4281,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-flexbox-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and flexbox: the flexbox representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-flexbox-x-page-margins.html",
+    "interaction_of": [
+      "flexbox",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-flexbox-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -4478,6 +4646,28 @@
     "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-overflow-clipping.html"
   },
   {
+    "id": "interactions-cartesian-fonts-advanced-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and fonts-advanced: the fonts-advanced representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-fonts-advanced-x-page-margins.html",
+    "interaction_of": [
+      "fonts-advanced",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ],
+    "reference_file": "references/interactions/interactions-cartesian-fonts-advanced-x-page-margins.html"
+  },
+  {
     "id": "interactions-cartesian-fonts-advanced-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -4801,6 +4991,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-generated-content-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and generated-content: the generated-content representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-generated-content-x-page-margins.html",
+    "interaction_of": [
+      "generated-content",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-generated-content-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -5096,6 +5307,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-grid-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and grid: the grid representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-grid-x-page-margins.html",
+    "interaction_of": [
+      "grid",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-grid-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -5370,6 +5602,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-images-replaced-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and images-replaced: the images-replaced representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-images-replaced-x-page-margins.html",
+    "interaction_of": [
+      "images-replaced",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-images-replaced-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -5622,6 +5875,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-inline-text-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and inline-text: the inline-text representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-inline-text-x-page-margins.html",
+    "interaction_of": [
+      "inline-text",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-inline-text-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -5853,6 +6127,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-lists-counters-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and lists-counters: the lists-counters representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-lists-counters-x-page-margins.html",
+    "interaction_of": [
+      "lists-counters",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-lists-counters-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -6063,6 +6358,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-multicol-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and multicol: the multicol representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-multicol-x-page-margins.html",
+    "interaction_of": [
+      "multicol",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-multicol-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -6254,6 +6570,27 @@
     ]
   },
   {
+    "id": "interactions-cartesian-overflow-clipping-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and overflow-clipping: the overflow-clipping representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-overflow-clipping-x-page-margins.html",
+    "interaction_of": [
+      "overflow-clipping",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
     "id": "interactions-cartesian-overflow-clipping-x-paged-media",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -6409,6 +6746,199 @@
     "file": "cases/interactions/interactions-cartesian-overflow-clipping-x-units-values.html",
     "interaction_of": [
       "overflow-clipping",
+      "units-values"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-page-margins",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Page-margin self-interaction across first/right, left, and later-right physical pages. Intentionally asymmetric margins make page-side selection, cascade, content origins, available block size, page-area paint boundaries, and root-flow gutters conspicuous.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-page-margins.html",
+    "interaction_of": [
+      "page-margins",
+      "page-margins"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-paged-media",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and paged-media: the paged-media representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-paged-media.html",
+    "interaction_of": [
+      "page-margins",
+      "paged-media"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ],
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Fragmentation 3 sections 3.1 and 4.3 require break-before:page on the nested in-flow block to force a class-A page break and move the ensuing content into the next page fragmentainer. Ironpress therefore emits four pages and slices the outer box across pages 2 and 3. Chromium 150 Foundation ignores that forced break, emits three pages, and overlaps the nested text with its preceding sibling on page 2. Its PDF remains a compatibility canary rather than a normative fragmentation oracle; the complete shared-pdftoppm page-count and raster evidence remains reported."
+    }
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-positioning",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and positioning: the positioning representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-positioning.html",
+    "interaction_of": [
+      "page-margins",
+      "positioning"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-selectors-cascade",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and selectors-cascade: the selectors-cascade representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-selectors-cascade.html",
+    "interaction_of": [
+      "page-margins",
+      "selectors-cascade"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-tables",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and tables: the tables representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-tables.html",
+    "interaction_of": [
+      "page-margins",
+      "tables"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-text-advanced",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and text-advanced: the text-advanced representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-text-advanced.html",
+    "interaction_of": [
+      "page-margins",
+      "text-advanced"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-transforms",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and transforms: the transforms representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-transforms.html",
+    "interaction_of": [
+      "page-margins",
+      "transforms"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-typography",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and typography: the typography representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-typography.html",
+    "interaction_of": [
+      "page-margins",
+      "typography"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "interactions-cartesian-page-margins-x-units-values",
+    "category": "interactions",
+    "feature": "supported-family-cartesian-product",
+    "subfeature": "physical-page-context-and-nested-feature-depths",
+    "description": "Physical-page-context interaction for page-margins and units-values: the units-values representative is exercised on the stage subject and at both nesting depths across first/right, left, and later-right physical pages. Intentionally asymmetric margins put layout and graphical effects directly against conspicuous page-area boundaries; stages also shift through root padding to detect conflated clips.",
+    "file": "cases/interactions/interactions-cartesian-page-margins-x-units-values.html",
+    "interaction_of": [
+      "page-margins",
       "units-values"
     ],
     "kind": "interaction",

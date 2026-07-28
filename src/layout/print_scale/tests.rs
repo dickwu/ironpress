@@ -18,7 +18,7 @@ fn shrinks_only_a_finite_normal_flow_overflow() {
 }
 
 #[test]
-fn page_margins_do_not_reduce_the_print_fit_width_twice() {
+fn selected_page_area_width_drives_print_fit() {
     let mut pages = vec![Page {
         elements: vec![(
             0.0,
@@ -33,13 +33,55 @@ fn page_margins_do_not_reduce_the_print_fit_width_twice() {
             }
             .boxed(),
         )],
-        margin_override: Some(Margin::new(0.0, 0.0, 0.0, 40.0)),
+        geometry: Some(crate::layout::page_context::PageGeometry::new(
+            PageSize::new(184.0, 120.0),
+            Margin::new(0.0, 0.0, 0.0, 40.0),
+        )),
         ..Page::default()
     }];
 
-    assign_page_print_scales(&mut pages, PageSize::new(184.0, 120.0));
+    assign_page_print_scales(
+        &mut pages,
+        PageSize::new(184.0, 120.0),
+        Margin::uniform(0.0),
+    );
 
-    assert!(pages[0].print_content_scale.is_identity());
+    assert_eq!(pages[0].print_content_scale.factor(), 144.0 / 184.0);
+}
+
+#[test]
+fn root_flow_start_is_measured_inside_the_physical_page_area() {
+    let mut pages = vec![Page {
+        elements: vec![(
+            0.0,
+            ProgressBar {
+                fraction: 1.0,
+                size: Size::new(150.0, 1.0),
+                colors: crate::layout::elements::ProgressColors {
+                    fill: Color::BLACK,
+                    track: Color::WHITE,
+                },
+                ..ProgressBar::default()
+            }
+            .boxed(),
+        )],
+        geometry: Some(
+            crate::layout::page_context::PageGeometry::new(
+                PageSize::new(192.0, 200.0),
+                Margin::new(16.0, 8.0, 8.0, 32.0),
+            )
+            .with_root_flow_insets(Margin::new(0.0, 8.0, 0.0, 8.0)),
+        ),
+        ..Page::default()
+    }];
+
+    assign_page_print_scales(
+        &mut pages,
+        PageSize::new(192.0, 200.0),
+        Margin::uniform(0.0),
+    );
+
+    assert_eq!(pages[0].print_content_scale.factor(), 152.0 / 158.0);
 }
 
 #[test]
@@ -65,7 +107,11 @@ fn collapsed_table_spacing_does_not_trigger_print_fit_scaling() {
         ..Page::default()
     }];
 
-    assign_page_print_scales(&mut pages, PageSize::new(240.0, 180.0));
+    assign_page_print_scales(
+        &mut pages,
+        PageSize::new(240.0, 180.0),
+        Margin::uniform(0.0),
+    );
 
     assert!(pages[0].print_content_scale.is_identity());
 }

@@ -1,4 +1,8 @@
 use crate::error::IronpressError;
+use crate::parser::dom::{DomNode, HtmlTag};
+use crate::security::resources::DocumentResources;
+#[cfg(test)]
+use crate::security::resources::ResourceAccess;
 
 /// Maximum allowed HTML input size (10 MB).
 const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
@@ -7,7 +11,18 @@ const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
 const MAX_NESTING_DEPTH: usize = 500;
 
 /// Sanitize HTML input by removing dangerous elements and attributes.
-pub fn sanitize_html(html: &str) -> Result<String, IronpressError> {
+#[cfg(test)]
+pub(crate) fn sanitize_html(html: &str) -> Result<String, IronpressError> {
+    sanitize_html_with_resources(
+        html,
+        &DocumentResources::new(ResourceAccess::Sanitized, None, None),
+    )
+}
+
+pub(crate) fn sanitize_html_with_resources(
+    html: &str,
+    resources: &DocumentResources,
+) -> Result<String, IronpressError> {
     // Check input size
     if html.len() > MAX_INPUT_SIZE {
         return Err(IronpressError::SecurityError(format!(
@@ -28,7 +43,7 @@ pub fn sanitize_html(html: &str) -> Result<String, IronpressError> {
     // Remove script tags and content
     result = remove_tag_with_content(&result, "script");
     // Note: <style> tags are preserved for CSS support, but sanitized
-    result = sanitize_style_tags(&result);
+    result = sanitize_style_tags(&result, resources);
     result = remove_tag_with_content(&result, "iframe");
     result = remove_tag_with_content(&result, "object");
     result = remove_tag_with_content(&result, "embed");
@@ -41,6 +56,51 @@ pub fn sanitize_html(html: &str) -> Result<String, IronpressError> {
     result = result.replace("javascript:", "");
 
     Ok(result)
+}
+
+/// Apply resource authorization to parsed attributes that can reach a loader.
+///
+/// Stylesheet URLs are handled separately because imported sheets have their
+/// own base directory. Inline declarations and replaced-element attributes use
+/// the document base.
+pub(crate) fn sanitize_dom_resources(nodes: &mut [DomNode], resources: &DocumentResources) {
+    for node in nodes {
+        let DomNode::Element(element) = node else {
+            continue;
+        };
+
+        if let Some(style) = element.attributes.get_mut("style") {
+            *style = resources.rewrite_css_urls(style, resources.base_path());
+        }
+
+        if element.tag == HtmlTag::Img {
+            authorize_attribute(&mut element.attributes, "src", resources);
+        }
+        if element.raw_tag_name.eq_ignore_ascii_case("image") {
+            authorize_attribute(&mut element.attributes, "href", resources);
+            authorize_attribute(&mut element.attributes, "xlink:href", resources);
+        }
+
+        sanitize_dom_resources(&mut element.children, resources);
+    }
+}
+
+fn authorize_attribute(
+    attributes: &mut std::collections::HashMap<String, String>,
+    name: &str,
+    resources: &DocumentResources,
+) {
+    let Some(value) = attributes.get(name) else {
+        return;
+    };
+    match resources.resolve(value, resources.base_path()) {
+        Some(authorized) => {
+            attributes.insert(name.to_string(), authorized);
+        }
+        None => {
+            attributes.remove(name);
+        }
+    }
 }
 
 fn remove_tag_with_content(html: &str, tag: &str) -> String {
@@ -73,7 +133,7 @@ fn remove_tag_with_content(html: &str, tag: &str) -> String {
     result
 }
 
-fn sanitize_style_tags(html: &str) -> String {
+fn sanitize_style_tags(html: &str, resources: &DocumentResources) -> String {
     let mut result = String::new();
     let mut remaining = html;
 
@@ -97,12 +157,20 @@ fn sanitize_style_tags(html: &str) -> String {
                         continue;
                     }
                     let css = &remaining[css_start..e];
-                    // Remove dangerous CSS: @import, url(), expression()
-                    let safe_css = css
-                        .replace("@import", "")
-                        .replace("expression(", "")
-                        .replace("expression (", "");
-                    let safe_css = remove_dangerous_urls(&safe_css);
+                    // An import is retained only when conversion has an
+                    // explicit local authorization root; the import resolver
+                    // applies the same canonical descendant boundary.
+                    let import_safe_css = if resources.has_authorized_root() {
+                        css.to_string()
+                    } else {
+                        remove_ascii_case_insensitive(css, "@import")
+                    };
+                    let expression_safe_css =
+                        remove_ascii_case_insensitive(&import_safe_css, "expression(");
+                    let expression_safe_css =
+                        remove_ascii_case_insensitive(&expression_safe_css, "expression (");
+                    let safe_css =
+                        resources.rewrite_css_urls(&expression_safe_css, resources.base_path());
                     result.push_str("<style>");
                     result.push_str(&safe_css);
                     result.push_str("</style>");
@@ -122,79 +190,15 @@ fn sanitize_style_tags(html: &str) -> String {
     result
 }
 
-fn remove_dangerous_urls(css: &str) -> String {
-    let mut result = String::with_capacity(css.len());
-    let mut remaining = css;
-    while let Some(pos) = remaining.to_ascii_lowercase().find("url(") {
-        result.push_str(&remaining[..pos]);
-        let after = &remaining[pos + 4..];
-        // Decide whether this `url()` is safe to KEEP. Safe references:
-        //   * `data:` URIs (inline, no network),
-        //   * same-document fragment references `url(#id)` (e.g. an SVG
-        //     `<filter>` for `filter: url(#id)`, css-filter-effects-1 §3), and
-        //   * LOCAL relative resource paths (e.g. an `@font-face`
-        //     `src: url('../fonts/F.ttf')`). These resolve against the
-        //     caller-controlled base directory and cannot fetch from the network
-        //     or exfiltrate data, so removing them would silently break
-        //     legitimate local fonts/assets.
-        // Removed (dangerous) references are external/network resources —
-        // `http:`/`https:`, protocol-relative `//host/...`, and `file:`/other
-        // explicit schemes — which a tracking pixel could use to phone home.
-        let trimmed = after.trim_start().trim_start_matches(['\'', '"']);
-        if trimmed.starts_with("data:")
-            || trimmed.starts_with('#')
-            || is_local_relative_url(trimmed)
-        {
-            result.push_str("url(");
-            remaining = after;
-        } else {
-            // Skip to closing paren
-            if let Some(close) = after.find(')') {
-                remaining = &after[close + 1..];
-            } else {
-                remaining = "";
-            }
-        }
+fn remove_ascii_case_insensitive(value: &str, needle: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(position) = remaining.to_ascii_lowercase().find(needle) {
+        result.push_str(&remaining[..position]);
+        remaining = &remaining[position + needle.len()..];
     }
     result.push_str(remaining);
     result
-}
-
-/// Returns `true` when a `url(...)` body (already stripped of leading quotes and
-/// whitespace) is a LOCAL, RELATIVE resource path that is safe to keep through
-/// sanitization — i.e. it cannot trigger a network fetch.
-///
-/// Rejects (as non-local): any explicit URL scheme such as `http:`/`https:`/
-/// `file:`/`ftp:` (a `scheme:` prefix before any `/`), protocol-relative
-/// `//host/...`, and OS-absolute paths (`/etc/...`). Everything else — a bare
-/// relative path like `../fonts/F.ttf` or `fonts/F.ttf` — is treated as local.
-fn is_local_relative_url(s: &str) -> bool {
-    let s = s.trim();
-    if s.is_empty() {
-        return false;
-    }
-    // Protocol-relative `//host/...` is a network reference.
-    if s.starts_with("//") {
-        return false;
-    }
-    // OS-absolute path.
-    if s.starts_with('/') {
-        return false;
-    }
-    // Explicit scheme `name:` appearing before the first path separator
-    // (e.g. `http:`, `https:`, `file:`, `data:` is handled by the caller).
-    if let Some(colon) = s.find(':') {
-        let before = &s[..colon];
-        let is_scheme = !before.is_empty()
-            && before
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
-            && !before.contains('/');
-        if is_scheme {
-            return false;
-        }
-    }
-    true
 }
 
 fn remove_event_handlers(html: &str) -> String {
@@ -351,268 +355,4 @@ fn check_nesting_depth(html: &str) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn removes_script_tags() {
-        let result =
-            sanitize_html("<p>Hello</p><script>alert('xss')</script><p>World</p>").unwrap();
-        assert!(!result.contains("script"));
-        assert!(!result.contains("alert"));
-        assert!(result.contains("Hello"));
-        assert!(result.contains("World"));
-    }
-
-    #[test]
-    fn removes_iframe() {
-        let result = sanitize_html(r#"<p>Hi</p><iframe src="evil.com"></iframe>"#).unwrap();
-        assert!(!result.contains("iframe"));
-    }
-
-    #[test]
-    fn removes_event_handlers() {
-        let result = sanitize_html(r#"<p onclick="alert('xss')">Hello</p>"#).unwrap();
-        assert!(!result.contains("onclick"));
-        assert!(!result.contains("alert"));
-    }
-
-    #[test]
-    fn preserves_attribute_value_token_starting_with_on() {
-        // Regression: the onXXX stripper must not treat a class token that
-        // happens to start with "on" (e.g. `one`, preceded by a space inside a
-        // quoted value) as an event handler. Doing so deleted the token and its
-        // closing quote, corrupting every following tag.
-        let result =
-            sanitize_html(r#"<span class="chip one"></span><span class="chip two"></span>"#)
-                .unwrap();
-        assert!(result.contains(r#"class="chip one""#), "got: {result}");
-        assert!(result.contains(r#"class="chip two""#), "got: {result}");
-    }
-
-    #[test]
-    fn preserves_single_quoted_on_token() {
-        let result = sanitize_html(r#"<span class='chip one'>x</span>"#).unwrap();
-        assert!(result.contains("class='chip one'"), "got: {result}");
-    }
-
-    #[test]
-    fn still_removes_event_handler_among_other_attributes() {
-        let result = sanitize_html(r#"<div class="one" onclick="bad()" id="x">Hi</div>"#).unwrap();
-        assert!(!result.contains("onclick"));
-        assert!(!result.contains("bad()"));
-        assert!(result.contains(r#"class="one""#), "got: {result}");
-        assert!(result.contains(r#"id="x""#), "got: {result}");
-    }
-
-    #[test]
-    fn removes_javascript_urls() {
-        let result = sanitize_html(r#"<a href="javascript:alert('xss')">Click</a>"#).unwrap();
-        assert!(!result.contains("javascript:"));
-    }
-
-    #[test]
-    fn preserves_safe_html() {
-        let html = "<h1>Title</h1><p>Hello <strong>World</strong></p>";
-        let result = sanitize_html(html).unwrap();
-        assert_eq!(result, html);
-    }
-
-    #[test]
-    fn rejects_oversized_input() {
-        let huge = "x".repeat(MAX_INPUT_SIZE + 1);
-        assert!(sanitize_html(&huge).is_err());
-    }
-
-    #[test]
-    fn nesting_depth_check() {
-        assert_eq!(check_nesting_depth("<a><b><c></c></b></a>"), 3);
-        assert_eq!(check_nesting_depth("<p>Hello</p>"), 1);
-    }
-
-    #[test]
-    fn rejects_excessive_nesting() {
-        let html = "<div>".repeat(501) + &"</div>".repeat(501);
-        let result = sanitize_html(&html);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("nesting depth"));
-    }
-
-    #[test]
-    fn removes_self_closing_embed() {
-        let result = sanitize_html(r#"<p>Hi</p><embed src="evil.swf" />"#).unwrap();
-        assert!(!result.contains("embed"));
-    }
-
-    #[test]
-    fn removes_unclosed_object_tag() {
-        let result = sanitize_html(r#"<p>Hi</p><object data="evil.swf"><p>inner</p>"#).unwrap();
-        assert!(!result.contains("object"));
-    }
-
-    #[test]
-    fn removes_unquoted_event_handler() {
-        let result = sanitize_html(r#"<p onclick=alert(1)>Hello</p>"#).unwrap();
-        assert!(!result.contains("onclick"));
-        assert!(result.contains("Hello"));
-    }
-
-    #[test]
-    fn removes_form_tag() {
-        let result = sanitize_html(r#"<form action="/submit"><input></form>"#).unwrap();
-        assert!(!result.contains("form"));
-    }
-
-    #[test]
-    fn sanitizes_style_tag() {
-        let result = sanitize_html(r#"<style>body { color: red }</style><p>Hi</p>"#).unwrap();
-        // Style tags are preserved but sanitized
-        assert!(result.contains("<style>"));
-        assert!(result.contains("color: red"));
-        assert!(result.contains("Hi"));
-    }
-
-    #[test]
-    fn sanitizes_dangerous_css() {
-        let result = sanitize_html(
-            r#"<style>body { background: url(http://evil.com/track.png); } @import "evil.css";</style>"#,
-        )
-        .unwrap();
-        assert!(!result.contains("@import"));
-        assert!(!result.contains("url(http"));
-    }
-
-    #[test]
-    fn unclosed_tag_no_gt() {
-        // Tag with no closing > — hits the break in the else branch
-        let result = sanitize_html("<p>Hi</p><embed src=x").unwrap();
-        // Should handle gracefully
-        assert!(result.contains("Hi"));
-    }
-
-    #[test]
-    fn event_handler_with_whitespace_before_value() {
-        let result = sanitize_html(r#"<div onmouseover = "alert(1)">Hi</div>"#).unwrap();
-        assert!(!result.contains("onmouseover"));
-        assert!(result.contains("Hi"));
-    }
-
-    #[test]
-    fn style_tag_unclosed_opening() {
-        // Lines 105-106: style tag with no closing '>'
-        let result = sanitize_html("<style body { color: red ").unwrap();
-        // Should handle gracefully without panicking
-        assert!(result.contains("style"));
-    }
-
-    #[test]
-    fn dangerous_url_without_close_paren() {
-        // Lines 128-129, 135: url() without closing paren
-        let result =
-            sanitize_html(r#"<style>body { background: url(http://evil.com }</style>"#).unwrap();
-        assert!(!result.contains("url(http"));
-    }
-
-    #[test]
-    fn data_uri_preserved() {
-        // Line 128-129: data: URIs are safe and preserved
-        let css = r#"<style>body { background: url(data:image/png;base64,abc) }</style>"#;
-        let result = sanitize_html(css).unwrap();
-        assert!(result.contains("url(data:"));
-    }
-
-    #[test]
-    fn fragment_url_reference_preserved() {
-        // Same-document fragment references `url(#id)` are safe and preserved so
-        // `filter: url(#id)` (css-filter-effects-1 §3) can resolve to an inline
-        // SVG <filter>. Quoted and external forms still behave as before.
-        let css = r#"<style>.b { filter: url(#sat); }</style>"#;
-        assert!(sanitize_html(css).unwrap().contains("url(#sat)"));
-        let quoted = r##"<style>.b { filter: url("#sat"); }</style>"##;
-        assert!(sanitize_html(quoted).unwrap().contains("url(\"#sat\")"));
-        let external = r#"<style>.b { background: url(http://evil.com/x.png); }</style>"#;
-        assert!(!sanitize_html(external).unwrap().contains("url(http"));
-    }
-
-    #[test]
-    fn local_relative_font_face_url_preserved() {
-        // A relative `@font-face` `src: url('../fonts/F.ttf')` is a LOCAL resource
-        // (resolved against the caller-controlled base dir) and must survive
-        // sanitization so the font can load — while remote/absolute references
-        // are still stripped.
-        let css = r#"<style>@font-face { font-family: F; src: url('../fonts/F.ttf'); }</style>"#;
-        assert!(
-            sanitize_html(css)
-                .unwrap()
-                .contains("url('../fonts/F.ttf')")
-        );
-
-        let bare = r#"<style>@font-face { font-family: F; src: url(fonts/F.ttf); }</style>"#;
-        assert!(sanitize_html(bare).unwrap().contains("url(fonts/F.ttf)"));
-
-        // Remote, protocol-relative, and absolute paths remain dangerous.
-        let remote = r#"<style>@font-face { src: url(https://evil.com/F.ttf); }</style>"#;
-        assert!(!sanitize_html(remote).unwrap().contains("url(http"));
-        let proto_rel = r#"<style>@font-face { src: url(//evil.com/F.ttf); }</style>"#;
-        assert!(!sanitize_html(proto_rel).unwrap().contains("url(//"));
-    }
-
-    #[test]
-    fn is_local_relative_url_classification() {
-        assert!(is_local_relative_url("../fonts/F.ttf"));
-        assert!(is_local_relative_url("fonts/F.ttf"));
-        assert!(is_local_relative_url("F.ttf"));
-        assert!(!is_local_relative_url("http://x/F.ttf"));
-        assert!(!is_local_relative_url("https://x/F.ttf"));
-        assert!(!is_local_relative_url("//x/F.ttf"));
-        assert!(!is_local_relative_url("/etc/passwd"));
-        assert!(!is_local_relative_url("file:///etc/passwd"));
-        assert!(!is_local_relative_url(""));
-    }
-
-    #[test]
-    fn event_handler_single_quoted_value() {
-        // Lines 189, 191-196: event handler with single-quoted value
-        let result = sanitize_html(r#"<p onclick='alert(1)'>Hello</p>"#).unwrap();
-        assert!(!result.contains("onclick"));
-        assert!(result.contains("Hello"));
-    }
-
-    #[test]
-    fn expression_css_removed() {
-        // Sanitizer removes expression() in CSS
-        let result =
-            sanitize_html(r#"<style>body { width: expression(alert(1)) }</style>"#).unwrap();
-        assert!(!result.contains("expression("));
-    }
-
-    #[test]
-    fn expression_with_space_removed() {
-        let result =
-            sanitize_html(r#"<style>body { width: expression (alert(1)) }</style>"#).unwrap();
-        assert!(!result.contains("expression ("));
-    }
-
-    #[test]
-    fn url_with_quoted_external_removed() {
-        // Exercises remove_dangerous_urls with quoted external URL
-        let result =
-            sanitize_html(r#"<style>body { background: url("http://evil.com/img.png") }</style>"#)
-                .unwrap();
-        assert!(!result.contains("evil.com"));
-    }
-
-    #[test]
-    fn event_handler_at_start_of_tag() {
-        // The prev-char check: 'o' at position after '<' or space
-        let result = sanitize_html(r#"<div onclick="bad()">Hi</div>"#).unwrap();
-        assert!(!result.contains("onclick"));
-    }
-
-    #[test]
-    fn event_handler_with_spaces_around_equals() {
-        let result = sanitize_html(r#"<p onload = "bad()">Safe</p>"#).unwrap();
-        assert!(!result.contains("onload"));
-    }
-}
+mod tests;

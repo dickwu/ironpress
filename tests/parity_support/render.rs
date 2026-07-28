@@ -70,6 +70,7 @@ pub(crate) fn render_pdf(
     fonts: &FontBundle,
     ua_stylesheet: &PinnedUaStylesheet,
     base_path: Option<&std::path::Path>,
+    resource_root: Option<&std::path::Path>,
 ) -> Result<Vec<u8>, String> {
     use ironpress::{HtmlConverter, Margin, PageSize};
     let mut conv = HtmlConverter::new()
@@ -84,6 +85,9 @@ pub(crate) fn render_pdf(
     // input used to produce the oracle PDF; it does not alter comparison.
     if let Some(base) = base_path {
         conv = conv.base_path(base);
+    }
+    if let Some(root) = resource_root {
+        conv = conv.resource_root(root);
     }
 
     // Register the bundled deterministic Parity faces (DejaVu Sans/Serif/Mono

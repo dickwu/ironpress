@@ -3638,7 +3638,7 @@ pub(crate) fn flatten_table(
     let table_border_box_height = box_height + table_level_border.vertical_width();
     let establishes_containing_block = crate::layout::helpers::establishes_containing_block(style);
     if establishes_containing_block {
-        crate::layout::helpers::patch_absolute_descendants_containing_block(
+        crate::layout::helpers::resolve_absolute_descendants_containing_block(
             &mut parts,
             ContainingBlock {
                 x: 0.0,

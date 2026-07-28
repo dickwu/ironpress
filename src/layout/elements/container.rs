@@ -95,13 +95,20 @@ impl BlockFlowParticipant for Container {
 }
 
 impl ContainingBlockConsumer for Container {
-    fn attach_missing_containing_block(
+    fn resolve_containing_block(
         &mut self,
         containing_block: crate::layout::engine::ContainingBlock,
     ) {
-        if self.positioning.scheme.is_absolute() && self.positioning.containing_block.is_none() {
-            self.positioning.containing_block = Some(containing_block);
-        }
+        let width = self
+            .box_model
+            .size
+            .width
+            .fixed_value()
+            .unwrap_or(containing_block.width);
+        self.positioning.resolve_final_containing_block(
+            containing_block,
+            crate::types::Size::new(width, self.block_extent()),
+        );
     }
 }
 
@@ -293,6 +300,10 @@ impl LayoutElement for Container {
     }
 
     fn box_paint_owner(&self) -> Option<&dyn BoxPaintOwner> {
+        Some(self)
+    }
+
+    fn box_paint_owner_mut(&mut self) -> Option<&mut dyn BoxPaintOwner> {
         Some(self)
     }
 

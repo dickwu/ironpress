@@ -97,7 +97,7 @@ pub(super) fn layout_pages_at_with_fonts(
         fonts,
         None,
         300.0,
-        crate::layout::paginate::PageMarginOverrides::default(),
+        crate::layout::paginate::FootnoteAreaLayout::default(),
     )
 }
 

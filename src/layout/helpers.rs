@@ -2429,35 +2429,20 @@ pub(crate) fn resolve_relative_offsets(
     (top, left)
 }
 
-/// Patch absolute-positioned children in a flattened element list with
-/// the parent's containing block info. This resolves bottom/right offsets
-/// into top/left and sets the `containing_block` field.
-pub(crate) fn patch_absolute_children_containing_block(
-    elements: &mut [LayoutNode],
-    cb: ContainingBlock,
-) {
-    for element in elements.iter_mut() {
-        if let Some(consumer) = element.containing_block_consumer_mut() {
-            consumer.attach_missing_containing_block(cb);
-        }
-    }
-}
-
-/// Attach one finalized containing block throughout a formatting-context
+/// Resolve one finalized containing block throughout a formatting-context
 /// subtree.
 ///
-/// Specialized box-tree builders such as tables can only know their principal
-/// extent after track layout. Their descendants are deliberately left
-/// unresolved during construction, then completed in one recursive pass here.
-/// Nodes that already resolved against a nearer containing block retain it via
-/// [`ContainingBlockConsumer::attach_missing_containing_block`].
-pub(crate) fn patch_absolute_descendants_containing_block(
+/// Formatting contexts can only know their final used extent after descendant
+/// layout. Absolute descendants therefore retain their authored constraints
+/// and are resolved in one recursive pass. Positioned depth prevents this pass
+/// from replacing geometry owned by a nearer containing block.
+pub(crate) fn resolve_absolute_descendants_containing_block(
     elements: &mut [LayoutNode],
     containing_block: ContainingBlock,
 ) {
     fn patch(element: &mut LayoutNode, containing_block: ContainingBlock) {
         if let Some(consumer) = element.containing_block_consumer_mut() {
-            consumer.attach_missing_containing_block(containing_block);
+            consumer.resolve_containing_block(containing_block);
         }
         element.visit_child_nodes_mut(&mut |child| patch(child, containing_block));
     }

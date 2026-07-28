@@ -314,10 +314,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "The high-level property is implemented: Ironpress and WeasyPrint have matching ligature-on/off advances, while Chrome differs only in baseline placement (Chrome 10.510986pt; WeasyPrint 10.923029pt; Ironpress 11.268000pt). CSS Fonts defines the OpenType feature selection, not cross-engine baseline quantization. Raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -352,10 +348,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Fonts defines font-size-adjust as a per-face used font-size adjustment while numeric line-height remains based on the computed size. Ironpress applies that rule: its normal-row word bounds agree with Chrome within 0.011pt horizontally and its adjusted-row bounds within 0.016pt, with the same enlarged red ParitySerif row and unchanged 48px line interval. WeasyPrint 69 reports this property unsupported, so it is not a semantic counter-oracle. Both Ironpress and Chrome PDFs are rasterized through the same pinned pdftoppm; the remaining raw contour residue comes from Ironpress CID TrueType versus Chrome Type 3 font programs, not a missing font-size-adjust operation. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
@@ -407,10 +399,6 @@
     "kind": "feature",
     "expected_support": "implemented",
     "oracle": "chrome",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Fonts defines the @font-face size-adjust descriptor as scaling the selected face's outlines and associated metrics while retaining the computed font size. Ironpress produces the same visibly enlarged black Adjusted row and normal red row as Chrome; their word bounds agree within 0.015pt horizontally on both rows. WeasyPrint 69 reports this descriptor unsupported, so it is not a semantic counter-oracle. Both PDFs are rasterized through the same pinned pdftoppm; the residual is one-device-pixel contour coverage from Ironpress CID TrueType versus Chrome Type 3 font programs, not a missing size-adjust descriptor. Raw evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",

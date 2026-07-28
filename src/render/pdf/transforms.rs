@@ -122,6 +122,7 @@ impl PdfPaintSpace {
 pub(super) struct PageContentTransform {
     page_size: Option<PdfVector>,
     content_scale: PrintContentScale,
+    content_scale_anchor: PdfPoint,
 }
 
 /// Physical page boundaries reached by a clip rectangle.
@@ -342,13 +343,18 @@ impl PdfContentSpace {
 
     /// Convert a bottom-up layout rectangle into this serialization space.
     pub(super) fn rect(self, rect: PdfRect) -> PdfRect {
-        let top_left = self.point(PdfPoint::new(rect.left, rect.top()));
-        PdfRect::new(
-            top_left.x,
-            top_left.y,
-            self.length(rect.width),
-            self.length(rect.height),
-        )
+        match self {
+            Self::Points => rect,
+            Self::PageCss { .. } => {
+                let top_left = self.point(PdfPoint::new(rect.left, rect.top()));
+                PdfRect::new(
+                    top_left.x,
+                    top_left.y,
+                    self.length(rect.width),
+                    self.length(rect.height),
+                )
+            }
+        }
     }
 
     pub(super) fn length(self, length: f32) -> f32 {
@@ -397,8 +403,13 @@ impl PageContentTransform {
 
     /// Apply browser print-to-page fitting to normal-flow content. Page
     /// decorations deliberately remain outside this transform.
-    pub(super) const fn with_content_scale(mut self, scale: PrintContentScale) -> Self {
+    pub(super) const fn with_content_scale(
+        mut self,
+        scale: PrintContentScale,
+        anchor: PdfPoint,
+    ) -> Self {
         self.content_scale = scale;
+        self.content_scale_anchor = anchor;
         self
     }
 
@@ -463,16 +474,19 @@ impl PageContentTransform {
         }
 
         let scale = self.scale();
-        let translate_y = self.translate_y();
+        let translation = self.translation();
         let grid = Self::DEVICE_TO_PAGE;
         let snap_down = |value: f32| (f64::from(value) / grid).floor() * grid;
         let snap_up = |value: f32| (f64::from(value) / grid).ceil() * grid;
-        let left = snap_down(rect.left * scale as f32) / scale;
-        let bottom = snap_down(rect.bottom * scale as f32 + translate_y as f32) / scale
-            - translate_y / scale;
-        let right = snap_up(rect.right() * scale as f32) / scale;
-        let top =
-            snap_up(rect.top() * scale as f32 + translate_y as f32) / scale - translate_y / scale;
+        let translate_x = f64::from(translation.x);
+        let translate_y = f64::from(translation.y);
+        let left =
+            snap_down(rect.left * scale as f32 + translation.x) / scale - translate_x / scale;
+        let bottom =
+            snap_down(rect.bottom * scale as f32 + translation.y) / scale - translate_y / scale;
+        let right =
+            snap_up(rect.right() * scale as f32 + translation.x) / scale - translate_x / scale;
+        let top = snap_up(rect.top() * scale as f32 + translation.y) / scale - translate_y / scale;
 
         PdfRect::new(
             left as f32,
@@ -512,9 +526,10 @@ impl PageContentTransform {
         if self.content_scale.is_identity() {
             return operator;
         }
+        let translate_x = f64::from(self.content_scale_anchor.x) * (1.0 - content_scale);
+        let translate_y = f64::from(self.content_scale_anchor.y) * (1.0 - content_scale);
         operator.push_str(&format!(
-            "{content_scale} 0 0 {content_scale} 0 {} cm\n",
-            f64::from(page_size.y) * (1.0 - content_scale),
+            "{content_scale} 0 0 {content_scale} {translate_x} {translate_y} cm\n",
         ));
         operator
     }
@@ -586,9 +601,13 @@ impl PageContentTransform {
 
     pub(super) fn inverse_operator(self) -> String {
         let scale = self.scale();
-        let translate_y = self.translate_y();
+        let translation = self.translation();
         let inverse = scale.recip();
-        format!("{inverse} 0 0 {inverse} 0 {} cm\n", -translate_y * inverse)
+        format!(
+            "{inverse} 0 0 {inverse} {} {} cm\n",
+            -f64::from(translation.x) * inverse,
+            -f64::from(translation.y) * inverse,
+        )
     }
 
     pub(super) fn is_identity(self) -> bool {
@@ -613,8 +632,8 @@ impl PageContentTransform {
         );
         let scale = self.content_scale.factor();
         PdfPoint::new(
-            page_point.x * scale,
-            page_height - (page_height - page_point.y) * scale,
+            self.content_scale_anchor.x + (page_point.x - self.content_scale_anchor.x) * scale,
+            self.content_scale_anchor.y + (page_point.y - self.content_scale_anchor.y) * scale,
         )
     }
 
@@ -638,9 +657,16 @@ impl PageContentTransform {
         })
     }
 
-    fn translate_y(self) -> f64 {
-        self.page_size
-            .map_or(0.0, |size| f64::from(size.y) * (1.0 - self.scale()))
+    fn translation(self) -> PdfVector {
+        self.page_size.map_or(PdfVector::default(), |size| {
+            let device_scale = (Self::DEVICE_TO_PAGE * Self::POINT_TO_DEVICE) as f32;
+            let content_scale = self.content_scale.factor();
+            PdfVector::new(
+                self.content_scale_anchor.x * (1.0 - content_scale),
+                size.y * (1.0 - device_scale) * content_scale
+                    + self.content_scale_anchor.y * (1.0 - content_scale),
+            )
+        })
     }
 }
 
@@ -742,6 +768,13 @@ mod tests {
     }
 
     #[test]
+    fn point_content_space_preserves_bottom_up_rectangles() {
+        let rect = PdfRect::new(18.0, 75.0, 114.0, 51.0);
+
+        assert_eq!(PdfContentSpace::Points.rect(rect), rect);
+    }
+
+    #[test]
     fn print_operator_retains_the_device_then_point_hierarchy() {
         let operator = PageContentTransform::print(PdfVector::new(180.0, 72.0)).operator();
         assert_eq!(
@@ -798,14 +831,15 @@ mod tests {
     }
 
     #[test]
-    fn print_content_scale_is_anchored_at_the_page_top_left() {
+    fn print_content_scale_is_anchored_at_the_page_area_top_left() {
         let scale = PrintContentScale::from_flow_width(252.0, 255.0);
-        let transform =
-            PageContentTransform::print(PdfVector::new(252.0, 72.0)).with_content_scale(scale);
+        let anchor = PdfPoint::new(18.0, 60.0);
+        let transform = PageContentTransform::print(PdfVector::new(252.0, 72.0))
+            .with_content_scale(scale, anchor);
         let scaled = transform.transform_rect(PdfRect::new(22.5, 29.25, 24.0, 12.0));
 
-        assert!((scaled.left - 22.5 * 84.0 / 85.0).abs() < 0.000_1);
-        assert!((scaled.bottom - 29.25 * 84.0 / 85.0 - 72.0 / 85.0).abs() < 0.000_1);
+        assert!((scaled.left - (18.0 + (22.5 - 18.0) * 84.0 / 85.0)).abs() < 0.000_1);
+        assert!((scaled.bottom - (60.0 + (29.25 - 60.0) * 84.0 / 85.0)).abs() < 0.000_1);
         assert!((scaled.width - 24.0 * 84.0 / 85.0).abs() < 0.000_1);
         assert!((scaled.height - 12.0 * 84.0 / 85.0).abs() < 0.000_1);
     }

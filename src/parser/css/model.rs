@@ -536,23 +536,23 @@ pub struct ImportRule {
 /// The selector of an `@page` rule — the text between `@page` and `{`
 /// (CSS Paged Media 3 §3 "Page selectors and the page context").
 ///
-/// `@page { }` (no selector) is [`PageSelector::None`] and applies to every
-/// page; the pseudo-class / named variants override per page.
+/// A page type name combined with zero or more page pseudo-classes.
+///
+/// CSS Paged Media permits compounds such as `chapter:left:first` and repeated
+/// pseudo-classes contribute repeatedly to specificity. Keeping both facts in
+/// one semantic value prevents parsing from discarding half of a selector.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum PageSelector {
-    /// `@page { }` — the default rule, applies to all pages.
-    #[default]
-    None,
-    /// `@page :first { }` — the first page of the document.
-    First,
-    /// `@page :left { }` — verso (left) pages.
-    Left,
-    /// `@page :right { }` — recto (right) pages.
-    Right,
-    /// `@page :blank { }` — intentionally-blank pages.
-    Blank,
-    /// `@page <name> { }` — a named page targeted by the `page` property.
-    Named(String),
+pub struct PageSelector {
+    name: Option<String>,
+    pseudo_classes: PagePseudoClasses,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct PagePseudoClasses {
+    first: u32,
+    blank: u32,
+    left: u32,
+    right: u32,
 }
 
 /// The physical-page facts against which an [`PageSelector`] is matched.
@@ -567,26 +567,95 @@ pub struct PageSelectorContext<'a> {
 }
 
 impl PageSelector {
-    /// Whether this selector applies to a physical page.
-    pub fn applies_to(&self, page: PageSelectorContext<'_>) -> bool {
-        match self {
-            Self::None => true,
-            Self::First => page.page_number == 1,
-            Self::Left => page.page_number % 2 == 0,
-            Self::Right => page.page_number % 2 != 0,
-            Self::Blank => page.is_blank,
-            Self::Named(name) => page.page_name == Some(name.as_str()),
+    pub const fn universal() -> Self {
+        Self {
+            name: None,
+            pseudo_classes: PagePseudoClasses {
+                first: 0,
+                blank: 0,
+                left: 0,
+                right: 0,
+            },
         }
     }
 
-    /// CSS Paged Media's `(f, g, h)` page-selector specificity.
-    pub const fn specificity(&self) -> (u8, u8, u8) {
-        match self {
-            Self::None => (0, 0, 0),
-            Self::Named(_) => (1, 0, 0),
-            Self::First | Self::Blank => (0, 1, 0),
-            Self::Left | Self::Right => (0, 0, 1),
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    pub const fn first() -> Self {
+        Self::universal().with_first()
+    }
+
+    #[cfg(test)]
+    pub const fn left() -> Self {
+        Self::universal().with_left()
+    }
+
+    #[cfg(test)]
+    pub const fn right() -> Self {
+        Self::universal().with_right()
+    }
+
+    #[cfg(test)]
+    pub const fn blank() -> Self {
+        Self::universal().with_blank()
+    }
+
+    pub const fn with_first(mut self) -> Self {
+        self.pseudo_classes.first = self.pseudo_classes.first.saturating_add(1);
+        self
+    }
+
+    pub const fn with_blank(mut self) -> Self {
+        self.pseudo_classes.blank = self.pseudo_classes.blank.saturating_add(1);
+        self
+    }
+
+    pub const fn with_left(mut self) -> Self {
+        self.pseudo_classes.left = self.pseudo_classes.left.saturating_add(1);
+        self
+    }
+
+    pub const fn with_right(mut self) -> Self {
+        self.pseudo_classes.right = self.pseudo_classes.right.saturating_add(1);
+        self
+    }
+
+    pub const fn is_universal(&self) -> bool {
+        self.name.is_none()
+            && self.pseudo_classes.first == 0
+            && self.pseudo_classes.blank == 0
+            && self.pseudo_classes.left == 0
+            && self.pseudo_classes.right == 0
+    }
+
+    /// Whether this selector applies to a physical page.
+    pub fn applies_to(&self, page: PageSelectorContext<'_>) -> bool {
+        self.name
+            .as_deref()
+            .is_none_or(|name| page.page_name == Some(name))
+            && (self.pseudo_classes.first == 0 || page.page_number == 1)
+            && (self.pseudo_classes.blank == 0 || page.is_blank)
+            && (self.pseudo_classes.left == 0 || page.page_number % 2 == 0)
+            && (self.pseudo_classes.right == 0 || page.page_number % 2 != 0)
+    }
+
+    /// CSS Paged Media's `(f, g, h)` page-selector specificity.
+    pub const fn specificity(&self) -> (u32, u32, u32) {
+        (
+            if self.name.is_some() { 1 } else { 0 },
+            self.pseudo_classes
+                .first
+                .saturating_add(self.pseudo_classes.blank),
+            self.pseudo_classes
+                .left
+                .saturating_add(self.pseudo_classes.right),
+        )
     }
 }
 
@@ -711,6 +780,60 @@ impl MarginBoxPosition {
 /// `content` of a running header/footer is a concatenation of string literals
 /// and the page counters `counter(page)` / `counter(pages)`, e.g.
 /// `content: "Page " counter(page) " of " counter(pages)`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PageContentPolicy {
+    #[default]
+    First,
+    Start,
+    Last,
+    FirstExcept,
+}
+
+impl PageContentPolicy {
+    pub(crate) fn parse(value: Option<&str>) -> Option<Self> {
+        match value {
+            None => Some(Self::First),
+            Some(value) if value.eq_ignore_ascii_case("first") => Some(Self::First),
+            Some(value) if value.eq_ignore_ascii_case("start") => Some(Self::Start),
+            Some(value) if value.eq_ignore_ascii_case("last") => Some(Self::Last),
+            Some(value) if value.eq_ignore_ascii_case("first-except") => Some(Self::FirstExcept),
+            Some(_) => None,
+        }
+    }
+}
+
+/// A prevalidated reference to page-scoped generated content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageContentReference {
+    name: String,
+    policy: PageContentPolicy,
+}
+
+impl PageContentReference {
+    pub(crate) fn new(name: String, policy: PageContentPolicy) -> Self {
+        Self { name, policy }
+    }
+
+    pub(crate) fn parse(name: &str, policy: Option<&str>) -> Option<Self> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        Some(Self::new(
+            name.to_ascii_lowercase(),
+            PageContentPolicy::parse(policy)?,
+        ))
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) const fn policy(&self) -> PageContentPolicy {
+        self.policy
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarginContentToken {
     /// A quoted string literal.
@@ -720,9 +843,9 @@ pub enum MarginContentToken {
     /// `counter(pages)` — resolved to the total page count.
     PageCount,
     /// `element(name)` — resolved to a captured `position: running(name)` box.
-    Element(String),
+    Element(PageContentReference),
     /// `string(name, page-policy)` — resolved from `string-set` captures.
-    NamedString(String, Option<String>),
+    NamedString(PageContentReference),
 }
 
 /// A parsed page-margin box (CSS Paged Media 3 §5): its position and the
@@ -913,7 +1036,7 @@ impl FootnoteAreaStyle {
 #[derive(Debug, Clone, Default)]
 pub struct PageRule {
     /// The page selector (`:first`/`:left`/`:right`/`:blank`/name) classified
-    /// from the text between `@page` and `{`. [`PageSelector::None`] for an
+    /// from the text between `@page` and `{`. A universal selector for an
     /// unselected `@page { }` rule that applies to every page.
     pub selector: PageSelector,
     /// Page width in points (if specified).
