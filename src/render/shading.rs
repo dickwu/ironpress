@@ -108,7 +108,7 @@ impl PdfGradientOffset {
     fn pdf_number(self) -> String {
         match self {
             Self::Exact(value) => format_pdf_number(value),
-            Self::Backend(value) if value == 0.0 => "0".to_string(),
+            Self::Backend(0.0) => "0".to_string(),
             Self::Backend(value) => value.to_string(),
         }
     }

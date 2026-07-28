@@ -1,3 +1,5 @@
+use crate::render::pdf::border_images::BorderImageShadings;
+
 include!("foundation.rs");
 mod flex_cells;
 mod stacking;

@@ -56,35 +56,64 @@ impl WavyDecorationMetrics {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::render::pdf) struct DecorationStroke {
+    pub(in crate::render::pdf) color: PdfRgb,
+    pub(in crate::render::pdf) line: DecorationLine,
+    pub(in crate::render::pdf) span: crate::render::text_decoration::InlineInterval,
+    pub(in crate::render::pdf) axis_y: f32,
+    pub(in crate::render::pdf) axis_from_baseline: f32,
+}
+
+impl DecorationStroke {
+    pub(in crate::render::pdf) fn new(
+        color: (f32, f32, f32),
+        line: DecorationLine,
+        start: f32,
+        end: f32,
+        axis_y: f32,
+        axis_from_baseline: f32,
+    ) -> Self {
+        Self {
+            color: PdfRgb::from(color),
+            line,
+            span: crate::render::text_decoration::InlineInterval::new(start, end),
+            axis_y,
+            axis_from_baseline,
+        }
+    }
+}
+
 pub(in crate::render::pdf) fn push_decoration_stroke(
     content: &mut String,
-    color: (f32, f32, f32),
     run: &TextRun,
     decoration: &crate::style::computed::TextDecoration,
-    line: DecorationLine,
-    x1: f32,
-    x2: f32,
-    y: f32,
+    stroke: DecorationStroke,
 ) {
     let thickness = decoration_thickness(run, decoration);
-    if x2 <= x1 {
+    if stroke.span.end <= stroke.span.start {
         return;
     }
     if !decoration_is_wavy(decoration) {
-        let rect = PdfRect::new(x1, y - thickness / 2.0, x2 - x1, thickness);
-        content.push_str(&PdfRgb::from(color).fill_operator());
+        let rect = PdfRect::new(
+            stroke.span.start,
+            stroke.axis_y - thickness / 2.0,
+            stroke.span.end - stroke.span.start,
+            thickness,
+        );
+        content.push_str(&stroke.color.fill_operator());
         content.push_str(&rect.rect_path());
         content.push_str("f\n");
         return;
     }
 
-    let stroke = thickness;
-    let metrics = WavyDecorationMetrics::from_thickness(stroke);
-    let axis_y = y + line.wavy_axis_offset(stroke);
-    let clip_y = axis_y - metrics.control_distance - stroke * 2.0;
-    let clip_h = (metrics.control_distance + stroke * 2.0) * 2.0;
-    let mut x = x1 - 2.0 * metrics.step;
-    let end_x = x2 + 4.0 * metrics.step;
+    let stroke_width = thickness;
+    let metrics = WavyDecorationMetrics::from_thickness(stroke_width);
+    let axis_y = stroke.axis_y + stroke.line.wavy_axis_offset(stroke_width);
+    let clip_y = axis_y - metrics.control_distance - stroke_width * 2.0;
+    let clip_h = (metrics.control_distance + stroke_width * 2.0) * 2.0;
+    let mut x = stroke.span.start - 2.0 * metrics.step;
+    let end_x = stroke.span.end + 4.0 * metrics.step;
     let mut path = format!("{x} {axis_y} m\n");
     while x + 2.0 * metrics.step <= end_x {
         let cx = x + metrics.step;
@@ -95,7 +124,11 @@ pub(in crate::render::pdf) fn push_decoration_stroke(
             axis_y + metrics.control_distance
         ));
     }
-    content.push_str(&format!("q\n{x1} {clip_y} {} {clip_h} re\nW\nn\n", x2 - x1));
-    content.push_str(&PdfRgb::from(color).stroke_operator());
-    content.push_str(&format!("{stroke} w\n0 J\n1 j\n{path}S\nQ\n"));
+    content.push_str(&format!(
+        "q\n{} {clip_y} {} {clip_h} re\nW\nn\n",
+        stroke.span.start,
+        stroke.span.end - stroke.span.start
+    ));
+    content.push_str(&stroke.color.stroke_operator());
+    content.push_str(&format!("{stroke_width} w\n0 J\n1 j\n{path}S\nQ\n"));
 }

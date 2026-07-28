@@ -921,7 +921,12 @@ impl TextRun {
     /// PDF painting agree.
     pub(crate) fn inline_advance(&self, width: f32) -> f32 {
         let boundary = self.metadata.boundary.total();
-        width + boundary.is_finite().then_some(boundary).unwrap_or_default()
+        width
+            + if boundary.is_finite() {
+                boundary
+            } else {
+                Default::default()
+            }
     }
 
     /// Complete advance for text painted by this run.
@@ -969,10 +974,11 @@ impl TextRun {
     }
 
     pub(crate) fn line_height_font_size(&self) -> f32 {
-        self.line_height_basis
-            .is_finite()
-            .then_some(self.line_height_basis)
-            .unwrap_or(self.font_size)
+        if self.line_height_basis.is_finite() {
+            self.line_height_basis
+        } else {
+            self.font_size
+        }
     }
 
     /// The line-box baseline offset caused by CSS `vertical-align`.
@@ -1456,10 +1462,11 @@ impl StackingContext {
 
 impl From<&crate::style::computed::FilterEffects> for StackingContext {
     fn from(filter: &crate::style::computed::FilterEffects) -> Self {
-        filter
-            .establishes_stacking_context
-            .then_some(Self::Filter)
-            .unwrap_or_default()
+        if filter.establishes_stacking_context {
+            Self::Filter
+        } else {
+            Default::default()
+        }
     }
 }
 
@@ -2565,7 +2572,6 @@ fn build_running_element(
         },
         semantics: TextSemantics {
             heading_level: heading_level(el.tag),
-            ..Default::default()
         },
         ..Default::default()
     };
@@ -4741,7 +4747,7 @@ fn route_element(
     }
 
     if style.display == Display::Block || style.display == Display::InlineBlock {
-        let early_exit = layout_block_element(
+        layout_block_element(
             el,
             style,
             &layout_ctx,
@@ -4754,9 +4760,6 @@ fn route_element(
             pseudo_styles.first_letter(),
             env,
         );
-        if early_exit {
-            return;
-        }
     } else {
         let has_inline_target_placeholder = generated_styles.before().is_some_and(|ps| {
             !pseudo_is_block_like(ps) && content_items_include_target_placeholder(&ps.content)

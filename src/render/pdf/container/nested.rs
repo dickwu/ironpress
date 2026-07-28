@@ -1,6 +1,7 @@
 use super::*;
 use crate::layout::elements::Container;
 use crate::layout::engine::StackingContext;
+use crate::render::pdf::affine_solids::AffineSolidGroup;
 
 fn push_nested_background_clip(
     content: &mut String,
@@ -154,8 +155,13 @@ pub(super) fn render_nested_container(
     let nk_border_box = nk_paint_geometry.rounded_border_box(*cont_radii);
     let background_geometry =
         nk_fragment_geometry.background(*nk_bg_origin, *nk_bg_clip, *cont_radii);
-    let nk_background_reference = background_geometry.positioning_box;
+    let nk_gradient_reference = background_geometry.positioning_area.generated_image_box();
+    let nk_image_reference = background_geometry.positioning_area.intrinsic_image_box();
     let nk_background_clip = background_geometry.painting_box;
+    let nk_gradient_area = LayerPaintArea::new(
+        nk_gradient_reference,
+        background_geometry.image_destination_box,
+    );
     let force_background_clip = child.fragmentation.reference_slice.is_some()
         || *nk_bg_clip != BackgroundClip::Border
         || nk_background_clip != nk_border_box;
@@ -249,11 +255,13 @@ pub(super) fn render_nested_container(
                     content,
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
-                    nk_box_transform,
-                    nk_paint_geometry,
-                    *background_color,
-                    border,
-                    nested_kids,
+                    AffineSolidGroup {
+                        transform: nk_box_transform,
+                        geometry: nk_paint_geometry,
+                        background: *background_color,
+                        border,
+                        children: nested_kids,
+                    },
                 )
             }
         {
@@ -406,10 +414,7 @@ pub(super) fn render_nested_container(
                             || nk_bg_svg.is_some(),
                         nk_bg_blend_mode,
                     ),
-                    nk_background_reference.left,
-                    nk_background_reference.bottom,
-                    nk_background_reference.width,
-                    nk_background_reference.height,
+                    nk_gradient_area,
                     ctx.shadings,
                     ctx.shading_counter,
                     ctx.text.pdf_writer,
@@ -435,10 +440,7 @@ pub(super) fn render_nested_container(
                 render_radial_gradient(
                     content,
                     &gradient,
-                    nk_background_reference.left,
-                    nk_background_reference.bottom,
-                    nk_background_reference.width,
-                    nk_background_reference.height,
+                    nk_gradient_area,
                     ctx.shadings,
                     ctx.shading_counter,
                     ctx.text.pdf_writer,
@@ -464,10 +466,7 @@ pub(super) fn render_nested_container(
                 render_conic_gradient(
                     content,
                     &gradient,
-                    nk_background_reference.left,
-                    nk_background_reference.bottom,
-                    nk_background_reference.width,
-                    nk_background_reference.height,
+                    nk_gradient_area,
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                 );
@@ -496,8 +495,8 @@ pub(super) fn render_nested_container(
                         Some(ctx.page_ext_gstates),
                     ),
                     PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                        nk_background_reference.into(),
-                        nk_background_clip.rect.into(),
+                        nk_image_reference.into(),
+                        background_geometry.image_destination_box.into(),
                         nk_background_clip.radii,
                         *nk_bg_blur,
                         *nk_bg_size,

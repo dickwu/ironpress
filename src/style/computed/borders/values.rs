@@ -102,10 +102,9 @@ fn parse_side(
             side.specified_width = width;
         } else if let Some(border_style) = parse_border_style(token) {
             side.style = border_style;
-        } else if let Some(parsed_color) = parse_border_color(token) {
-            color = Some(parsed_color);
         } else {
-            return None;
+            let parsed_color = parse_border_color(token)?;
+            color = Some(parsed_color);
         }
     }
     side.color = color.unwrap_or(SpecifiedColor::CurrentColor);

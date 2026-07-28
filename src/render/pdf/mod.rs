@@ -149,10 +149,10 @@ use page_paint_plan::{ElementPaintPhase, plan_page_elements};
 #[cfg(test)]
 use patterns::PdfTilingPattern;
 use patterns::{
-    PdfFunctionPattern, PdfPatternEntry, PdfPatternGeometryFormat, PdfShadingPattern,
-    PdfTilingPatternEntry, PdfTilingPatternTarget, RepeatModes, gradient_layer_pattern,
-    paint_css_box_pattern, paint_css_page_pattern, paint_distributed_tiles, paint_shading_pattern,
-    paint_tiling_pattern,
+    LayerPaintArea, PdfFunctionPattern, PdfPatternEntry, PdfPatternGeometryFormat,
+    PdfShadingPattern, PdfTilingPatternEntry, PdfTilingPatternTarget, RepeatModes,
+    gradient_layer_pattern, paint_css_box_pattern, paint_css_page_pattern, paint_distributed_tiles,
+    paint_shading_pattern, paint_tiling_pattern,
 };
 use pdf_text::{build_tounicode_cmap, escape_pdf_string};
 #[allow(unused_imports)]

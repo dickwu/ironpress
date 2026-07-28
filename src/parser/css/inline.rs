@@ -86,10 +86,8 @@ pub(super) fn apply_declaration(map: &mut StyleMap, raw_prop: &str, val: &str, i
         }
     }
 
-    if prop == "background-image" {
-        if apply_background_image_value(map, val.trim(), is_important) {
-            return;
-        }
+    if prop == "background-image" && apply_background_image_value(map, val.trim(), is_important) {
+        return;
     }
 
     if prop == "background-position-x" || prop == "background-position-y" {

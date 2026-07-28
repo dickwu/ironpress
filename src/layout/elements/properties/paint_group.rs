@@ -109,8 +109,8 @@ impl BoxTransform {
     ) -> Option<CssAffineMatrix> {
         let transform = self.value?;
         let reference_box = match self.reference_box {
-            TransformBox::ContentBox | TransformBox::FillBox => border_box.inset(content_insets),
-            TransformBox::BorderBox | TransformBox::StrokeBox | TransformBox::ViewBox => border_box,
+            TransformBox::Content | TransformBox::Fill => border_box.inset(content_insets),
+            TransformBox::Border | TransformBox::Stroke | TransformBox::View => border_box,
         };
         let (origin_x, origin_y) = self
             .origin
@@ -205,7 +205,7 @@ mod tests {
                 offset: CssVector::new(100.0, 0.0),
                 percentages: PercentageAxes::new(true, false),
             }),
-            reference_box: TransformBox::ContentBox,
+            reference_box: TransformBox::Content,
             ..Default::default()
         };
 

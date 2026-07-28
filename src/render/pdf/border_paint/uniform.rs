@@ -2,9 +2,11 @@ use super::*;
 
 /// Paint a square solid fragment with an omitted physical edge.
 ///
-/// CSS fragmentation leaves the omitted edge open. Rectangle bands are the
-/// exact union of the remaining sides, have no shared-area overpaint, and
-/// preserve the top-down CSS coordinate serialization used by browser PDFs.
+/// CSS fragmentation leaves the omitted edge open. The remaining full-span
+/// rectangles overlap at the corners instead of merely meeting at independently
+/// antialiased endpoints. Opaque source paint uses the same full-span rectangle
+/// decomposition as browser PDF output. Translucent source paint accumulates
+/// the rectangles into one compound fill so their overlap is composited once.
 pub(super) fn paint_open_square_solid_border(
     content: &mut String,
     border_box: PdfRect,
@@ -24,43 +26,23 @@ pub(super) fn paint_open_square_solid_border(
         return false;
     }
 
-    let vertical_bottom = border_box.bottom + widths.bottom;
-    let vertical_height = border_box.height - widths.vertical();
-    let bands = PhysicalEdges::new(
-        PdfRect::new(
-            border_box.left,
-            border_box.top() - widths.top,
-            border_box.width,
-            widths.top,
-        ),
-        PdfRect::new(
-            border_box.right() - widths.right,
-            vertical_bottom,
-            widths.right,
-            vertical_height,
-        ),
-        PdfRect::new(
-            border_box.left,
-            border_box.bottom,
-            border_box.width,
-            widths.bottom,
-        ),
-        PdfRect::new(
-            border_box.left,
-            vertical_bottom,
-            widths.left,
-            vertical_height,
-        ),
-    );
+    let bands =
+        SquareBorderBandGeometry::between(border_box, EdgeSizes::ZERO, widths).full_span_sides();
 
     let alpha = begin_border_alpha(content, page_ext_gstates, alpha_counter, color.alpha());
     content.push_str(&PdfRgb::from(color).fill_operator());
+    let compound_fill = !color.is_opaque();
     for edge in PhysicalSide::ALL {
         let band = *bands.get(edge);
         if border.get(edge).paints() && !band.is_empty() {
             content.push_str(&band.rect_path());
-            content.push_str("f\n");
+            if !compound_fill {
+                content.push_str("f\n");
+            }
         }
+    }
+    if compound_fill {
+        content.push_str("f\n");
     }
     end_border_alpha(content, alpha);
     true

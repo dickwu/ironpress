@@ -118,7 +118,7 @@ impl PdfPaintSpace {
 /// it, the print-device coordinate system. Normal page content stays in its
 /// native page-point space: composing device-scale inverses there causes
 /// one-device-pixel edge differences in an otherwise identical PDF.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(super) struct PageContentTransform {
     page_size: Option<PdfVector>,
     content_scale: PrintContentScale,
@@ -227,14 +227,16 @@ impl PdfDeviceSpace {
         let outer_layout_scale =
             PageContentTransform::DEVICE_TO_PAGE * PageContentTransform::POINT_TO_DEVICE;
         let inverse = outer_layout_scale.recip();
-        let scale_x = edges
-            .touches_horizontal_axis()
-            .then_some(inverse)
-            .unwrap_or(1.0);
-        let scale_y = edges
-            .touches_vertical_axis()
-            .then_some(inverse)
-            .unwrap_or(1.0);
+        let scale_x = if edges.touches_horizontal_axis() {
+            inverse
+        } else {
+            1.0
+        };
+        let scale_y = if edges.touches_vertical_axis() {
+            inverse
+        } else {
+            1.0
+        };
         let translate_y = if edges.touches_vertical_axis() {
             -self.page_height * (1.0 - outer_layout_scale) * inverse
         } else {
@@ -639,15 +641,6 @@ impl PageContentTransform {
     fn translate_y(self) -> f64 {
         self.page_size
             .map_or(0.0, |size| f64::from(size.y) * (1.0 - self.scale()))
-    }
-}
-
-impl Default for PageContentTransform {
-    fn default() -> Self {
-        Self {
-            page_size: None,
-            content_scale: PrintContentScale::default(),
-        }
     }
 }
 

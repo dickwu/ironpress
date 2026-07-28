@@ -626,7 +626,7 @@ fn flex_intrinsic_basis_for_lightning(value: &str) -> Option<String> {
 /// `subgrid` track list. Subgrids can only carry optional bracketed line-name
 /// groups after the `subgrid` keyword; actual track sizes make the declaration
 /// invalid.
-fn subgrid_tracks_for_lightning<'a>(property: &str, value: &'a str) -> Option<&'static str> {
+fn subgrid_tracks_for_lightning(property: &str, value: &str) -> Option<&'static str> {
     if !matches!(property, "grid-template-columns" | "grid-template-rows") {
         return None;
     }

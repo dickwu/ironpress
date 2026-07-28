@@ -71,8 +71,13 @@ pub(super) fn render_flex_child(
     let flex_fragment_geometry = flex_box_geometry.fragment(Default::default());
     let flex_background =
         flex_box_geometry.background(*flex_bg_origin, *flex_bg_clip, *flex_border_radii);
-    let flex_background_reference = flex_background.positioning_box;
+    let flex_gradient_reference = flex_background.positioning_area.generated_image_box();
+    let flex_image_reference = flex_background.positioning_area.intrinsic_image_box();
     let flex_background_clip = flex_background.painting_box;
+    let flex_gradient_area = LayerPaintArea::new(
+        flex_gradient_reference,
+        flex_background.image_destination_box,
+    );
     let flex_group = PaintGroupScope::begin(content, child, flex_fragment_geometry, ctx);
 
     // A flex container that establishes a containing block records its
@@ -123,10 +128,7 @@ pub(super) fn render_flex_child(
                         || background_svg.is_some(),
                     child.paint.background.blend_mode.background_layer(0),
                 ),
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -144,10 +146,7 @@ pub(super) fn render_flex_child(
             render_radial_gradient(
                 content,
                 &gradient,
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -167,10 +166,7 @@ pub(super) fn render_flex_child(
             render_conic_gradient(
                 content,
                 &gradient,
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -201,8 +197,8 @@ pub(super) fn render_flex_child(
                     Some(&mut *ctx.page_ext_gstates),
                 ),
                 PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                    flex_background_reference.into(),
-                    flex_background_clip.rect.into(),
+                    flex_image_reference.into(),
+                    flex_background.image_destination_box.into(),
                     flex_background_clip.radii,
                     *background_blur_radius,
                     *flex_bg_size,

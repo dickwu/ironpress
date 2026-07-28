@@ -59,8 +59,17 @@ pub(in crate::render::pdf) fn render_flex_row(
     let flex_paint_box = flex_paint_geometry.border_box;
     let flex_background_geometry =
         flex_box_geometry.background(*flex_bg_origin, *flex_bg_clip, *flex_radii);
-    let flex_background_reference = flex_background_geometry.positioning_box;
+    let flex_gradient_reference = flex_background_geometry
+        .positioning_area
+        .generated_image_box();
+    let flex_image_reference = flex_background_geometry
+        .positioning_area
+        .intrinsic_image_box();
     let flex_background_clip = flex_background_geometry.painting_box;
+    let flex_gradient_area = LayerPaintArea::new(
+        flex_gradient_reference,
+        flex_background_geometry.image_destination_box,
+    );
     let flex_group = PaintGroupScope::begin(content, element, flex_fragment_geometry, ctx);
 
     if phase.paints_decoration() {
@@ -103,10 +112,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                         || background_svg.is_some(),
                     element.paint.background.blend_mode.background_layer(0),
                 ),
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -125,10 +131,7 @@ pub(in crate::render::pdf) fn render_flex_row(
             render_radial_gradient(
                 content,
                 &gradient,
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -149,10 +152,7 @@ pub(in crate::render::pdf) fn render_flex_row(
             render_conic_gradient(
                 content,
                 &gradient,
-                flex_background_reference.left,
-                flex_background_reference.bottom,
-                flex_background_reference.width,
-                flex_background_reference.height,
+                flex_gradient_area,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -185,8 +185,8 @@ pub(in crate::render::pdf) fn render_flex_row(
                     Some(ctx.page_ext_gstates),
                 ),
                 PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                    flex_background_reference.into(),
-                    flex_background_clip.rect.into(),
+                    flex_image_reference.into(),
+                    flex_background_geometry.image_destination_box.into(),
                     flex_background_clip.radii,
                     *background_blur_radius,
                     *flex_bg_size,
@@ -397,8 +397,11 @@ pub(in crate::render::pdf) fn render_flex_row(
                         Some(ctx.page_ext_gstates),
                     ),
                     PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
-                        cell_background.positioning_box.into(),
-                        cell_background_clip.rect.into(),
+                        cell_background
+                            .positioning_area
+                            .intrinsic_image_box()
+                            .into(),
+                        cell_background.image_destination_box.into(),
                         cell_background_clip.radii,
                         cell.paint.background.layers.blur_radius,
                         cell.paint.background.layers.size,
@@ -505,9 +508,10 @@ pub(in crate::render::pdf) fn render_flex_row(
                         render_text_emphasis_marks(
                             content,
                             run,
-                            x,
-                            text_y,
-                            run.metadata.emphasis.color,
+                            TextEmphasisPlacement {
+                                origin: PdfPoint::new(x, text_y),
+                                color: run.metadata.emphasis.color,
+                            },
                             ctx.text.custom_fonts,
                             ctx.text.prepared_custom_fonts,
                             ctx.text.pdf_writer,

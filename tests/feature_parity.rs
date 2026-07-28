@@ -15,6 +15,7 @@
 mod parity_support;
 
 #[test]
+#[ignore = "run through scripts/parity.sh so the durable report has an invocation identity"]
 fn feature_parity() -> Result<(), String> {
     parity_support::run()
 }

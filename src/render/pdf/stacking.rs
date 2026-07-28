@@ -94,7 +94,7 @@ impl StackingTraversal {
         }
     }
 
-    pub(super) const fn marker(&self) -> usize {
+    pub(super) fn marker(&self) -> usize {
         self.deferred.len()
     }
 

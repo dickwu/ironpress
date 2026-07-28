@@ -132,12 +132,16 @@ pub(crate) fn emphasis_mark_run(run: &TextRun) -> TextRun {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct TextEmphasisPlacement {
+    pub(super) origin: PdfPoint,
+    pub(super) color: crate::types::Color,
+}
+
 pub(super) fn render_text_emphasis_marks(
     content: &mut String,
     run: &TextRun,
-    x: f32,
-    text_y: f32,
-    color: crate::types::Color,
+    placement: TextEmphasisPlacement,
     custom_fonts: &HashMap<String, TtfFont>,
     prepared_custom_fonts: &PreparedCustomFonts,
     pdf_writer: &mut PdfWriter,
@@ -145,14 +149,15 @@ pub(super) fn render_text_emphasis_marks(
 ) {
     let metrics = TextEmphasisMetrics::from_run(run);
     let mut mark = emphasis_mark_run(run);
-    mark.color = color;
+    mark.color = placement.color;
     // Emphasis marks are ruby annotations (css-text-decor-4 §3.4). Chrome
     // resolves the annotation's inline extent upward to its CSS-pixel grid
     // before centering it over the base character.
     let mark_width =
         crate::fonts::ceil_to_css_pixel(estimate_run_width_with_fonts(&mark, custom_fonts));
-    let mark_baseline = crate::fonts::round_to_css_pixel(text_y + metrics.mark_baseline_offset);
-    let mut cx = x;
+    let mark_baseline =
+        crate::fonts::round_to_css_pixel(placement.origin.y + metrics.mark_baseline_offset);
+    let mut cx = placement.origin.x;
     for ch in run.text.chars() {
         let chs = ch.to_string();
         let adv = crate::layout::text::estimate_word_width(

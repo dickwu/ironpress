@@ -385,17 +385,21 @@ pub(super) fn render_affine_solid_box(
 /// Paint an axis-aligned transformed solid group as one device-space Form.
 /// Only contained, absolutely positioned, effect-free solid child containers
 /// are accepted; every other subtree stays on the general renderer.
+pub(super) struct AffineSolidGroup<'a> {
+    pub(super) transform: &'a BoxTransform,
+    pub(super) geometry: PaintBoxGeometry,
+    pub(super) background: Option<crate::types::Color>,
+    pub(super) border: &'a LayoutBorder,
+    pub(super) children: &'a [LayoutNode],
+}
+
 pub(super) fn render_affine_solid_group(
     content: &mut String,
     writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
-    box_transform: &BoxTransform,
-    geometry: PaintBoxGeometry,
-    background: Option<crate::types::Color>,
-    border: &LayoutBorder,
-    children: &[LayoutNode],
+    group: AffineSolidGroup<'_>,
 ) -> bool {
-    let Some(transform) = box_transform.value.as_ref() else {
+    let Some(transform) = group.transform.value.as_ref() else {
         return false;
     };
     if !matches!(transform, Transform::Scale(_)) {
@@ -404,13 +408,13 @@ pub(super) fn render_affine_solid_group(
     let Some(device) = writer.page_content_transform.device_space() else {
         return false;
     };
-    let reference = geometry.transform_reference(box_transform);
+    let reference = group.geometry.transform_reference(group.transform);
     let Some(paint) = AffineSolidBox::from_layout(
-        geometry.border_box,
+        group.geometry.border_box,
         reference.local_pivot(),
         reference.size(),
-        background,
-        border,
+        group.background,
+        group.border,
     ) else {
         return false;
     };
@@ -420,7 +424,8 @@ pub(super) fn render_affine_solid_group(
     ) else {
         return false;
     };
-    let Some(children) = children
+    let Some(children) = group
+        .children
         .iter()
         .map(|child| LocalSolidBox::from_absolute_child(child, paint))
         .collect::<Option<Vec<_>>>()

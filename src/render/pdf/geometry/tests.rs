@@ -126,17 +126,19 @@ fn box_geometry_derives_every_box_from_one_border_box() {
 }
 
 #[test]
-fn box_paint_keeps_authored_background_phase_and_snaps_only_the_destination() {
-    let layout = LayoutBoxGeometry::new(
+fn box_paint_uses_distinct_intrinsic_and_generated_background_geometry() {
+    let border = PhysicalEdges::uniform(LayoutBorderSide::solid(0.75, Color::BLACK));
+    let layout = LayoutBoxGeometry::from_layout(
         PdfRect::from_top(4.125, 100.125, 108.75, 30.375),
-        EdgeSizes::uniform(0.75),
+        &border,
         EdgeSizes::new(3.75, 0.0, 0.0, 5.625),
+        None,
     );
     let page = super::super::transforms::PageContentTransform::print(PdfVector::new(150.0, 150.0));
     let geometry = layout.for_paint(page, BoxPaintGrid::Page);
     let background = geometry.background(
         BackgroundOrigin::Padding,
-        BackgroundClip::Padding,
+        BackgroundClip::Border,
         CornerRadii::ZERO,
     );
 
@@ -145,16 +147,77 @@ fn box_paint_keeps_authored_background_phase_and_snaps_only_the_destination() {
         page.snap_layout_box(layout.border_box)
     );
     assert_eq!(
-        background.positioning_box,
+        background.positioning_area.intrinsic_image_box(),
         layout.background_origin_box(BackgroundOrigin::Padding)
     );
     assert_eq!(
-        background.painting_box.rect,
+        background.positioning_area.generated_image_box(),
+        geometry.painting().padding_box()
+    );
+    assert_eq!(background.painting_box.rect, geometry.painting().border_box);
+    assert_eq!(
+        background.image_destination_box,
         geometry.painting().padding_box()
     );
     assert_ne!(
-        background.positioning_box,
+        background.positioning_area.intrinsic_image_box(),
+        background.positioning_area.generated_image_box()
+    );
+    assert_eq!(
+        background.positioning_area.generated_image_box().width,
+        geometry.painting().padding_box().width
+    );
+}
+
+#[test]
+fn unobscured_background_still_snaps_generated_image_geometry() {
+    let layout = LayoutBoxGeometry::new(
+        PdfRect::from_top(4.125, 100.125, 108.75, 30.375),
+        EdgeSizes::uniform(0.75),
+        EdgeSizes::ZERO,
+    );
+    let page = super::super::transforms::PageContentTransform::print(PdfVector::new(150.0, 150.0));
+    let geometry = layout.for_paint(page, BoxPaintGrid::Page);
+    let background = geometry.background(
+        BackgroundOrigin::Padding,
+        BackgroundClip::Border,
+        CornerRadii::ZERO,
+    );
+
+    assert_eq!(
+        background.positioning_area.generated_image_box(),
         geometry.painting().padding_box()
+    );
+    assert_eq!(
+        background.positioning_area.intrinsic_image_box(),
+        layout.padding_box()
+    );
+    assert_eq!(
+        background.image_destination_box,
+        geometry.painting().border_box
+    );
+}
+
+#[test]
+fn rounded_background_retains_its_css_painting_box() {
+    let border = PhysicalEdges::uniform(LayoutBorderSide::solid(6.0, Color::BLACK));
+    let layout = LayoutBoxGeometry::from_layout(
+        PdfRect::from_top(18.75, 95.25, 127.5, 75.0),
+        &border,
+        EdgeSizes::ZERO,
+        None,
+    );
+    let page = super::super::transforms::PageContentTransform::print(PdfVector::new(168.0, 114.0));
+    let geometry = layout.for_paint(page, BoxPaintGrid::Page);
+    let background = geometry.background(
+        BackgroundOrigin::Padding,
+        BackgroundClip::Border,
+        CornerRadii::circular(30.0),
+    );
+
+    assert_eq!(
+        background.image_destination_box,
+        background.painting_box.rect
     );
 }
 
@@ -171,7 +234,7 @@ fn content_box_transform_reference_retains_used_border_and_padding() {
             y_fraction: 0.0,
             ..Default::default()
         },
-        reference_box: TransformBox::ContentBox,
+        reference_box: TransformBox::Content,
         ..Default::default()
     });
 
@@ -180,7 +243,7 @@ fn content_box_transform_reference_retains_used_border_and_padding() {
     assert_eq!(top_left.local_pivot(), PdfVector::new(12.0, 6.0));
 
     let center = geometry.transform_reference(&BoxTransform {
-        reference_box: TransformBox::ContentBox,
+        reference_box: TransformBox::Content,
         ..Default::default()
     });
     assert_eq!(center.pivot(), PdfPoint::new(62.0, 62.0));

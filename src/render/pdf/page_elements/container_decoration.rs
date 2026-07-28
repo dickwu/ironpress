@@ -56,8 +56,20 @@ pub(super) fn paint_container_decoration(
         // The box `background-clip` confines the painted fill to.
         let background_geometry = geometry.background(*c_bg_origin, *c_bg_clip, *c_border_radii);
         let c_clip_box = background_geometry.painting_box;
-        let c_reference = background_geometry.positioning_box;
+        let c_image_destination = background_geometry.image_destination_box;
+        let c_gradient_reference = background_geometry.positioning_area.generated_image_box();
+        let c_image_reference = background_geometry.positioning_area.intrinsic_image_box();
         let c_needs_clip = *c_bg_clip != BackgroundClip::Border || c_clip_box != container_box;
+        let gradient_area = |attachment| {
+            if attachment == Some(BackgroundAttachment::Fixed) {
+                LayerPaintArea::new(
+                    PdfRect::new(0.0, 0.0, page_size.width, page_size.height),
+                    c_clip_box.rect,
+                )
+            } else {
+                LayerPaintArea::new(c_gradient_reference, c_image_destination)
+            }
+        };
 
         // Draw background
         if let Some(background) = background_color {
@@ -121,17 +133,6 @@ pub(super) fn paint_container_decoration(
             if gradient_clip {
                 c_clip_box.push_clip(content);
             }
-            let (grad_x, grad_y, grad_w, grad_h) =
-                if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                    (0.0, 0.0, page_size.width, page_size.height)
-                } else {
-                    (
-                        c_reference.left,
-                        c_reference.bottom,
-                        c_reference.width,
-                        c_reference.height,
-                    )
-                };
             render_linear_gradient(
                 content,
                 &gradient,
@@ -140,10 +141,7 @@ pub(super) fn paint_container_decoration(
                     c_bg_radial.is_some() || c_bg_conic.is_some() || c_bg_svg.is_some(),
                     c_bg_blend_mode,
                 ),
-                grad_x,
-                grad_y,
-                grad_w,
-                grad_h,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -172,10 +170,7 @@ pub(super) fn paint_container_decoration(
             render_radial_gradient(
                 content,
                 &gradient,
-                c_reference.left,
-                c_reference.bottom,
-                c_reference.width,
-                c_reference.height,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -204,10 +199,7 @@ pub(super) fn paint_container_decoration(
             render_conic_gradient(
                 content,
                 &gradient,
-                c_reference.left,
-                c_reference.bottom,
-                c_reference.width,
-                c_reference.height,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -230,8 +222,8 @@ pub(super) fn paint_container_decoration(
                 begin_blend_mode(content, ctx.page_ext_gstates, c_bg_blend_mode);
             }
             let paint = BackgroundPaintContext::new(
-                c_reference.into(),
-                c_clip_box.rect.into(),
+                c_image_reference.into(),
+                c_image_destination.into(),
                 c_clip_box.radii,
                 *c_bg_blur,
                 *c_bg_size,
@@ -270,17 +262,6 @@ pub(super) fn paint_container_decoration(
             if gradient_clip {
                 c_clip_box.push_clip(content);
             }
-            let (grad_x, grad_y, grad_w, grad_h) =
-                if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                    (0.0, 0.0, page_size.width, page_size.height)
-                } else {
-                    (
-                        c_reference.left,
-                        c_reference.bottom,
-                        c_reference.width,
-                        c_reference.height,
-                    )
-                };
             render_linear_gradient(
                 content,
                 &gradient,
@@ -289,10 +270,7 @@ pub(super) fn paint_container_decoration(
                     c_bg_radial.is_some() || c_bg_conic.is_some() || c_bg_svg.is_some(),
                     c_bg_blend_mode,
                 ),
-                grad_x,
-                grad_y,
-                grad_w,
-                grad_h,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,

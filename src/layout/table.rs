@@ -474,10 +474,14 @@ impl TableRowNode<'_> {
     }
 }
 
+struct GeneratedCellLayout<'a> {
+    runs: &'a mut Vec<TextRun>,
+    blocks: &'a mut Vec<LayoutNode>,
+}
+
 fn append_generated_cell_layout(
     generated: Option<GeneratedBox<'_>>,
-    runs: &mut Vec<TextRun>,
-    blocks: &mut Vec<LayoutNode>,
+    output: GeneratedCellLayout<'_>,
     parent_style: &ComputedStyle,
     available_width: f32,
     fonts: &HashMap<String, TtfFont>,
@@ -496,10 +500,10 @@ fn append_generated_cell_layout(
             filter_defs,
             counter_state,
         ) {
-            blocks.push(block);
+            output.blocks.push(block);
         }
     } else {
-        generated.append_inline(runs, fonts, counter_state);
+        generated.append_inline(output.runs, fonts, counter_state);
     }
 }
 
@@ -2860,7 +2864,6 @@ pub(crate) fn flatten_table(
                             ..Default::default()
                         },
                         table: TableCellState::default(),
-                        ..Default::default()
                     });
                     col_pos += span;
                 }
@@ -3091,8 +3094,10 @@ pub(crate) fn flatten_table(
             }
             append_generated_cell_layout(
                 authored_generated.before(),
-                &mut runs,
-                &mut nested_rows,
+                GeneratedCellLayout {
+                    runs: &mut runs,
+                    blocks: &mut nested_rows,
+                },
                 &cell_content_style,
                 cell_inner,
                 fonts,
@@ -3134,8 +3139,10 @@ pub(crate) fn flatten_table(
             }
             append_generated_cell_layout(
                 authored_generated.after(),
-                &mut runs,
-                &mut nested_rows,
+                GeneratedCellLayout {
+                    runs: &mut runs,
+                    blocks: &mut nested_rows,
+                },
                 &cell_content_style,
                 cell_inner,
                 fonts,
@@ -3224,7 +3231,6 @@ pub(crate) fn flatten_table(
                 table: TableCellState {
                     hide_if_empty,
                     clips: cell_style.overflow.clips(),
-                    ..Default::default()
                 },
             };
             let collapsed_columns = column_info
@@ -3661,9 +3667,11 @@ pub(crate) fn flatten_table(
         ..Default::default()
     };
     principal.positioning.insets.left += table_offset.value();
-    principal.positioning.containing_block_depth = establishes_containing_block
-        .then_some(context.positioned_depth)
-        .unwrap_or(0);
+    principal.positioning.containing_block_depth = if establishes_containing_block {
+        context.positioned_depth
+    } else {
+        0
+    };
     output.push(Table::new(principal).boxed());
 }
 

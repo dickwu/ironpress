@@ -127,9 +127,10 @@ pub(in crate::render::pdf) fn paint_horizontal_line_text(
             render_text_emphasis_marks(
                 content,
                 decoration.run,
-                *x,
-                paint.origin.y,
-                decoration.run.metadata.emphasis.color,
+                TextEmphasisPlacement {
+                    origin: PdfPoint::new(*x, paint.origin.y),
+                    color: decoration.run.metadata.emphasis.color,
+                },
                 custom_fonts,
                 prepared_custom_fonts,
                 pdf_writer,
@@ -273,12 +274,14 @@ impl<'a> HorizontalRunDecorations<'a> {
                     content,
                     decoration,
                     origin_index,
-                    color,
-                    DecorationLine::Underline,
-                    start,
-                    end,
-                    self.baseline + axis + block_offset,
-                    axis,
+                    DecorationStroke::new(
+                        color,
+                        DecorationLine::Underline,
+                        start,
+                        end,
+                        self.baseline + axis + block_offset,
+                        axis,
+                    ),
                 );
             }
             if decoration.lines.line_through && phase.paints_above_text() {
@@ -287,12 +290,14 @@ impl<'a> HorizontalRunDecorations<'a> {
                     content,
                     decoration,
                     origin_index,
-                    color,
-                    DecorationLine::LineThrough,
-                    start,
-                    end,
-                    self.baseline + axis + block_offset,
-                    axis,
+                    DecorationStroke::new(
+                        color,
+                        DecorationLine::LineThrough,
+                        start,
+                        end,
+                        self.baseline + axis + block_offset,
+                        axis,
+                    ),
                 );
             }
             if decoration.lines.overline && phase.paints_below_text() {
@@ -307,12 +312,14 @@ impl<'a> HorizontalRunDecorations<'a> {
                     content,
                     decoration,
                     origin_index,
-                    color,
-                    DecorationLine::Overline,
-                    start,
-                    end,
-                    self.baseline + axis + block_offset,
-                    axis,
+                    DecorationStroke::new(
+                        color,
+                        DecorationLine::Overline,
+                        start,
+                        end,
+                        self.baseline + axis + block_offset,
+                        axis,
+                    ),
                 );
             }
         }
@@ -333,44 +340,39 @@ impl<'a> HorizontalRunDecorations<'a> {
         content: &mut String,
         decoration: &crate::style::computed::TextDecoration,
         origin_index: usize,
-        color: (f32, f32, f32),
-        line: DecorationLine,
-        start: f32,
-        end: f32,
-        y: f32,
-        axis_from_baseline: f32,
+        stroke: DecorationStroke,
     ) {
         let mut skip_intervals = crate::render::text_decoration::ink_skip_intervals(
             self.run,
             decoration,
-            line,
-            axis_from_baseline,
+            stroke.line,
+            stroke.axis_from_baseline,
             self.custom_fonts,
         )
         .into_iter()
         .map(|interval| interval.translated(self.origin))
         .collect::<Vec<_>>();
-        if let Some(previous_end) =
-            self.previous_ink_skip_end(decoration, origin_index, line, axis_from_baseline)
-        {
+        if let Some(previous_end) = self.previous_ink_skip_end(
+            decoration,
+            origin_index,
+            stroke.line,
+            stroke.axis_from_baseline,
+        ) {
             skip_intervals.push(crate::render::text_decoration::InlineInterval::new(
-                start,
+                stroke.span.start,
                 previous_end,
             ));
         }
-        for segment in crate::render::text_decoration::visible_segments(
-            crate::render::text_decoration::InlineInterval::new(start, end),
-            skip_intervals,
-        ) {
+        for segment in crate::render::text_decoration::visible_segments(stroke.span, skip_intervals)
+        {
             push_decoration_stroke(
                 content,
-                color,
                 self.run,
                 decoration,
-                line,
-                segment.start,
-                segment.end,
-                y,
+                DecorationStroke {
+                    span: segment,
+                    ..stroke
+                },
             );
         }
     }

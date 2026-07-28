@@ -163,9 +163,9 @@ fn evaluate_literal(literal: MathLiteral, context: EvaluationContext) -> Option<
         )),
         MathLiteral::Resolution(value) => Some(MathValue::fixed(
             match value.unit {
-                ResolutionUnit::DotsPerInch => value.value,
-                ResolutionUnit::DotsPerCentimeter => value.value * 2.54,
-                ResolutionUnit::DotsPerPixel => value.value * 96.0,
+                ResolutionUnit::Inch => value.value,
+                ResolutionUnit::Centimeter => value.value * 2.54,
+                ResolutionUnit::Pixel => value.value * 96.0,
             },
             MathType::RESOLUTION,
         )),

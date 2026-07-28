@@ -350,7 +350,6 @@ pub(super) fn blurred_simple_container_group(
                                     .synthetic_bold_stroke_width(self.fonts)
                                     .unwrap_or_default(),
                                 shear: run.synthetic_italic_shear(self.fonts).unwrap_or_default(),
-                                ..Default::default()
                             },
                             origin: crate::render::blur::GlyphBaselineOrigin::top_down(
                                 run_x, baseline_y,

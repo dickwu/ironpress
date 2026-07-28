@@ -314,7 +314,6 @@ pub(super) fn make_rule_container(
             width,
             color,
             style: rule_style,
-            ..Default::default()
         },
     }
     .boxed()

@@ -341,7 +341,11 @@ pub(crate) fn inline_boundary_kerning_advance(
         return 0.0;
     };
     let advance = pair_width - left_width - right_width;
-    advance.is_finite().then_some(advance).unwrap_or_default()
+    if advance.is_finite() {
+        advance
+    } else {
+        Default::default()
+    }
 }
 
 /// Try to shape `run` with the Unicode fallback font.
@@ -902,7 +906,7 @@ mod tests {
         )
         .unwrap();
         let fallback = crate::parser::ttf::parse_ttf(
-            std::fs::read("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc").unwrap(),
+            include_bytes!("../tests/fonts/IronpressCjkVertical.ttf").to_vec(),
         )
         .unwrap();
         let mut fonts = HashMap::new();
@@ -975,7 +979,7 @@ mod tests {
     #[test]
     fn vertical_shaping_uses_the_font_vertical_origin_and_advance() {
         let font = crate::parser::ttf::parse_ttf(
-            std::fs::read("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc").unwrap(),
+            include_bytes!("../tests/fonts/IronpressCjkVertical.ttf").to_vec(),
         )
         .unwrap();
 

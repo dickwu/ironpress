@@ -131,10 +131,7 @@
         render_radial_gradient(
             &mut content,
             &gradient,
-            0.0,
-            0.0,
-            1.0,
-            1.0,
+            LayerPaintArea::single(PdfRect::new(0.0, 0.0, 1.0, 1.0)),
             &mut shadings,
             &mut counter,
             &mut pdf_writer,

@@ -331,12 +331,16 @@ fn paint_slice(content: &mut String, form: &ImageRef, source: PdfRect, destinati
     content.push_str(&format!("/{} Do\nQ\n", form.name));
 }
 
+pub(super) struct BorderImageShadings<'a> {
+    pub(super) entries: &'a mut Vec<ShadingEntry>,
+    pub(super) counter: &'a mut usize,
+}
+
 pub(super) fn render_border_image(
     content: &mut String,
     border_image: &BorderImagePaint,
     geometry: PaintBoxGeometry,
-    shadings: &mut Vec<ShadingEntry>,
-    shading_counter: &mut usize,
+    shadings: BorderImageShadings<'_>,
     page_ext_gstates: &mut Vec<(String, f32)>,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
@@ -367,8 +371,8 @@ pub(super) fn render_border_image(
         &source,
         source_box,
         image_area,
-        shadings,
-        shading_counter,
+        shadings.entries,
+        shadings.counter,
         page_ext_gstates,
         pdf_writer,
         page_images,
@@ -481,7 +485,7 @@ mod tests {
             r#"<svg viewBox="0 0 2 1"><rect width="2" height="1"/></svg>"#,
         )
         .expect("valid SVG border image");
-        let mut source = ResolvedBorderImageSource::Svg(tree);
+        let mut source = ResolvedBorderImageSource::Svg(Box::new(tree));
 
         let geometry = source
             .prepare(PdfRect::new(0.0, 0.0, 120.0, 120.0))

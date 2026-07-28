@@ -458,12 +458,16 @@ impl InlineOffset {
         containing_width: f32,
         border_box_width: f32,
     ) -> Self {
-        let fixed_start = (!style.margin_left_auto)
-            .then_some(style.margin.left)
-            .unwrap_or_default();
-        let fixed_end = (!style.margin_right_auto)
-            .then_some(style.margin.right)
-            .unwrap_or_default();
+        let fixed_start = if !style.margin_left_auto {
+            style.margin.left
+        } else {
+            Default::default()
+        };
+        let fixed_end = if !style.margin_right_auto {
+            style.margin.right
+        } else {
+            Default::default()
+        };
         let free_space = (containing_width - border_box_width - fixed_start - fixed_end).max(0.0);
 
         let start = match (style.margin_left_auto, style.margin_right_auto) {

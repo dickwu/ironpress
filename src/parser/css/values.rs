@@ -337,10 +337,8 @@ fn radius_groups(value: &str) -> Option<(&str, Option<&str>)> {
         match ch {
             '(' => depth += 1,
             ')' => depth = depth.checked_sub(1)?,
-            '/' if depth == 0 => {
-                if slash.replace(index).is_some() {
-                    return None;
-                }
+            '/' if depth == 0 && slash.replace(index).is_some() => {
+                return None;
             }
             _ => {}
         }

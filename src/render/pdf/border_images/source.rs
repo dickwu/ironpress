@@ -38,7 +38,7 @@ pub(super) enum ResolvedBorderImageSource<'a> {
     Radial(&'a RadialGradient),
     Conic(&'a ConicGradient),
     Raster(crate::layout::engine::RasterImageAsset),
-    Svg(crate::parser::svg::SvgTree),
+    Svg(Box<crate::parser::svg::SvgTree>),
 }
 
 impl ResolvedBorderImageSource<'_> {
@@ -109,7 +109,7 @@ fn resolve_url_source(url: &str) -> Option<ResolvedBorderImageSource<'static>> {
         .as_deref()
         .is_some_and(|mime| !mime.contains("svg") && !mime.contains("xml"));
     if !skip_svg && let Some(tree) = crate::layout::images::try_parse_svg_bytes(&bytes) {
-        return Some(ResolvedBorderImageSource::Svg(tree));
+        return Some(ResolvedBorderImageSource::Svg(Box::new(tree)));
     }
     crate::layout::images::load_image_bytes(bytes).map(ResolvedBorderImageSource::Raster)
 }

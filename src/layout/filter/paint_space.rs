@@ -140,7 +140,7 @@ mod tests {
                     y_fraction: 0.0,
                     ..Default::default()
                 },
-                reference_box: TransformBox::BorderBox,
+                reference_box: TransformBox::Border,
                 ..Default::default()
             },
             ..Default::default()
@@ -197,7 +197,7 @@ mod tests {
                     y_fraction: 0.0,
                     ..Default::default()
                 },
-                reference_box: TransformBox::BorderBox,
+                reference_box: TransformBox::Border,
                 ..Default::default()
             },
             ..Default::default()

@@ -673,6 +673,177 @@
     ]
   },
   {
+    "id": "interactions-z-index-core-layers",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "core-layers-and-descendant-escape",
+    "description": "Flagrant overlaps cover positive and negative layers, auto/zero tree order, and a positive positioned descendant escaping an ordinary ancestor.",
+    "file": "cases/interactions/interactions-z-index-core-layers.html",
+    "interaction_of": [
+      "positioning",
+      "backgrounds-borders"
+    ],
+    "base_ids": [
+      "positioning-z-index-stacking",
+      "positioning-z-index-negative-behind-flow"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-z-index-context-boundaries",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "atomic-stacking-context-triggers",
+    "description": "Large overlaps distinguish descendant escape from atomic contexts created by integer z-index, fixed, sticky, opacity, transforms, perspective, filters, isolation, blending, and masking.",
+    "file": "cases/interactions/interactions-z-index-context-boundaries.html",
+    "interaction_of": [
+      "positioning",
+      "effects",
+      "filters",
+      "transforms",
+      "clip-mask"
+    ],
+    "base_ids": [
+      "positioning-z-index-stacking"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-z-index-flex-grid-items",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "static-flex-grid-items-and-order",
+    "description": "Flagrant flex and grid overlaps cover static integer z-index, order-modified painting, and atomic item contexts containing high-z descendants.",
+    "file": "cases/interactions/interactions-z-index-flex-grid-items.html",
+    "interaction_of": [
+      "positioning",
+      "flexbox",
+      "grid"
+    ],
+    "base_ids": [
+      "flexbox-z-index-static",
+      "grid-overlap-z-index"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-z-index-generated-replaced-svg",
+    "category": "interactions",
+    "feature": "z-index",
+    "subfeature": "generated-pseudo-raster-vector-content",
+    "description": "Large overlaps cover before/after pseudo-elements, generated PNG and SVG content, PNG and JPEG replaced elements, SVG images, and inline SVG paint order.",
+    "file": "cases/interactions/interactions-z-index-generated-replaced-svg.html",
+    "interaction_of": [
+      "positioning",
+      "generated-content",
+      "images-replaced"
+    ],
+    "base_ids": [
+      "positioning-z-index-stacking"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-grid-fragmentation-raster-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-raster",
+    "description": "A certificate-like fragmented fit-content grid has one huge raster corner tile that must paint only in its correct fragment while every flattened row and final marker survives.",
+    "file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",
+    "interaction_of": [
+      "grid",
+      "paged-media",
+      "backgrounds-borders",
+      "images-replaced"
+    ],
+    "base_ids": [
+      "grid-fit-content-track",
+      "grid-display-contents-flattens-children-into-grid"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-grid-fragmentation-jpeg-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-jpeg",
+    "description": "JPEG counterpart to the certificate reproduction: a conspicuous decoded tile must paint only in its first fragment while every flattened grid row and final marker survives.",
+    "file": "cases/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.html",
+    "interaction_of": [
+      "grid",
+      "paged-media",
+      "backgrounds-borders",
+      "images-replaced"
+    ],
+    "base_ids": [
+      "grid-fit-content-track",
+      "grid-display-contents-flattens-children-into-grid"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "interactions-grid-fragmentation-svg-background-single-owner",
+    "category": "interactions",
+    "feature": "fragmented-background-ownership",
+    "subfeature": "grid-fit-content-display-contents-svg",
+    "description": "SVG counterpart to the certificate raster stress case: one huge vector emblem must not be repainted on continuation pages, and all flattened grid rows remain visible.",
+    "file": "cases/interactions/interactions-grid-fragmentation-svg-background-single-owner.html",
+    "interaction_of": [
+      "grid",
+      "paged-media",
+      "backgrounds-borders",
+      "images-replaced"
+    ],
+    "base_ids": [
+      "grid-fit-content-track",
+      "grid-display-contents-flattens-children-into-grid",
+      "svg-as-img"
+    ],
+    "kind": "interaction",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
     "id": "interactions-cartesian-backgrounds-borders-x-backgrounds-borders",
     "category": "interactions",
     "feature": "supported-family-cartesian-product",
@@ -3234,16 +3405,16 @@
     "kind": "interaction",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Fragmentation 3 section 5.4 requires box-decoration-break:slice to render the unbroken box and then slice it, with no box-shadow drawn at a broken edge. WPT box-shadow-002 tests that rule directly, while box-shadow-005 reserves a shadow around every fragment for box-decoration-break:clone. Ironpress leaves the page 2/3 cut undecorated; Chromium paints the yellow inset-shadow band at both cut edges as if the fragments were cloned. Its PDF remains a compatibility canary, not a normative oracle, and the raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Fragmentation 3 section 5.4 requires box-decoration-break:slice to render the unbroken box and then slice it, with no box-shadow drawn at a broken edge. WPT box-shadow-002 tests that rule directly, while box-shadow-005 reserves a shadow around every fragment for box-decoration-break:clone. Ironpress leaves the page 2/3 cut undecorated; Chromium paints the yellow inset-shadow band at both cut edges as if the fragments were cloned. Its PDF remains a compatibility canary, not a normative oracle, and the raw shared-pdftoppm evidence remains reported."
+    }
   },
   {
     "id": "interactions-cartesian-effects-x-positioning",
@@ -6474,16 +6645,16 @@
     "kind": "interaction",
     "oracle": "chrome",
     "expected_support": "implemented",
-    "reference": {
-      "status": "disputed",
-      "note": "CSS Tables 3 section 4.1 defines the containing block generated by a positioned table wrapper as the area around which table margins are applied, explicitly including the area where the table border is drawn. Ironpress positions the absolute Bb from that border edge. Both the locked Chromium 150.0.7871.114 Foundation PDF and a fresh Chromium 150.0.7871.128 Foundation PDF instead inset it by the authored 2px table border on both axes; the specification identifies this behavior as a Chromium bug and interoperability risk. The Chromium PDF remains a compatibility canary rather than a normative geometry oracle, and the raw shared-pdftoppm evidence remains reported."
-    },
     "depends_on": [
       "probe-text-baseline",
       "probe-fill-box",
       "probe-border-box",
       "probe-color-swatch"
-    ]
+    ],
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Tables 3 section 4.1 defines the containing block generated by a positioned table wrapper as the area around which table margins are applied, explicitly including the area where the table border is drawn. Ironpress positions the absolute Bb from that border edge. Both the locked Chromium 150.0.7871.114 Foundation PDF and a fresh Chromium 150.0.7871.128 Foundation PDF instead inset it by the authored 2px table border on both axes; the specification identifies this behavior as a Chromium bug and interoperability risk. The Chromium PDF remains a compatibility canary rather than a normative geometry oracle, and the raw shared-pdftoppm evidence remains reported."
+    }
   },
   {
     "id": "interactions-cartesian-positioning-x-text-advanced",
@@ -7025,103 +7196,5 @@
       "probe-fill-box",
       "probe-border-box"
     ]
-  },
-  {
-    "id": "interactions-z-index-core-layers",
-    "category": "interactions",
-    "feature": "z-index",
-    "subfeature": "core-layers-and-descendant-escape",
-    "description": "Flagrant overlaps cover positive and negative layers, auto/zero tree order, and a positive positioned descendant escaping an ordinary ancestor.",
-    "file": "cases/interactions/interactions-z-index-core-layers.html",
-    "interaction_of": ["positioning", "backgrounds-borders"],
-    "base_ids": ["positioning-z-index-stacking", "positioning-z-index-negative-behind-flow"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-z-index-context-boundaries",
-    "category": "interactions",
-    "feature": "z-index",
-    "subfeature": "atomic-stacking-context-triggers",
-    "description": "Large overlaps distinguish descendant escape from atomic contexts created by integer z-index, fixed, sticky, opacity, transforms, perspective, filters, isolation, blending, and masking.",
-    "file": "cases/interactions/interactions-z-index-context-boundaries.html",
-    "interaction_of": ["positioning", "effects", "filters", "transforms", "clip-mask"],
-    "base_ids": ["positioning-z-index-stacking"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-z-index-flex-grid-items",
-    "category": "interactions",
-    "feature": "z-index",
-    "subfeature": "static-flex-grid-items-and-order",
-    "description": "Flagrant flex and grid overlaps cover static integer z-index, order-modified painting, and atomic item contexts containing high-z descendants.",
-    "file": "cases/interactions/interactions-z-index-flex-grid-items.html",
-    "interaction_of": ["positioning", "flexbox", "grid"],
-    "base_ids": ["flexbox-z-index-static", "grid-overlap-z-index"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-z-index-generated-replaced-svg",
-    "category": "interactions",
-    "feature": "z-index",
-    "subfeature": "generated-pseudo-raster-vector-content",
-    "description": "Large overlaps cover before/after pseudo-elements, generated PNG and SVG content, PNG and JPEG replaced elements, SVG images, and inline SVG paint order.",
-    "file": "cases/interactions/interactions-z-index-generated-replaced-svg.html",
-    "interaction_of": ["positioning", "generated-content", "images-replaced"],
-    "base_ids": ["positioning-z-index-stacking"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-grid-fragmentation-raster-background-single-owner",
-    "category": "interactions",
-    "feature": "fragmented-background-ownership",
-    "subfeature": "grid-fit-content-display-contents-raster",
-    "description": "A certificate-like fragmented fit-content grid has one huge raster corner tile that must paint only in its correct fragment while every flattened row and final marker survives.",
-    "file": "cases/interactions/interactions-grid-fragmentation-raster-background-single-owner.html",
-    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
-    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-grid-fragmentation-jpeg-background-single-owner",
-    "category": "interactions",
-    "feature": "fragmented-background-ownership",
-    "subfeature": "grid-fit-content-display-contents-jpeg",
-    "description": "JPEG counterpart to the certificate reproduction: a conspicuous decoded tile must paint only in its first fragment while every flattened grid row and final marker survives.",
-    "file": "cases/interactions/interactions-grid-fragmentation-jpeg-background-single-owner.html",
-    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
-    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
-  },
-  {
-    "id": "interactions-grid-fragmentation-svg-background-single-owner",
-    "category": "interactions",
-    "feature": "fragmented-background-ownership",
-    "subfeature": "grid-fit-content-display-contents-svg",
-    "description": "SVG counterpart to the certificate raster stress case: one huge vector emblem must not be repainted on continuation pages, and all flattened grid rows remain visible.",
-    "file": "cases/interactions/interactions-grid-fragmentation-svg-background-single-owner.html",
-    "interaction_of": ["grid", "paged-media", "backgrounds-borders", "images-replaced"],
-    "base_ids": ["grid-fit-content-track", "grid-display-contents-flattens-children-into-grid", "svg-as-img"],
-    "kind": "interaction",
-    "oracle": "chrome",
-    "expected_support": "implemented",
-    "depends_on": ["probe-fill-box", "probe-block-flow"]
   }
 ]

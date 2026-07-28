@@ -24,7 +24,7 @@ impl DiscreteGaussianPlan {
         }
         let window = width as u32;
         let pass_len = window.checked_sub(1)?;
-        let even = window.is_multiple_of(2);
+        let even = window % 2 == 0;
         let border = if even {
             window.checked_mul(3)?.checked_div(2)?.checked_sub(1)?
         } else {
@@ -171,8 +171,8 @@ impl GaussianLinePass {
     }
 
     fn advance(&mut self, leading: BlurPixel) -> Option<[u8; 4]> {
-        for channel in 0..4 {
-            self.sums[0][channel] = self.sums[0][channel].checked_add(leading[channel])?;
+        for (channel, leading) in leading.into_iter().enumerate() {
+            self.sums[0][channel] = self.sums[0][channel].checked_add(leading)?;
             self.sums[1][channel] = self.sums[1][channel].checked_add(self.sums[0][channel])?;
             self.sums[2][channel] = self.sums[2][channel].checked_add(self.sums[1][channel])?;
         }

@@ -170,7 +170,7 @@ impl PageMarginBoxFrame {
     ) -> PageMarginBoxLayout {
         use crate::parser::css::{MarginBoxAlign, MarginBoxPosition};
 
-        let box_width = declared_width.unwrap_or_else(|| match position {
+        let box_width = declared_width.unwrap_or(match position {
             MarginBoxPosition::TopLeftCorner | MarginBoxPosition::BottomLeftCorner => {
                 self.margin.left
             }

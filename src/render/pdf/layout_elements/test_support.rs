@@ -107,8 +107,11 @@ pub(in crate::render::pdf) fn render_nested_text_block(
             ),
             PdfBackgroundPaintContext::local(
                 BackgroundPaintContext::new(
-                    background_geometry.positioning_box.into(),
-                    background_clip.rect.into(),
+                    background_geometry
+                        .positioning_area
+                        .intrinsic_image_box()
+                        .into(),
+                    background_geometry.image_destination_box.into(),
                     background_clip.radii,
                     block.background_blur_radius,
                     block.background_size,

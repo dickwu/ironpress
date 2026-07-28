@@ -1563,12 +1563,12 @@ pub struct TransformOrigin {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransformBox {
-    BorderBox,
-    ContentBox,
-    FillBox,
-    StrokeBox,
+    Border,
+    Content,
+    Fill,
+    Stroke,
     #[default]
-    ViewBox,
+    View,
 }
 
 impl Default for TransformOrigin {
@@ -7172,11 +7172,11 @@ fn apply_style_map_with_percentage_basis(
 
     if let Some(CssValue::Keyword(k)) = get_non_special(map, "transform-box") {
         if let Some(reference_box) = match k.trim().to_ascii_lowercase().as_str() {
-            "border-box" => Some(TransformBox::BorderBox),
-            "content-box" => Some(TransformBox::ContentBox),
-            "fill-box" => Some(TransformBox::FillBox),
-            "stroke-box" => Some(TransformBox::StrokeBox),
-            "view-box" => Some(TransformBox::ViewBox),
+            "border-box" => Some(TransformBox::Border),
+            "content-box" => Some(TransformBox::Content),
+            "fill-box" => Some(TransformBox::Fill),
+            "stroke-box" => Some(TransformBox::Stroke),
+            "view-box" => Some(TransformBox::View),
             _ => None,
         } {
             style.transform_box = reference_box;
@@ -7900,8 +7900,7 @@ fn apply_style_map_with_percentage_basis(
     }
 
     if let Some(value) = get_non_special(map, "word-spacing")
-        && let Some(word_spacing) =
-            word_spacing_from_css_value(value, style, length_context, font_metrics)
+        && let Some(word_spacing) = word_spacing_from_css_value(value, style, font_metrics)
     {
         style.word_spacing = word_spacing;
     }
@@ -9528,7 +9527,7 @@ fn build_simple_multi_background_svg(
                         w = fmt_svg_num(size.0),
                         h = fmt_svg_num(size.1),
                         color = color_to_svg_hex(color),
-                        opacity = fmt_svg_num(color.a as f32 / 255.0),
+                        opacity = fmt_svg_num(color.a / 255.0),
                     ));
                 } else {
                     return None;
@@ -9557,7 +9556,7 @@ fn build_simple_multi_background_svg(
                         r#"<stop offset="{offset}%" stop-color="{color}" stop-opacity="{opacity}"/>"#,
                         offset = fmt_svg_num(offset),
                         color = color_to_svg_hex(stop.color.color),
-                        opacity = fmt_svg_num(stop.color.color.a as f32 / 255.0),
+                        opacity = fmt_svg_num(stop.color.color.a / 255.0),
                     ));
                 }
                 defs.push_str("</linearGradient>");
@@ -13195,12 +13194,11 @@ fn parse_column_rule_shorthand(raw: &str, font_size: f32) -> Option<BorderSide> 
             if value < 0.0 || width.replace(value).is_some() {
                 return None;
             }
-        } else if let Some(value) = parse_border_color(token) {
+        } else {
+            let value = parse_border_color(token)?;
             if color.replace(value).is_some() {
                 return None;
             }
-        } else {
-            return None;
         }
         found = true;
     }
@@ -13369,7 +13367,6 @@ fn text_indent_from_css_value(
 fn word_spacing_from_css_value(
     value: &CssValue,
     style: &ComputedStyle,
-    base: crate::style::resolve::LengthResolutionContext,
     font_metrics: FontMetrics<'_>,
 ) -> Option<f32> {
     match value {
@@ -13389,7 +13386,6 @@ fn word_spacing_from_css_value(
             word_spacing_from_css_value(
                 &parse_property_value("word-spacing", &raw)?,
                 style,
-                base,
                 font_metrics,
             )
         }

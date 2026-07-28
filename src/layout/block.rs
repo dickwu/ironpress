@@ -342,10 +342,6 @@ fn has_direct_table_cell_child(
 }
 
 /// Lay out a `display: block` or `display: inline-block` element.
-///
-/// Returns `true` when the layout completed via the mixed-block-children
-/// early-exit path (page-break-after already emitted), meaning the caller
-/// should return immediately without further post-processing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layout_block_element(
     el: &ElementNode,
@@ -359,7 +355,7 @@ pub(crate) fn layout_block_element(
     first_line_style: Option<&ComputedStyle>,
     first_letter_style: Option<&ComputedStyle>,
     env: &mut LayoutEnv,
-) -> bool {
+) {
     let before_style = generated_styles.before();
     let after_style = generated_styles.after();
     let output_start_len = output.len();
@@ -1262,7 +1258,7 @@ pub(crate) fn layout_block_element(
             }
 
             emit_page_break_after(style, output);
-            return true;
+            return;
         } else if has_block_kids_for_wrapper {
             // Inline generated boundaries live on opposite sides of the real
             // block children. Preserve the leading fragment now; the trailing
@@ -2325,7 +2321,6 @@ pub(crate) fn layout_block_element(
             env.counter_state,
         );
     }
-    false
 }
 
 fn apply_line_clamp(

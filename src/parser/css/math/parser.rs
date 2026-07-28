@@ -442,9 +442,9 @@ fn parse_frequency_unit(unit: &str) -> Option<FrequencyUnit> {
 
 fn parse_resolution_unit(unit: &str) -> Option<ResolutionUnit> {
     [
-        ("dpi", ResolutionUnit::DotsPerInch),
-        ("dpcm", ResolutionUnit::DotsPerCentimeter),
-        ("dppx", ResolutionUnit::DotsPerPixel),
+        ("dpi", ResolutionUnit::Inch),
+        ("dpcm", ResolutionUnit::Centimeter),
+        ("dppx", ResolutionUnit::Pixel),
     ]
     .into_iter()
     .find_map(|(name, parsed)| unit.eq_ignore_ascii_case(name).then_some(parsed))

@@ -9,17 +9,12 @@ use super::*;
 pub(super) fn render_conic_gradient(
     content: &mut String,
     gradient: &impl GradientView<ConicGradient>,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    area: LayerPaintArea,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) {
     let source = gradient.source();
-    let Some(pattern) =
-        gradient_layer_pattern(&gradient.layer_box(), PdfRect::new(x, y, width, height))
-    else {
+    let Some(pattern) = gradient_layer_pattern(&gradient.layer_box(), area) else {
         return;
     };
     let Some(first_tile) = pattern.first_tile() else {

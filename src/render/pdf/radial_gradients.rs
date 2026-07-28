@@ -5,19 +5,14 @@ use super::*;
 pub(super) fn render_radial_gradient(
     content: &mut String,
     gradient: &impl GradientView<RadialGradient>,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    area: LayerPaintArea,
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) {
     let source = gradient.source();
-    let Some(pattern) =
-        gradient_layer_pattern(&gradient.layer_box(), PdfRect::new(x, y, width, height))
-    else {
+    let Some(pattern) = gradient_layer_pattern(&gradient.layer_box(), area) else {
         return;
     };
     let Some(first_tile) = pattern.first_tile() else {
@@ -90,18 +85,16 @@ pub(super) fn render_radial_gradient_layer_tile(
     if !content_transform.is_identity()
         && let Some(geometry) =
             RadialGradientGeometry::resolve(gradient, PdfVector::new(tile.width, tile.height))
-    {
-        if render_radial_function_gradient(
+        && (render_radial_function_gradient(
             content,
             gradient,
             geometry,
             tile,
             content_transform,
             pdf_writer,
-        ) || render_radial_pattern_tile(content, gradient, geometry, tile, pdf_writer)
-        {
-            return;
-        }
+        ) || render_radial_pattern_tile(content, gradient, geometry, tile, pdf_writer))
+    {
+        return;
     }
     if !render_radial_gradient_tile(
         content,

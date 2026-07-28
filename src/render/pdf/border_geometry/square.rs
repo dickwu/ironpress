@@ -63,4 +63,29 @@ impl SquareBorderBandGeometry {
             ],
         }
     }
+
+    /// Four full-span rectangles whose union is this square border band.
+    ///
+    /// A single compound fill paints overlapping corner areas only once.
+    /// This is required for an open fragmented border: independently filled
+    /// bands expose antialiasing at their mathematically coincident endpoints,
+    /// while shortening the vertical sides leaves those endpoints uncovered.
+    pub(in crate::render::pdf) fn full_span_sides(self) -> PhysicalEdges<PdfRect> {
+        PhysicalEdges::new(
+            self.top(),
+            PdfRect::new(
+                self.inner.right(),
+                self.outer.bottom,
+                self.outer.right() - self.inner.right(),
+                self.outer.height,
+            ),
+            self.bottom(),
+            PdfRect::new(
+                self.outer.left,
+                self.outer.bottom,
+                self.inner.left - self.outer.left,
+                self.outer.height,
+            ),
+        )
+    }
 }

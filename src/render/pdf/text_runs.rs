@@ -484,8 +484,8 @@ fn paint_run_text_shadows_at_baseline(
             }
             // Try the glyph-alpha raster path first when the shadow has blur and
             // the run is a shapeable custom font (outlines available).
-            if shadow.blur > 0.0 {
-                if render_text_shadow_blur(
+            if shadow.blur > 0.0
+                && render_text_shadow_blur(
                     content,
                     run,
                     x + shadow.offset_x,
@@ -495,9 +495,9 @@ fn paint_run_text_shadows_at_baseline(
                     custom_fonts,
                     pdf_writer,
                     page_images,
-                ) {
-                    continue;
-                }
+                )
+            {
+                continue;
             }
             let mut shadow_run = run.clone();
             shadow_run.color = shadow.color;

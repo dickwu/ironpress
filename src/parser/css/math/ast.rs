@@ -256,9 +256,9 @@ pub(super) struct Resolution {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResolutionUnit {
-    DotsPerInch,
-    DotsPerCentimeter,
-    DotsPerPixel,
+    Inch,
+    Centimeter,
+    Pixel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -16,17 +16,12 @@ pub(super) fn paint_box_gradient_backgrounds(
 ) {
     let layers = &paint.background.layers;
     let geometry = geometry.background(layers.origin, layers.clip, paint.border_radii);
-    let positioning_box = geometry.positioning_box;
+    let positioning_box = geometry.positioning_area.generated_image_box();
     let painted_box = geometry.painting_box;
-    let PdfRect {
-        left: box_x,
-        bottom: box_y,
-        width: box_w,
-        height: box_h,
-    } = positioning_box;
-    if painted_box.rect.is_empty() {
+    if geometry.image_destination_box.is_empty() {
         return;
     }
+    let paint_area = LayerPaintArea::new(positioning_box, geometry.image_destination_box);
     let layer_box = background_layer_box(layers.size, layers.position, layers.repeat);
     if let Some(gradient) = &layers.gradient {
         let gradient = linear_with_background_layer(gradient, layer_box);
@@ -41,10 +36,7 @@ pub(super) fn paint_box_gradient_backgrounds(
                     || layers.svg.is_some(),
                 crate::style::computed::BlendMode::Normal,
             ),
-            box_x,
-            box_y,
-            box_w,
-            box_h,
+            paint_area,
             ctx.shadings,
             ctx.shading_counter,
             ctx.text.pdf_writer,
@@ -60,10 +52,7 @@ pub(super) fn paint_box_gradient_backgrounds(
         render_radial_gradient(
             content,
             &gradient,
-            box_x,
-            box_y,
-            box_w,
-            box_h,
+            paint_area,
             ctx.shadings,
             ctx.shading_counter,
             ctx.text.pdf_writer,
@@ -79,10 +68,7 @@ pub(super) fn paint_box_gradient_backgrounds(
         render_conic_gradient(
             content,
             &gradient,
-            box_x,
-            box_y,
-            box_w,
-            box_h,
+            paint_area,
             ctx.text.pdf_writer,
             ctx.text.page_images,
         );
@@ -97,19 +83,14 @@ pub(super) fn render_linear_gradient(
     content: &mut String,
     gradient: &impl GradientView<LinearGradient>,
     backdrop: GradientBackdrop,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    area: LayerPaintArea,
     shadings: &mut Vec<ShadingEntry>,
     shading_counter: &mut usize,
     pdf_writer: &mut PdfWriter,
     page_images: &mut Vec<ImageRef>,
 ) {
     let source = gradient.source();
-    let Some(pattern) =
-        gradient_layer_pattern(&gradient.layer_box(), PdfRect::new(x, y, width, height))
-    else {
+    let Some(pattern) = gradient_layer_pattern(&gradient.layer_box(), area) else {
         return;
     };
     let Some(first_tile) = pattern.first_tile() else {
@@ -132,7 +113,14 @@ pub(super) fn render_linear_gradient(
     }
 
     let content_transform = pdf_writer.page_content_transform;
-    if render_distributed_linear_gradient_raster(content, source, pattern, pdf_writer, page_images)
+    if pattern.has_distributed_repeat()
+        && render_distributed_linear_gradient_raster(
+            content,
+            source,
+            pattern,
+            pdf_writer,
+            page_images,
+        )
     {
         return;
     }
@@ -200,10 +188,9 @@ pub(super) fn render_linear_gradient_layer_tile(
             && let Some(color) = premultiplied_solid_gradient_color(&gradient.ramp, basis)
             && let Some(mask) = pdf_writer.try_linear_gradient_alpha_mask(gradient, tile)
             && let Some(pattern) = pdf_writer.add_masked_solid_page_pattern(tile, &mask, color)
+            && paint_css_box_pattern(content, content_transform, &pattern, tile).is_some()
         {
-            if paint_css_box_pattern(content, content_transform, &pattern, tile).is_some() {
-                return;
-            }
+            return;
         }
         render_linear_gradient_tile_raster(content, gradient, tile, pdf_writer, page_images);
         return;
@@ -271,9 +258,11 @@ pub(super) fn render_linear_gradient_tile(
     let tile = PdfRect::new(x, y, width, height);
     render_linear_gradient_tile_clipped(
         content,
-        angle,
-        tile,
-        tile,
+        LinearGradientTile {
+            angle,
+            bounds: tile,
+            clip: tile,
+        },
         native,
         content_transform,
         shadings,
@@ -284,11 +273,16 @@ pub(super) fn render_linear_gradient_tile(
 /// Paint one axial-gradient tile, resolving its stops against `tile` while
 /// clipping the result to `clip`. Soft masks use an enclosing device-pixel
 /// clip so their surface cannot lose a partially covered physical edge.
+#[derive(Clone, Copy)]
+pub(super) struct LinearGradientTile {
+    pub(super) angle: f32,
+    pub(super) bounds: PdfRect,
+    pub(super) clip: PdfRect,
+}
+
 pub(super) fn render_linear_gradient_tile_clipped(
     content: &mut String,
-    angle: f32,
-    tile: PdfRect,
-    clip: PdfRect,
+    tile: LinearGradientTile,
     native: NativePdfGradient,
     content_transform: PageContentTransform,
     shadings: &mut Vec<ShadingEntry>,
@@ -299,15 +293,15 @@ pub(super) fn render_linear_gradient_tile_clipped(
     //   CSS 0° (to top) => PDF line from bottom center to top center
     //   CSS 90° (to right) => PDF line from left center to right center
     //   CSS 180° (to bottom) => PDF line from top center to bottom center
-    let (sin_a, cos_a) = sin_cos_degrees(angle);
+    let (sin_a, cos_a) = sin_cos_degrees(tile.angle);
 
     // Gradient line: start and end points
     // CSS: 0deg = to top, so direction vector is (sin(angle), -cos(angle)) in CSS coords
     // In PDF coords (y flipped): direction is (sin(angle), cos(angle))
-    let cx = tile.left + tile.width / 2.0;
-    let cy = tile.bottom + tile.height / 2.0;
+    let cx = tile.bounds.left + tile.bounds.width / 2.0;
+    let cy = tile.bounds.bottom + tile.bounds.height / 2.0;
     // Half-length of the gradient line along the direction
-    let half_len = (tile.width * sin_a.abs() + tile.height * cos_a.abs()) / 2.0;
+    let half_len = (tile.bounds.width * sin_a.abs() + tile.bounds.height * cos_a.abs()) / 2.0;
     let dx = sin_a * half_len;
     let dy = cos_a * half_len;
 
@@ -325,7 +319,7 @@ pub(super) fn render_linear_gradient_tile_clipped(
 
     // Clip to the gradient area and paint with shading
     content.push_str("q\n");
-    content.push_str(&clip.rect_path());
+    content.push_str(&tile.clip.rect_path());
     content.push_str("W n\n");
     content.push_str(&content_transform.inverse_operator());
     content.push_str(&format!("/{name} sh\n"));

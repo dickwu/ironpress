@@ -21,9 +21,9 @@ Pure rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies
 [![Downloads](https://img.shields.io/crates/d/ironpress.svg)](https://crates.io/crates/ironpress)
 [![WASM](https://img.shields.io/badge/wasm-ready-blueviolet.svg)](../../wiki/WASM-Playground)
 [![Playground](https://img.shields.io/badge/try_it-playground-blueviolet.svg)](https://gastongouron.github.io/ironpress/)
-[![Parity report](https://img.shields.io/badge/parity-report-ff69b4.svg)](tests/parity/REPORT.md)
+[![Parity report](https://img.shields.io/badge/parity-report-ff69b4.svg)](https://htmlpreview.github.io/?https://github.com/Wicpar/ironpress/blob/parity-report/tests/parity/reports/index.html)
 
-**[Try it in your browser](https://gastongouron.github.io/ironpress/)** | **[Parity report](tests/parity/REPORT.md)** | **[Wiki](../../wiki)**
+**[Try it in your browser](https://gastongouron.github.io/ironpress/)** | **[HTML parity report](https://htmlpreview.github.io/?https://github.com/Wicpar/ironpress/blob/parity-report/tests/parity/reports/index.html)** | **[Wiki](../../wiki)**
 
 </div>
 
@@ -193,9 +193,10 @@ scripts/parity-gen-refs.sh --check      # authenticate the complete corpus
 - **Run it:** `scripts/parity.sh` supplies a fresh invocation identity, renders
   every fixture in-process, rasterizes candidate and oracle PDFs symmetrically,
   and verifies that JSON, Markdown, and HTML all belong to that invocation.
-- **Read it:** `tests/parity/REPORT.md` is the compact, problem-first report;
-  `tests/parity/report.json` contains the complete machine result; and
-  `tests/parity/reports/index.html` provides the visual evidence.
+- **Read it:** the [HTML parity report](https://htmlpreview.github.io/?https://github.com/Wicpar/ironpress/blob/parity-report/tests/parity/reports/index.html)
+  provides the complete visual evidence; `tests/parity/REPORT.md` is the compact,
+  problem-first summary, and `tests/parity/report.json` contains the complete
+  machine result.
 - **Oracles:** committed PDFs are the source of truth. Oracle-preview, candidate,
   and diff PNGs are generated report evidence and are intentionally ignored.
   `refs.lock` authenticates each fixture, oracle PDF, manifest entry, renderer,

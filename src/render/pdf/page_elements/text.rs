@@ -331,8 +331,14 @@ pub(in crate::render::pdf) fn render_text_block(
 
     let tb_background_geometry =
         tb_box_geometry.background(*background_origin, *background_clip, *tb_radii);
-    let tb_reference = tb_background_geometry.positioning_box;
+    let tb_gradient_reference = tb_background_geometry
+        .positioning_area
+        .generated_image_box();
+    let tb_image_reference = tb_background_geometry
+        .positioning_area
+        .intrinsic_image_box();
     let tb_clip_box = tb_background_geometry.painting_box;
+    let tb_image_destination = tb_background_geometry.image_destination_box;
     let tb_needs_clip = *background_clip != BackgroundClip::Border || tb_clip_box != tb_border_box;
     let tb_text_clip_background = *background_clip == BackgroundClip::Text;
     let tb_gradient_clip = !tb_text_clip_background;
@@ -382,6 +388,17 @@ pub(in crate::render::pdf) fn render_text_block(
         }
     }
 
+    let gradient_area = |attachment| {
+        if attachment == Some(BackgroundAttachment::Fixed) {
+            LayerPaintArea::new(
+                PdfRect::new(0.0, 0.0, page_size.width, page_size.height),
+                tb_clip_box.rect,
+            )
+        } else {
+            LayerPaintArea::new(tb_gradient_reference, tb_image_destination)
+        }
+    };
+
     // Draw linear gradient if specified
     if phase.paints_decoration()
         && let Some(gradient) = background_gradient
@@ -398,17 +415,6 @@ pub(in crate::render::pdf) fn render_text_block(
             if tb_gradient_clip {
                 tb_clip_box.push_clip(content);
             }
-            let (grad_x, grad_y, grad_w, grad_h) =
-                if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                    (0.0, 0.0, page_size.width, page_size.height)
-                } else {
-                    (
-                        tb_reference.left,
-                        tb_reference.bottom,
-                        tb_reference.width,
-                        tb_reference.height,
-                    )
-                };
             render_linear_gradient(
                 content,
                 &gradient,
@@ -419,10 +425,7 @@ pub(in crate::render::pdf) fn render_text_block(
                         || background_svg.is_some(),
                     tb_bg_blend_mode,
                 ),
-                grad_x,
-                grad_y,
-                grad_w,
-                grad_h,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -452,24 +455,10 @@ pub(in crate::render::pdf) fn render_text_block(
             if tb_gradient_clip {
                 tb_clip_box.push_clip(content);
             }
-            let (grad_x, grad_y, grad_w, grad_h) =
-                if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                    (0.0, 0.0, page_size.width, page_size.height)
-                } else {
-                    (
-                        tb_reference.left,
-                        tb_reference.bottom,
-                        tb_reference.width,
-                        tb_reference.height,
-                    )
-                };
             render_radial_gradient(
                 content,
                 &gradient,
-                grad_x,
-                grad_y,
-                grad_w,
-                grad_h,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -499,24 +488,10 @@ pub(in crate::render::pdf) fn render_text_block(
             if tb_gradient_clip {
                 tb_clip_box.push_clip(content);
             }
-            let (grad_x, grad_y, grad_w, grad_h) =
-                if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                    (0.0, 0.0, page_size.width, page_size.height)
-                } else {
-                    (
-                        tb_reference.left,
-                        tb_reference.bottom,
-                        tb_reference.width,
-                        tb_reference.height,
-                    )
-                };
             render_conic_gradient(
                 content,
                 &gradient,
-                grad_x,
-                grad_y,
-                grad_w,
-                grad_h,
+                gradient_area(gradient.layer_box.attachment),
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );
@@ -555,8 +530,8 @@ pub(in crate::render::pdf) fn render_text_block(
             begin_blend_mode(content, ctx.page_ext_gstates, tb_bg_blend_mode);
         }
         let paint = BackgroundPaintContext::new(
-            tb_reference.into(),
-            tb_clip_box.rect.into(),
+            tb_image_reference.into(),
+            tb_image_destination.into(),
             tb_clip_box.radii,
             *background_blur_radius,
             *background_size,
@@ -649,7 +624,7 @@ pub(in crate::render::pdf) fn render_text_block(
         text_lines::render_text_block_lines(
             content,
             element,
-            tb_geometry,
+            tb_box_geometry,
             frame,
             false,
             text_space,

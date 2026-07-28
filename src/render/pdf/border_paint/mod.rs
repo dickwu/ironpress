@@ -1,3 +1,4 @@
+use super::border_images::BorderImageShadings;
 use super::*;
 
 mod bevel;
@@ -61,8 +62,10 @@ pub(super) fn paint_box_decoration(
             content,
             border_image,
             positioning,
-            resources.shadings,
-            resources.shading_counter,
+            BorderImageShadings {
+                entries: resources.shadings,
+                counter: resources.shading_counter,
+            },
             resources.page_ext_gstates,
             resources.pdf_writer,
             resources.page_images,

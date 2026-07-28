@@ -570,12 +570,12 @@ fn inline_atomic_cell(
                     runs,
                     TextWrapOptions::new(
                         child_style.width.unwrap_or(f32::MAX).max(0.0),
-                        used_font_size(&child_style, env.fonts),
+                        used_font_size(child_style, env.fonts),
                         text_run_line_height_factor(child_style, env.fonts),
                         child_style.overflow_wrap,
                     )
                     .with_white_space(child_style.white_space)
-                    .with_parent_strut(parent_line_strut(&child_style, env.fonts))
+                    .with_parent_strut(parent_line_strut(child_style, env.fonts))
                     .with_word_break_keep_all(child_style.word_break_keep_all),
                     env.fonts,
                 );

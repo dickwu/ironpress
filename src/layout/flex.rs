@@ -625,7 +625,6 @@ fn flex_row_node(
             fragment_role,
             row_height,
             alignment,
-            ..Default::default()
         },
         box_model: crate::layout::elements::BoxModel {
             size,
@@ -1685,22 +1684,26 @@ pub(crate) fn layout_flex_container(
                 (generated_style.margin.top, generated_style.margin.bottom)
             };
             let is_relative = generated_style.position.is_relative();
-            let rel_left = is_relative
-                .then(|| {
+            let rel_left = if is_relative {
+                {
                     generated_style
                         .left
                         .or_else(|| generated_style.right.map(|right| -right))
                         .unwrap_or_default()
-                })
-                .unwrap_or_default();
-            let rel_top = is_relative
-                .then(|| {
+                }
+            } else {
+                Default::default()
+            };
+            let rel_top = if is_relative {
+                {
                     generated_style
                         .top
                         .or_else(|| generated_style.bottom.map(|bottom| -bottom))
                         .unwrap_or_default()
-                })
-                .unwrap_or_default();
+                }
+            } else {
+                Default::default()
+            };
 
             FlexItem {
                 elements: vec![element],
@@ -2645,9 +2648,9 @@ pub(crate) fn layout_flex_container(
                         break_before: item.break_before,
                         ..Default::default()
                     };
-                } else if current_line.item_indices.is_empty() {
-                    current_line.break_before = item.break_before;
-                } else if !wrap.wraps() && item.break_before.is_some() {
+                } else if current_line.item_indices.is_empty()
+                    || (!wrap.wraps() && item.break_before.is_some())
+                {
                     current_line.break_before = item.break_before;
                 }
 

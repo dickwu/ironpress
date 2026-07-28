@@ -144,3 +144,59 @@ fn elliptical_uniform_double_border_keeps_exact_css_rings() {
     assert_eq!(content.lines().filter(|line| *line == "f*").count(), 2);
     assert!(!content.contains("S\n"));
 }
+
+#[test]
+fn open_fragment_border_is_one_connected_full_span_fill() {
+    let color = crate::types::Color::rgba8(87, 117, 144, 194);
+    let border = PhysicalEdges::new(
+        solid(1.5, color),
+        solid(1.5, color),
+        Default::default(),
+        solid(1.5, color),
+    );
+    let mut content = String::new();
+    let mut states = Vec::new();
+    let mut counter = 0;
+
+    assert!(paint_open_square_solid_border(
+        &mut content,
+        PdfRect::new(11.25, 0.0, 94.5, 124.5),
+        &border,
+        CornerRadii::ZERO,
+        &mut states,
+        &mut counter,
+    ));
+
+    assert_eq!(content.lines().filter(|line| *line == "f").count(), 1);
+    assert!(content.contains("104.25 0 1.5 124.5 re\n"));
+    assert!(content.contains("11.25 0 1.5 124.5 re\n"));
+    assert_eq!(states, vec![("GSbd0".to_string(), 194.0 / 255.0)]);
+}
+
+#[test]
+fn opaque_open_fragment_border_matches_full_span_browser_decomposition() {
+    let color = crate::types::Color::rgb(87, 117, 144);
+    let border = PhysicalEdges::new(
+        solid(1.5, color),
+        solid(1.5, color),
+        Default::default(),
+        solid(1.5, color),
+    );
+    let mut content = String::new();
+    let mut states = Vec::new();
+    let mut counter = 0;
+
+    assert!(paint_open_square_solid_border(
+        &mut content,
+        PdfRect::new(11.25, 0.0, 94.5, 124.5),
+        &border,
+        CornerRadii::ZERO,
+        &mut states,
+        &mut counter,
+    ));
+
+    assert_eq!(content.lines().filter(|line| *line == "f").count(), 3);
+    assert!(content.contains("104.25 0 1.5 124.5 re\n"));
+    assert!(content.contains("11.25 0 1.5 124.5 re\n"));
+    assert!(states.is_empty());
+}

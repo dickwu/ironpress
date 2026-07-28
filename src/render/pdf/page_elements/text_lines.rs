@@ -4,12 +4,13 @@ use crate::layout::elements::TextBlock;
 pub(super) fn render_text_block_lines(
     content: &mut String,
     element: &TextBlock,
-    geometry: LayoutBoxGeometry,
+    box_geometry: BoxPaintGeometry,
     frame: PageElementFrame<'_>,
     opacity_active: bool,
     text_space: PdfContentSpace,
     ctx: &mut PageRenderContext<'_>,
 ) {
+    let geometry = box_geometry.layout();
     let lines = &element.lines;
     let padding = &element.box_model.padding;
     let border = &element.box_model.border;
@@ -34,12 +35,27 @@ pub(super) fn render_text_block_lines(
     let elem_idx = frame.element_index;
     let page_size = frame.page_size;
     let needs_opacity = opacity_active;
-    let tb_reference = geometry.background_origin_box(*background_origin);
+    let background_geometry = box_geometry.background(
+        *background_origin,
+        *background_clip,
+        element.paint.border_radii,
+    );
+    let tb_reference = background_geometry.positioning_area.generated_image_box();
     let tb_text_clip_background = *background_clip == BackgroundClip::Text;
     let tb_layer_box =
         background_layer_box(*background_size, *background_position, *background_repeat);
     let tb_bg_blend_mode = background_blend_mode.background_layer(0);
     let tb_bg_blended = tb_bg_blend_mode != crate::style::computed::BlendMode::Normal;
+    let gradient_area = |attachment| {
+        if attachment == Some(BackgroundAttachment::Fixed) {
+            LayerPaintArea::new(
+                PdfRect::new(0.0, 0.0, page_size.width, page_size.height),
+                background_geometry.painting_box.rect,
+            )
+        } else {
+            LayerPaintArea::new(tb_reference, background_geometry.image_destination_box)
+        }
+    };
 
     // Text content is inset from the border-box top by the top
     // border width and the top padding.
@@ -218,17 +234,6 @@ pub(super) fn render_text_block_lines(
                             content.push_str("q\n");
                             begin_blend_mode(content, ctx.page_ext_gstates, tb_bg_blend_mode);
                         }
-                        let (grad_x, grad_y, grad_w, grad_h) =
-                            if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                                (0.0, 0.0, page_size.width, page_size.height)
-                            } else {
-                                (
-                                    tb_reference.left,
-                                    tb_reference.bottom,
-                                    tb_reference.width,
-                                    tb_reference.height,
-                                )
-                            };
                         render_linear_gradient(
                             content,
                             &gradient,
@@ -238,10 +243,7 @@ pub(super) fn render_text_block_lines(
                                     || background_conic_gradient.is_some(),
                                 tb_bg_blend_mode,
                             ),
-                            grad_x,
-                            grad_y,
-                            grad_w,
-                            grad_h,
+                            gradient_area(gradient.layer_box.attachment),
                             ctx.shadings,
                             ctx.shading_counter,
                             ctx.text.pdf_writer,
@@ -272,24 +274,10 @@ pub(super) fn render_text_block_lines(
                             content.push_str("q\n");
                             begin_blend_mode(content, ctx.page_ext_gstates, tb_bg_blend_mode);
                         }
-                        let (grad_x, grad_y, grad_w, grad_h) =
-                            if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                                (0.0, 0.0, page_size.width, page_size.height)
-                            } else {
-                                (
-                                    tb_reference.left,
-                                    tb_reference.bottom,
-                                    tb_reference.width,
-                                    tb_reference.height,
-                                )
-                            };
                         render_radial_gradient(
                             content,
                             &gradient,
-                            grad_x,
-                            grad_y,
-                            grad_w,
-                            grad_h,
+                            gradient_area(gradient.layer_box.attachment),
                             ctx.shadings,
                             ctx.shading_counter,
                             ctx.text.pdf_writer,
@@ -320,24 +308,10 @@ pub(super) fn render_text_block_lines(
                             content.push_str("q\n");
                             begin_blend_mode(content, ctx.page_ext_gstates, tb_bg_blend_mode);
                         }
-                        let (grad_x, grad_y, grad_w, grad_h) =
-                            if gradient.layer_box.attachment == Some(BackgroundAttachment::Fixed) {
-                                (0.0, 0.0, page_size.width, page_size.height)
-                            } else {
-                                (
-                                    tb_reference.left,
-                                    tb_reference.bottom,
-                                    tb_reference.width,
-                                    tb_reference.height,
-                                )
-                            };
                         render_conic_gradient(
                             content,
                             &gradient,
-                            grad_x,
-                            grad_y,
-                            grad_w,
-                            grad_h,
+                            gradient_area(gradient.layer_box.attachment),
                             ctx.text.pdf_writer,
                             ctx.text.page_images,
                         );
@@ -473,9 +447,10 @@ pub(super) fn render_text_block_lines(
                     render_text_emphasis_marks(
                         content,
                         run,
-                        bg_x,
-                        text_y,
-                        run.metadata.emphasis.color,
+                        TextEmphasisPlacement {
+                            origin: PdfPoint::new(bg_x, text_y),
+                            color: run.metadata.emphasis.color,
+                        },
                         ctx.text.custom_fonts,
                         ctx.text.prepared_custom_fonts,
                         ctx.text.pdf_writer,

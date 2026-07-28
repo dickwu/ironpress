@@ -572,8 +572,8 @@ impl PageSelector {
         match self {
             Self::None => true,
             Self::First => page.page_number == 1,
-            Self::Left => page.page_number.is_multiple_of(2),
-            Self::Right => !page.page_number.is_multiple_of(2),
+            Self::Left => page.page_number % 2 == 0,
+            Self::Right => page.page_number % 2 != 0,
             Self::Blank => page.is_blank,
             Self::Named(name) => page.page_name == Some(name.as_str()),
         }

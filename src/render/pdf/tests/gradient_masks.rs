@@ -336,8 +336,11 @@ fn subpixel_repeating_gradient_uses_one_pdf_pattern_cell() {
     let mut shadings = Vec::new();
     let mut shading_counter = 0;
     let mut writer = PdfWriter::new();
-    let resolved =
-        gradient_layer_pattern(&gradient.layer_box, PdfRect::new(0.0, 0.0, 100.0, 10.0)).unwrap();
+    let resolved = gradient_layer_pattern(
+        &gradient.layer_box,
+        LayerPaintArea::single(PdfRect::new(0.0, 0.0, 100.0, 10.0)),
+    )
+    .unwrap();
     let pattern_geometry = resolved
         .pdf_pattern(PdfRect::new(0.0, 0.0, 1e-9, 10.0))
         .unwrap();
@@ -350,10 +353,7 @@ fn subpixel_repeating_gradient_uses_one_pdf_pattern_cell() {
         &mut content,
         &gradient,
         GradientBackdrop::default(),
-        0.0,
-        0.0,
-        100.0,
-        10.0,
+        LayerPaintArea::single(PdfRect::new(0.0, 0.0, 100.0, 10.0)),
         &mut shadings,
         &mut shading_counter,
         &mut writer,
@@ -887,8 +887,10 @@ fn border_image_gradient_uses_one_source_form_across_eight_slices() {
         &mut content,
         &border_image,
         geometry,
-        &mut shadings,
-        &mut shading_counter,
+        BorderImageShadings {
+            entries: &mut shadings,
+            counter: &mut shading_counter,
+        },
         &mut Vec::new(),
         &mut writer,
         &mut images,
@@ -931,10 +933,7 @@ fn exact_hard_stop_uses_single_linear_raster_path() {
         &mut content,
         &gradient,
         GradientBackdrop::default(),
-        0.0,
-        0.0,
-        10.0,
-        10.0,
+        LayerPaintArea::single(PdfRect::new(0.0, 0.0, 10.0, 10.0)),
         &mut shadings,
         &mut shading_counter,
         &mut pdf_writer,
@@ -973,10 +972,7 @@ fn alpha_linear_gradient_over_opaque_solid_uses_one_vector_shading() {
         &mut content,
         &gradient,
         backdrop,
-        0.0,
-        0.0,
-        126.0,
-        68.0,
+        LayerPaintArea::single(PdfRect::new(0.0, 0.0, 126.0, 68.0)),
         &mut shadings,
         &mut shading_counter,
         &mut pdf_writer,

@@ -63,7 +63,7 @@ jobs:
       - name: Build feature parity report
         env:
           FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
-        run: cargo test --release --test feature_parity -- --nocapture
+        run: scripts/parity.sh
 
       - name: Stage feature parity report
         run: |

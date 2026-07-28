@@ -91,11 +91,11 @@ fn important_three_value_transform_origin_wins_the_cascade() {
 #[test]
 fn transform_box_preserves_every_specified_reference_box() {
     for (keyword, expected) in [
-        ("border-box", TransformBox::BorderBox),
-        ("content-box", TransformBox::ContentBox),
-        ("fill-box", TransformBox::FillBox),
-        ("stroke-box", TransformBox::StrokeBox),
-        ("view-box", TransformBox::ViewBox),
+        ("border-box", TransformBox::Border),
+        ("content-box", TransformBox::Content),
+        ("fill-box", TransformBox::Fill),
+        ("stroke-box", TransformBox::Stroke),
+        ("view-box", TransformBox::View),
     ] {
         let style = compute_style(
             HtmlTag::Div,
@@ -114,5 +114,5 @@ fn invalid_transform_box_does_not_replace_an_earlier_valid_value() {
         &ComputedStyle::default(),
     );
 
-    assert_eq!(style.transform_box, TransformBox::ContentBox);
+    assert_eq!(style.transform_box, TransformBox::Content);
 }

@@ -367,13 +367,16 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     let mut solid = String::new();
     push_decoration_stroke(
         &mut solid,
-        (0.0, 0.0, 0.0),
         &run,
         &run.decorations[0],
-        DecorationLine::Underline,
-        1.0,
-        2.0,
-        3.0,
+        DecorationStroke::new(
+            (0.0, 0.0, 0.0),
+            DecorationLine::Underline,
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+        ),
     );
     assert!(solid.contains("1 2.625 1 0.75 re"));
 
@@ -381,13 +384,16 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     let mut wavy = String::new();
     push_decoration_stroke(
         &mut wavy,
-        (0.0, 0.0, 0.0),
         &run,
         &run.decorations[0],
-        DecorationLine::Underline,
-        1.0,
-        2.0,
-        3.0,
+        DecorationStroke::new(
+            (0.0, 0.0, 0.0),
+            DecorationLine::Underline,
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+        ),
     );
     assert!(wavy.contains("0.75 w"));
     assert!(wavy.contains("-6.5 1.5 m"));
@@ -397,13 +403,16 @@ fn decoration_uses_the_css_device_pixel_floor_without_rescaling_offset() {
     let mut zero = String::new();
     push_decoration_stroke(
         &mut zero,
-        (0.0, 0.0, 0.0),
         &run,
         &run.decorations[0],
-        DecorationLine::Underline,
-        1.0,
-        2.0,
-        3.0,
+        DecorationStroke::new(
+            (0.0, 0.0, 0.0),
+            DecorationLine::Underline,
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+        ),
     );
     assert!(zero.contains("1 2.625 1 0.75 re"));
 }

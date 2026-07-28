@@ -88,7 +88,9 @@ pub(super) fn render_text_child(
         );
         let tb_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(tb_geometry);
         let tb_paint_geometry = tb_box_geometry.painting();
-        let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+        let tb_background_geometry =
+            tb_box_geometry.background(*tb_bg_origin, *tb_bg_clip, *tb_radii);
+        let tb_background_box = tb_background_geometry.painting_box;
         let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);
 
         if phase == ElementPaintPhase::All
@@ -316,7 +318,14 @@ pub(super) fn render_text_child(
     );
     let tb_box_geometry = ctx.text.pdf_writer.resolve_box_geometry(tb_geometry);
     let tb_paint_geometry = tb_box_geometry.painting();
-    let tb_background_box = tb_paint_geometry.background_clip_box(*tb_bg_clip, *tb_radii);
+    let tb_background_geometry = tb_box_geometry.background(*tb_bg_origin, *tb_bg_clip, *tb_radii);
+    let tb_background_box = tb_background_geometry.painting_box;
+    let tb_gradient_area = LayerPaintArea::new(
+        tb_background_geometry
+            .positioning_area
+            .generated_image_box(),
+        tb_background_geometry.image_destination_box,
+    );
     let tb_fragment_geometry = tb_box_geometry.fragment(child.fragmentation.box_fragmentation);
 
     // CSS `filter: blur()` on a nested solid box (css-filter-effects-1
@@ -452,10 +461,7 @@ pub(super) fn render_text_child(
                     tb_bg_radial.is_some() || tb_bg_conic.is_some() || tb_bg_svg.is_some(),
                     bg_blend_mode,
                 ),
-                tb_paint_geometry.border_box.left,
-                tb_paint_geometry.border_box.bottom,
-                tb_paint_geometry.border_box.width,
-                tb_paint_geometry.border_box.height,
+                tb_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -479,10 +485,7 @@ pub(super) fn render_text_child(
             render_radial_gradient(
                 content,
                 gradient,
-                tb_paint_geometry.border_box.left,
-                tb_paint_geometry.border_box.bottom,
-                tb_paint_geometry.border_box.width,
-                tb_paint_geometry.border_box.height,
+                tb_gradient_area,
                 ctx.shadings,
                 ctx.shading_counter,
                 ctx.text.pdf_writer,
@@ -506,10 +509,7 @@ pub(super) fn render_text_child(
             render_conic_gradient(
                 content,
                 gradient,
-                tb_paint_geometry.border_box.left,
-                tb_paint_geometry.border_box.bottom,
-                tb_paint_geometry.border_box.width,
-                tb_paint_geometry.border_box.height,
+                tb_gradient_area,
                 ctx.text.pdf_writer,
                 ctx.text.page_images,
             );

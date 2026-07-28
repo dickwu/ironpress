@@ -68,6 +68,10 @@ pub(in crate::render::pdf) struct BoxPaintGeometry {
 }
 
 impl BoxPaintGeometry {
+    pub(in crate::render::pdf) const fn layout(self) -> LayoutBoxGeometry {
+        self.layout
+    }
+
     pub(in crate::render::pdf) const fn painting(self) -> PaintBoxGeometry {
         self.painting
     }
@@ -103,10 +107,14 @@ impl BoxPaintGeometry {
         clip: BackgroundClip,
         radii: CornerRadii,
     ) -> BackgroundFragmentGeometry {
-        BackgroundFragmentGeometry {
-            positioning_box: self.layout.background_origin_box(origin),
-            painting_box: self.painting.background_clip_box(clip, radii),
-        }
+        BackgroundFragmentGeometry::resolve(
+            self.layout,
+            self.painting,
+            self.painting,
+            origin,
+            clip,
+            radii,
+        )
     }
 }
 
@@ -144,11 +152,73 @@ impl TransformReferenceGeometry {
     }
 }
 
-/// Positioning retains authored geometry; clipping uses snapped paint geometry.
+/// Paired background positioning rectangles retained at the paint boundary.
+///
+/// Intrinsic images use authored geometry for source mapping. Generated images
+/// such as CSS gradients use the border-aligned snapped rectangle. Blink
+/// deliberately keeps these quantities separate: intrinsic image maps require
+/// the author's fractional geometry, while a generated tile must reach the
+/// snapped destination without wrapping or leaving a seam beside the border.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(in crate::render::pdf) struct BackgroundPositioningGeometry {
+    authored: PdfRect,
+    snapped: PdfRect,
+}
+
+impl BackgroundPositioningGeometry {
+    const fn new(authored: PdfRect, snapped: PdfRect) -> Self {
+        Self { authored, snapped }
+    }
+
+    pub(in crate::render::pdf) const fn intrinsic_image_box(self) -> PdfRect {
+        self.authored
+    }
+
+    pub(in crate::render::pdf) const fn generated_image_box(self) -> PdfRect {
+        self.snapped
+    }
+}
+
+/// Background image positioning, optimized destination, and CSS clip.
+///
+/// These rectangles are deliberately distinct. An opaque border can conceal a
+/// contracted image destination, while the authored `background-clip` remains
+/// the clipping contract for color and exposed paint.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(in crate::render::pdf) struct BackgroundFragmentGeometry {
-    pub(in crate::render::pdf) positioning_box: PdfRect,
+    pub(in crate::render::pdf) positioning_area: BackgroundPositioningGeometry,
+    pub(in crate::render::pdf) image_destination_box: PdfRect,
     pub(in crate::render::pdf) painting_box: RoundedRect,
+}
+
+impl BackgroundFragmentGeometry {
+    fn resolve(
+        layout_positioning: LayoutBoxGeometry,
+        snapped_positioning: PaintBoxGeometry,
+        painting: PaintBoxGeometry,
+        origin: BackgroundOrigin,
+        clip: BackgroundClip,
+        radii: CornerRadii,
+    ) -> Self {
+        let authored_positioning_box = layout_positioning.background_origin_box(origin);
+        let aligns_to_inner_border = layout_positioning
+            .background_bleed
+            .obscures_rectangular_destination(radii);
+        let snapped_positioning_box = snapped_positioning.background_origin_box(origin);
+        let painting_box = painting.background_clip_box(clip, radii);
+        Self {
+            positioning_area: BackgroundPositioningGeometry::new(
+                authored_positioning_box,
+                snapped_positioning_box,
+            ),
+            image_destination_box: if aligns_to_inner_border && clip == BackgroundClip::Border {
+                painting.padding_box()
+            } else {
+                painting_box.rect
+            },
+            painting_box,
+        }
+    }
 }
 
 /// The current fragment's paint box and its position in the reassembled box.
@@ -207,10 +277,14 @@ impl FragmentPaintGeometry {
         clip: BackgroundClip,
         radii: CornerRadii,
     ) -> BackgroundFragmentGeometry {
-        BackgroundFragmentGeometry {
-            positioning_box: self.layout_reassembled.background_origin_box(origin),
-            painting_box: self.painting.background_clip_box(clip, radii),
-        }
+        BackgroundFragmentGeometry::resolve(
+            self.layout_reassembled,
+            self.reassembled,
+            self.painting,
+            origin,
+            clip,
+            radii,
+        )
     }
 }
 
@@ -307,6 +381,14 @@ impl PaintBoxGeometry {
         self.border_box.inset(self.border + self.padding)
     }
 
+    pub(in crate::render::pdf) fn background_origin_box(self, origin: BackgroundOrigin) -> PdfRect {
+        match origin {
+            BackgroundOrigin::Border => self.border_box,
+            BackgroundOrigin::Padding => self.padding_box(),
+            BackgroundOrigin::Content => self.content_box(),
+        }
+    }
+
     pub(in crate::render::pdf) fn rounded_border_box(self, radii: CornerRadii) -> RoundedRect {
         self.border_box
             .rounded(radii.fit_to(self.border_box.width, self.border_box.height))
@@ -321,10 +403,8 @@ impl PaintBoxGeometry {
         transform: &BoxTransform,
     ) -> TransformReferenceGeometry {
         let reference_box = match transform.reference_box {
-            TransformBox::ContentBox | TransformBox::FillBox => self.content_box(),
-            TransformBox::BorderBox | TransformBox::StrokeBox | TransformBox::ViewBox => {
-                self.border_box
-            }
+            TransformBox::Content | TransformBox::Fill => self.content_box(),
+            TransformBox::Border | TransformBox::Stroke | TransformBox::View => self.border_box,
         };
         TransformReferenceGeometry {
             border_box: self.border_box,

@@ -275,6 +275,29 @@ impl AxisRepeatPattern {
         }
     }
 
+    /// Return a shader-cell stride that preserves the CSS repetition mode
+    /// throughout a visible window.
+    ///
+    /// PDF tiling patterns repeat in both axes even when CSS says
+    /// `no-repeat`. A one-tile CSS axis therefore needs a synthetic stride
+    /// whose neighbouring cells are wholly outside the eventual paint clip.
+    /// One full tile of guard space also keeps antialiasing at the clip edge
+    /// from exposing a neighbouring synthetic cell.
+    pub(crate) fn shader_stride(self, start: f32, end: f32) -> Option<f32> {
+        if let Some(stride) = self.stride() {
+            return Some(stride);
+        }
+        if !start.is_finite() || !end.is_finite() || start >= end {
+            return None;
+        }
+
+        let first = self.first();
+        let size = self.tile_size();
+        let exclusion_distance = (end - first).max(first + size - start).max(size);
+        let stride = exclusion_distance + size;
+        (stride.is_finite() && stride > 0.0).then_some(stride)
+    }
+
     /// Extend a periodic image-shader lattice beyond its eventual paint clip.
     ///
     /// Browser PDF backends materialize the shader over a page surface and
@@ -768,6 +791,17 @@ mod tests {
 
         let partial = AxisRepeatPattern::new(AxisRepeatMode::Repeat, 25.0, 100.0, 100.0).unwrap();
         assert!(!partial.is_single_in(0.0, 100.0));
+    }
+
+    #[test]
+    fn no_repeat_shader_stride_isolates_the_visible_window() {
+        let pattern = AxisRepeatPattern::new(AxisRepeatMode::NoRepeat, 0.0, 20.0, 100.0).unwrap();
+        let start = -3.0;
+        let end = 103.0;
+        let stride = pattern.shader_stride(start, end).unwrap();
+
+        assert!(pattern.first() + stride > end);
+        assert!(pattern.first() + pattern.tile_size() - stride < start);
     }
 
     #[test]

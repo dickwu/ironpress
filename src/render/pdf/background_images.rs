@@ -1,7 +1,7 @@
 use super::backgrounds::{PdfBackgroundPaintContext, PdfBackgroundResources};
 use super::geometry::{BoxPaintGeometry, PdfRect};
 use super::patterns::{
-    LayerTilePattern, RepeatModes, paint_page_tiling_pattern, paint_tiling_pattern,
+    LayerPaintArea, LayerTilePattern, RepeatModes, paint_page_tiling_pattern, paint_tiling_pattern,
 };
 use super::{SvgPageImageSink, begin_blend_mode};
 use crate::render::background::{
@@ -77,7 +77,7 @@ pub(super) fn render_block_svg_background(
             .geometry
             .background(background.origin, background.clip, background.border_radii);
     let clip = geometry.painting_box;
-    let reference = geometry.positioning_box;
+    let reference = geometry.positioning_area.intrinsic_image_box();
     let blended = background.blend_mode != BlendMode::Normal
         && resources.ext_gstates.as_deref_mut().is_some_and(|states| {
             content.push_str("q\n");
@@ -90,7 +90,7 @@ pub(super) fn render_block_svg_background(
         resources,
         PdfBackgroundPaintContext::local(BackgroundPaintContext::new(
             reference.into(),
-            clip.rect.into(),
+            geometry.image_destination_box.into(),
             clip.radii,
             background.blur_radius,
             background.size,
@@ -266,11 +266,19 @@ pub(super) fn render_svg_background(
     };
     let (scaled_w, scaled_h) = (x_pattern.tile_size(), y_pattern.tile_size());
     let tile_pattern = LayerTilePattern::new(
-        PdfRect::new(
-            paint.reference_box.x,
-            paint.reference_box.y,
-            paint.reference_box.width,
-            paint.reference_box.height,
+        LayerPaintArea::new(
+            PdfRect::new(
+                paint.reference_box.x,
+                paint.reference_box.y,
+                paint.reference_box.width,
+                paint.reference_box.height,
+            ),
+            PdfRect::new(
+                paint.clip_box.x,
+                paint.clip_box.y,
+                paint.clip_box.width,
+                paint.clip_box.height,
+            ),
         ),
         x_pattern,
         y_pattern,

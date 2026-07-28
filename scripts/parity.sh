@@ -21,7 +21,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if (( $# != 0 )); then
   echo "parity: this command runs the complete gate and accepts no arguments" >&2
-  echo "parity: use PARITY_ONLY=<fixture-id> cargo test --test feature_parity -- --nocapture for diagnostics" >&2
+  echo "parity: use PARITY_ONLY=<fixture-id> cargo test --test feature_parity -- --ignored --nocapture for diagnostics" >&2
   exit 64
 fi
 
@@ -48,7 +48,7 @@ fi
 
 TEST_STATUS=0
 PARITY_INVOCATION_ID="$INVOCATION_ID" \
-  cargo test --manifest-path "$ROOT/Cargo.toml" --test feature_parity -- --nocapture --exact feature_parity || TEST_STATUS=$?
+  cargo test --manifest-path "$ROOT/Cargo.toml" --test feature_parity -- --ignored --nocapture --exact feature_parity || TEST_STATUS=$?
 
 if ! bash "$SCRIPT_DIR/parity-check-report.sh" "$ROOT" "$INVOCATION_ID"; then
   echo "parity: run produced no fresh JSON/Markdown/HTML report for this invocation" >&2

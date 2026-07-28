@@ -282,15 +282,17 @@ fn paint_shader_surface(
     if !tile_scale.is_positive() {
         return false;
     }
-    let mut paint = tiny_skia::Paint::default();
-    paint.shader = tiny_skia::Pattern::new(
-        source_pixmap,
-        tiny_skia::SpreadMode::Repeat,
-        tiny_skia::FilterQuality::Bilinear,
-        1.0,
-        tiny_skia::Transform::from_row(tile_scale.x, 0.0, 0.0, tile_scale.y, phase.x, phase.y),
-    );
-    paint.anti_alias = true;
+    let paint = tiny_skia::Paint {
+        shader: tiny_skia::Pattern::new(
+            source_pixmap,
+            tiny_skia::SpreadMode::Repeat,
+            tiny_skia::FilterQuality::Bilinear,
+            1.0,
+            tiny_skia::Transform::from_row(tile_scale.x, 0.0, 0.0, tile_scale.y, phase.x, phase.y),
+        ),
+        anti_alias: true,
+        ..Default::default()
+    };
 
     let horizontal_space = patch.horizontal == BorderImageRepeatMode::Space;
     let vertical_space = patch.vertical == BorderImageRepeatMode::Space;

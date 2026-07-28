@@ -38,9 +38,7 @@ pub(super) fn rasterize_mask_coverage(
                 return None;
             }
             let stop_scale = (scale_x + scale_y) * 0.5;
-            let Some(ramp) = lg.ramp.resolve_scaled(half * 2.0, stop_scale) else {
-                return None;
-            };
+            let ramp = lg.ramp.resolve_scaled(half * 2.0, stop_scale)?;
             let (cx, cy) = (w * 0.5, h * 0.5);
             for py in 0..window.tile.height {
                 let fy = window.global_y(py);
@@ -101,9 +99,7 @@ pub(super) fn rasterize_mask_coverage(
                 return None;
             }
             let stop_scale = (scale_x + scale_y) * 0.5;
-            let Some(ramp) = rg.ramp.resolve_scaled(radii.x, stop_scale) else {
-                return None;
-            };
+            let ramp = rg.ramp.resolve_scaled(radii.x, stop_scale)?;
             for py in 0..window.tile.height {
                 let fy = window.global_y(py);
                 for px in 0..window.tile.width {
@@ -119,9 +115,7 @@ pub(super) fn rasterize_mask_coverage(
             let cx = resolve_px(cg.center.x, w, scale_x);
             let cy = resolve_px(cg.center.y, h, scale_y);
             let from = cg.from_angle.to_radians();
-            let Some(ramp) = cg.ramp.resolve(1.0) else {
-                return None;
-            };
+            let ramp = cg.ramp.resolve(1.0)?;
             for py in 0..window.tile.height {
                 let fy = window.global_y(py);
                 for px in 0..window.tile.width {

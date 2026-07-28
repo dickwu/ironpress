@@ -49,6 +49,17 @@ impl BackgroundBleed {
             Self::NONE.insets
         }
     }
+
+    /// Whether every physical border edge hides a rectangular image
+    /// destination up to the inner border.
+    ///
+    /// A rounded border exposes parts of that rectangle around its curved
+    /// inner frontier, so it retains the CSS painting box even when every side
+    /// is opaque. Dashed, translucent, missing, and image borders never
+    /// produce a bleed proof in the first place.
+    pub(crate) fn obscures_rectangular_destination(self, radii: CornerRadii) -> bool {
+        self.insets != EdgeSizes::ZERO && radii.is_zero()
+    }
 }
 
 fn edge_obscures_background(side: LayoutBorderSide) -> bool {

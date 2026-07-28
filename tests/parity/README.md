@@ -55,7 +55,7 @@ or newly shaped defect.
 To inspect a small subset without touching the baseline:
 
 ```bash
-PARITY_ONLY=invalid-justify-content cargo test --test feature_parity -- --nocapture
+PARITY_ONLY=invalid-justify-content cargo test --test feature_parity -- --ignored --nocapture
 ```
 
 This is diagnostic only and deliberately exits nonzero after rendering. A

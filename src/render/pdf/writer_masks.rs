@@ -428,9 +428,11 @@ impl PdfWriter {
         let mut group = String::new();
         render_linear_gradient_tile_clipped(
             &mut group,
-            gradient.angle,
-            tile,
-            paint_bounds,
+            LinearGradientTile {
+                angle: gradient.angle,
+                bounds: tile,
+                clip: paint_bounds,
+            },
             NativePdfGradient::unit(stops),
             self.page_content_transform,
             &mut shadings,

@@ -327,7 +327,7 @@ fn footnote_lines_height(
                 line_height,
                 OverflowWrap::Normal,
             ),
-            &fonts,
+            fonts,
         );
         *total += lines.iter().map(|line| line.height).sum::<f32>();
     };
@@ -351,7 +351,7 @@ fn footnote_lines_height(
                 },
                 OverflowWrap::Normal,
             ),
-            &fonts,
+            fonts,
         );
         total += lines.iter().map(|line| line.height).sum::<f32>();
     }

@@ -214,15 +214,17 @@ fn style_run_font_style(style: &ComputedStyle, fonts: &HashMap<String, TtfFont>)
         true,
         style.font_stretch,
     );
-    match family {
+    if match family {
         FontFamily::Custom(name) => {
             crate::system_fonts::find_font(fonts, &name, style.font_weight.is_bold(), true)
                 .is_some_and(|(_, font)| font.is_italic)
         }
         _ => true,
+    } {
+        style.font_style
+    } else {
+        Default::default()
     }
-    .then_some(style.font_style)
-    .unwrap_or_default()
 }
 
 pub(crate) fn mark_synthetic_weight_run(
@@ -351,10 +353,11 @@ impl InlineTextSequence for [TextRun] {
                 let (before, after) = self.split_at_mut(current);
                 let previous_run = &mut before[previous_index];
                 let current_run = &after[0];
-                let advance = previous_run
-                    .joins_typographically(current_run)
-                    .then_some(spacing.letter)
-                    .unwrap_or_default();
+                let advance = if previous_run.joins_typographically(current_run) {
+                    spacing.letter
+                } else {
+                    Default::default()
+                };
                 previous_run
                     .metadata
                     .boundary
@@ -1084,9 +1087,11 @@ impl StyledWord {
     }
 
     fn outgoing_advance(&self, run: &TextRun) -> f32 {
-        self.ends_run
-            .then(|| run.metadata.boundary.total())
-            .unwrap_or_default()
+        if self.ends_run {
+            run.metadata.boundary.total()
+        } else {
+            Default::default()
+        }
     }
 }
 
@@ -1132,42 +1137,52 @@ impl NormalTokenMeasurement {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NormalTokenContext<'a> {
+    preceding_runs: &'a [TextRun],
+    line_has_content: bool,
+    previous_ends_whitespace: bool,
+    preserve_spacing: bool,
+    joins_previous: bool,
+    leading_tracking: f32,
+    outgoing_advance: f32,
+}
+
 fn measure_normal_token(
     paint_word: &str,
     template: &TextRun,
-    line_has_content: bool,
-    preceding_runs: &[TextRun],
-    previous_ends_whitespace: bool,
-    preserve_spacing: bool,
-    joins_prev: bool,
-    leading_tracking: f32,
-    outgoing_advance: f32,
+    context: NormalTokenContext<'_>,
     fonts: &HashMap<String, TtfFont>,
 ) -> NormalTokenMeasurement {
-    let word_width = estimate_text_width_for_run(paint_word, template, fonts) + outgoing_advance;
-    let contextual_width = joins_prev
-        .then(|| joined_token_advance(preceding_runs, paint_word, template, fonts))
+    let word_width =
+        estimate_text_width_for_run(paint_word, template, fonts) + context.outgoing_advance;
+    let contextual_width = context
+        .joins_previous
+        .then(|| joined_token_advance(context.preceding_runs, paint_word, template, fonts))
         .flatten()
-        .map(|width| width + outgoing_advance)
+        .map(|width| width + context.outgoing_advance)
         .unwrap_or(word_width);
-    let needs_space =
-        line_has_content && !preserve_spacing && !previous_ends_whitespace && !joins_prev;
+    let needs_space = context.line_has_content
+        && !context.preserve_spacing
+        && !context.previous_ends_whitespace
+        && !context.joins_previous;
     if !needs_space {
         return NormalTokenMeasurement {
             inter_word_space: InterWordSpace::None,
             leading_width: 0.0,
-            text_width: leading_tracking + contextual_width,
+            text_width: context.leading_tracking + contextual_width,
             word_width,
         };
     }
 
-    let previous_run = preceding_runs.last();
+    let previous_run = context.preceding_runs.last();
     let previous_background = previous_run.and_then(|run| run.background_color);
     if previous_background != template.background_color && template.background_color.is_some() {
         let previous_run = previous_run.unwrap_or(template);
         NormalTokenMeasurement {
             inter_word_space: InterWordSpace::PreviousRun,
-            leading_width: leading_tracking + estimate_text_width_for_run(" ", previous_run, fonts),
+            leading_width: context.leading_tracking
+                + estimate_text_width_for_run(" ", previous_run, fonts),
             text_width: word_width,
             word_width,
         }
@@ -1178,9 +1193,9 @@ fn measure_normal_token(
         NormalTokenMeasurement {
             inter_word_space: InterWordSpace::CurrentRun,
             leading_width: 0.0,
-            text_width: leading_tracking
+            text_width: context.leading_tracking
                 + estimate_text_width_for_run(&spaced, template, fonts)
-                + outgoing_advance,
+                + context.outgoing_advance,
             word_width,
         }
     }
@@ -1949,13 +1964,15 @@ fn measure_styled_token_end(
     measure_normal_token(
         &paint_word,
         run,
-        line_width > 0.0,
-        preceding_runs,
-        previous_ends_whitespace,
-        token.preserve_spacing,
-        token.joins_prev,
-        token.leading_tracking(run, line_width > 0.0),
-        token.outgoing_advance(run),
+        NormalTokenContext {
+            preceding_runs,
+            line_has_content: line_width > 0.0,
+            previous_ends_whitespace,
+            preserve_spacing: token.preserve_spacing,
+            joins_previous: token.joins_prev,
+            leading_tracking: token.leading_tracking(run, line_width > 0.0),
+            outgoing_advance: token.outgoing_advance(run),
+        },
         fonts,
     )
     .end_width(line_width)
@@ -2242,7 +2259,7 @@ pub(crate) fn wrap_text_runs(
             // Line break
             push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
             current_width = 0.0;
-            line_height = run_line_height(&template);
+            line_height = run_line_height(template);
             bs_break_run_idx = 0;
             continue;
         }
@@ -2267,9 +2284,11 @@ pub(crate) fn wrap_text_runs(
             let mut pending = String::new();
             let mut follows_internal_unit = has_internal_predecessor && current_width > 0.0;
             for c in word.chars() {
-                let tracking = follows_internal_unit
-                    .then_some(template.metadata.spacing.letter)
-                    .unwrap_or_default();
+                let tracking = if follows_internal_unit {
+                    template.metadata.spacing.letter
+                } else {
+                    Default::default()
+                };
                 if current_width > 0.0
                     && width_exceeds_limit(
                         current_width + tracking + single_sp,
@@ -2291,7 +2310,7 @@ pub(crate) fn wrap_text_runs(
                     // earlier word-overflow flush shortened `current_runs`.
                     let split_at = bs_break_run_idx.min(current_runs.len());
                     let rolled: Vec<TextRun> = current_runs.split_off(split_at);
-                    line_height = line_height.max(run_line_height(&template));
+                    line_height = line_height.max(run_line_height(template));
                     push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                     current_width = 0.0;
                     line_height = options.default_font_size * line_height_factor;
@@ -2305,14 +2324,15 @@ pub(crate) fn wrap_text_runs(
                     follows_internal_unit = has_internal_predecessor && current_width > 0.0;
                 }
                 pending.push(c);
-                current_width += follows_internal_unit
-                    .then_some(template.metadata.spacing.letter)
-                    .unwrap_or_default()
-                    + single_sp;
+                current_width += (if follows_internal_unit {
+                    template.metadata.spacing.letter
+                } else {
+                    Default::default()
+                }) + single_sp;
                 follows_internal_unit = true;
             }
             if !pending.is_empty() {
-                line_height = line_height.max(run_line_height(&template));
+                line_height = line_height.max(run_line_height(template));
                 current_runs.push(template.text_fragment(pending, ends_run));
             }
             // A soft wrap opportunity now exists after these spaces: a following
@@ -2338,7 +2358,7 @@ pub(crate) fn wrap_text_runs(
             && !word.is_empty()
             && word.chars().all(|c| c == ' ' || c == '\t')
         {
-            let sp_width = estimate_text_width_for_run(&word, &template, fonts);
+            let sp_width = estimate_text_width_for_run(&word, template, fonts);
             let total_width = leading_tracking + sp_width;
             if current_width > 0.0
                 && width_exceeds_limit(current_width + total_width, line_max_width(lines.len()))
@@ -2346,7 +2366,7 @@ pub(crate) fn wrap_text_runs(
                 // The spaces hang past the line edge: keep them on the current
                 // line, then break. The next token starts a fresh line with no
                 // carried-over leading space.
-                line_height = line_height.max(run_line_height(&template));
+                line_height = line_height.max(run_line_height(template));
                 current_runs.push(template.text_fragment(word, false));
                 push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                 current_width = 0.0;
@@ -2355,7 +2375,7 @@ pub(crate) fn wrap_text_runs(
             }
             // Otherwise the spaces fit on the line: emit them verbatim.
             current_width += total_width;
-            line_height = line_height.max(run_line_height(&template));
+            line_height = line_height.max(run_line_height(template));
             current_runs.push(template.text_fragment(word, ends_run));
             continue;
         }
@@ -2373,7 +2393,7 @@ pub(crate) fn wrap_text_runs(
                 .and_then(|r: &TextRun| r.text.chars().last())
                 .is_some_and(char::is_whitespace);
             let mut measurement = measure_inline_token(
-                &template,
+                template,
                 current_width > 0.0,
                 prev_emitted_ws,
                 joins_prev,
@@ -2388,8 +2408,8 @@ pub(crate) fn wrap_text_runs(
             {
                 push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                 current_width = 0.0;
-                line_height = run_line_height(&template);
-                measurement = measure_inline_token(&template, false, true, joins_prev, fonts);
+                line_height = run_line_height(template);
+                measurement = measure_inline_token(template, false, true, joins_prev, fonts);
             }
             if measurement.leading_width > 0.0 {
                 // Emit the inter-word space as a run so the box advances past it.
@@ -2425,7 +2445,7 @@ pub(crate) fn wrap_text_runs(
                         }
                         crate::style::computed::VerticalAlign::Length(v) => v,
                         crate::style::computed::VerticalAlign::Percent(p) => {
-                            authored_run_line_height(&template) * p
+                            authored_run_line_height(template) * p
                         }
                         _ => 0.0,
                     };
@@ -2443,7 +2463,7 @@ pub(crate) fn wrap_text_runs(
                         template.font_style.is_slanted(),
                         fonts,
                     );
-                    let lh = run_line_height(&template);
+                    let lh = run_line_height(template);
                     let content = (asc_ratio + desc_ratio) * template.font_size;
                     let half_leading = ((lh - content) / 2.0).max(0.0);
                     let text_above = asc_ratio * template.font_size + half_leading;
@@ -2462,7 +2482,7 @@ pub(crate) fn wrap_text_runs(
                         template.font_style.is_slanted(),
                         fonts,
                     );
-                    let lh = run_line_height(&template);
+                    let lh = run_line_height(template);
                     let content = (asc_ratio + desc_ratio) * template.font_size;
                     let half_leading = ((lh - content) / 2.0).max(0.0);
                     let text_above = asc_ratio * template.font_size + half_leading;
@@ -2499,14 +2519,16 @@ pub(crate) fn wrap_text_runs(
             .is_some_and(char::is_whitespace);
         let mut measurement = measure_normal_token(
             &paint_word,
-            &template,
-            current_width > 0.0,
-            &current_runs,
-            previous_ends_whitespace,
-            preserve_spacing,
-            joins_prev,
-            leading_tracking,
-            outgoing_advance,
+            template,
+            NormalTokenContext {
+                preceding_runs: &current_runs,
+                line_has_content: current_width > 0.0,
+                previous_ends_whitespace,
+                preserve_spacing,
+                joins_previous: joins_prev,
+                leading_tracking,
+                outgoing_advance,
+            },
             fonts,
         );
         let effective_max_width = line_max_width(lines.len());
@@ -2537,17 +2559,19 @@ pub(crate) fn wrap_text_runs(
             if current_width > 0.0 {
                 push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                 current_width = 0.0;
-                line_height = run_line_height(&template);
+                line_height = run_line_height(template);
                 measurement = measure_normal_token(
                     &paint_word,
-                    &template,
-                    false,
-                    &[],
-                    true,
-                    preserve_spacing,
-                    joins_prev,
-                    0.0,
-                    outgoing_advance,
+                    template,
+                    NormalTokenContext {
+                        preceding_runs: &[],
+                        line_has_content: false,
+                        previous_ends_whitespace: true,
+                        preserve_spacing,
+                        joins_previous: joins_prev,
+                        leading_tracking: 0.0,
+                        outgoing_advance,
+                    },
                     fonts,
                 );
             }
@@ -2563,12 +2587,12 @@ pub(crate) fn wrap_text_runs(
             ) {
                 // The current line was already flushed above, so the prefix
                 // starts a fresh line with no leading inter-word space.
-                line_height = line_height.max(run_line_height(&template));
+                line_height = line_height.max(run_line_height(template));
                 current_runs.push(template.text_fragment(prefix, false));
 
                 push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                 current_width = 0.0;
-                line_height = run_line_height(&template);
+                line_height = run_line_height(template);
                 queue.push_front(StyledWord {
                     text: remainder,
                     run_index,
@@ -2585,18 +2609,20 @@ pub(crate) fn wrap_text_runs(
         if overflows && current_width > 0.0 && break_before {
             push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
             current_width = 0.0;
-            line_height = run_line_height(&template);
+            line_height = run_line_height(template);
             bs_break_run_idx = 0;
             measurement = measure_normal_token(
                 &paint_word,
-                &template,
-                false,
-                &[],
-                true,
-                preserve_spacing,
-                joins_prev,
-                0.0,
-                outgoing_advance,
+                template,
+                NormalTokenContext {
+                    preceding_runs: &[],
+                    line_has_content: false,
+                    previous_ends_whitespace: true,
+                    preserve_spacing,
+                    joins_previous: joins_prev,
+                    leading_tracking: 0.0,
+                    outgoing_advance,
+                },
                 fonts,
             );
         }
@@ -2614,7 +2640,7 @@ pub(crate) fn wrap_text_runs(
             InterWordSpace::PreviousRun => {
                 // Emit space as separate unstyled run using the PREVIOUS
                 // run's font so it matches the surrounding text metrics.
-                let prev_run = current_runs.last().unwrap_or(&template);
+                let prev_run = current_runs.last().unwrap_or(template);
                 current_runs.push(TextRun {
                     text: " ".to_string(),
                     decorations: Vec::new(),
@@ -2633,7 +2659,7 @@ pub(crate) fn wrap_text_runs(
             InterWordSpace::None => run_word,
         };
         current_width = measurement.end_width(current_width);
-        line_height = line_height.max(run_line_height(&template));
+        line_height = line_height.max(run_line_height(template));
 
         current_runs.push(template.text_fragment(text, ends_run));
     }
