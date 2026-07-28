@@ -30,17 +30,24 @@ Pure rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies
 
 ## Performance
 
-<!-- AUTO:BENCH - updated by CI -->
-| Document | Time | Pages/sec |
-|----------|------|-----------|
-| Simple HTML (`<h1>` + `<p>`) | **16 us** | 62,500 |
-| Styled HTML (CSS, lists, links) | **71 us** | 14,000 |
-| Markdown (headings, code, lists) | **141 us** | 7,000 |
-| Table (5 rows, styled headers) | **341 us** | 2,900 |
-| Full report (tables, flex, progress bars) | **587 us** | 1,700 |
-<!-- /AUTO:BENCH -->
+Criterion measures complete, in-process conversion to PDF bytes:
 
-Chrome headless takes ~2,500 ms per page. **ironpress is 4,000x faster**.
+| Document | Representative median | Approx. conversions/sec |
+|----------|----------------------:|------------------------:|
+| Simple HTML (`<h1>` + `<p>`) | **1.3 ms** | 770 |
+| Styled HTML (CSS, lists, links) | **5.8 ms** | 170 |
+| Markdown (headings, code, lists) | **11 ms** | 89 |
+| Table (5 rows, styled headers) | **13 ms** | 75 |
+| Full report (tables, flex, progress bars) | **30 ms** | 33 |
+
+Measured on Linux x86-64 with a Ryzen 9 5950X and Rust 1.97.1 at commit
+`b4536834`. The benchmark profile uses `opt-level=3`, fat LTO, and one codegen
+unit. Results depend on hardware and document content; conversions/sec is not a
+page-throughput claim. Reproduce the measurements with:
+
+```bash
+cargo bench --bench conversion
+```
 
 ## Quick start
 
