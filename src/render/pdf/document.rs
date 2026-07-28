@@ -393,6 +393,7 @@ mod page_margin_text_tests {
 
     #[test]
     fn synthetic_weight_running_element_uses_its_registered_font_resource() {
+        const FAMILY: &str = "IronpressSyntheticWeightFixture";
         let font = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/parity/fonts/ParitySans.ttf"),
@@ -400,12 +401,12 @@ mod page_margin_text_tests {
         .expect("ParitySans fixture font");
         let pdf = crate::HtmlConverter::new()
             .compress(false)
-            .add_font("ParitySans", font)
+            .add_font(FAMILY, font)
             .convert(
                 r#"<html><head><style>
                     @page { size: 180px 120px; margin: 22px 0 0;
                         @top-center { content: element(header) } }
-                    html { font-family: ParitySans }
+                    html { font-family: IronpressSyntheticWeightFixture }
                     h1 { position: running(header); font-size: 12px }
                     div { height: 100px }
                 </style></head><body><h1>RUNNING HEAD</h1><div></div></body></html>"#,
@@ -415,13 +416,13 @@ mod page_margin_text_tests {
 
         assert!(
             syntax
-                .matches("/paritysans__bold__synthetic_weight")
+                .matches("/ironpresssyntheticweightfixture__synthetic_weight")
                 .count()
                 >= 2,
             "the synthetic font must appear in both page resources and text operators"
         );
         assert!(
-            !syntax.contains("/paritysans__bold "),
+            !syntax.contains("/ironpresssyntheticweightfixture "),
             "running text must not reference the unregistered source resource"
         );
     }
