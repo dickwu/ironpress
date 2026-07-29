@@ -1,0 +1,75 @@
+# Changelog
+
+## [1.4.4] — 2026-07-29
+
+### Chromium visual parity
+
+Ironpress now achieves **100% verified visual parity** with Chromium across a
+1,662-fixture adversarial corpus (1,642 PASS / 0 FAIL / 20 reference-disputed).
+Every fixture comparison uses the same pinned `pdftoppm` invocation at 300 DPI —
+no translation, registration, jitter, or raster replacement.
+
+### Parity test harness
+
+- Same-rasterizer parity gate: `scripts/parity.sh` renders every fixture
+  in-process, rasterizes candidate and oracle PDFs symmetrically, and reports
+  pass/fail with complete RGBA evidence.
+- `refs.lock` authenticates each fixture, oracle PDF, renderer, fonts, and
+  provenance.
+- `baseline.json` tracks regression health separately from test history.
+- HTML parity report with full visual diffs for every fixture.
+- CI gate (`.github/workflows/parity.yml`) runs the same browser-free check.
+
+### Layout & rendering fixes
+
+- **Paged media**: `@page` backgrounds cascade through named, `:first`, `:left`,
+  `:right`, and `:blank` selectors; sheet decoration modeled semantically.
+- **Multicol**: block flow constraints, nested clip paths, rule positioning,
+  and layout split by semantic responsibility.
+- **Grid**: block-size constrained before track alignment; multicol reference
+  geometry corrected.
+- **Borders**: collapsed table borders resolved as a shared grid; opaque square
+  painting unified; rounded background coverage aligned with Chromium; vector
+  serialization matches Chromium; bevel geometry matched.
+- **Filters**: inherited filter layer paint space; premultiplied source
+  rendering; raster placement and sampling; linear-light surface parity;
+  descendant clipping to overflow bounds; filter surface geometry fix.
+- **Inline layout**: mixed advances unified; atomic inline origins preserved;
+  generated content traversal unified; layout probes replaced with capabilities.
+- **Text**: origin-aware text decorations; text combine expansion handling.
+- **Tables**: cell paint phase ordering; expanded table height honored in flex
+  alignment.
+- **Images**: source pixels preserved for `object-fit: cover`; source images
+  reused across page fragments; fragmented JPEG background ownership; off-fragment
+  resources culled; certificate image rendering optimized.
+- **Backgrounds**: nested fills routed through box background geometry; rounded
+  background raster phase fixed; full-box radial masks rendered as native shadings.
+- **Graphical effects**: continued across page boxes; transformed descendants
+  composited in filter sources; descendant clips propagated into filter sources.
+- **Transforms**: Fontations transform oracle restored; fractional transform
+  parity; CSS print scale reconstructed exactly.
+- **Raster**: bounds quantized from exact DPI; x-height quantization matched
+  with Fontations.
+- **List markers**: built-in markers rendered as vector shapes.
+- **Opacity**: applied to absolute-positioned elements.
+- **Box-shadow**: parity pass corrections.
+- **Percentage widths**: parity pass corrections.
+- **Heading font-sizes**: use `em` units (Chrome UA parity).
+- **Body padding**: folded into page margin.
+
+### Performance
+
+- README benchmark claims replaced with reproducible Criterion medians.
+- Benchmark profile: `opt-level=3`, fat LTO, one codegen unit.
+
+### Builder API
+
+- `RasterQuality` struct: controls background, filter, and image DPI in one
+  policy. CLI exposes `--image-dpi`, `--filter-dpi`, `--background-raster-dpi`.
+
+### CI
+
+- Parity rasterizer pinned in CI.
+- Codecov made informational for parity PRs.
+- Fork PR visual ref regeneration avoided.
+- Synthetic font resource test made host-independent.
