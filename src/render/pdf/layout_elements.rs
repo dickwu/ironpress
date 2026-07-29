@@ -1,33 +1,61 @@
+#[cfg(test)]
+use super::geometry::LayoutBoxGeometry;
+use super::geometry::{PdfPoint, PdfRect};
 use super::*;
+use crate::layout::elements::LayoutNode;
+#[cfg(test)]
+use crate::types::CornerRadii;
 
 pub(super) struct TextRenderContext<'a> {
-    custom_fonts: &'a HashMap<String, TtfFont>,
-    prepared_custom_fonts: &'a PreparedCustomFonts,
-    annotations: &'a mut Vec<LinkAnnotation>,
+    pub(super) page_height: f32,
+    pub(super) custom_fonts: &'a HashMap<String, TtfFont>,
+    pub(super) prepared_custom_fonts: &'a PreparedCustomFonts,
+    pub(super) annotations: &'a mut Vec<LinkAnnotation>,
+    // Threaded so `render_cell_text` can embed blurred `text-shadow` image
+    // XObjects (it rasterizes + blurs the shadow glyphs, like the page path).
+    pub(super) pdf_writer: &'a mut PdfWriter,
+    pub(super) page_images: &'a mut Vec<ImageRef>,
 }
 
 impl<'a> TextRenderContext<'a> {
     pub(super) fn new(
+        page_height: f32,
         custom_fonts: &'a HashMap<String, TtfFont>,
         prepared_custom_fonts: &'a PreparedCustomFonts,
         annotations: &'a mut Vec<LinkAnnotation>,
+        pdf_writer: &'a mut PdfWriter,
+        page_images: &'a mut Vec<ImageRef>,
     ) -> Self {
         Self {
+            page_height,
             custom_fonts,
             prepared_custom_fonts,
             annotations,
+            pdf_writer,
+            page_images,
         }
+    }
+
+    pub(super) fn annotation_marker(&self) -> usize {
+        self.annotations.len()
+    }
+
+    pub(super) fn discard_annotations_since(&mut self, marker: usize) {
+        self.annotations.truncate(marker);
     }
 }
 
 pub(super) struct PageRenderContext<'a> {
-    pdf_writer: &'a mut PdfWriter,
-    page_images: &'a mut Vec<ImageRef>,
-    shadings: &'a mut Vec<ShadingEntry>,
-    shading_counter: &'a mut usize,
+    pub(super) paint_box: PdfRect,
+    /// Top-left of the initial fixed containing block (the page area in paged
+    /// media), in PDF page coordinates.
+    pub(super) initial_fixed_origin: PdfPoint,
+    pub(super) shadings: &'a mut Vec<ShadingEntry>,
+    pub(super) shading_counter: &'a mut usize,
     pub(super) page_ext_gstates: &'a mut Vec<(String, f32)>,
     pub(super) bg_alpha_counter: &'a mut usize,
-    text: TextRenderContext<'a>,
+    pub(super) stacking: StackingTraversal,
+    pub(super) text: TextRenderContext<'a>,
 }
 
 impl<'a> PageRenderContext<'a> {
@@ -42,41 +70,50 @@ impl<'a> PageRenderContext<'a> {
         page_ext_gstates: &'a mut Vec<(String, f32)>,
         bg_alpha_counter: &'a mut usize,
         annotations: &'a mut Vec<LinkAnnotation>,
+        paint_box: PdfRect,
+        page_height: f32,
     ) -> Self {
         Self {
-            pdf_writer,
-            page_images,
+            paint_box,
+            initial_fixed_origin: PdfPoint::new(paint_box.left, paint_box.top()),
             shadings,
             shading_counter,
             page_ext_gstates,
             bg_alpha_counter,
-            text: TextRenderContext::new(custom_fonts, prepared_custom_fonts, annotations),
+            stacking: StackingTraversal::default(),
+            text: TextRenderContext::new(
+                page_height,
+                custom_fonts,
+                prepared_custom_fonts,
+                annotations,
+                pdf_writer,
+                page_images,
+            ),
         }
+    }
+
+    pub(super) const fn with_initial_fixed_origin(mut self, origin: PdfPoint) -> Self {
+        self.initial_fixed_origin = origin;
+        self
     }
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct NestedLayoutFrame {
-    origin_x: f32,
-    top_y: f32,
-    initial_origin_x: f32,
-    initial_top_y: f32,
+    origin: PdfPoint,
+    initial_origin: PdfPoint,
     available_width: f32,
 }
 
 impl NestedLayoutFrame {
     pub(super) const fn new(
-        origin_x: f32,
-        top_y: f32,
-        initial_origin_x: f32,
-        initial_top_y: f32,
+        origin: PdfPoint,
+        initial_origin: PdfPoint,
         available_width: f32,
     ) -> Self {
         Self {
-            origin_x,
-            top_y,
-            initial_origin_x,
-            initial_top_y,
+            origin,
+            initial_origin,
             available_width,
         }
     }
@@ -84,115 +121,192 @@ impl NestedLayoutFrame {
 
 #[derive(Clone, Copy)]
 pub(super) struct CellTextPlacement {
-    cell_x: f32,
-    content_top: f32,
+    origin: PdfPoint,
     col_width: f32,
+    /// Extra horizontal offset applied to the FIRST rendered line only (CSS
+    /// `text-indent`). Negative values pull the first line left, used to hang a
+    /// list marker into the surrounding padding.
+    first_line_indent: f32,
 }
 
 impl CellTextPlacement {
-    pub(super) const fn new(cell_x: f32, content_top: f32, col_width: f32) -> Self {
+    pub(super) const fn new(origin: PdfPoint, col_width: f32) -> Self {
         Self {
-            cell_x,
-            content_top,
+            origin,
             col_width,
+            first_line_indent: 0.0,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn with_first_line_indent(mut self, first_line_indent: f32) -> Self {
+        self.first_line_indent = first_line_indent;
+        self
     }
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct TableCellRenderBox {
-    cell_x: f32,
-    row_y: f32,
+pub(super) struct CellRenderBox {
+    origin: PdfPoint,
     col_width: f32,
     row_height: f32,
-    nested_frame: NestedLayoutFrame,
+    /// Extra downward offset applied to this cell's content so a
+    /// `vertical-align: baseline` cell's first text baseline lines up with the
+    /// common baseline of the other baseline-aligned cells in the same row. 0.0
+    /// when the cell is not baseline-aligned or shares the row's tallest
+    /// baseline (the common case, so existing single-font rows are unaffected).
+    baseline_shift: f32,
 }
 
-impl TableCellRenderBox {
-    pub(super) const fn new(
-        cell_x: f32,
-        row_y: f32,
-        col_width: f32,
-        row_height: f32,
-        nested_frame: NestedLayoutFrame,
-    ) -> Self {
+impl CellRenderBox {
+    pub(super) const fn new(origin: PdfPoint, col_width: f32, row_height: f32) -> Self {
         Self {
-            cell_x,
-            row_y,
+            origin,
             col_width,
             row_height,
-            nested_frame,
+            baseline_shift: 0.0,
         }
+    }
+
+    pub(super) const fn with_baseline_shift(mut self, shift: f32) -> Self {
+        self.baseline_shift = shift;
+        self
     }
 }
 
+/// First text baseline distance from a cell's content-box top: the leading above
+/// the first line plus its ascent. Returns `None` for cells with no rendered
+/// text line (nothing to baseline-align).
+pub(super) fn table_cell_first_baseline(
+    cell: &CellBox,
+    custom_fonts: &HashMap<String, TtfFont>,
+) -> Option<f32> {
+    let line = cell
+        .content
+        .lines
+        .iter()
+        .find(|line| line.runs.iter().any(|run| !run.text.is_empty()))?;
+    let metrics = line_box_metrics(line, custom_fonts);
+    Some(cell.box_model.content_insets.top + metrics.half_leading + metrics.ascender)
+}
+
+/// Per-cell baseline shifts for one row: each `vertical-align: baseline` cell
+/// with text is offset down so its first baseline matches the row's deepest
+/// baseline. Index i corresponds to `cells[i]`; non-baseline / text-less cells
+/// get 0.0. All-equal rows (same font + line-height) yield all-zero shifts, so
+/// uniform tables render exactly as before.
+pub(super) fn row_baseline_shifts<T: CellBoxHolder>(
+    cells: &[T],
+    custom_fonts: &HashMap<String, TtfFont>,
+) -> Vec<f32> {
+    let baselines: Vec<Option<f32>> = cells
+        .iter()
+        .map(|cell| {
+            let layout = cell.cell_box();
+            if layout.alignment.block == VerticalAlign::Baseline {
+                table_cell_first_baseline(layout, custom_fonts)
+            } else {
+                None
+            }
+        })
+        .collect();
+    let common = baselines
+        .iter()
+        .filter_map(|b| *b)
+        .fold(f32::NEG_INFINITY, f32::max);
+    if !common.is_finite() {
+        return vec![0.0; cells.len()];
+    }
+    baselines
+        .iter()
+        .map(|b| b.map_or(0.0, |own| (common - own).max(0.0)))
+        .collect()
+}
+
+#[cfg(test)]
 pub(super) struct NestedTextBlock<'a> {
     pub(super) lines: &'a [TextLine],
     pub(super) text_align: TextAlign,
-    pub(super) padding_top: f32,
-    pub(super) padding_bottom: f32,
-    pub(super) padding_left: f32,
-    pub(super) padding_right: f32,
+    pub(super) padding: EdgeSizes,
     pub(super) border: crate::layout::engine::LayoutBorder,
     pub(super) block_width: Option<f32>,
     pub(super) block_height: Option<f32>,
-    pub(super) background_color: Option<(f32, f32, f32, f32)>,
+    /// Whether the box clips overflow (`overflow: hidden`/`scroll`). When true a
+    /// definite `block_height` is a hard size and content is clipped to it rather
+    /// than growing the box.
+    pub(super) clips: bool,
+    pub(super) background_color: Option<crate::types::Color>,
     pub(super) background_svg: Option<&'a crate::parser::svg::SvgTree>,
     pub(super) background_blur_radius: f32,
     pub(super) background_size: BackgroundSize,
     pub(super) background_position: BackgroundPosition,
     pub(super) background_repeat: BackgroundRepeat,
     pub(super) background_origin: BackgroundOrigin,
+    pub(super) background_clip: BackgroundClip,
     pub(super) background_blur_canvas_box: Option<SvgViewportBox>,
-    pub(super) border_radius: f32,
+    pub(super) border_radii: CornerRadii,
+    /// CSS `text-indent` applied to the first line only. List items use a
+    /// negative value here to hang an `outside` marker into the padding band.
+    pub(super) text_indent: f32,
 }
 
-/// Compute the height of a table row from its cells.
-pub(super) fn compute_row_height(cells: &[TableCell]) -> f32 {
+/// Compute a grid row's painted height. Unlike a table row, a grid track size is
+/// resolved during layout (css-grid-1 §11): the row track already accounts for
+/// each item's definite/auto height, and a grid item with a definite height does
+/// NOT grow its track when its content is taller — the content overflows the box
+/// instead. So the painted row height is the track height carried on each cell as
+/// `min_content_height`, never grown by the cells' intrinsic content height.
+pub(super) fn compute_grid_row_height(cells: &[GridCell]) -> f32 {
     cells
         .iter()
-        .map(table_cell_content_height)
+        .map(|cell| cell.layout.box_model.minimum_block_size)
         .fold(0.0f32, f32::max)
-}
-
-pub(super) fn table_cell_geometry(
-    col_widths: &[f32],
-    col_pos: usize,
-    colspan: usize,
-    spacing: f32,
-    origin_x: f32,
-) -> (f32, f32) {
-    let cell_x = origin_x + col_widths.iter().take(col_pos).sum::<f32>() + spacing * col_pos as f32;
-    let cell_w = col_widths.iter().skip(col_pos).take(colspan).sum::<f32>()
-        + spacing * colspan.saturating_sub(1) as f32;
-    (cell_x, cell_w)
 }
 
 pub(super) fn render_cell_content(
     content: &mut String,
-    cell: &TableCell,
-    placement: TableCellRenderBox,
+    cell: &CellBox,
+    placement: CellRenderBox,
+    inherited_abs_origins: &HashMap<usize, PdfPoint>,
     ctx: &mut PageRenderContext<'_>,
 ) {
-    let content_top = table_cell_content_top(cell, placement.row_y, placement.row_height);
-    if !cell.nested_rows.is_empty() {
-        let text_h: f32 = cell.lines.iter().map(|line| line.height).sum();
+    let content_top =
+        cell_content_top(cell, placement.origin.y, placement.row_height) - placement.baseline_shift;
+    if !cell.content.children.is_empty() {
+        let text_h: f32 = cell.content.lines.iter().map(|line| line.height).sum();
         render_cell_text(
             content,
             cell,
-            CellTextPlacement::new(placement.cell_x, content_top, placement.col_width),
+            CellTextPlacement::new(
+                PdfPoint::new(placement.origin.x, content_top),
+                placement.col_width,
+            ),
             &mut ctx.text,
         );
-        render_nested_layout_elements(
+        render_cell_child_elements(
             content,
-            &cell.nested_rows,
+            &cell.content.children,
             NestedLayoutFrame::new(
-                placement.cell_x + cell.padding_left,
-                content_top - text_h - cell.padding_bottom,
-                placement.nested_frame.initial_origin_x,
-                placement.nested_frame.initial_top_y,
-                (placement.col_width - cell.padding_left - cell.padding_right).max(0.0),
+                PdfPoint::new(
+                    placement.origin.x + cell.box_model.content_insets.left,
+                    // `content_top` is already the content-box top (row top minus the
+                    // cell's top padding). Nested block content starts just below any
+                    // cell text; it must NOT be shifted down by the bottom padding.
+                    content_top - text_h,
+                ),
+                PdfPoint::new(
+                    placement.origin.x + cell.box_model.border_insets.left,
+                    placement.origin.y - cell.box_model.border_insets.top,
+                ),
+                (placement.col_width - cell.box_model.content_insets.horizontal()).max(0.0),
             ),
+            if cell.establishes_stacking_context() {
+                StackingScope::Local
+            } else {
+                StackingScope::Ancestor
+            },
+            cell,
+            inherited_abs_origins,
             ctx,
         );
         return;
@@ -201,582 +315,185 @@ pub(super) fn render_cell_content(
     render_cell_text(
         content,
         cell,
-        CellTextPlacement::new(placement.cell_x, content_top, placement.col_width),
+        CellTextPlacement::new(
+            PdfPoint::new(placement.origin.x, content_top),
+            placement.col_width,
+        ),
         &mut ctx.text,
+    );
+}
+
+fn render_cell_child_elements(
+    content: &mut String,
+    elements: &[LayoutNode],
+    frame: NestedLayoutFrame,
+    stacking_scope: StackingScope,
+    cell: &CellBox,
+    inherited_abs_origins: &HashMap<usize, PdfPoint>,
+    ctx: &mut PageRenderContext<'_>,
+) {
+    let mut abs_origins = inherited_abs_origins.clone();
+    if let Some(depth) = cell.established_containing_block_depth() {
+        abs_origins.insert(depth, frame.initial_origin);
+    }
+    render_container_children(
+        content,
+        elements,
+        ContainerFrame::new(
+            frame.origin,
+            crate::types::Size::new(frame.available_width, f32::INFINITY),
+            frame.initial_origin,
+        ),
+        &mut abs_origins,
+        ctx,
+        ContainerRenderOptions {
+            stacking_scope,
+            ..Default::default()
+        },
     );
 }
 
 pub(super) fn render_cell_text(
     content: &mut String,
-    cell: &TableCell,
+    cell: &CellBox,
     placement: CellTextPlacement,
     ctx: &mut TextRenderContext<'_>,
 ) {
-    let cell_inner_w = placement.col_width - cell.padding_left - cell.padding_right;
-    let mut text_y = placement.content_top;
-    for line in &cell.lines {
+    let cell_inner_w = placement.col_width - cell.box_model.content_insets.horizontal();
+    let mut baseline_cursor =
+        TextBaselineCursor::new(placement.origin.y, ctx.pdf_writer.page_content_transform);
+    let mut first_drawn_line = true;
+    for line in &cell.content.lines {
         let metrics = line_box_metrics(line, ctx.custom_fonts);
-        text_y -= metrics.half_leading + metrics.ascender;
-        let line_annotation_box = TextLineAnnotationBox {
-            top: text_y + metrics.ascender + metrics.half_leading,
-            bottom: text_y - metrics.descender - metrics.half_leading,
-        };
+        let text_y = baseline_cursor.next_horizontal(metrics);
+        let line_annotation_bottom = text_y - metrics.descender - metrics.half_leading;
+        let line_annotation_height =
+            metrics.ascender + metrics.descender + 2.0 * metrics.half_leading;
         let text_content: String = line.runs.iter().map(|run| run.text.as_str()).collect();
         if text_content.is_empty() {
             continue;
         }
-        let merged = merge_runs(&line.runs);
+        // CSS `text-indent` shifts the start of the first rendered line. List
+        // items pass a negative value so an `outside` marker (the first run)
+        // hangs left into the padding while the following text lands at the
+        // content edge.
+        let first_line_indent = if first_drawn_line {
+            placement.first_line_indent
+        } else {
+            0.0
+        };
+        first_drawn_line = false;
+        let merged = crate::text::coalesce_text_runs(&line.runs);
         let line_width: f32 = merged
             .iter()
             .map(|run| estimate_run_width_with_fonts(run, ctx.custom_fonts))
             .sum();
-        let text_x = match cell.text_align {
+        let text_x = match cell.alignment.inline {
             TextAlign::Right => {
-                placement.cell_x + cell.padding_left + (cell_inner_w - line_width).max(0.0)
+                placement.origin.x
+                    + cell.box_model.content_insets.left
+                    + (cell_inner_w - line_width).max(0.0)
             }
             TextAlign::Center => {
-                placement.cell_x + cell.padding_left + ((cell_inner_w - line_width) / 2.0).max(0.0)
+                placement.origin.x
+                    + cell.box_model.content_insets.left
+                    + ((cell_inner_w - line_width) / 2.0).max(0.0)
             }
-            _ => placement.cell_x + cell.padding_left,
+            _ => placement.origin.x + cell.box_model.content_insets.left + first_line_indent,
         };
         let mut x = text_x;
-        for run in &merged {
+        for (run_index, run) in merged.iter().enumerate() {
             if run.text.is_empty() {
                 continue;
             }
-            let (r, g, b) = run.color;
             let run_width = estimate_run_width_with_fonts(run, ctx.custom_fonts);
+            let previous = merged[..run_index]
+                .iter()
+                .rev()
+                .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
+            let decoration =
+                HorizontalRunDecorations::new(run, x, run_width, text_y, ctx.custom_fonts)
+                    .continuing_after(previous);
 
-            if let Some((background_r, background_g, background_b, _background_a)) =
-                run.background_color
-            {
-                let (pad_h, pad_v) = run.padding;
-                let rx = x - pad_h;
-                let ry = text_y - 2.0 - pad_v;
-                let rw2 = run_width + pad_h * 2.0;
-                let rh = run.font_size + 2.0 + pad_v * 2.0;
+            if let Some(background) = run.background_color {
+                let (background_r, background_g, background_b) = background.to_f32_rgb();
+                let rx = x - run.padding.left;
+                let ry = text_y - 2.0 - run.padding.bottom;
+                let rw2 = run_width + run.padding.horizontal();
+                let rh = run.font_size + 2.0 + run.padding.vertical();
                 content.push_str(&format!(
                     "{background_r} {background_g} {background_b} rg\n"
                 ));
-                if run.border_radius > 0.0 {
-                    content.push_str(&rounded_rect_path(rx, ry, rw2, rh, run.border_radius));
-                    content.push_str("\nf\n");
-                } else {
-                    content.push_str(&format!("{rx} {ry} {rw2} {rh} re\nf\n"));
-                }
+                content.push_str(
+                    &PdfRect::new(rx, ry, rw2, rh)
+                        .rounded(run.border_radii)
+                        .path_or_rect(),
+                );
+                content.push_str("f\n");
             }
 
-            render_run_text(
+            decoration.paint_text(
                 content,
-                run,
-                x,
-                text_y,
-                ctx.custom_fonts,
+                crate::layout::text::line_primary_font_size(&merged),
                 ctx.prepared_custom_fonts,
+                0.0,
+                ctx.pdf_writer,
+                ctx.page_images,
             );
 
-            if run.underline {
-                let (_, descender_ratio) = crate::fonts::font_metrics_ratios(
-                    &run.font_family,
-                    run.bold,
-                    run.italic,
-                    ctx.custom_fonts,
-                );
-                let desc = descender_ratio * run.font_size;
-                let underline_y = text_y - desc * 0.6;
-                let thickness = (run.font_size * 0.07).max(0.5);
-                content.push_str(&format!(
-                    "{r} {g} {b} RG\n{thickness} w\n{x} {underline_y} m {x2} {underline_y} l\nS\n",
-                    x2 = x + run_width,
-                ));
-            }
-
-            if run.line_through {
-                let strike_y = text_y + run.font_size * 0.3;
-                let thickness = (run.font_size * 0.07).max(0.5);
-                content.push_str(&format!(
-                    "{r} {g} {b} RG\n{thickness} w\n{x} {strike_y} m {x2} {strike_y} l\nS\n",
-                    x2 = x + run_width,
-                ));
-            }
-
-            if let Some(annotation) =
-                text_run_link_annotation(run, x, run_width, line_annotation_box)
-            {
+            if let Some(annotation) = text_run_link_annotation(
+                run,
+                PdfRect::new(x, line_annotation_bottom, run_width, line_annotation_height),
+            ) {
                 ctx.annotations.push(annotation);
             }
 
             x += run_width;
         }
-        text_y -= metrics.descender + metrics.half_leading;
     }
 }
 
-fn table_cell_content_top(cell: &TableCell, row_y: f32, row_height: f32) -> f32 {
-    let content_height = table_cell_content_height(cell);
-    let offset = match cell.vertical_align {
-        VerticalAlign::Middle => ((row_height - content_height) / 2.0).max(0.0),
-        VerticalAlign::Bottom => (row_height - content_height).max(0.0),
-        VerticalAlign::Top
-        | VerticalAlign::Baseline
-        | VerticalAlign::Super
-        | VerticalAlign::Sub => 0.0,
-    };
-    row_y - offset - cell.padding_top
+fn cell_content_top(cell: &CellBox, row_y: f32, row_height: f32) -> f32 {
+    let offset = cell.content_block_offset(row_height);
+    row_y - offset - cell.box_model.content_insets.top
 }
 
-pub(super) fn table_row_total_height(row: &LayoutElement) -> f32 {
-    match row {
-        LayoutElement::TableRow {
-            cells,
-            margin_top,
-            margin_bottom,
-            ..
-        } => margin_top + compute_row_height(cells) + margin_bottom,
-        _ => 0.0,
-    }
-}
+#[cfg(test)]
+mod table_cell_alignment_tests {
+    use super::*;
 
-pub(super) fn render_nested_text_block(
-    content: &mut String,
-    block: NestedTextBlock<'_>,
-    frame: NestedLayoutFrame,
-    ctx: &mut PageRenderContext<'_>,
-) {
-    let render_width = block.block_width.unwrap_or(frame.available_width).max(0.0);
-    let total_height = text_block_total_height(
-        block.lines,
-        block.padding_top,
-        block.padding_bottom,
-        block.block_height,
-    );
-    let block_bottom = frame.top_y - total_height;
-
-    if let Some((r, g, b, a)) = block.background_color {
-        let needs_bg_alpha = a < 1.0;
-        if needs_bg_alpha {
-            let gs_name = format!("GSba{}", ctx.bg_alpha_counter);
-            *ctx.bg_alpha_counter += 1;
-            ctx.page_ext_gstates.push((gs_name.clone(), a));
-            content.push_str(&format!("/{gs_name} gs\n"));
-        }
-        content.push_str(&format!("{r} {g} {b} rg\n"));
-        if block.border_radius > 0.0 {
-            content.push_str(&rounded_rect_path(
-                frame.origin_x,
-                block_bottom,
-                render_width,
-                total_height,
-                block.border_radius,
-            ));
-        } else {
-            content.push_str(&format!(
-                "{x} {y} {w} {h} re\n",
-                x = frame.origin_x,
-                y = block_bottom,
-                w = render_width,
-                h = total_height,
-            ));
-        }
-        content.push_str("f\n");
-        if needs_bg_alpha {
-            content.push_str("/GSDefault gs\n");
-        }
-    }
-
-    if let Some(svg_tree) = block.background_svg {
-        let (ref_x, ref_y, ref_w, ref_h) = match block.background_origin {
-            BackgroundOrigin::Border => (
-                frame.origin_x - block.border.left.width,
-                block_bottom - block.border.bottom.width,
-                render_width + block.border.left.width + block.border.right.width,
-                total_height + block.border.top.width + block.border.bottom.width,
-            ),
-            BackgroundOrigin::Content => (
-                frame.origin_x + block.padding_left,
-                block_bottom + block.padding_bottom,
-                (render_width - block.padding_left - block.padding_right).max(0.0),
-                (total_height - block.padding_top - block.padding_bottom).max(0.0),
-            ),
-            BackgroundOrigin::Padding => (frame.origin_x, block_bottom, render_width, total_height),
+    #[test]
+    fn middle_cell_rounds_a_half_css_pixel_remainder_toward_block_start() {
+        let cell = CellBox {
+            content: crate::layout::cells::CellContent {
+                lines: vec![TextLine {
+                    // A 14px font at line-height: 1.5 occupies 21 CSS pixels.
+                    height: 21.0 * crate::fonts::PT_PER_CSS_PX,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            alignment: crate::layout::cells::CellAlignment {
+                block: VerticalAlign::Middle,
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        render_svg_background(
-            content,
-            svg_tree,
-            ctx.pdf_writer,
-            ctx.page_images,
-            ctx.shadings,
-            ctx.shading_counter,
-            Some(ctx.page_ext_gstates),
-            BackgroundPaintContext::new(
-                SvgViewportBox::new(ref_x, ref_y, ref_w, ref_h),
-                SvgViewportBox::new(
-                    frame.origin_x - block.border.left.width,
-                    block_bottom - block.border.bottom.width,
-                    render_width + block.border.left.width + block.border.right.width,
-                    total_height + block.border.top.width + block.border.bottom.width,
-                ),
-                block.border_radius,
-                block.background_blur_radius,
-                block.background_size,
-                block.background_position,
-                block.background_repeat,
-            )
-            .with_blur_canvas_box(block.background_blur_canvas_box),
-        );
-    }
 
-    if block.border.has_any() {
-        let x1 = frame.origin_x;
-        let x2 = frame.origin_x + render_width;
-        let y_top = frame.top_y;
-        let y_bottom = block_bottom;
-        if block.border.top.width > 0.0 {
-            let (r, g, b) = block.border.top.color;
-            content.push_str(dash_pattern_for_style(block.border.top.style));
-            content.push_str(&format!(
-                "{r} {g} {b} RG\n{} w\n{x1} {y_top} m {x2} {y_top} l S\n",
-                block.border.top.width
-            ));
-            content.push_str(reset_dash_pattern(block.border.top.style));
-        }
-        if block.border.right.width > 0.0 {
-            let (r, g, b) = block.border.right.color;
-            content.push_str(dash_pattern_for_style(block.border.right.style));
-            content.push_str(&format!(
-                "{r} {g} {b} RG\n{} w\n{x2} {y_top} m {x2} {y_bottom} l S\n",
-                block.border.right.width
-            ));
-            content.push_str(reset_dash_pattern(block.border.right.style));
-        }
-        if block.border.bottom.width > 0.0 {
-            let (r, g, b) = block.border.bottom.color;
-            content.push_str(dash_pattern_for_style(block.border.bottom.style));
-            content.push_str(&format!(
-                "{r} {g} {b} RG\n{} w\n{x1} {y_bottom} m {x2} {y_bottom} l S\n",
-                block.border.bottom.width
-            ));
-            content.push_str(reset_dash_pattern(block.border.bottom.style));
-        }
-        if block.border.left.width > 0.0 {
-            let (r, g, b) = block.border.left.color;
-            content.push_str(dash_pattern_for_style(block.border.left.style));
-            content.push_str(&format!(
-                "{r} {g} {b} RG\n{} w\n{x1} {y_top} m {x1} {y_bottom} l S\n",
-                block.border.left.width
-            ));
-            content.push_str(reset_dash_pattern(block.border.left.style));
-        }
-    }
-
-    if !block.lines.is_empty() {
-        let proxy_cell = TableCell {
-            lines: block.lines.to_vec(),
-            nested_rows: Vec::new(),
-            bold: false,
-            background_color: None,
-            padding_top: block.padding_top,
-            padding_right: block.padding_right,
-            padding_bottom: block.padding_bottom,
-            padding_left: block.padding_left,
-            colspan: 1,
-            rowspan: 1,
-            border: crate::layout::engine::LayoutBorder::default(),
-            text_align: block.text_align,
-            vertical_align: VerticalAlign::Baseline,
-        };
-        render_cell_text(
-            content,
-            &proxy_cell,
-            CellTextPlacement::new(
-                frame.origin_x,
-                frame.top_y - block.padding_top,
-                render_width,
+        // A 40px row has 19px of surplus. Chrome assigns its half-pixel to
+        // the block-start side, so the content begins 10px below the top.
+        assert_eq!(
+            cell_content_top(
+                &cell,
+                40.0 * crate::fonts::PT_PER_CSS_PX,
+                40.0 * crate::fonts::PT_PER_CSS_PX,
             ),
-            &mut ctx.text,
+            30.0 * crate::fonts::PT_PER_CSS_PX,
         );
     }
 }
 
-pub(super) fn render_nested_layout_elements(
-    content: &mut String,
-    elements: &[LayoutElement],
-    frame: NestedLayoutFrame,
-    ctx: &mut PageRenderContext<'_>,
-) {
-    let mut planned = plan_nested_layout_elements(elements, frame);
-    planned.sort_by_key(|planned_element| layout_element_paint_order(planned_element.element));
-
-    for planned_element in planned {
-        match planned_element.element {
-            LayoutElement::TableRow {
-                cells,
-                col_widths,
-                border_collapse,
-                border_spacing,
-                ..
-            } => {
-                let spacing = if *border_collapse == BorderCollapse::Collapse {
-                    0.0
-                } else {
-                    *border_spacing
-                };
-                let row_y = planned_element.top_y;
-                let row_height = compute_row_height(cells);
-
-                let mut col_pos: usize = 0;
-                for cell in cells {
-                    if cell.rowspan == 0 {
-                        col_pos += cell.colspan;
-                        continue;
-                    }
-
-                    let (cell_x, cell_w) = table_cell_geometry(
-                        col_widths,
-                        col_pos,
-                        cell.colspan,
-                        spacing,
-                        planned_element.origin_x,
-                    );
-
-                    let cell_height = if cell.rowspan > 1 {
-                        let mut total_height = row_height;
-                        for offset in 1..cell.rowspan {
-                            let future_idx = planned_element.source_index + offset;
-                            if let Some(future_row) = elements.get(future_idx) {
-                                total_height += table_row_total_height(future_row);
-                            }
-                        }
-                        total_height
-                    } else {
-                        row_height
-                    };
-
-                    if let Some((r, g, b, a)) = cell.background_color {
-                        let needs_cell_bg_alpha = a < 1.0;
-                        if needs_cell_bg_alpha {
-                            let gs_name = format!("GSba{}", ctx.bg_alpha_counter);
-                            *ctx.bg_alpha_counter += 1;
-                            ctx.page_ext_gstates.push((gs_name.clone(), a));
-                            content.push_str(&format!("/{gs_name} gs\n"));
-                        }
-                        content.push_str(&format!(
-                            "{r} {g} {b} rg\n{x} {y} {w} {h} re\nf\n",
-                            x = cell_x,
-                            y = row_y - cell_height,
-                            w = cell_w,
-                            h = cell_height,
-                        ));
-                        if needs_cell_bg_alpha {
-                            content.push_str("/GSDefault gs\n");
-                        }
-                    }
-
-                    if cell.border.has_any() {
-                        let x1 = cell_x;
-                        let x2 = cell_x + cell_w;
-                        let y_top = row_y;
-                        let y_bottom = row_y - cell_height;
-                        if cell.border.top.width > 0.0 {
-                            let (r, g, b) = cell.border.top.color;
-                            content.push_str(&format!(
-                                "{r} {g} {b} RG\n{} w\n{x1} {y_top} m {x2} {y_top} l S\n",
-                                cell.border.top.width
-                            ));
-                        }
-                        if cell.border.right.width > 0.0 {
-                            let (r, g, b) = cell.border.right.color;
-                            content.push_str(&format!(
-                                "{r} {g} {b} RG\n{} w\n{x2} {y_top} m {x2} {y_bottom} l S\n",
-                                cell.border.right.width
-                            ));
-                        }
-                        if cell.border.bottom.width > 0.0 {
-                            let (r, g, b) = cell.border.bottom.color;
-                            content.push_str(&format!(
-                                "{r} {g} {b} RG\n{} w\n{x1} {y_bottom} m {x2} {y_bottom} l S\n",
-                                cell.border.bottom.width
-                            ));
-                        }
-                        if cell.border.left.width > 0.0 {
-                            let (r, g, b) = cell.border.left.color;
-                            content.push_str(&format!(
-                                "{r} {g} {b} RG\n{} w\n{x1} {y_top} m {x1} {y_bottom} l S\n",
-                                cell.border.left.width
-                            ));
-                        }
-                    }
-
-                    render_cell_content(
-                        content,
-                        cell,
-                        TableCellRenderBox::new(cell_x, row_y, cell_w, row_height, frame),
-                        ctx,
-                    );
-
-                    col_pos += cell.colspan;
-                }
-            }
-            LayoutElement::TextBlock {
-                lines,
-                text_align,
-                background_color,
-                padding_top,
-                padding_bottom,
-                padding_left,
-                padding_right,
-                border,
-                block_width,
-                block_height,
-                border_radius,
-                background_gradient: _,
-                background_radial_gradient: _,
-                background_svg,
-                background_blur_radius,
-                background_size,
-                background_position,
-                background_repeat,
-                background_origin,
-                ..
-            } => {
-                render_nested_text_block(
-                    content,
-                    NestedTextBlock {
-                        lines,
-                        text_align: *text_align,
-                        padding_top: *padding_top,
-                        padding_bottom: *padding_bottom,
-                        padding_left: *padding_left,
-                        padding_right: *padding_right,
-                        border: *border,
-                        block_width: *block_width,
-                        block_height: *block_height,
-                        background_color: *background_color,
-                        background_svg: background_svg.as_ref(),
-                        background_blur_radius: *background_blur_radius,
-                        background_size: *background_size,
-                        background_position: *background_position,
-                        background_repeat: *background_repeat,
-                        background_origin: *background_origin,
-                        background_blur_canvas_box: planned_element.blur_canvas_box,
-                        border_radius: *border_radius,
-                    },
-                    NestedLayoutFrame::new(
-                        planned_element.origin_x,
-                        planned_element.top_y,
-                        frame.initial_origin_x,
-                        frame.initial_top_y,
-                        planned_element.available_width,
-                    ),
-                    ctx,
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(super) struct PlannedNestedElement<'a> {
-    pub(super) element: &'a LayoutElement,
-    pub(super) source_index: usize,
-    pub(super) origin_x: f32,
-    pub(super) top_y: f32,
-    pub(super) available_width: f32,
-    pub(super) blur_canvas_box: Option<SvgViewportBox>,
-}
-
-pub(super) fn plan_nested_layout_elements(
-    elements: &[LayoutElement],
-    frame: NestedLayoutFrame,
-) -> Vec<PlannedNestedElement<'_>> {
-    let mut cursor_y = frame.top_y;
-    let mut positioned_origins: HashMap<usize, (f32, f32)> = HashMap::new();
-    let mut planned = Vec::with_capacity(elements.len());
-
-    for (element_idx, element) in elements.iter().enumerate() {
-        match element {
-            LayoutElement::TableRow {
-                cells,
-                margin_top,
-                margin_bottom,
-                ..
-            } => {
-                cursor_y -= *margin_top;
-                let row_y = cursor_y;
-                planned.push(PlannedNestedElement {
-                    element,
-                    source_index: element_idx,
-                    origin_x: frame.origin_x,
-                    top_y: row_y,
-                    available_width: frame.available_width,
-                    blur_canvas_box: None,
-                });
-                cursor_y -= compute_row_height(cells) + *margin_bottom;
-            }
-            LayoutElement::TextBlock {
-                margin_top,
-                margin_bottom,
-                containing_block,
-                positioned_depth,
-                position,
-                offset_top,
-                offset_left,
-                lines,
-                padding_top,
-                padding_bottom,
-                block_height,
-                ..
-            } => {
-                let containing_origin =
-                    containing_block.and_then(|cb| positioned_origins.get(&cb.depth).copied());
-                let base_origin_x = match position {
-                    Position::Absolute => {
-                        containing_origin.map_or(frame.initial_origin_x, |(x, _)| x)
-                    }
-                    _ => containing_origin.map_or(frame.origin_x, |(x, _)| x),
-                };
-                let base_top_y = match position {
-                    Position::Absolute => {
-                        containing_origin.map_or(frame.initial_top_y, |(_, y)| y) - *margin_top
-                    }
-                    _ => cursor_y - *margin_top,
-                };
-                let element_top_y = match position {
-                    Position::Absolute | Position::Relative => base_top_y - *offset_top,
-                    Position::Static => base_top_y,
-                };
-                let element_origin_x = base_origin_x + offset_left;
-                let blur_canvas_box = containing_block.and_then(|cb| {
-                    containing_origin
-                        .map(|(x, y)| SvgViewportBox::new(x, y - cb.height, cb.width, cb.height))
-                });
-                planned.push(PlannedNestedElement {
-                    element,
-                    source_index: element_idx,
-                    origin_x: element_origin_x,
-                    top_y: element_top_y,
-                    available_width: frame.available_width,
-                    blur_canvas_box,
-                });
-                if *positioned_depth > 0
-                    && (*position == Position::Relative || *position == Position::Absolute)
-                {
-                    positioned_origins.insert(*positioned_depth, (element_origin_x, element_top_y));
-                }
-                if *position != Position::Absolute {
-                    cursor_y = base_top_y
-                        - text_block_total_height(
-                            lines,
-                            *padding_top,
-                            *padding_bottom,
-                            *block_height,
-                        )
-                        - *margin_bottom;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    planned
-}
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+pub(super) use test_support::*;

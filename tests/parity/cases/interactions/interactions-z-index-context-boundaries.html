@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>z-index stacking context boundaries</title>
+<style>
+@page { size: 1040px 336px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1040px; height: 336px; background: #fff; }
+.panel {
+  position: absolute;
+  z-index: 0;
+  width: 160px;
+  height: 144px;
+  overflow: hidden;
+  border: 4px solid #111827;
+  background: #e5e7eb;
+}
+.p1 { left: 16px; top: 16px; }
+.p2 { left: 184px; top: 16px; }
+.p3 { left: 352px; top: 16px; }
+.p4 { left: 520px; top: 16px; }
+.p5 { left: 688px; top: 16px; }
+.p6 { left: 856px; top: 16px; }
+.p7 { left: 16px; top: 168px; }
+.p8 { left: 184px; top: 168px; }
+.p9 { left: 352px; top: 168px; }
+.p10 { left: 520px; top: 168px; }
+.p11 { left: 688px; top: 168px; }
+.trap { position: absolute; left: 12px; top: 12px; width: 104px; height: 96px; }
+.high { position: absolute; z-index: 100; left: 12px; top: 12px; width: 88px; height: 88px; background: #ef233c; }
+.cap { position: absolute; z-index: 1; left: 52px; top: 48px; width: 88px; height: 88px; background: #2563eb; }
+.integer .trap { z-index: 0; }
+.fixed .trap { position: fixed; left: 364px; top: 28px; }
+.sticky .trap { position: sticky; margin-left: 12px; margin-top: 12px; }
+.opacity .trap { opacity: .99; }
+.transform .trap { transform: translate(0); }
+.perspective .trap { perspective: 400px; }
+.filter .trap { filter: brightness(1); }
+.isolation .trap { isolation: isolate; }
+.blend .trap { mix-blend-mode: multiply; }
+.mask .trap { mask-image: linear-gradient(#000, #000); }
+</style>
+</head>
+<body>
+<section class="panel p1 control"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p2 integer"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p3 fixed"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p4 sticky"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p5 opacity"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p6 transform"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p7 perspective"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p8 filter"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p9 isolation"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p10 blend"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+<section class="panel p11 mask"><div class="trap"><div class="high"></div></div><div class="cap"></div></section>
+</body>
+</html>

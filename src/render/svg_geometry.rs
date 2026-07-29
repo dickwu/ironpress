@@ -1,4 +1,6 @@
+use crate::layout::engine::ReplacedContent;
 use crate::parser::svg::{SvgAlign, SvgMeetOrSlice, SvgPreserveAspectRatio, SvgTree};
+use crate::types::Size;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SvgViewportBox {
@@ -112,8 +114,30 @@ impl SvgSourceBox {
             }
         }
 
-        let width = tree.width.max(0.0);
-        let height = tree.height.max(0.0);
+        // No viewBox: the SVG's children are drawn in its own user-coordinate
+        // system whose extent is the `width`/`height` *attributes* (CSS px),
+        // taken here as the source box that maps onto the display viewport.
+        // We must NOT use `tree.width`/`tree.height` for this: they have been
+        // overwritten with the *display box in pt* (≈ px × 0.75) by
+        // `sync_svg_tree_to_layout_box`, so using them would make the source
+        // box equal the viewport and yield scale 1 — inner content (e.g. a
+        // centered rect) would then be drawn unscaled and clipped at the box
+        // edge instead of being scaled into place. Preferring the native
+        // attribute extent restores the px→pt viewport scale across the whole
+        // drawing. Fall back to `tree.width`/`tree.height` only when the
+        // attributes are absent or non-absolute (e.g. a `%` root size).
+        let native_width = tree
+            .width_attr
+            .as_deref()
+            .and_then(crate::parser::svg::parse_absolute_length)
+            .filter(|w| *w > 0.0);
+        let native_height = tree
+            .height_attr
+            .as_deref()
+            .and_then(crate::parser::svg::parse_absolute_length)
+            .filter(|h| *h > 0.0);
+        let width = native_width.unwrap_or_else(|| tree.width.max(0.0));
+        let height = native_height.unwrap_or_else(|| tree.height.max(0.0));
         if width > 0.0 && height > 0.0 {
             Some(Self::new(0.0, 0.0, width, height))
         } else {
@@ -198,6 +222,45 @@ pub(crate) fn compute_svg_placement(
     request: SvgPlacementRequest,
 ) -> Option<SvgPlacement> {
     SvgSourceBox::from_tree(tree)?.placement(request)
+}
+
+/// Compose CSS `object-fit` with the SVG root's own viewport mapping.
+///
+/// An SVG without a root `viewBox` has no inner aspect-ratio transform: its
+/// user coordinates fill the fitted object viewport. Fragmented SVGs retain
+/// that original viewport and move it beneath the fragment clip.
+pub(crate) fn compute_replaced_svg_placement(
+    tree: &SvgTree,
+    content_size: Size,
+    replaced: ReplacedContent,
+) -> Option<SvgPlacement> {
+    let source_content_size = replaced
+        .fragment
+        .map_or(content_size, |fragment| fragment.source_content_size);
+    let object = crate::layout::images::compute_replaced_content_placement(
+        source_content_size,
+        crate::layout::images::svg_intrinsic_size(tree),
+        replaced.object_fit,
+        replaced.object_position,
+    );
+    let preserve_aspect_ratio = tree
+        .view_box
+        .map_or(SvgPreserveAspectRatio::None, |_| tree.preserve_aspect_ratio);
+    let mut placement = compute_svg_placement(
+        tree,
+        SvgPlacementRequest::from_rect(
+            object.offset_x,
+            object.offset_y,
+            object.width,
+            object.height,
+            preserve_aspect_ratio,
+        ),
+    )?;
+    if let Some(fragment) = replaced.fragment {
+        placement.translate_x -= fragment.content_offset.x;
+        placement.translate_y -= fragment.content_offset.y;
+    }
+    Some(placement)
 }
 
 pub(crate) fn compute_raster_placement(

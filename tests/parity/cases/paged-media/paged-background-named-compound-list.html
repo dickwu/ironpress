@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>named compound page background selectors</title>
+  <style>
+    @page { size: 160px 120px; margin: 0; background: #ef476f; }
+    @page Chapter { background: #ffd166; }
+    @page Chapter:left, Appendix:right { background: #3a86ff; }
+    @page Chapter:first { background: #06d6a0; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    .sheet { width: 48px; height: 40px; background: #111827; }
+    .sheet + .sheet { break-before: page; }
+    .chapter { page: Chapter; }
+    .appendix { page: Appendix; }
+    .lowercase { page: chapter; }
+  </style>
+</head>
+<body>
+  <div class="sheet chapter"></div>
+  <div class="sheet chapter"></div>
+  <div class="sheet appendix"></div>
+  <div class="sheet appendix"></div>
+  <div class="sheet lowercase"></div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>mix-blend-mode screen</title>
+<style>
+  @page { size: 480px 304px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage { position: relative; width: 320px; height: 220px; background: #263238; margin: 40px; }
+  .base {
+    position: absolute; top: 30px; left: 30px;
+    width: 180px; height: 140px;
+    background-color: #c62828;
+  }
+  .blend {
+    position: absolute; top: 70px; left: 110px;
+    width: 180px; height: 140px;
+    background-color: #1565c0;
+    /* overlap region should lighten via screen */
+    mix-blend-mode: screen;
+  }
+</style>
+</head>
+<body>
+  <div class="stage"><div class="base"></div><div class="blend"></div></div>
+</body>
+</html>

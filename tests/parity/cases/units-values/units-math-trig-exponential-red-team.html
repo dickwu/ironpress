@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-math-trig-exponential-red-team</title>
+<style>
+  /* Adapted from WPT css/css-values trig and exponential function coverage. */
+  @page { size: 480px 576px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane { position: relative; width: 400px; height: 48px; margin-bottom: 9px; background: #f1f1f1; border: 3px solid #111; }
+  .bar { height: 100%; background: #ff006e; border-right: 6px solid #3a86ff; }
+  .sin .bar { width: calc(100px + 40px * sin(30deg)); }
+  .cos .bar { width: calc(100px + 40px * cos(60deg)); }
+  .tan .bar { width: calc(80px + 40px * tan(45deg)); }
+  .sqrt .bar { width: calc(40px * sqrt(9)); }
+  .pow .bar { width: calc(15px * pow(2, 3)); }
+  .log .bar { width: calc(40px * log(8, 2)); }
+  .exp .bar { width: calc(120px * exp(0)); }
+  .nested .bar { width: calc(80px + 80px * sin(asin(.5))); }
+  .constants .bar { width: calc(120px * cos(0 * pi)); }
+</style></head><body>
+  <div class="lane sin"><div class="bar"></div></div>
+  <div class="lane cos"><div class="bar"></div></div>
+  <div class="lane tan"><div class="bar"></div></div>
+  <div class="lane sqrt"><div class="bar"></div></div>
+  <div class="lane pow"><div class="bar"></div></div>
+  <div class="lane log"><div class="bar"></div></div>
+  <div class="lane exp"><div class="bar"></div></div>
+  <div class="lane nested"><div class="bar"></div></div>
+  <div class="lane constants"><div class="bar"></div></div>
+</body></html>

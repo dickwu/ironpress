@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tables-th-header</title>
+<style>
+  @page { size: 416px 136px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; }
+  table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 300px;
+    font-family: ParitySans;
+    font-size: 16px;
+  }
+  th, td {
+    width: 150px;
+    height: 50px;
+    border: 3px solid #001524;
+    line-height: 44px;
+  }
+  /* `tables-th-default` covers the UA bold default. Keep this fixture focused
+     on header-cell layout: CSS Fonts permits each UA to synthesize a missing
+     bold face differently, which must not obscure table geometry. */
+  th { background: #15616d; color: #ffffff; font-synthesis: none; }
+  td { background: #ffecd1; color: #001524; }
+</style>
+</head>
+<body>
+  <table>
+    <tr><th>AA</th><th>BB</th></tr>
+    <tr><td>cc</td><td>dd</td></tr>
+  </table>
+</body>
+</html>

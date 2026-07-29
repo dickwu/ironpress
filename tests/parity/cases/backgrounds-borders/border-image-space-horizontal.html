@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border-image horizontal space</title>
+<style>
+@page{size:240px 120px;margin:0}
+html{font-family:ParitySans;line-height:1.5}
+*{margin:0;box-sizing:border-box}
+html,body{background:#fff}
+body{padding:24px}
+.box{
+  width:192px;
+  height:72px;
+  border:8px solid transparent;
+  background:#f1faee;
+  border-image:linear-gradient(to right,#e63946 0 25%,#ffbe0b 25% 50%,#457b9d 50% 75%,#2a9d8f 75% 100%) 32 / 1 / 0 space stretch;
+}
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

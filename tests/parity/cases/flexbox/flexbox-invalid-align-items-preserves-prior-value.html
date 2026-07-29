@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid align-items preserves prior value</title>
+<style>
+  @page { size: 224px 184px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage {
+    display: flex;
+    align-items: flex-end;
+    align-items: definitely-invalid;
+    width: 180px;
+    height: 140px;
+    margin: 20px;
+    padding: 10px;
+    border: 3px solid #111111;
+    background: #e8eaf6;
+  }
+  .item { width: 154px; height: 45px; background: #1565c0; }
+</style>
+</head>
+<body><div class="stage"><div class="item"></div></div></body>
+</html>

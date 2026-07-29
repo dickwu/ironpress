@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-calc-typed-arithmetic-red-team</title>
+<style>
+  /* Visual reduction of WPT css/css-values/typed_arithmetic.html. Every
+     compound dimension cancels to a 120px used width. Old calc engines that
+     require one side of multiplication to be a number retain the loud 8px
+     fallback and expose almost the whole lane. */
+  @page { size: 480px 608px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane {
+    position: relative;
+    width: 406px;
+    height: 54px;
+    margin-bottom: 10px;
+    background: #ffd166;
+    border: 3px solid #111;
+  }
+  .lane:last-child { margin-bottom: 0; }
+  .bar {
+    position: relative;
+    width: 8px;
+    height: 100%;
+    background: #e63946;
+    border-right: 6px solid #087e8b;
+  }
+  .target {
+    position: absolute;
+    z-index: 2;
+    left: 116px;
+    top: 0;
+    width: 8px;
+    height: 100%;
+    background: #111;
+  }
+  .length .bar { width: calc(40px * 3px / 1px); }
+  .percentage .bar { width: calc(30% * 40px / 40px); }
+  .angle .bar { width: calc(60px * 2deg / 1deg); }
+  .time .bar { width: calc(6px * 1s / 50ms); }
+  .frequency .bar { width: calc(30px * 2kHz / 500Hz); }
+  .resolution .bar { width: calc(60px * 192dpi / 1dppx); }
+  .flex .bar { width: calc(40px * 3fr / 1fr); }
+  .font .bar { width: calc(240px / 2em * 1em); }
+  .percentage-square .bar { width: calc(30% * 30% / 30%); }
+</style></head><body>
+  <div class="lane length"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane percentage"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane angle"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane time"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane frequency"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane resolution"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane flex"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane font"><div class="bar"></div><div class="target"></div></div>
+  <div class="lane percentage-square"><div class="bar"></div><div class="target"></div></div>
+</body></html>

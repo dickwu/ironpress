@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<!--
+  Standards-derived oracle source for paged-footnote-styling-pseudos.
+
+  CSS GCPM §2.2 inserts ::footnote-call in place of a float:footnote element,
+  and §2.6 permits its authored content and style. Chromium has no native
+  float:footnote layout, so this source materializes that required result in
+  the 192px × 128px page area: the call remains in the paragraph and the
+  footnote area is bottom-aligned with the authored separator and padding.
+  It deliberately uses Chromium rather than WeasyPrint: the latter paints
+  otherwise identical ParitySans text through a different transformed text
+  matrix, which makes its PDF a typography-raster compatibility canary rather
+  than a valid same-font pixel oracle. This source uses no Ironpress output,
+  raster edits, crops, or registration.
+-->
+<html><head><meta charset="utf-8"><title>footnote styling pseudos reference</title><style>
+@page{size:208px 144px;margin:8px}
+html{font-family:ParitySans;line-height:1.5;font-size:12px}
+*,html,body{margin:0;box-sizing:border-box}
+body{position:relative;width:192px;height:128px}
+p{background:#fef3c7}.footnote-call{color:#ef476f;font-size:80%;font-variant-position:normal;vertical-align:baseline}.footnote-area{position:absolute;right:0;bottom:0;left:0;border-top:8px solid #111;padding-top:8px}.footnote-marker{color:#1d4ed8}
+</style></head><body><p>Body text<span class="footnote-call">[1]</span> continues.</p><div class="footnote-area"><span class="footnote-marker">N1: </span>styled footnote body</div></body></html>

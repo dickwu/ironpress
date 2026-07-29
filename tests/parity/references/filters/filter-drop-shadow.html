@@ -1,0 +1,47 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for filter-drop-shadow.
+
+  CSS Images 3 §5.2 defines image-rendering: pixelated at a non-integral
+  target scale as nearest-neighbour scaling to the closest positive integer
+  multiple, followed by smooth scaling to the target. Chromium instead uses
+  nearest-neighbour directly at 2.5x. The inline canvas materializes those
+  required 3x and 3x -> 2.5x stages before the unchanged CSS drop shadow is
+  applied. It is a standards-derived source, not candidate output or an image
+  comparison adjustment.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: 344px 264px; margin: 0; }
+  /* The browser's 8px body margin is UA stylesheet policy, not drop-shadow
+     or image-rendering behavior; fix the neutral test baseline explicitly. */
+  html, body { margin: 0; background: #ffffff; }
+  .frame { padding: 40px; }
+  canvas {
+    display: block;
+    width: 160px;
+    height: 160px;
+    filter: drop-shadow(20px 20px 0 #424242);
+  }
+</style>
+</head>
+<body>
+  <div class="frame"><canvas id="pixelated" width="160" height="160"></canvas></div>
+  <script>
+    const source = new Image();
+    source.onload = () => {
+      const nearest = document.createElement('canvas');
+      nearest.width = nearest.height = 192;
+      const nearestContext = nearest.getContext('2d');
+      nearestContext.imageSmoothingEnabled = false;
+      nearestContext.drawImage(source, 0, 0, 192, 192);
+      const targetContext = document.querySelector('#pixelated').getContext('2d');
+      targetContext.imageSmoothingEnabled = true;
+      targetContext.drawImage(nearest, 0, 0, 192, 192, 0, 0, 160, 160);
+    };
+    source.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAA6UlEQVR42u2a2QmAMBAFtxz7r8deFH8F0ZhjjzcDFjADapKNGQCAE/u2HdcjLS8Z4S4vFeFJXiLCm3zpCF/lS0ZolS8V4a98iQi98qkjjJJPGWG0fKoIs+RTRJgtHzrCKvmQEVbLh4rgJR8igre8a4Qo8i4RoskvjRBVfkmE6PJTI2SRnxIhm/zQCFnlh0TILt8VoYr8rwjV5JsiVJX/HEE+gPwrwEeQ3yALIZbCbIbYDnMgwpEYh6IcizMYYTTGcJTxOBckuCLDJakAESwz0vK9EawS0vKtEawy0vJvEUwJafl7BAMAcOIE8NvBjJwtM6wAAAAASUVORK5CYII=';
+  </script>
+</body>
+</html>

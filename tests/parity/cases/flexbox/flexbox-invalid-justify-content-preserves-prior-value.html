@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid justify-content preserves prior value</title>
+<style>
+  @page { size: 264px 144px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage {
+    display: flex;
+    justify-content: flex-end;
+    justify-content: definitely-invalid;
+    width: 220px;
+    height: 100px;
+    margin: 20px;
+    padding: 10px;
+    border: 3px solid #111111;
+    background: #e8eaf6;
+  }
+  .item { width: 50px; height: 74px; background: #0a7f2e; }
+</style>
+</head>
+<body><div class="stage"><div class="item"></div></div></body>
+</html>

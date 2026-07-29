@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>break-before avoid-page keeps the previous box</title>
+  <style>
+    @page { size: 160px 120px; margin: 0 }
+    * { box-sizing: border-box; margin: 0 }
+    .spacer { height: 72px; background: #dbeafe }
+    .previous { height: 24px; background: #ef476f }
+    .next { height: 32px; background: #06d6a0; break-before: avoid-page }
+  </style>
+</head>
+<body><div class="spacer"></div><div class="previous"></div><div class="next"></div></body>
+</html>

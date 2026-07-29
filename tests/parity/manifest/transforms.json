@@ -1,0 +1,637 @@
+[
+  {
+    "id": "transforms-translate",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translate",
+    "description": "transform: translate(x, y) shifts a positioned box right and down from its in-flow slot without affecting surrounding layout.",
+    "file": "cases/transforms/transforms-translate.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-x",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translateX",
+    "description": "transform: translateX() shifts the box horizontally only, leaving its vertical position unchanged.",
+    "file": "cases/transforms/transforms-translate-x.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-y",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translateY",
+    "description": "transform: translateY() shifts the box vertically only, leaving its horizontal position unchanged.",
+    "file": "cases/transforms/transforms-translate-y.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scale",
+    "description": "transform: scale() enlarges the box uniformly about its center (default transform-origin) without changing layout flow.",
+    "file": "cases/transforms/transforms-scale.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale-x",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scaleX",
+    "description": "transform: scaleX() stretches the box horizontally about its center.",
+    "file": "cases/transforms/transforms-scale-x.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale-y",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scaleY",
+    "description": "transform: scaleY() stretches the box vertically about its center.",
+    "file": "cases/transforms/transforms-scale-y.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotate",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotate",
+    "description": "transform: rotate() turns the box clockwise about its center (default transform-origin) without disturbing layout flow.",
+    "file": "cases/transforms/transforms-rotate.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-skew",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "skew",
+    "description": "transform: skew() shears the box along X and Y about its center, turning the rectangle into a parallelogram. Aspirational: skew is absent from the ironpress Transform enum and parser.",
+    "file": "cases/transforms/transforms-skew.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-matrix",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "matrix",
+    "description": "transform: matrix(a,b,c,d,e,f) applies a 2D affine matrix combining scale, shear, and translate in one function. Aspirational: matrix() is not parsed by ironpress.",
+    "file": "cases/transforms/transforms-matrix.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-top-left",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "top-left",
+    "description": "transform-origin: top left moves the rotation pivot from the box center to its top-left corner, changing where a rotate() lands. Aspirational: ironpress has no transform-origin parse and always pivots about the default origin.",
+    "file": "cases/transforms/transforms-origin-top-left.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-compound-rotate-translate",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "compound-rotate-translate",
+    "description": "Chained transform functions translate(...) rotate(...) compose left-to-right in the box coordinate space. Aspirational: parse_transform returns a single Transform, so chaining is unsupported.",
+    "file": "cases/transforms/transforms-compound-rotate-translate.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-percent",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translate-percent",
+    "description": "transform: translate(50%, 50%) resolves percentages against the element's OWN border box (width for X, height for Y), shifting the box by half its own size.",
+    "file": "cases/transforms/transforms-translate-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-x-percent",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translateX-percent",
+    "description": "transform: translateX(100%) shifts the box right by its own width (percentage relative to border-box width).",
+    "file": "cases/transforms/transforms-translate-x-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-y-percent",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translateY-percent",
+    "description": "transform: translateY(100%) shifts the box down by its own height (percentage relative to border-box height).",
+    "file": "cases/transforms/transforms-translate-y-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate-em",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "translate-em",
+    "description": "transform: translate(3em, 2em) resolves em length args against the element's own font-size.",
+    "file": "cases/transforms/transforms-translate-em.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale-negative",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scale-negative",
+    "description": "transform: scale(-1, 1) mirrors the box horizontally about its center, swapping its left/right halves.",
+    "file": "cases/transforms/transforms-scale-negative.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale-omitted",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scale-single-arg",
+    "description": "transform: scale(1.5) with the second argument omitted scales both axes uniformly.",
+    "file": "cases/transforms/transforms-scale-omitted.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotate-turn",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotate-turn",
+    "description": "transform: rotate(0.25turn) == rotate(90deg); the turn angle unit is converted before rotating about the box center.",
+    "file": "cases/transforms/transforms-rotate-turn.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotate-rad",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotate-rad",
+    "description": "transform: rotate(0.5236rad) == rotate(30deg); the radian angle unit is converted before rotating.",
+    "file": "cases/transforms/transforms-rotate-rad.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotate-negative",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotate-negative",
+    "description": "transform: rotate(-30deg) turns the box counter-clockwise about its center.",
+    "file": "cases/transforms/transforms-rotate-negative.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-skew-x",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "skewX",
+    "description": "transform: skewX(20deg) shears the box horizontally about its center into a parallelogram.",
+    "file": "cases/transforms/transforms-skew-x.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-skew-y",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "skewY",
+    "description": "transform: skewY(20deg) shears the box vertically about its center into a parallelogram.",
+    "file": "cases/transforms/transforms-skew-y.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-bottom-right",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "bottom-right",
+    "description": "transform-origin: bottom right pivots a rotation about the box's bottom-right corner.",
+    "file": "cases/transforms/transforms-origin-bottom-right.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-length",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "length",
+    "description": "transform-origin with px length values pivots a scale about a point measured from the box top-left.",
+    "file": "cases/transforms/transforms-origin-length.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-percent",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "percent",
+    "description": "transform-origin: 100% 0 pivots a scale about the box's top-right corner.",
+    "file": "cases/transforms/transforms-origin-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-keyword-length",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "keyword-length",
+    "description": "Two-value transform-origin mixing a keyword and a length (left 20px) pivots a rotation about that anchor on the left edge.",
+    "file": "cases/transforms/transforms-origin-keyword-length.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-scale-corner",
+    "category": "transforms",
+    "feature": "transform-origin",
+    "subfeature": "scale-pivot",
+    "description": "transform-origin affects the scale pivot: with top-left origin the box grows down/right while its top-left corner stays anchored.",
+    "file": "cases/transforms/transforms-origin-scale-corner.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-compound-order",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "compound-order",
+    "description": "Compound order dependence: translate() rotate() composes differently from rotate() translate(); the two boxes land in distinct places.",
+    "file": "cases/transforms/transforms-compound-order.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-compound-scale-translate",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "compound-scale-translate",
+    "description": "scale(2) translate(40px, 20px): the translation that follows the scale is itself scaled, and the box is twice as large.",
+    "file": "cases/transforms/transforms-compound-scale-translate.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-none-reset",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "none-reset",
+    "description": "transform: none is an explicit reset: a later rule overriding an earlier transform with none leaves the box untransformed in its in-flow slot.",
+    "file": "cases/transforms/transforms-none-reset.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-individual-transform-box-content",
+    "category": "transforms",
+    "feature": "individual-transform",
+    "subfeature": "translate-rotate-transform-box-content",
+    "description": "Individual translate and rotate properties compose around transform-box:content-box with transform-origin:0 0; catches shorthand-only and border-box-origin transform implementations.",
+    "file": "cases/transforms/transforms-individual-transform-box-content.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale-percent",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "scale-percent",
+    "description": "transform:scale(150%,50%) accepts percentage scale factors and scales from a top-left origin; catches parsers that accept only numeric scale factors and drop the transform.",
+    "file": "cases/transforms/transforms-scale-percent.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-perspective-rotate-x",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "perspective-rotate-x",
+    "description": "perspective() rotateX() projects the box as a 3D quadrilateral; catches 2D flattening, perspective drops, or treating rotateX as a plain scale.",
+    "file": "cases/transforms/transforms-perspective-rotate-x.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-perspective-translate-z",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "perspective-translate-z",
+    "description": "A parent perspective makes a translateZ child render larger than the red reference; catches ignoring either the perspective property or the Z translation.",
+    "file": "cases/transforms/transforms-perspective-translate-z.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotate3d-axis",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "rotate3d-axis",
+    "description": "rotate3d(1,1,0,62deg) rotates around an arbitrary 3D axis under perspective; catches dropping rotate3d or rendering the element as an unprojected rectangle.",
+    "file": "cases/transforms/transforms-rotate3d-axis.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-matrix3d-translate",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "matrix3d-translate",
+    "description": "matrix3d() translation components move the green box down and right from the red reference; catches 2D-only parsers that drop matrix3d.",
+    "file": "cases/transforms/transforms-matrix3d-translate.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-preserve-3d-depth-order",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "preserve-3d-depth-order",
+    "description": "transform-style:preserve-3d lets an earlier translateZ child paint above a later flat sibling; catches flattening or source-order-only painting.",
+    "file": "cases/transforms/transforms-preserve-3d-depth-order.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-perspective-origin",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "perspective-origin",
+    "description": "perspective-origin changes the projection center for otherwise identical rotateY boxes; catches treating both scenes as the same projection.",
+    "file": "cases/transforms/transforms-perspective-origin.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-translate3d-perspective",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "translate3d-perspective",
+    "description": "translate3d(x,y,z) combines planar movement with perspective enlargement; catches dropping translate3d or ignoring its Z component.",
+    "file": "cases/transforms/transforms-translate3d-perspective.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-scale3d-rotate-y",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "scale3d-rotate-y",
+    "description": "scale3d's Z component changes the projected shape of a rotateY plane; catches dropping scale3d or using a flat 2D projection.",
+    "file": "cases/transforms/transforms-scale3d-rotate-y.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-origin-z-offset",
+    "category": "transforms",
+    "feature": "transform-3d",
+    "subfeature": "transform-origin-z-offset",
+    "description": "A three-value transform-origin with a Z offset changes the rotateY hinge; catches ignoring the third transform-origin component.",
+    "file": "cases/transforms/transforms-origin-z-offset.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-invalid-unitless-angle-is-ignored",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "invalid-unitless-angle",
+    "description": "A non-zero unitless rotate() angle is syntactically invalid, so the declaration is discarded and the green target stays over the red reference. Catches permissive parsers that reinterpret rotate(45) as rotate(45deg).",
+    "file": "cases/transforms/transforms-invalid-unitless-angle-is-ignored.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-invalid-unitless-translation-is-ignored",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "invalid-unitless-translation",
+    "description": "A non-zero unitless translate() component is syntactically invalid, so the declaration is discarded and the green target stays over the red reference. Catches treating bare translation numbers as points or pixels.",
+    "file": "cases/transforms/transforms-invalid-unitless-translation-is-ignored.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "transforms-rotated-repeating-background",
+    "category": "transforms",
+    "feature": "transform",
+    "subfeature": "rotated-repeating-background",
+    "description": "A rotated and non-uniformly scaled box keeps its repeating image cell in the element's transformed coordinate space; catches page-space pattern resources that ignore the element CTM.",
+    "file": "cases/transforms/transforms-rotated-repeating-background.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "transform",
+      "background-repeat",
+      "background-image"
+    ],
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-color-swatch"
+    ]
+  }
+]

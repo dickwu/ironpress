@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid filter argument preserves prior filter</title>
+<style>
+  @page { size: 184px 144px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .target {
+    width: 120px;
+    height: 80px;
+    margin: 30px;
+    background: #c62828;
+    filter: opacity(40%);
+    filter: blur(-5px);
+  }
+</style>
+</head>
+<body><div class="target"></div></body>
+</html>

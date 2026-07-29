@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>border-image fill and independent axis repeats</title>
+<style>
+  @page { size: 360px 224px; margin: 0; }
+  html, body { width: 360px; height: 224px; margin: 0; padding: 0; background: #fff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .box {
+    position: absolute;
+    border: 16px solid #d00000;
+    background: #edf2f4;
+    border-image-source: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB4AAAAeBAMAAADJHrORAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAeUExUReY5Rv++C0V7nSqdj8202/SiYXssvwbWoCZGU////zsroH4AAAABYktHRAnx2aXsAAAAB3RJTUUH6gcWAwgai6SLPAAAAChJREFUGNNjYAABQRBQAgGGwcY3BgEXEAgFgUHHTwOBchDoAIHBxgcAV5p3ifEnFCkAAAAASUVORK5CYII=");
+    border-image-slice: 10 fill;
+    border-image-width: 16px;
+  }
+  .round-repeat {
+    left: 16px;
+    top: 24px;
+    width: 176px;
+    height: 128px;
+    border-image-repeat: round repeat;
+  }
+  .stretch-space {
+    left: 224px;
+    top: 16px;
+    width: 104px;
+    height: 188.8px;
+    border-image-repeat: stretch space;
+  }
+</style>
+</head>
+<body>
+  <div class="box round-repeat"></div>
+  <div class="box stretch-space"></div>
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>grid-display-contents-auto-rows-text</title>
+<style>
+  @page { size: 664px 600px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; color: #111; font: 18px/1.25 ParitySans; }
+  body { padding: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    grid-auto-rows: auto;
+    width: 600px;
+    border: 6px solid #111;
+    background: #111;
+    gap: 6px;
+  }
+  .row { display: contents; }
+  .label, .value { padding: 12px; border: 4px solid #fff; }
+  .label { color: #fff; background: #d62828; font-weight: 700; }
+  .value { background: #80ed99; }
+  .row:nth-child(2) .label { background: #6a4c93; }
+  .row:nth-child(3) .label { background: #006d77; }
+  .row:nth-child(4) .label { background: #ee9b00; color: #111; }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="row"><div class="label">ROW ONE LABEL</div><div class="value">One line. ROW-ONE-END</div></div>
+    <div class="row"><div class="label">ROW TWO LABEL WRAPS TO MULTIPLE LINES</div><div class="value">The value is deliberately much taller than its label.<br>Second line remains in row two.<br>Third line remains in row two.<br>ROW-TWO-END</div></div>
+    <div class="row"><div class="label">ROW THREE<br>LABEL<br>IS<br>TALLEST<br>ROW-THREE-LABEL-END</div><div class="value">Short value. ROW-THREE-END</div></div>
+    <div class="row"><div class="label">ROW FOUR LABEL</div><div class="value">No cell may overlap, disappear, or escape its own colored row. ROW-FOUR-END</div></div>
+  </div>
+</body>
+</html>

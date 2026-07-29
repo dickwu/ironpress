@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>physical reference for logical border cascade</title>
+<style>
+  @page { size: 360px 264px; margin: 0; }
+  html, body { width: 360px; height: 260px; background: #fff; }
+  html, body, div { box-sizing: border-box; margin: 0; padding: 0; }
+  .box { position: absolute; width: 140px; height: 88px; border: 8px solid #d9dee3; background: #f6f7f8; }
+  .horizontal { left: 24px; top: 24px; border-left: 14px solid #315fce; border-top-left-radius: 7px; }
+  .rtl { left: 196px; top: 24px; border-right: 16px solid #7b2cbf; border-top-right-radius: 25px 13px; }
+  .vertical { left: 24px; top: 148px; border-left: 13px solid #f4a261; border-top: 11px solid #264653; border-top-left-radius: 24px 14px; }
+  .sideways { left: 196px; top: 148px; border-left: 13px solid #f4a261; border-bottom: 11px solid #264653; border-bottom-left-radius: 24px 14px; }
+</style>
+</head>
+<body>
+  <div class="box horizontal"></div>
+  <div class="box rtl"></div>
+  <div class="box vertical"></div>
+  <div class="box sideways"></div>
+</body>
+</html>

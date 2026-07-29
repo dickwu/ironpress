@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>all initial respects declaration order</title>
+<style>
+  @page { size: 256px 144px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage {
+    display: flex;
+    gap: 20px;
+    width: 210px;
+    height: 100px;
+    margin: 20px;
+    padding: 10px;
+    background: #c62828;
+    border: 3px solid #111111;
+  }
+  .before {
+    background: #0a7f2e;
+    all: initial;
+    display: block;
+    width: 75px;
+    height: 74px;
+  }
+  .after {
+    all: initial;
+    display: block;
+    width: 75px;
+    height: 74px;
+    background: #0a7f2e;
+  }
+</style>
+</head>
+<body><div class="stage"><div class="before"></div><div class="after"></div></div></body>
+</html>

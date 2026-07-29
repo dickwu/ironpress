@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>color hsl() powerless hue at zero saturation</title>
+<style>
+  @page { size: 280px 120px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 200px;
+    height: 120px;
+    /* css-color-4 §7: saturation 0% -> hue is powerless, gray rgb(128 128 128) */
+    background-color: hsl(120 0% 50%);
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>sub-point text-decoration geometry</title>
+<style>
+  @page { size: 320px 192px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1; }
+  * { margin: 0; box-sizing: border-box; }
+  body { padding: 16px; background: #fff; color: #111; font-size: 24px; }
+  .row { height: 40px; }
+  .sample {
+    text-decoration-line: underline;
+    text-decoration-thickness: 0.1px;
+    text-decoration-color: #d7263d;
+    text-decoration-skip-ink: none;
+  }
+  .zero { text-underline-offset: 0; }
+  .positive { text-underline-offset: 1px; }
+  .negative { text-underline-offset: -1px; }
+</style>
+</head>
+<body>
+  <div class="row"><span class="sample">thin exact rule</span></div>
+  <div class="row"><span class="sample zero">explicit zero</span></div>
+  <div class="row"><span class="sample positive">positive offset</span></div>
+  <div class="row"><span class="sample negative">negative offset</span></div>
+</body>
+</html>

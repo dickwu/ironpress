@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-calc-length-units-red-team</title>
+<style>
+  /* Visual reduction of WPT mixed-dimension calc coverage. */
+  @page { size: 480px 624px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html { font-size: 16px; line-height: 24px; }
+  body { padding: 18px; background: #fff; }
+  .suite { font-size: 20px; line-height: 30px; }
+  .lane { position: relative; width: 420px; height: 48px; margin-bottom: 9px; background: #eee; border: 3px solid #111; }
+  .bar { height: 100%; background: #118ab2; border-right: 6px solid #ef476f; }
+  .em .bar { width: calc(5em + 20px); }
+  .rem .bar { width: calc(8rem - 8px); }
+  .inch .bar { width: calc(1in + 24px); }
+  .cm .bar { width: calc(2.54cm + 24px); }
+  .mm .bar { width: calc(25.4mm + 24px); }
+  .viewport .bar { width: calc(50vw - 280px); }
+  .vmin .bar { width: calc(50vmin - 180px); }
+  .lh .bar { width: calc(4lh); }
+  .rlh .bar { width: calc(5rlh); }
+  .mixed .bar { width: calc(1em + 2rem + 28px + 5%); }
+</style></head><body><div class="suite">
+  <div class="lane em"><div class="bar"></div></div>
+  <div class="lane rem"><div class="bar"></div></div>
+  <div class="lane inch"><div class="bar"></div></div>
+  <div class="lane cm"><div class="bar"></div></div>
+  <div class="lane mm"><div class="bar"></div></div>
+  <div class="lane viewport"><div class="bar"></div></div>
+  <div class="lane vmin"><div class="bar"></div></div>
+  <div class="lane lh"><div class="bar"></div></div>
+  <div class="lane rlh"><div class="bar"></div></div>
+  <div class="lane mixed"><div class="bar"></div></div>
+</div></body></html>

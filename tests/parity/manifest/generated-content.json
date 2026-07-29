@@ -1,0 +1,621 @@
+[
+  {
+    "id": "generated-content-before-string",
+    "category": "generated-content",
+    "feature": "pseudo-element",
+    "subfeature": "before-content-string",
+    "description": "::before inserts a literal red string in front of the element text inside a filled, bordered box.",
+    "file": "cases/generated-content/generated-content-before-string.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-after-string",
+    "category": "generated-content",
+    "feature": "pseudo-element",
+    "subfeature": "after-content-string",
+    "description": "::after appends a literal string after the element text inside a filled, bordered box.",
+    "file": "cases/generated-content/generated-content-after-string.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-attr",
+    "category": "generated-content",
+    "feature": "content-attr",
+    "subfeature": "before-attr",
+    "description": "content: attr(data-prefix) pulls the value of an HTML data attribute into ::before generated text.",
+    "file": "cases/generated-content/generated-content-attr.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-counter",
+    "category": "generated-content",
+    "feature": "content-counter",
+    "subfeature": "counter-reset-increment",
+    "description": "counter-reset plus counter-increment with content: counter(step) numbers three stacked items via ::before.",
+    "file": "cases/generated-content/generated-content-counter.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-content-none",
+    "category": "generated-content",
+    "feature": "content-suppression",
+    "subfeature": "content-none",
+    "description": "content: none on ::before suppresses the pseudo-element so only the original element text renders.",
+    "file": "cases/generated-content/generated-content-content-none.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-before-decorative-box",
+    "category": "generated-content",
+    "feature": "pseudo-element",
+    "subfeature": "before-empty-decorative-box",
+    "description": "content: \"\" with display:inline-block renders an empty ::before as a filled, bordered marker box before the text.",
+    "file": "cases/generated-content/generated-content-before-decorative-box.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-open-close-quote",
+    "category": "generated-content",
+    "feature": "quotes",
+    "subfeature": "open-close-quote",
+    "description": "content: open-quote / close-quote on ::before and ::after wraps text in quotation marks from the quotes property.",
+    "file": "cases/generated-content/generated-content-open-close-quote.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-line",
+    "category": "generated-content",
+    "feature": "first-line",
+    "subfeature": "color-weight",
+    "description": "::first-line restyles only the first wrapped line of a paragraph to red bold while later lines stay normal.",
+    "file": "cases/generated-content/generated-content-first-line.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-letter-dropcap",
+    "category": "generated-content",
+    "feature": "first-letter",
+    "subfeature": "drop-cap",
+    "description": "::first-letter floats and enlarges the initial letter of a paragraph into a drop cap with text wrapping beside it.",
+    "file": "cases/generated-content/generated-content-first-letter-dropcap.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "Ironpress and Chrome have the same floated initial letter, text wrapping, and line sequence. Ironpress matches WeasyPrint's normal-line origins (for example 28.397869pt versus 28.397871pt) while Chrome uses 28.076659pt; the remaining raw divergence is renderer-specific first-letter glyph geometry. CSS Pseudo-Elements specifies the float and allowed styling, not a Chrome-specific glyph bounding box. Raw shared-pdftoppm evidence remains reported."
+    },
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-content-url-image",
+    "category": "generated-content",
+    "feature": "content-url",
+    "subfeature": "before-image",
+    "description": "content: url(data:png) on ::before places a small decoded raster image before the element text.",
+    "file": "cases/generated-content/generated-content-content-url-image.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "generated-content-counters-nested",
+    "category": "generated-content",
+    "feature": "content-counters",
+    "subfeature": "counters-nested",
+    "description": "content: counters(name, \".\") numbers nested list items as 1, 1.1, 1.2, 2 via ::before.",
+    "file": "cases/generated-content/generated-content-counters-nested.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-counter-roman",
+    "category": "generated-content",
+    "feature": "content-counter",
+    "subfeature": "counter-style-upper-roman",
+    "description": "content: counter(step, upper-roman) renders item numbers as I, II, III, IV.",
+    "file": "cases/generated-content/generated-content-counter-roman.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-content-list-mix",
+    "category": "generated-content",
+    "feature": "content-list",
+    "subfeature": "string-counter-attr-mix",
+    "description": "A single content declaration concatenates a string, counter(), and attr() into one ::before label.",
+    "file": "cases/generated-content/generated-content-content-list-mix.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-attr-missing",
+    "category": "generated-content",
+    "feature": "content-attr",
+    "subfeature": "attr-missing-empty",
+    "description": "attr() of a missing attribute resolves to the empty string, leaving only the literal brackets.",
+    "file": "cases/generated-content/generated-content-attr-missing.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-content-normal",
+    "category": "generated-content",
+    "feature": "content-suppression",
+    "subfeature": "content-normal",
+    "description": "content: normal on ::before computes to none and suppresses the pseudo-element.",
+    "file": "cases/generated-content/generated-content-content-normal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-no-quote-keywords",
+    "category": "generated-content",
+    "feature": "quotes",
+    "subfeature": "no-open-no-close-quote",
+    "description": "no-open-quote emits no glyph while close-quote still renders the declared closing quote.",
+    "file": "cases/generated-content/generated-content-no-quote-keywords.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-nested-quotes",
+    "category": "generated-content",
+    "feature": "quotes",
+    "subfeature": "nested-two-levels",
+    "description": "Two quote pairs nest: open-quote/open-quote/close-quote/close-quote use the first then second declared pair.",
+    "file": "cases/generated-content/generated-content-nested-quotes.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-letter-color",
+    "category": "generated-content",
+    "feature": "first-letter",
+    "subfeature": "color-background",
+    "description": "::first-letter recolors the initial letter white on an orange background at the same size.",
+    "file": "cases/generated-content/generated-content-first-letter-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-letter-transform",
+    "category": "generated-content",
+    "feature": "first-letter",
+    "subfeature": "text-transform-uppercase",
+    "description": "::first-letter text-transform:uppercase uppercases just the initial letter.",
+    "file": "cases/generated-content/generated-content-first-letter-transform.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-line-background",
+    "category": "generated-content",
+    "feature": "first-line",
+    "subfeature": "background-color",
+    "description": "::first-line paints a highlight background behind the first wrapped line only.",
+    "file": "cases/generated-content/generated-content-first-line-background.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-before-block",
+    "category": "generated-content",
+    "feature": "pseudo-element",
+    "subfeature": "before-display-block",
+    "description": "::before with display:block renders a full-width colored header band above the body text.",
+    "file": "cases/generated-content/generated-content-before-block.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-after-replaced",
+    "category": "generated-content",
+    "feature": "pseudo-element",
+    "subfeature": "after-on-replaced-img",
+    "description": "::after on a replaced <img> generates no box; only the image renders.",
+    "file": "cases/generated-content/generated-content-after-replaced.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "generated-content-content-url-sized",
+    "category": "generated-content",
+    "feature": "content-url",
+    "subfeature": "before-image-sized",
+    "description": "content: url(data:png) with explicit width/height scales the ::before replaced image.",
+    "file": "cases/generated-content/generated-content-content-url-sized.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-text-baseline",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "generated-content-first-line-font-size",
+    "category": "generated-content",
+    "feature": "first-line",
+    "subfeature": "font-size-geometry",
+    "description": "::first-line font-size and line-height change the first formatted line geometry; catches implementations that only restyle first-line paint.",
+    "file": "cases/generated-content/generated-content-first-line-font-size.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "generated-content-first-letter-leading-quote",
+    "category": "generated-content",
+    "feature": "::first-letter punctuation unit",
+    "subfeature": "first-letter-leading-quote",
+    "description": "A paragraph begins with an opening quote; ::first-letter background and color should apply to the quote plus the first letter as one unit. Catches: Styling only the first alphanumeric glyph passes simple first-letter tests but leaves the quote unstyled.",
+    "file": "cases/generated-content/generated-content-first-letter-leading-quote.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-first-letter-leading-digit",
+    "category": "generated-content",
+    "feature": "::first-letter numeric first-letter unit",
+    "subfeature": "first-letter-leading-digit",
+    "description": "A paragraph starts with a digit and ::first-letter should style that digit before the rest of the text. Catches: An implementation limited to alphabetic letters passes prose drop-cap fixtures but ignores numeric initial-letter units.",
+    "file": "cases/generated-content/generated-content-first-letter-leading-digit.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-first-line-text-transform",
+    "category": "generated-content",
+    "feature": "::first-line text-transform",
+    "subfeature": "first-line-text-transform",
+    "description": "A wrapped paragraph uppercases only the first formatted line through ::first-line{text-transform:uppercase}. Catches: A first-line implementation that only copies color/background/font-weight passes existing first-line tests while leaving text case unchanged.",
+    "file": "cases/generated-content/generated-content-first-line-text-transform.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-first-line-letter-spacing",
+    "category": "generated-content",
+    "feature": "::first-line letter-spacing",
+    "subfeature": "first-line-letter-spacing",
+    "description": "Only the first formatted line gets 5px letter spacing, changing where that line wraps relative to later lines. Catches: Restyling after line breaking passes color-only first-line fixtures but misses geometry-affecting first-line properties.",
+    "file": "cases/generated-content/generated-content-first-line-letter-spacing.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-first-line-line-height",
+    "category": "generated-content",
+    "feature": "::first-line line-height",
+    "subfeature": "first-line-line-height",
+    "description": "The first line gets a 54px line-height while later lines keep 24px, creating extra vertical space after line one. Catches: Applying first-line style after wrapping without recomputing line metrics passes color/background tests but keeps uniform line heights.",
+    "file": "cases/generated-content/generated-content-first-line-line-height.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-nested-q-quote-depth",
+    "category": "generated-content",
+    "feature": "open-quote/close-quote quote depth across nested elements",
+    "subfeature": "nested-q-quote-depth",
+    "description": "Nested q elements use generated open-quote/close-quote with two quote pairs; the inner quote must use the second pair. Catches: Resolving quote depth independently inside each content declaration passes single open/close quote fixtures but never reaches nested quote pairs.",
+    "file": "cases/generated-content/generated-content-nested-q-quote-depth.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-no-open-quote-depth",
+    "category": "generated-content",
+    "feature": "no-open-quote/no-close-quote depth effects",
+    "subfeature": "no-open-quote-depth",
+    "description": "A hidden opener increments quote depth before a visible nested quote, so the visible quote uses the second-level pair. Catches: Treating no-open-quote as a no-op passes no-glyph tests but fails depth-dependent nested quote rendering.",
+    "file": "cases/generated-content/generated-content-no-open-quote-depth.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-leader-function",
+    "category": "generated-content",
+    "feature": "content:leader('.')",
+    "subfeature": "leader-function",
+    "description": "A table-of-contents row inserts a dotted leader between a title and a page number. The destination is a non-painting anchor so default heading font synthesis cannot mask the leader result. Catches: A generated-content parser without leader() passes string and counter fixtures but leaves a blank gap before page numbers.",
+    "file": "cases/generated-content/generated-content-leader-function.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "weasyprint",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-target-counter-page",
+    "category": "generated-content",
+    "feature": "target-counter(attr(href), page)",
+    "subfeature": "target-counter-page",
+    "description": "A link to a later section appends that target's page number through target-counter(attr(href), page). Explicit link and target styles isolate cross-reference resolution from user-agent defaults.",
+    "file": "cases/generated-content/generated-content-target-counter-page.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "weasyprint",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-target-text",
+    "category": "generated-content",
+    "feature": "target-text(attr(href))",
+    "subfeature": "target-text",
+    "description": "A cross-reference link appends its target element's text using target-text(attr(href)). The target is ordinary styled text and the link disables its UA underline, isolating cross-reference resolution from independent heading, font-synthesis, and text-decoration behavior. The authenticated standards-derived Chrome reference materializes the CSS Generated Content Level 3 required result because browsers do not implement target-text(). Catches: An attr()/counter-only content implementation passes generated string tests but cannot resolve target element text.",
+    "file": "cases/generated-content/generated-content-target-text.html",
+    "reference_file": "references/generated-content/generated-content-target-text.html",
+    "reference": {
+      "status": "verified"
+    },
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-string-set-running-header",
+    "category": "generated-content",
+    "feature": "string-set and string()",
+    "subfeature": "string-set-running-header",
+    "description": "A heading stores its text in a named running string and the page top-center margin prints string(chapter). The explicit top margin gives that box a visible, nonzero layout area; the heading weight is explicit so this isolates named-string collection from engine-specific HTML UA styles. Catches: @page literal/counter support passes simple page footer tests but cannot collect named strings from document content.",
+    "file": "cases/generated-content/generated-content-string-set-running-header.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "weasyprint",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS GCPM requires string-set to capture the heading and string() to reproduce it in the page-margin box; it does not prescribe renderer-specific glyph quantization. Both PDFs contain the complete Running Head on both pages. On page 1 Ironpress places its header bbox at x=47.8125..132.1758pt, y=4.2683..18.2243pt, versus WeasyPrint x=47.8184..132.2024pt, y=4.2683..18.2363pt. The residual is a text-contour representation difference, so this WeasyPrint PDF is not a unique pixel oracle; raw shared-pdftoppm evidence remains reported."
+    },
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-running-element-margin",
+    "category": "generated-content",
+    "feature": "position:running() and element()",
+    "subfeature": "running-element-margin",
+    "description": "A sized painted box is captured with position:running(head) and reused by @page top-left via element(head) on two pages. The visible flow probes remain at each page's content top; an explicit top page margin gives the running box a real, non-clipped layout area.",
+    "file": "cases/generated-content/generated-content-running-element-margin.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "weasyprint",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "generated-content-before-list-item-marker",
+    "category": "generated-content",
+    "feature": "::before{display:list-item}",
+    "subfeature": "before-list-item-marker",
+    "description": "A block's ::before pseudo is display:list-item with list-style-type:square, producing a marker before the generated label. Catches: Supporting inline/block generated pseudos passes existing ::before fixtures but drops marker generation for list-item pseudos.",
+    "file": "cases/generated-content/generated-content-before-list-item-marker.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  }
+]

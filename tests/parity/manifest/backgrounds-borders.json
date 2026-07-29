@@ -1,0 +1,1231 @@
+[
+  {
+    "id": "background-color-solid",
+    "category": "backgrounds-borders",
+    "feature": "background-color",
+    "subfeature": "solid",
+    "description": "Single box filled with a solid opaque background-color.",
+    "file": "cases/backgrounds-borders/background-color-solid.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-color-rgba",
+    "category": "backgrounds-borders",
+    "feature": "background-color",
+    "subfeature": "rgba-alpha",
+    "description": "Semi-transparent rgba() box composited over a solid background box.",
+    "file": "cases/backgrounds-borders/background-color-rgba.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-linear-gradient",
+    "category": "backgrounds-borders",
+    "feature": "linear-gradient",
+    "subfeature": "to-right",
+    "description": "Horizontal two-stop linear-gradient background.",
+    "file": "cases/backgrounds-borders/background-linear-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-linear-gradient-diagonal",
+    "category": "backgrounds-borders",
+    "feature": "linear-gradient",
+    "subfeature": "45deg-diagonal",
+    "description": "Diagonal 45deg two-stop linear-gradient background on a square box.",
+    "file": "cases/backgrounds-borders/background-linear-gradient-diagonal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-radial-gradient",
+    "category": "backgrounds-borders",
+    "feature": "radial-gradient",
+    "subfeature": "circle-center",
+    "description": "Centered circular two-stop radial-gradient background on a square box.",
+    "file": "cases/backgrounds-borders/background-radial-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-solid-width",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "solid-width",
+    "description": "Box with a uniform 8px solid border around a light fill.",
+    "file": "cases/backgrounds-borders/border-solid-width.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-style-dashed",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "dashed",
+    "description": "Box with a 6px dashed border.",
+    "file": "cases/backgrounds-borders/border-style-dashed.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-style-dotted",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "dotted",
+    "description": "Box with a 6px dotted border.",
+    "file": "cases/backgrounds-borders/border-style-dotted.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-style-double",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "double",
+    "description": "Box with a 10px double border (two solid rules separated by a gap).",
+    "file": "cases/backgrounds-borders/border-style-double.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-per-side-colors",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "per-side-width-color",
+    "description": "Box with four different per-side border widths and colors.",
+    "file": "cases/backgrounds-borders/border-per-side-colors.html",
+    "reference_file": "references/backgrounds-borders/border-per-side-colors.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-rounded-per-side-width-color",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "rounded-per-side-width-color",
+    "description": "Unequal side widths and colors share one normalized elliptical border ring with non-overlapping corner ownership.",
+    "file": "cases/backgrounds-borders/border-rounded-per-side-width-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-rounded-mixed-styles",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "rounded-mixed-per-side",
+    "description": "Solid, dashed, dotted, and double sides follow one nonuniform rounded border geometry and meet only at their corner frontiers.",
+    "file": "cases/backgrounds-borders/border-rounded-mixed-styles.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-rounded-translucent-sides",
+    "category": "backgrounds-borders",
+    "feature": "border-color",
+    "subfeature": "rounded-translucent-side-joins",
+    "description": "Translucent unequal border sides retain single-paint diagonal ownership at normalized elliptical corners without alpha-dark overlap.",
+    "file": "cases/backgrounds-borders/border-rounded-translucent-sides.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-radius-uniform",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "uniform",
+    "description": "Filled box with a uniform 24px border-radius and a solid border.",
+    "file": "cases/backgrounds-borders/border-radius-uniform.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-radius-invalid-unitless-preserves-prior",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A nonzero unitless border-radius is invalid and cannot replace the prior valid radius.",
+    "file": "cases/backgrounds-borders/border-radius-invalid-unitless-preserves-prior.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-circle",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "50pct-circle",
+    "description": "Square box turned into a filled circle via border-radius 50%.",
+    "file": "cases/backgrounds-borders/border-radius-circle.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-radius-per-corner",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "per-corner",
+    "description": "Filled box with two rounded corners and two square corners.",
+    "file": "cases/backgrounds-borders/border-radius-per-corner.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "outline-solid",
+    "category": "backgrounds-borders",
+    "feature": "outline",
+    "subfeature": "solid-offset",
+    "description": "Square-corner outline with a positive offset. Exact outline geometry is user-agent-defined; this fixture is a Chromium compatibility canary.",
+    "file": "cases/backgrounds-borders/outline-solid.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-box-shadow-offset",
+    "category": "backgrounds-borders",
+    "feature": "box-shadow",
+    "subfeature": "hard-offset",
+    "description": "Box with a hard-edged (zero-blur) offset box-shadow for deterministic diffing.",
+    "file": "cases/backgrounds-borders/border-box-shadow-offset.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-radius-x-linear-gradient",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "x-linear-gradient",
+    "description": "Combo: border-radius rounding must clip a linear-gradient background fill (same-category combination).",
+    "file": "cases/backgrounds-borders/border-radius-x-linear-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-x-box-shadow",
+    "category": "backgrounds-borders",
+    "feature": "box-shadow",
+    "subfeature": "x-border",
+    "description": "Combo: a hard offset box-shadow cast by a box that also has a solid border (same-category combination).",
+    "file": "cases/backgrounds-borders/border-x-box-shadow.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-radius-corner-longhands",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "corner-longhands",
+    "description": "Per-corner border-radius longhands (top-left + bottom-right rounded, others square).",
+    "file": "cases/backgrounds-borders/border-radius-corner-longhands.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-four-values",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "four-value-shorthand",
+    "description": "border-radius 1-4 value shorthand assigning a distinct radius to each corner.",
+    "file": "cases/backgrounds-borders/border-radius-four-values.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-two-values",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "two-value-shorthand",
+    "description": "border-radius two-value shorthand (TL/BR vs TR/BL diagonal radii).",
+    "file": "cases/backgrounds-borders/border-radius-two-values.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-percentage",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "percentage",
+    "description": "border-radius given as a non-50% percentage of the box.",
+    "file": "cases/backgrounds-borders/border-radius-percentage.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-clamped",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "overlap-clamping",
+    "description": "border-radius larger than half the box is clamped/normalized to fit.",
+    "file": "cases/backgrounds-borders/border-radius-clamped.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-elliptical",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "elliptical-slash",
+    "description": "Elliptical border-radius via the Rx / Ry slash syntax.",
+    "file": "cases/backgrounds-borders/border-radius-elliptical.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-radius-ellipse-nonsquare",
+    "category": "backgrounds-borders",
+    "feature": "border-radius",
+    "subfeature": "50pct-nonsquare",
+    "description": "border-radius 50% on a non-square box (elliptical corners).",
+    "file": "cases/backgrounds-borders/border-radius-ellipse-nonsquare.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "border-style-none",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "none-no-paint",
+    "description": "border-style none paints no border while reserving the declared width via longhands.",
+    "file": "cases/backgrounds-borders/border-style-none.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-width-keywords",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "width-keywords",
+    "description": "Per-side border-width keywords thin/medium/thick.",
+    "file": "cases/backgrounds-borders/border-width-keywords.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-color-transparent",
+    "category": "backgrounds-borders",
+    "feature": "border-color",
+    "subfeature": "transparent-side",
+    "description": "border-color transparent on one side, solid on the rest.",
+    "file": "cases/backgrounds-borders/border-color-transparent.html",
+    "reference_file": "references/backgrounds-borders/border-color-transparent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-color-currentcolor",
+    "category": "backgrounds-borders",
+    "feature": "border-color",
+    "subfeature": "currentcolor",
+    "description": "border-color currentColor resolves to the element color.",
+    "file": "cases/backgrounds-borders/border-color-currentcolor.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "outline-offset-negative",
+    "category": "backgrounds-borders",
+    "feature": "outline",
+    "subfeature": "negative-offset",
+    "description": "outline-offset negative pulls the outline inward over the box.",
+    "file": "cases/backgrounds-borders/outline-offset-negative.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "background-conic-gradient",
+    "category": "backgrounds-borders",
+    "feature": "conic-gradient",
+    "subfeature": "center",
+    "description": "Centered multi-stop conic-gradient background.",
+    "file": "cases/backgrounds-borders/background-conic-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-radial-gradient-ellipse",
+    "category": "backgrounds-borders",
+    "feature": "radial-gradient",
+    "subfeature": "ellipse-farthest-corner",
+    "description": "Elliptical radial-gradient sized to the farthest corner.",
+    "file": "cases/backgrounds-borders/background-radial-gradient-ellipse.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-gradient-slice",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "gradient-slice",
+    "description": "border-image paints a linear-gradient source into a transparent physical border; catches engines that ignore border-image or fall back to a plain/transparent border.",
+    "file": "cases/backgrounds-borders/border-image-gradient-slice.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-width-multiplier",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "width-number-multiplier",
+    "description": "border-image-width:3 makes the image border 3× the computed 8px physical border width, dividing the border-image area 24px from every edge. Catches implementations that parse slices but always use the physical border width for the destination patches.",
+    "file": "cases/backgrounds-borders/border-image-width-multiplier.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-background-nested-inline",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "background-coexistence-nested-replaced",
+    "description": "A border image remains independent from a background gradient and replaces the red fallback border on block, nested-block, and replaced raster-image paths. Catches computed-style source collisions and child paint paths that bypass the shared border decoration pipeline.",
+    "file": "cases/backgrounds-borders/border-image-background-nested-inline.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-source-families",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "raster-svg-radial-conic-order-independent-shorthand",
+    "description": "Four border images use a raster data URL, SVG data URL, radial gradient, and conic gradient. The conic source appears after the slice and width components, exercising the order-independent shorthand grammar. Every source replaces the magenta fallback border and passes through the same nine-slice painter.",
+    "file": "cases/backgrounds-borders/border-image-source-families.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-unavailable-source-fallback",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "unavailable-source-fallback",
+    "description": "An unavailable border-image source falls back to the authored per-side border colors, widths, and radii instead of suppressing the border or painting a placeholder.",
+    "file": "cases/backgrounds-borders/border-image-unavailable-source-fallback.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-outset-number",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "outset-number-multiplier",
+    "description": "border-image shorthand outset 2 extends the image area by 2× the computed 8px physical border on every edge without changing layout. Catches implementations that parse the first slash but discard the second slash/outset component.",
+    "file": "cases/backgrounds-borders/border-image-outset-number.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-outset-em",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "outset-font-relative-length",
+    "description": "border-image outset .25em resolves against the element's 40px font size, extending the painted image area by 10px on every side without changing layout. Catches parsers that accept only absolute units and discard the entire border image for a valid font-relative CSS length.",
+    "file": "cases/backgrounds-borders/border-image-outset-em.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-repeat-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "repeat-horizontal-stretch-vertical",
+    "description": "border-image-repeat: repeat stretch tiles the top and bottom edge slices at their proportional width, centered with clipped partial end tiles, while the side slices remain stretched. Catches parsers that reject the repeat keyword and render no image, or render every edge as one stretched patch.",
+    "file": "cases/backgrounds-borders/border-image-repeat-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-round-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "round-horizontal-stretch-vertical",
+    "description": "border-image-repeat: round stretch resizes each proportional top and bottom edge tile horizontally until exactly six whole tiles fit, while side slices remain stretched. Catches implementations that tile at the unrounded size or stretch the whole edge once.",
+    "file": "cases/backgrounds-borders/border-image-round-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-image-space-horizontal",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "space-horizontal-stretch-vertical",
+    "description": "border-image-repeat: space stretch keeps five whole proportional top and bottom edge tiles and equalizes the surplus before, between, and after them, while side slices remain stretched. Catches background-repeat-style edge-flush spacing or partial edge tiles.",
+    "file": "cases/backgrounds-borders/border-image-space-horizontal.html",
+    "reference_file": "references/backgrounds-borders/border-image-space-horizontal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-style-3d-bevels",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "groove-ridge-inset-outset",
+    "description": "groove, ridge, inset, and outset render with 3D bevel polarity; catches unsupported keywords collapsed to flat solid borders.",
+    "file": "cases/backgrounds-borders/border-style-3d-bevels.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-repeat-space-round",
+    "category": "backgrounds-borders",
+    "feature": "background-repeat",
+    "subfeature": "space-round",
+    "description": "background-repeat: space distributes four 40px columns with 8px gaps while round scales 24px images into three 26.666px rows.",
+    "file": "cases/backgrounds-borders/background-repeat-space-round.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-position-edge-offsets",
+    "category": "backgrounds-borders",
+    "feature": "background-position",
+    "subfeature": "four-value-edge-offsets",
+    "description": "background-position: right 20px bottom 15px anchors a tile from named edges; catches one/two-value parsers that fall back to top-left.",
+    "file": "cases/backgrounds-borders/background-position-edge-offsets.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-size-auto-length",
+    "category": "backgrounds-borders",
+    "feature": "background-size",
+    "subfeature": "auto-length-intrinsic-ratio",
+    "description": "background-size: auto 60px preserves the image intrinsic ratio; catches implementations that treat mixed auto/length as plain auto.",
+    "file": "cases/backgrounds-borders/background-size-auto-length.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-clip-text-gradient",
+    "category": "backgrounds-borders",
+    "feature": "background-clip",
+    "subfeature": "text",
+    "description": "background-clip:text clips a gradient background to glyph shapes; catches engines that map text to border-box or leave transparent text invisible.",
+    "file": "cases/backgrounds-borders/background-clip-text-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Backgrounds 4 defines background-clip:text by the text geometry, not a text-edge sampling grid or PDF representation. Chromium's PDF turns the matched ParitySans outlines into a 196x83 soft-mask image; Ironpress retains the same outline geometry as a vector text clip. The gradient interior and glyph positions agree, but the two valid edge-coverage strategies cannot be a unique pixel oracle."
+    },
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "box-shadow-elliptical-radius",
+    "category": "backgrounds-borders",
+    "feature": "box-shadow",
+    "subfeature": "elliptical-percentage-radius",
+    "description": "A pill-shaped border-radius:50% casts a hard oval shadow; catches scalar rounded-rectangle shadow math on non-square boxes.",
+    "file": "cases/backgrounds-borders/box-shadow-elliptical-radius.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "box-shadow",
+      "border-radius"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-origin-border-box",
+    "category": "backgrounds-borders",
+    "feature": "background-origin",
+    "subfeature": "border-box",
+    "description": "background-origin:border-box positions a tile from the outer border edge; catches implementations that always use padding-box.",
+    "file": "cases/backgrounds-borders/background-origin-border-box.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-image-image-set",
+    "category": "backgrounds-borders",
+    "feature": "background-image",
+    "subfeature": "image-set",
+    "description": "background-image:image-set() paints its selected candidate; catches parsers that drop image-set() and leave the box white.",
+    "file": "cases/backgrounds-borders/background-image-image-set.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-attachment-fixed-viewport",
+    "category": "backgrounds-borders",
+    "feature": "background-attachment",
+    "subfeature": "fixed-viewport",
+    "description": "background-attachment:fixed anchors a split gradient to the page viewport; catches element-relative fixed positioning.",
+    "file": "cases/backgrounds-borders/background-attachment-fixed-viewport.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-attachment-local-scroll-canvas",
+    "category": "backgrounds-borders",
+    "feature": "background-attachment",
+    "subfeature": "local-scroll-canvas",
+    "description": "background-attachment:local positions a bottom stripe against the scrollable content canvas; catches aliases to scroll/static attachment.",
+    "file": "cases/backgrounds-borders/background-attachment-local-scroll-canvas.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-block-flow"
+    ]
+  },
+  {
+    "id": "body-background-canvas-propagation",
+    "category": "backgrounds-borders",
+    "feature": "body-background-canvas-propagation",
+    "subfeature": "transparent-root",
+    "description": "The body background propagates to the page canvas when the html background is transparent; catches body-only painting that leaves page margins white.",
+    "file": "cases/backgrounds-borders/body-background-canvas-propagation.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "html-background-suppresses-body-canvas",
+    "category": "backgrounds-borders",
+    "feature": "root-body-canvas-background-precedence",
+    "subfeature": "root-suppresses-body-propagation",
+    "description": "An html background paints the canvas and prevents body background propagation; catches engines that fill the whole page with the body color.",
+    "file": "cases/backgrounds-borders/html-background-suppresses-body-canvas.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "background-color",
+      "root-canvas"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-clip-content-box-color",
+    "category": "backgrounds-borders",
+    "feature": "background-clip",
+    "subfeature": "content-box-color",
+    "description": "background-clip:content-box clips a solid background color to the content box; catches border-box clipping that fills padding.",
+    "file": "cases/backgrounds-borders/background-clip-content-box-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-clip-padding-box-dashed-gradient",
+    "category": "backgrounds-borders",
+    "feature": "background-clip",
+    "subfeature": "padding-box-dashed-gradient",
+    "description": "background-clip:padding-box clips a gradient before dashed border gaps; catches border-box clipping that leaks red through the border.",
+    "file": "cases/backgrounds-borders/background-clip-padding-box-dashed-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-clip-padding-box-elliptical-radius",
+    "category": "backgrounds-borders",
+    "feature": "background-clip",
+    "subfeature": "padding-box-elliptical-radius",
+    "description": "background-clip:padding-box follows the elliptical inner border curve beneath a translucent solid border; catches red background bleed into the border band.",
+    "file": "cases/backgrounds-borders/background-clip-padding-box-elliptical-radius.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "background-clip",
+      "border-radius"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-origin-list-matching",
+    "category": "backgrounds-borders",
+    "feature": "background-origin",
+    "subfeature": "layer-list-matching",
+    "description": "Comma-separated background-origin values position two image layers from different boxes; catches implementations with one origin for all layers.",
+    "file": "cases/backgrounds-borders/background-origin-list-matching.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-clip-list-matching",
+    "category": "backgrounds-borders",
+    "feature": "background-clip",
+    "subfeature": "layer-list-matching",
+    "description": "Comma-separated background-clip values clip only the top layer to content-box over a blue border-box layer; catches single-clip implementations.",
+    "file": "cases/backgrounds-borders/background-clip-list-matching.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-repeat-repeat-x-no-repeat-y",
+    "category": "backgrounds-borders",
+    "feature": "background-repeat",
+    "subfeature": "repeat-no-repeat-two-keyword",
+    "description": "background-repeat:repeat no-repeat repeats a tile only horizontally; catches parsers that collapse the two-keyword value to full repeat.",
+    "file": "cases/backgrounds-borders/background-repeat-repeat-x-no-repeat-y.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-position-xy-longhands",
+    "category": "backgrounds-borders",
+    "feature": "background-position",
+    "subfeature": "x-y-longhands",
+    "description": "background-position-x and background-position-y independently place a tile at fixed offsets; catches engines that ignore the longhands.",
+    "file": "cases/backgrounds-borders/background-position-xy-longhands.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-image-none-layer-list",
+    "category": "backgrounds-borders",
+    "feature": "background-image",
+    "subfeature": "none-layer-list-matching",
+    "description": "A none background layer still consumes matching size/repeat/position list entries; catches implementations that drop none before list matching.",
+    "file": "cases/backgrounds-borders/background-image-none-layer-list.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-shorthand-visual-box-single",
+    "category": "backgrounds-borders",
+    "feature": "background-shorthand",
+    "subfeature": "single-visual-box",
+    "description": "The background shorthand with one visual-box sets both origin and clip to content-box; catches shorthands that set only one of them.",
+    "file": "cases/backgrounds-borders/background-shorthand-visual-box-single.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-shorthand-origin-clip-pair",
+    "category": "backgrounds-borders",
+    "feature": "background-shorthand",
+    "subfeature": "origin-clip-visual-box-pair",
+    "description": "The background shorthand with border-box content-box positions from border-box and clips to content-box; catches reversed or collapsed visual-box parsing.",
+    "file": "cases/backgrounds-borders/background-shorthand-origin-clip-pair.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-shorthand-multiple-layers-color",
+    "category": "backgrounds-borders",
+    "feature": "background-shorthand",
+    "subfeature": "multiple-layers-final-color",
+    "description": "The background shorthand accepts multiple image layers plus a final background color; catches one-layer parsers that drop a tile or the color.",
+    "file": "cases/backgrounds-borders/background-shorthand-multiple-layers-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-shorthand-reset-longhands",
+    "category": "backgrounds-borders",
+    "feature": "background-shorthand",
+    "subfeature": "reset-longhands",
+    "description": "A later background shorthand resets earlier image, repeat, size, origin, and clip longhands; catches stale red image or stale content-box clipping.",
+    "file": "cases/backgrounds-borders/background-shorthand-reset-longhands.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-blend-mode-multiply-image",
+    "category": "backgrounds-borders",
+    "feature": "background-blend-mode",
+    "subfeature": "multiply-image-color",
+    "description": "background-blend-mode:multiply blends a blue image layer with a yellow background color; catches engines that paint the image normally.",
+    "file": "cases/backgrounds-borders/background-blend-mode-multiply-image.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-blend-mode-list-matching",
+    "category": "backgrounds-borders",
+    "feature": "background-blend-mode",
+    "subfeature": "layer-list-matching",
+    "description": "Comma-separated background-blend-mode values keep the top red tile normal while multiplying the bottom blue layer into the yellow color; catches one global blend mode.",
+    "file": "cases/backgrounds-borders/background-blend-mode-list-matching.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-layer-order-raster-gradient",
+    "category": "backgrounds-borders",
+    "feature": "background-layer-order",
+    "subfeature": "gradient-over-raster",
+    "description": "A top red gradient layer covers a bottom blue raster at the same corner; catches fixed slot painters that put raster over gradient.",
+    "file": "cases/backgrounds-borders/background-layer-order-raster-gradient.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "linear-gradient",
+      "background-image"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-style-four-value-shorthand",
+    "category": "backgrounds-borders",
+    "feature": "border-style",
+    "subfeature": "four-value-shorthand",
+    "description": "border-style four-value shorthand assigns solid, dashed, dotted, and double styles to different sides; catches uniform-style parsing.",
+    "file": "cases/backgrounds-borders/border-style-four-value-shorthand.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-width-four-value-shorthand",
+    "category": "backgrounds-borders",
+    "feature": "border-width",
+    "subfeature": "four-value-shorthand",
+    "description": "border-width four-value shorthand assigns visibly different widths to every side; catches uniform-width shorthand parsing.",
+    "file": "cases/backgrounds-borders/border-width-four-value-shorthand.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "border-color-four-value-shorthand",
+    "category": "backgrounds-borders",
+    "feature": "border-color",
+    "subfeature": "four-value-shorthand",
+    "description": "border-color four-value shorthand assigns a distinct color to each side; catches single-color shorthand parsing.",
+    "file": "cases/backgrounds-borders/border-color-four-value-shorthand.html",
+    "reference_file": "references/backgrounds-borders/border-color-four-value-shorthand.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "box-shadow-inset-elliptical-radius",
+    "category": "backgrounds-borders",
+    "feature": "box-shadow",
+    "subfeature": "inset-elliptical-radius",
+    "description": "An inset spread shadow follows an elliptical border-radius inner curve; catches rectangular or scalar-radius clipping.",
+    "file": "cases/backgrounds-borders/box-shadow-inset-elliptical-radius.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "box-shadow",
+      "border-radius"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-image-nonuniform-radius-clip",
+    "category": "backgrounds-borders",
+    "feature": "background-image",
+    "subfeature": "nonuniform-radius-clipping",
+    "description": "A raster background is clipped by four unequal border radii; catches unclipped or uniform-radius image clipping.",
+    "file": "cases/backgrounds-borders/background-image-nonuniform-radius-clip.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "background-image",
+      "border-radius"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-image-render",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "box-shadow-spread-nonuniform-radius",
+    "category": "backgrounds-borders",
+    "feature": "box-shadow",
+    "subfeature": "spread-nonuniform-radius",
+    "description": "A spread-only outer box-shadow preserves four unequal corner radii; catches scalar-radius shadow inflation.",
+    "file": "cases/backgrounds-borders/box-shadow-spread-nonuniform-radius.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "box-shadow",
+      "border-radius"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-invalid-repeat-preserves-no-repeat",
+    "category": "backgrounds-borders",
+    "feature": "background-repeat",
+    "subfeature": "invalid-declaration-discard",
+    "description": "A later invalid background-repeat declaration is discarded, so the earlier no-repeat value keeps the sized gradient in the first tile only.",
+    "file": "cases/backgrounds-borders/background-invalid-repeat-preserves-no-repeat.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "border-logical-cascade-writing-modes",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "logical-physical-cascade-writing-modes",
+    "description": "Logical border sides and radii share declaration order with physical longhands and map through horizontal LTR, horizontal RTL, vertical-lr, and sideways-lr writing modes.",
+    "file": "cases/backgrounds-borders/border-logical-cascade-writing-modes.html",
+    "reference_file": "references/backgrounds-borders/border-logical-cascade-writing-modes.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-image-intrinsic-overlap-reset",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "intrinsic-svg-overlap-global-scaling-reset",
+    "description": "Border images use SVG concrete object sizing, preserve overlapping source slices, scale all destination widths with one global factor, and reset every border-image longhand through the border shorthand.",
+    "file": "cases/backgrounds-borders/border-image-intrinsic-overlap-reset.html",
+    "reference_file": "references/backgrounds-borders/border-image-intrinsic-overlap-reset.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-collapsed-table-applicability",
+    "category": "backgrounds-borders",
+    "feature": "border",
+    "subfeature": "collapsed-table-image-radius-applicability",
+    "description": "Collapsed table cells ignore border-image and border-radius while their ordinary borders remain in collapsed-border conflict resolution; the collapsed table radius also has no effect.",
+    "file": "cases/backgrounds-borders/border-collapsed-table-applicability.html",
+    "reference_file": "references/backgrounds-borders/border-collapsed-table-applicability.html",
+    "kind": "interaction",
+    "interaction_of": ["border-image", "border-radius", "tables"],
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  },
+  {
+    "id": "border-image-fill-axis-repeat",
+    "category": "backgrounds-borders",
+    "feature": "border-image",
+    "subfeature": "center-fill-independent-axis-repeat",
+    "description": "The preserved center slice paints above the background while horizontal and vertical border-image-repeat modes independently apply round, repeat, stretch, and space tiling.",
+    "file": "cases/backgrounds-borders/border-image-fill-axis-repeat.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box", "probe-color-swatch"]
+  }
+]

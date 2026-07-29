@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>exclusive polygon reference for four-value border color</title>
+<style>
+  @page { size: 192px 144px; margin: 0; }
+  html, body { width: 192px; height: 144px; background: #fff; }
+  html, body, svg { box-sizing: border-box; margin: 0; padding: 0; }
+  svg { position: absolute; left: 20px; top: 20px; display: block; width: 130px; height: 90px; }
+</style>
+</head>
+<body>
+  <svg viewBox="0 0 130 90" xmlns="http://www.w3.org/2000/svg" aria-label="four exclusive equal-width border side polygons">
+    <rect width="130" height="90" fill="#fff"/>
+    <path d="M0 0H130L118 12H12Z" fill="#e53935"/>
+    <path d="M130 0V90L118 78V12Z" fill="#1e88e5"/>
+    <path d="M130 90H0L12 78H118Z" fill="#43a047"/>
+    <path d="M0 90V0L12 12V78Z" fill="#fdd835"/>
+  </svg>
+</body>
+</html>

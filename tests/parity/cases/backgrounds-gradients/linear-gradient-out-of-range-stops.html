@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>linear-gradient out-of-range color stops</title>
+<style>
+  @page { size: 320px 160px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { width: 320px; height: 160px; background: #ffffff; }
+  .box {
+    width: 320px;
+    height: 160px;
+    background: linear-gradient(90deg, #d32f2f -50%, #1565c0 150%);
+  }
+</style>
+</head>
+<body><div class="box"></div></body>
+</html>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>img height scaled aspect preserved</title>
+<style>
+  @page { size: 400px 152px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage { width: 260px; margin: 30px; background: #eeeeee; }
+  /* height set, width auto: a 2:1 intrinsic image stays 2:1, so height:90px
+     derives width:180px from the aspect ratio. */
+  img {
+    display: block; width: auto; height: 90px; image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <img alt="" height="90" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII=">
+  </div>
+</body>
+</html>

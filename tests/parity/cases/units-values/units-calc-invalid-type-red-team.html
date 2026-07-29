@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-calc-invalid-type-red-team</title>
+<style>
+  /* Visual reduction of WPT calc type-checking and invalid grammar coverage. */
+  @page { size: 480px 520px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane { position: relative; width: 400px; height: 54px; margin-bottom: 10px; background: #f1f1f1; border: 3px solid #111; }
+  .bar { width: 120px; height: 100%; background: #06d6a0; border-right: 6px solid #073b4c; }
+  .dimension-product .bar { width: calc(10px * 2px); }
+  .mixed-type .bar { width: calc(10px + 2); }
+  .angle-length .bar { width: calc(100px + 2deg); }
+  .trailing .bar { width: calc(100px +); }
+  .unbalanced .bar { width: calc((100px); }
+  .comparison .bar { width: min(100px, 2deg); }
+  .arity .bar { width: clamp(20px, 100px); }
+</style></head><body>
+  <div class="lane dimension-product"><div class="bar"></div></div>
+  <div class="lane mixed-type"><div class="bar"></div></div>
+  <div class="lane angle-length"><div class="bar"></div></div>
+  <div class="lane trailing"><div class="bar"></div></div>
+  <div class="lane unbalanced"><div class="bar"></div></div>
+  <div class="lane comparison"><div class="bar"></div></div>
+  <div class="lane arity"><div class="bar"></div></div>
+</body></html>

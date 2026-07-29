@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>per-physical-page background cascade</title>
+  <style>
+    @page { size: 160px 120px; margin: 0; background: #ef476f; }
+    @page :right { background: #ffd166; }
+    @page :left { background: #118ab2; }
+    @page :first { background: #06d6a0; }
+    @page :left { background: #3a86ff; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    .sheet { width: 48px; height: 40px; background: #111827; }
+    .sheet + .sheet { break-before: page; }
+  </style>
+</head>
+<body>
+  <div class="sheet"></div>
+  <div class="sheet"></div>
+  <div class="sheet"></div>
+  <div class="sheet"></div>
+</body>
+</html>

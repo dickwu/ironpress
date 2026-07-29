@@ -1,0 +1,342 @@
+[
+  {
+    "id": "typography-font-size-px",
+    "category": "typography",
+    "feature": "font-size",
+    "subfeature": "px",
+    "description": "Text rendered at an explicit 32px font-size in a bordered, filled region.",
+    "file": "cases/typography/typography-font-size-px.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-size-pt",
+    "category": "typography",
+    "feature": "font-size",
+    "subfeature": "pt",
+    "description": "Text rendered at an explicit 24pt font-size to verify pt-to-px conversion.",
+    "file": "cases/typography/typography-font-size-pt.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-size-em",
+    "category": "typography",
+    "feature": "font-size",
+    "subfeature": "em",
+    "description": "font-size 2em resolved against the parent's 16px font-size.",
+    "file": "cases/typography/typography-font-size-em.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-size-rem",
+    "category": "typography",
+    "feature": "font-size",
+    "subfeature": "rem",
+    "description": "font-size 2rem resolved against the root 16px font-size, not the local 10px.",
+    "file": "cases/typography/typography-font-size-rem.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-size-percent",
+    "category": "typography",
+    "feature": "font-size",
+    "subfeature": "percent",
+    "description": "font-size 150% resolved against the parent's 16px font-size.",
+    "file": "cases/typography/typography-font-size-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-weight-bold",
+    "category": "typography",
+    "feature": "font-weight",
+    "subfeature": "bold",
+    "description": "Bold-weight text so heavier glyph strokes show up as pixel differences.",
+    "file": "cases/typography/typography-font-weight-bold.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-weight-normal",
+    "category": "typography",
+    "feature": "font-weight",
+    "subfeature": "normal",
+    "description": "Normal-weight text as the regular-stroke counterpart to the bold fixture.",
+    "file": "cases/typography/typography-font-weight-normal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-style-italic",
+    "category": "typography",
+    "feature": "font-style",
+    "subfeature": "italic",
+    "description": "Italic serif text with only a regular bundled face available, verifying synthetic slant and its metrics.",
+    "file": "cases/typography/typography-font-style-italic.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-family-serif",
+    "category": "typography",
+    "feature": "font-family",
+    "subfeature": "serif",
+    "description": "Generic serif family fallback at 28px.",
+    "file": "cases/typography/typography-font-family-serif.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-family-sans-serif",
+    "category": "typography",
+    "feature": "font-family",
+    "subfeature": "sans-serif",
+    "description": "Generic sans-serif family fallback at 28px.",
+    "file": "cases/typography/typography-font-family-sans-serif.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-font-family-monospace",
+    "category": "typography",
+    "feature": "font-family",
+    "subfeature": "monospace",
+    "description": "Generic monospace family fallback at 28px with fixed-advance glyphs.",
+    "file": "cases/typography/typography-font-family-monospace.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-line-height-numeric",
+    "category": "typography",
+    "feature": "line-height",
+    "subfeature": "numeric",
+    "description": "Unitless line-height 2 across three stacked lines to verify line-box spacing.",
+    "file": "cases/typography/typography-line-height-numeric.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-line-height-length",
+    "category": "typography",
+    "feature": "line-height",
+    "subfeature": "length",
+    "description": "Length line-height 36px across three stacked lines to verify fixed line-box height.",
+    "file": "cases/typography/typography-line-height-length.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-heading-default-sizes",
+    "category": "typography",
+    "feature": "heading-default-size",
+    "subfeature": "h1-h3",
+    "description": "The authenticated parity baseline's explicit h1, h2 and h3 font sizes are stacked in one region.",
+    "file": "cases/typography/typography-heading-default-sizes.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-vertical-align-sub",
+    "category": "typography",
+    "feature": "vertical-align",
+    "subfeature": "sub",
+    "description": "Subscript element (H2O) lowered below the baseline with reduced font-size.",
+    "file": "cases/typography/typography-vertical-align-sub.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-vertical-align-sup",
+    "category": "typography",
+    "feature": "vertical-align",
+    "subfeature": "sup",
+    "description": "Superscript element (x squared) raised above the baseline with reduced font-size.",
+    "file": "cases/typography/typography-vertical-align-sup.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-line-height-percent",
+    "category": "typography",
+    "feature": "line-height",
+    "subfeature": "percentage-font-size",
+    "description": "line-height:200% resolves from the element font-size to 40px line boxes; catches percentage line-height being ignored or inherited as 1.5.",
+    "file": "cases/typography/typography-line-height-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "typography-mixed-inline-font-size-linebox",
+    "category": "typography",
+    "feature": "mixed inline font-size line box metrics",
+    "subfeature": "mixed-inline-font-size-linebox",
+    "description": "A paragraph with a 42px span in the middle must produce a taller first line than the following normal line. Catches: A block-level line-height-only engine passes uniform line-height tests while clipping or overlapping large inline runs.",
+    "file": "cases/typography/typography-mixed-inline-font-size-linebox.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-line-height-em-inheritance",
+    "category": "typography",
+    "feature": "line-height:<length em> inheritance",
+    "subfeature": "line-height-em-inheritance",
+    "description": "A parent sets font-size:20px and line-height:2em; a smaller child inherits a 40px computed line-height, not a unitless factor of 2. Catches: Treating line-height:2em as the number 2 passes simple same-element line-height tests but compresses descendants with smaller fonts.",
+    "file": "cases/typography/typography-line-height-em-inheritance.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-text-emphasis-filled-dot",
+    "category": "typography",
+    "feature": "text-emphasis filled dot",
+    "subfeature": "text-emphasis-filled-dot",
+    "description": "Japanese text uses filled red emphasis dots above the characters. Catches: An implementation with only text-decoration lines passes underline/overline tests but renders no emphasis marks.",
+    "file": "cases/typography/typography-text-emphasis-filled-dot.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-text-emphasis-leading",
+    "category": "typography",
+    "feature": "text-emphasis line-height interaction",
+    "subfeature": "text-emphasis-leading",
+    "description": "CJK emphasis dots are tested in tight and roomy lines. Catches: a hard-coded baseline ratio may align one font size while ignoring the selected font's annotation metrics and the leading already available above the base text.",
+    "file": "cases/typography/typography-text-emphasis-leading.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-text-emphasis-under",
+    "category": "typography",
+    "feature": "text-emphasis position",
+    "subfeature": "text-emphasis-under",
+    "description": "`under right` must place marks below the base and reserve the ruby annotation spacing on the corresponding line-box side.",
+    "file": "cases/typography/typography-text-emphasis-under.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-text-emphasis-whitespace",
+    "category": "typography",
+    "feature": "text-emphasis skip",
+    "subfeature": "text-emphasis-whitespace",
+    "description": "An emphasized preserved space paints no mark but retains its ruby annotation height in following flow.",
+    "file": "cases/typography/typography-text-emphasis-whitespace.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "typography-initial-letter-two-line",
+    "category": "typography",
+    "feature": "initial-letter:2",
+    "subfeature": "initial-letter-two-line",
+    "description": "A paragraph uses p::first-letter{initial-letter:2} to create a dropped initial spanning two lines without manual float sizing. Catches: A renderer with only custom ::first-letter font-size/float drop caps passes handcrafted drop-cap fixtures but ignores the initial-letter property.",
+    "file": "cases/typography/typography-initial-letter-two-line.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  }
+]

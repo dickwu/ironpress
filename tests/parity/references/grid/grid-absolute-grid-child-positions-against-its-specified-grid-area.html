@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!--
+  Standards-derived print oracle for grid-area-containing-block.
+
+  CSS Grid Level 1 §9.1 makes the placed grid area the containing block of an
+  absolutely positioned child. Chromium 150's screen layout follows that rule,
+  but its print-to-PDF path drops the grid's 20px static offset for this child.
+  The candidate fixture has left/top:10px; this independent reference adds the
+  missing 20px only in the print source, producing the standard-required final
+  geometry without using candidate output, image edits, crops, or registration.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>absolute-grid-child-positions-against-its-specified-grid-area</title>
+<style>
+  @page { size: 256px 192px; margin: 0; }
+  html {
+    font-family: ParitySans;
+    line-height: 1.5;
+  }
+  * {
+    margin: 0;
+    box-sizing: border-box;
+  }
+  html, body {
+    background: #ffffff;
+  }
+  .grid {
+    display: grid;
+    position: relative;
+    grid-template-columns: 80px 80px;
+    grid-template-rows: 60px 60px;
+    width: 160px;
+    margin: 20px;
+    border: 2px solid #000000;
+  }
+  .bg {
+    background: #eeeeee;
+  }
+  .abs {
+    position: absolute;
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
+    left: 30px;
+    top: 30px;
+    width: 50px;
+    height: 30px;
+    background: #d7263d;
+  }
+</style>
+</head>
+<body>
+<div class="grid"><div class="bg"></div><div class="bg"></div><div class="bg"></div><div class="bg"></div><div class="abs"></div></div>
+</body>
+</html>

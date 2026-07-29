@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>transforms x font synthesis matrix</title>
+<style>
+  @page { size: 680px 264px; margin: 0; }
+  @font-face {
+    font-family: MatrixSans;
+    src: url('../../fonts/ParitySans.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+  }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 18px; color: #111111; }
+  .row { height: 56px; font-size: 0; line-height: 0; white-space: nowrap; }
+  .label {
+    display: inline-block;
+    width: 92px;
+    height: 40px;
+    border: 1px solid transparent;
+    font: 12px/38px ParitySans;
+    vertical-align: top;
+  }
+  .sample {
+    display: inline-block;
+    width: 126px;
+    height: 40px;
+    margin-right: 8px;
+    border: 1px solid #64748b;
+    background: #e0f2fe;
+    color: #172554;
+    font-family: MatrixSans;
+    font-size: 20px;
+    line-height: 38px;
+    text-align: center;
+    vertical-align: top;
+  }
+  .rotate { transform: rotate(7deg); transform-origin: center; }
+  .scale { transform: scale(.9, 1.12); transform-origin: left center; }
+  .skew { transform: skewX(-10deg); transform-origin: center bottom; }
+  .compound {
+    transform: translate(3px, 2px) rotate(-4deg);
+    transform-origin: 20% 70%;
+  }
+  .bold { font-weight: bold; }
+  .oblique { font-style: oblique 20deg; }
+  .bold-oblique { font: italic bold 20px/38px MatrixSans; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <span class="label" aria-label="normal"></span><span class="sample rotate">Ag office</span><span class="sample scale">Ag office</span><span class="sample skew">Ag office</span><span class="sample compound">Ag office</span>
+  </div>
+  <div class="row">
+    <span class="label" aria-label="bold"></span><span class="sample bold rotate">Ag office</span><span class="sample bold scale">Ag office</span><span class="sample bold skew">Ag office</span><span class="sample bold compound">Ag office</span>
+  </div>
+  <div class="row">
+    <span class="label" aria-label="oblique"></span><span class="sample oblique rotate">Ag office</span><span class="sample oblique scale">Ag office</span><span class="sample oblique skew">Ag office</span><span class="sample oblique compound">Ag office</span>
+  </div>
+  <div class="row">
+    <span class="label" aria-label="bold italic"></span><span class="sample bold-oblique rotate">Ag office</span><span class="sample bold-oblique scale">Ag office</span><span class="sample bold-oblique skew">Ag office</span><span class="sample bold-oblique compound">Ag office</span>
+  </div>
+</body>
+</html>

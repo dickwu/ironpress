@@ -1,0 +1,575 @@
+[
+  {
+    "id": "list-style-type-disc",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "disc",
+    "description": "Unordered list rendering filled disc markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-disc.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-decimal",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "decimal",
+    "description": "Ordered list rendering 1./2./3. decimal markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-decimal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-lower-alpha",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "lower-alpha",
+    "description": "Ordered list rendering a./b./c. lower-alpha markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-lower-alpha.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-upper-roman",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "upper-roman",
+    "description": "Ordered list rendering I./II./III. upper-roman markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-upper-roman.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-none",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "none",
+    "description": "Unordered list with markers suppressed via list-style-type:none.",
+    "file": "cases/lists-counters/list-style-type-none.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-position-inside",
+    "category": "lists-counters",
+    "feature": "list-style-position",
+    "subfeature": "inside",
+    "description": "Ordered list with markers flowed inside the content box (list-style-position:inside).",
+    "file": "cases/lists-counters/list-style-position-inside.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-position-outside",
+    "category": "lists-counters",
+    "feature": "list-style-position",
+    "subfeature": "outside",
+    "description": "Ordered list with markers hung outside the content box (list-style-position:outside).",
+    "file": "cases/lists-counters/list-style-position-outside.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-image-data-uri",
+    "category": "lists-counters",
+    "feature": "list-style-image",
+    "subfeature": "data-uri-png",
+    "description": "Unordered list using a data-URI PNG as the marker image (list-style-image:url()).",
+    "file": "cases/lists-counters/list-style-image-data-uri.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "marker-pseudo-color",
+    "category": "lists-counters",
+    "feature": "marker-pseudo",
+    "subfeature": "color",
+    "description": "Ordered list whose markers are recolored and bolded via the ::marker pseudo-element.",
+    "file": "cases/lists-counters/marker-pseudo-color.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "counter-reset-increment",
+    "category": "lists-counters",
+    "feature": "counters",
+    "subfeature": "reset-increment-content",
+    "description": "counter-reset and counter-increment feeding content:counter() in ::before across three rows.",
+    "file": "cases/lists-counters/counter-reset-increment.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "counter-content-roman",
+    "category": "lists-counters",
+    "feature": "counters",
+    "subfeature": "counter-style-argument",
+    "description": "content:counter(x, upper-roman) rendering counter values in an explicit counter style.",
+    "file": "cases/lists-counters/counter-content-roman.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "counters-nested",
+    "category": "lists-counters",
+    "feature": "counters",
+    "subfeature": "counters-function-nested",
+    "description": "Nested ordered lists numbered with content:counters(x, '.') producing 1, 2, 2.1, 2.2, 3.",
+    "file": "cases/lists-counters/counters-nested.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-circle",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "circle",
+    "description": "Unordered list rendering hollow circle markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-circle.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-square",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "square",
+    "description": "Unordered list rendering filled square markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-square.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-decimal-leading-zero",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "decimal-leading-zero",
+    "description": "Ordered list rendering 01./02./03. zero-padded decimal markers on three items.",
+    "file": "cases/lists-counters/list-style-type-decimal-leading-zero.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-lower-roman",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "lower-roman",
+    "description": "Ordered list rendering i./ii./iii. lower-roman markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-lower-roman.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-type-upper-alpha",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "upper-alpha",
+    "description": "Ordered list rendering A./B./C. upper-alpha markers on three short text items.",
+    "file": "cases/lists-counters/list-style-type-upper-alpha.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "list-style-shorthand",
+    "category": "lists-counters",
+    "feature": "list-style",
+    "subfeature": "shorthand-type-position",
+    "description": "list-style shorthand setting lower-alpha type and inside position in one declaration.",
+    "file": "cases/lists-counters/list-style-shorthand.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "ol-start-attribute",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "ol-start",
+    "description": "Ordered list whose markers begin at 5 via the <ol start> attribute (5./6./7.).",
+    "file": "cases/lists-counters/ol-start-attribute.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "ol-decimal-markers",
+    "category": "lists-counters",
+    "feature": "list-style-type",
+    "subfeature": "ol-default-decimal",
+    "description": "An <ol> inherits the authenticated parity baseline's explicit decimal marker style (1./2./3.); a nested <ol> restarts its own sequence.",
+    "file": "cases/lists-counters/ol-decimal-markers.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "ol-continues-across-page-break",
+    "category": "lists-counters",
+    "feature": "counter-continuity",
+    "subfeature": "ol-across-page-break",
+    "description": "An <ol> of ten 40px items spans two pages (CSS Lists 3 §4): counters resolve in document order, not visual layout, so page 2 markers read 6-10 (not a reset to 1). The multi-page harness asserts the page COUNT (2) and diffs both pages; a per-page counter reset would fail.",
+    "file": "cases/lists-counters/ol-continues-across-page-break.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "lists-counters-list-style-image-data-uri",
+    "category": "lists-counters",
+    "feature": "list-style-image",
+    "subfeature": "data-png-marker",
+    "description": "list-style-image:url(data:png) replaces disc bullets with the intrinsic image marker; catches fallback to list-style-type markers.",
+    "file": "cases/lists-counters/lists-counters-list-style-image-data-uri.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "lists-counters-counter-set",
+    "category": "lists-counters",
+    "feature": "counter-set",
+    "subfeature": "assign-existing-counter",
+    "description": "counter-set:item 7 assigns the existing counter so generated labels read 1, 7, 8; catches counter-reset/increment-only support.",
+    "file": "cases/lists-counters/lists-counters-counter-set.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
+    "id": "lists-counters-list-style-type-string",
+    "category": "lists-counters",
+    "feature": "list-style-type:<string>",
+    "subfeature": "list-style-type-string",
+    "description": "A ul sets list-style-type:'-- ' so each marker is a literal two-dash string instead of a disc. Catches: A built-in-only list-style parser falls unknown types back to disc and passes disc/circle/square fixtures.",
+    "file": "cases/lists-counters/lists-counters-list-style-type-string.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-list-style-type-cjk-decimal",
+    "category": "lists-counters",
+    "feature": "list-style-type:cjk-decimal",
+    "subfeature": "list-style-type-cjk-decimal",
+    "description": "An ordered list uses cjk-decimal markers, which render CJK decimal digits rather than western 1/2/3. Catches: An implementation limited to latin/roman built-ins passes existing list-style-type coverage but falls back to disc or decimal for international styles.",
+    "file": "cases/lists-counters/lists-counters-list-style-type-cjk-decimal.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-counter-style-cyclic",
+    "category": "lists-counters",
+    "feature": "@counter-style cyclic symbols",
+    "subfeature": "counter-style-cyclic",
+    "description": "A custom @counter-style named checks cycles through two literal symbols for list markers. Catches: Ignoring @counter-style passes built-in marker tests but falls back to disc for author-defined styles.",
+    "file": "cases/lists-counters/lists-counters-counter-style-cyclic.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-counter-style-pad-prefix-suffix",
+    "category": "lists-counters",
+    "feature": "@counter-style extends decimal pad prefix suffix",
+    "subfeature": "counter-style-pad-prefix-suffix",
+    "description": "A custom counter style extends decimal with pad:2 '0', prefix '[' and suffix '] '. Catches: A decimal-only formatter passes decimal-leading-zero and roman fixtures but ignores custom style descriptors.",
+    "file": "cases/lists-counters/lists-counters-counter-style-pad-prefix-suffix.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-counter-style-negative",
+    "category": "lists-counters",
+    "feature": "@counter-style negative descriptor",
+    "subfeature": "counter-style-negative",
+    "description": "A generated counter starts at -2 and uses a custom negative descriptor to wrap negative values. Catches: A counter implementation that only formats positive decimal/roman cases passes current fixtures but mishandles negative custom styles.",
+    "file": "cases/lists-counters/lists-counters-counter-style-negative.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-marker-side-match-parent",
+    "category": "lists-counters",
+    "feature": "marker-side:match-parent",
+    "subfeature": "marker-side-match-parent",
+    "description": "Compatibility canary for vertical outside-marker placement. The current fixture gives every item the same directionality as its parent, so it cannot distinguish marker-side:match-parent from match-self; a future semantic fixture must contrast the two directions without treating an exact outside-marker position as normative.",
+    "file": "cases/lists-counters/lists-counters-marker-side-match-parent.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "oracle": "chrome",
+    "reference": {
+      "status": "disputed",
+      "note": "CSS Lists 3 leaves the exact position of outside marker boxes undefined. This fixture does not vary list-item directionality, so match-parent has no observable effect. Chromium 150 reports CSS.supports('marker-side: match-parent') as false and an empty computed value; its PDF is an unsupported-feature compatibility canary, not a normative oracle."
+    },
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-marker-content-counter",
+    "category": "lists-counters",
+    "feature": "::marker{content:...}",
+    "subfeature": "marker-content-counter",
+    "description": "An ordered list replaces default decimal markers with a generated counter wrapped in square brackets through ::marker content. Catches: A ::marker color-only implementation passes marker styling tests but still emits default 1./2. markers.",
+    "file": "cases/lists-counters/lists-counters-marker-content-counter.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-marker-font-size",
+    "category": "lists-counters",
+    "feature": "::marker font-size",
+    "subfeature": "marker-font-size",
+    "description": "A list styles only ::marker with a 36px font-size while item text remains 20px. Catches: A marker renderer that only recolors markers passes marker color tests but misses marker font metrics.",
+    "file": "cases/lists-counters/lists-counters-marker-font-size.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-ol-reversed",
+    "category": "lists-counters",
+    "feature": "<ol reversed>",
+    "subfeature": "ol-reversed",
+    "description": "A three-item ordered list with the reversed attribute should render 3, 2, 1 markers. Catches: An ol implementation that only handles start passes start fixtures but always counts upward.",
+    "file": "cases/lists-counters/lists-counters-ol-reversed.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-li-value",
+    "category": "lists-counters",
+    "feature": "<li value>",
+    "subfeature": "li-value",
+    "description": "The middle li value='7' changes that marker and subsequent items continue from 8. Catches: An ordered-list context that only tracks a running index passes default and start fixtures but ignores per-item value overrides.",
+    "file": "cases/lists-counters/lists-counters-li-value.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-counter-list-item-after",
+    "category": "lists-counters",
+    "feature": "counter(list-item)",
+    "subfeature": "counter-list-item-after",
+    "description": "Each li appends generated text using counter(list-item), matching its ordered-list marker number. Catches: A renderer with an internal list index can paint markers but still resolves counter(list-item) to 0 in content.",
+    "file": "cases/lists-counters/lists-counters-counter-list-item-after.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "lists-counters-list-item-increment-step",
+    "category": "lists-counters",
+    "feature": "counter-increment:list-item 2",
+    "subfeature": "list-item-increment-step",
+    "description": "An ordered list increments list-item by 2 so markers advance 2, 4, 6. Catches: A list renderer with hard-coded +1 indices passes normal lists but ignores author counter-increment on list-item.",
+    "file": "cases/lists-counters/lists-counters-list-item-increment-step.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  }
+]

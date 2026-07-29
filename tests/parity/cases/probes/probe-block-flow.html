@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>probe block flow</title>
+<style>
+  @page { size: 304px 184px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  /* Exact-output canary: two known, correctly stacked rectangles.
+     A mismatch can come from PDF coordinate/edge encoding and is not, by
+     itself, evidence that normal-flow geometry is wrong. */
+  .a {
+    width: 220px;
+    height: 90px;
+    background-color: #1565c0;
+  }
+  .b {
+    width: 220px;
+    height: 90px;
+    background-color: #ef6c00;
+  }
+</style>
+</head>
+<body>
+  <div class="a"></div>
+  <div class="b"></div>
+</body>
+</html>

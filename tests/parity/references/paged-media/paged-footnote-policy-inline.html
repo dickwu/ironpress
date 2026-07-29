@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-footnote-policy-inline.
+
+  CSS GCPM §2.8 requires `footnote-policy: line` to break at the start of the
+  line containing the first reference when its body cannot fit. The first
+  paragraph remains on page one, the line with both calls starts page two, and
+  a compact bottom area holds both bodies. CSS GCPM §2.6 gives the synthesized
+  calls `vertical-align: baseline`, `font-size: 100%`, `line-height: inherit`,
+  and `font-variant-position: super`. ParitySans has no `sups` glyphs, so CSS
+  Fonts 4 requires a synthesized reduced and raised form. Chromium does not
+  synthesize that form for `font-variant-position`; the static calls below
+  materialize the required result without candidate output or raster edits.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page {
+      size: 192px 136px;
+      margin: 8px;
+      @footnote { border-top: 8px solid #111111; padding-top: 8px; }
+    }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .lead { width: 176px; height: 72px; background: #e0f2fe; }
+    p { width: 176px; height: 20px; line-height: 20px; background: #fef3c7; }
+    .page { position: relative; height: 120px; break-before: page; }
+    .footnote-call {
+      color: #d00000;
+      font-size: 80%;
+      font-variant-position: normal;
+      line-height: inherit;
+      position: relative;
+      bottom: 4.56px;
+    }
+    .footnote-area {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      border-top: 8px solid #111111;
+      padding-top: 8px;
+      color: #d00000;
+      line-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="lead"></div>
+  <p>First line stays here</p>
+  <div class="page">
+    <p>Second line has notes<span class="footnote-call">1</span><span class="footnote-call">2</span></p>
+    <div class="footnote-area">1. first note2. second note</div>
+  </div>
+</body>
+</html>

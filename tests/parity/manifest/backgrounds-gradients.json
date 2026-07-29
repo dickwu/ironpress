@@ -1,0 +1,659 @@
+[
+  {
+    "id": "linear-gradient-angle-90deg",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "angle-90deg",
+    "description": "Two-stop linear-gradient using an explicit 90deg angle (paints left-to-right).",
+    "file": "cases/backgrounds-gradients/linear-gradient-angle-90deg.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-multi-stop",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "three-stops-percent",
+    "description": "Three-stop linear-gradient with explicit 0%/50%/100% color-stop positions, to right.",
+    "file": "cases/backgrounds-gradients/linear-gradient-multi-stop.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-to-corner",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "to-bottom-right",
+    "description": "Two-stop linear-gradient using the 'to bottom right' corner keyword on a square box.",
+    "file": "cases/backgrounds-gradients/linear-gradient-to-corner.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-circle-center",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "circle-at-center",
+    "description": "Centered circular two-stop radial-gradient (the shape ironpress natively supports).",
+    "file": "cases/backgrounds-gradients/radial-gradient-circle-center.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-ellipse-corner",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "ellipse-at-top-left",
+    "description": "Elliptical radial-gradient positioned at the top-left corner; ironpress only paints centered circles so shape/position are not honored.",
+    "file": "cases/backgrounds-gradients/radial-gradient-ellipse-corner.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-sized-px",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "explicit-pixel-size",
+    "description": "Radial-gradient with an explicit 60px circle radius over a solid base; ironpress ignores explicit size/extent so the radius will not match Chrome.",
+    "file": "cases/backgrounds-gradients/radial-gradient-sized-px.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-basic",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "four-quadrant-sweep",
+    "description": "Four-quadrant conic-gradient sweep, rendered via a sector fan clipped to the box.",
+    "file": "cases/backgrounds-gradients/conic-gradient-basic.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-to-side",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "to-bottom-side",
+    "description": "Two-stop linear-gradient using the 'to bottom' side keyword on a tall box.",
+    "file": "cases/backgrounds-gradients/linear-gradient-to-side.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-hard-stops",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "hard-color-stops",
+    "description": "Hard color-stop linear-gradient (two stops at 50%) producing a deterministic sharp 50/50 split.",
+    "file": "cases/backgrounds-gradients/linear-gradient-hard-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-closest-side",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "circle-closest-side",
+    "description": "Circular radial-gradient sized to the closest side of a non-square box.",
+    "file": "cases/backgrounds-gradients/radial-gradient-closest-side.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-farthest-side",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "circle-farthest-side",
+    "description": "Circular radial-gradient sized to the farthest side of a non-square box.",
+    "file": "cases/backgrounds-gradients/radial-gradient-farthest-side.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-ellipse-explicit",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "ellipse-explicit-radii",
+    "description": "Elliptical radial-gradient with explicit 120px x 60px radii centered in the box.",
+    "file": "cases/backgrounds-gradients/radial-gradient-ellipse-explicit.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-at-position",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "circle-at-25-25",
+    "description": "Circular radial-gradient anchored at the 25%/25% position (off-center).",
+    "file": "cases/backgrounds-gradients/radial-gradient-at-position.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-from-angle",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "from-angle",
+    "description": "Four-quadrant conic-gradient rotated by a 45deg 'from' start angle.",
+    "file": "cases/backgrounds-gradients/conic-gradient-from-angle.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-at-position",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "at-position",
+    "description": "Four-quadrant conic-gradient with its center anchored at 30%/30%.",
+    "file": "cases/backgrounds-gradients/conic-gradient-at-position.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-hard-stops",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "hard-stops-pie",
+    "description": "Three-wedge hard-stop conic-gradient pie chart (deterministic 120deg sectors).",
+    "file": "cases/backgrounds-gradients/conic-gradient-hard-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "repeating-linear-gradient",
+    "category": "backgrounds-gradients",
+    "feature": "repeating-linear-gradient",
+    "subfeature": "stripes",
+    "description": "Repeating-linear-gradient producing evenly spaced vertical stripes (10% period).",
+    "file": "cases/backgrounds-gradients/repeating-linear-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "repeating-radial-gradient",
+    "category": "backgrounds-gradients",
+    "feature": "repeating-radial-gradient",
+    "subfeature": "rings",
+    "description": "Repeating-radial-gradient producing concentric rings (10% period circle).",
+    "file": "cases/backgrounds-gradients/repeating-radial-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "repeating-conic-gradient",
+    "category": "backgrounds-gradients",
+    "feature": "repeating-conic-gradient",
+    "subfeature": "wedges",
+    "description": "Repeating-conic-gradient producing alternating 30deg wedges around the center.",
+    "file": "cases/backgrounds-gradients/repeating-conic-gradient.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-position-keyword",
+    "category": "backgrounds-gradients",
+    "feature": "background-position",
+    "subfeature": "bottom-right-keyword",
+    "description": "A no-repeat raster placed at the 'bottom right' keyword position inside a sized box.",
+    "file": "cases/backgrounds-gradients/background-position-keyword.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "background-size-cover",
+    "category": "backgrounds-gradients",
+    "feature": "background-size",
+    "subfeature": "cover",
+    "description": "background-size: cover scales the raster to fill the box, cropping overflow, centered.",
+    "file": "cases/backgrounds-gradients/background-size-cover.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "background-size-contain",
+    "category": "backgrounds-gradients",
+    "feature": "background-size",
+    "subfeature": "contain",
+    "description": "background-size: contain scales the raster to fit within the box, left-aligned, leaving base color visible.",
+    "file": "cases/backgrounds-gradients/background-size-contain.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "background-size-length",
+    "category": "backgrounds-gradients",
+    "feature": "background-size",
+    "subfeature": "explicit-length",
+    "description": "background-size with an explicit 120px x 80px length, no-repeat, top-left.",
+    "file": "cases/backgrounds-gradients/background-size-length.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "background-origin-content-box",
+    "category": "backgrounds-gradients",
+    "feature": "background-origin",
+    "subfeature": "content-box",
+    "description": "background-origin: content-box anchors the raster inside the padding box of a bordered, padded element.",
+    "file": "cases/backgrounds-gradients/background-origin-content-box.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "background-clip-padding-box",
+    "category": "backgrounds-gradients",
+    "feature": "background-clip",
+    "subfeature": "padding-box",
+    "description": "background-clip: padding-box should stop the background-color under a translucent border; background-clip is not implemented, so this is a known-gap fixture.",
+    "file": "cases/backgrounds-gradients/background-clip-padding-box.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "multiple-backgrounds-layered",
+    "category": "backgrounds-gradients",
+    "feature": "multiple-backgrounds",
+    "subfeature": "image-over-gradient",
+    "description": "Two comma-separated background layers (a raster over a linear-gradient) with per-layer position/size; multiple backgrounds are not implemented, so this is an aspirational known-gap fixture.",
+    "file": "cases/backgrounds-gradients/multiple-backgrounds-layered.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-image-render"
+    ]
+  },
+  {
+    "id": "linear-gradient-color-hint",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "interpolation-hint",
+    "description": "A standalone 20% color interpolation hint moves the red/blue midpoint left; catches gradient parsers that ignore hints or drop the gradient.",
+    "file": "cases/backgrounds-gradients/linear-gradient-color-hint.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "repeating-linear-gradient-px-stops",
+    "category": "backgrounds-gradients",
+    "feature": "repeating-linear-gradient",
+    "subfeature": "length-stops",
+    "description": "repeating-linear-gradient with 12px hard color-stop ranges creates fixed-width stripes; catches percentage-only stop handling.",
+    "file": "cases/backgrounds-gradients/repeating-linear-gradient-px-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-alpha-stops",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "alpha-stops",
+    "description": "Transparent-to-opaque red gradient composites over a blue parent; catches gradient painters that drop alpha from color stops.",
+    "file": "cases/backgrounds-gradients/linear-gradient-alpha-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "multiple-gradient-layers",
+    "category": "backgrounds-gradients",
+    "feature": "multiple-backgrounds",
+    "subfeature": "two-gradient-layers",
+    "description": "Two gradient background layers use independent size, position, repeat, and paint order; catches one-slot gradient storage or shared geometry.",
+    "file": "cases/backgrounds-gradients/multiple-gradient-layers.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "background-origin-content-box-gradient",
+    "category": "backgrounds-gradients",
+    "feature": "background-origin",
+    "subfeature": "content-box-gradient-tile",
+    "description": "background-origin:content-box anchors a fixed-size gradient tile at the content edge; catches implementations that apply origin only to raster images.",
+    "file": "cases/backgrounds-gradients/background-origin-content-box-gradient.html",
+    "kind": "interaction",
+    "interaction_of": [
+      "background-origin",
+      "linear-gradient"
+    ],
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-border-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-srgb-interpolation",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "srgb-interpolation-method",
+    "description": "Control fixture for interpolation syntax: the same geometry, endpoints, and border as the Oklab fixture, with explicit `in srgb`.",
+    "file": "cases/backgrounds-gradients/linear-gradient-srgb-interpolation.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-oklab-interpolation",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "oklab-interpolation-method",
+    "description": "linear-gradient() accepts explicit `in oklab` interpolation syntax. Chromium's PDF print path currently rasterizes this control identically to explicit sRGB, so the fixture does not claim an unobservable oracle distinction.",
+    "file": "cases/backgrounds-gradients/linear-gradient-oklab-interpolation.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-closest-corner-offcenter",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "closest-corner-offcenter",
+    "description": "An off-center radial-gradient(circle closest-corner) sizes the hard transition by nearest-corner distance; catches aliases to side or far-corner sizing.",
+    "file": "cases/backgrounds-gradients/radial-gradient-closest-corner-offcenter.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-farthest-corner-offcenter",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "farthest-corner-offcenter",
+    "description": "An off-center radial-gradient(circle farthest-corner) sizes the hard transition by farthest-corner distance; catches farthest-side aliases.",
+    "file": "cases/backgrounds-gradients/radial-gradient-farthest-corner-offcenter.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-edge-offset-position",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "edge-offset-position",
+    "description": "radial-gradient() accepts a four-value edge-offset at-position from right and bottom; catches center fallback or parse failure.",
+    "file": "cases/backgrounds-gradients/radial-gradient-edge-offset-position.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-edge-offset-position",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "edge-offset-position",
+    "description": "conic-gradient() accepts a four-value edge-offset at-position from right and bottom; catches center fallback or parse failure.",
+    "file": "cases/backgrounds-gradients/conic-gradient-edge-offset-position.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-color-hint",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "color-hint",
+    "description": "A standalone radial-gradient color hint shifts the red/blue interpolation midpoint toward the outer edge; catches hint rejection or ignored hints.",
+    "file": "cases/backgrounds-gradients/radial-gradient-color-hint.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-color-hint",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "color-hint",
+    "description": "A standalone conic-gradient color hint shifts the angular interpolation midpoint late in the turn; catches hint rejection or ignored hints.",
+    "file": "cases/backgrounds-gradients/conic-gradient-color-hint.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "repeating-radial-gradient-px-ranges",
+    "category": "backgrounds-gradients",
+    "feature": "repeating-radial-gradient",
+    "subfeature": "length-range-stops",
+    "description": "repeating-radial-gradient with 10px two-position stop ranges creates crisp rings; catches percentage-only or non-repeating fallback.",
+    "file": "cases/backgrounds-gradients/repeating-radial-gradient-px-ranges.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-calc-stops",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "calc-color-stop-positions",
+    "description": "linear-gradient color stops accept calc() length-percentage positions around the midpoint; catches literal-percentage-only parsers.",
+    "file": "cases/backgrounds-gradients/linear-gradient-calc-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "conic-gradient-turn-rad-stops",
+    "category": "backgrounds-gradients",
+    "feature": "conic-gradient",
+    "subfeature": "turn-radian-stop-units",
+    "description": "conic-gradient color-stop positions accept turn and rad angle units in the same list; catches degree-only parsers.",
+    "file": "cases/backgrounds-gradients/conic-gradient-turn-rad-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "radial-gradient-two-position-percent-stops",
+    "category": "backgrounds-gradients",
+    "feature": "radial-gradient",
+    "subfeature": "two-position-percent-stops",
+    "description": "radial-gradient two-position percentage stops create crisp yellow, red, and blue rings; catches smooth interpolation or dropped range stops.",
+    "file": "cases/backgrounds-gradients/radial-gradient-two-position-percent-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-authored-endpoints",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "authored-endpoint-plateaus",
+    "description": "Two authored stops at 20% and 80% keep constant endpoint plateaus instead of stretching interpolation over the full domain.",
+    "file": "cases/backgrounds-gradients/linear-gradient-authored-endpoints.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-out-of-range-stops",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "out-of-range-color-stops",
+    "description": "Legal -50% and 150% stops influence the visible 0%..100% interval without being clamped before interpolation.",
+    "file": "cases/backgrounds-gradients/linear-gradient-out-of-range-stops.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  },
+  {
+    "id": "linear-gradient-premultiplied-alpha",
+    "category": "backgrounds-gradients",
+    "feature": "linear-gradient",
+    "subfeature": "premultiplied-alpha-interpolation",
+    "description": "Transparent black to opaque red interpolates in premultiplied sRGBA and therefore avoids a gray halo over white.",
+    "file": "cases/backgrounds-gradients/linear-gradient-premultiplied-alpha.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch"
+    ]
+  }
+]

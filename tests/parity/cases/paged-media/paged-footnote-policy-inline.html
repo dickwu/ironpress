@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page {
+      size: 192px 136px;
+      margin: 8px;
+      @footnote { border-top: 8px solid #111111; padding-top: 8px; }
+    }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .lead { width: 176px; height: 72px; background: #e0f2fe; }
+    p { width: 176px; line-height: 20px; background: #fef3c7; }
+    .fn { float: footnote; footnote-display: inline; footnote-policy: line; color: #d00000; }
+  </style>
+</head>
+<body>
+  <div class="lead"></div>
+  <p>First line stays here<br>Second line has notes<span class="fn">first note</span><span class="fn">second note</span></p>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>transformed repeating image background</title>
+<style>
+  @page { size: 240px 184px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #f4f1e8; }
+  .box {
+    width: 132px;
+    height: 84px;
+    margin: 48px 54px;
+    border: 5px solid #181818;
+    background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAIElEQVR42mO4rK8PRJJll4CIAYWjV2sERF/rxYEIhQMABxYT6ZMR6l4AAAAASUVORK5CYII=");
+    background-size: 18px 14px;
+    background-repeat: repeat;
+    transform: rotate(17deg) scale(1.08, .92);
+    transform-origin: 31% 63%;
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

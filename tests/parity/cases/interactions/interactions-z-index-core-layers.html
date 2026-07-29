@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>z-index core stacking layers</title>
+<style>
+@page { size: 640px 184px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 640px; height: 184px; background: #fff; }
+.panel {
+  position: absolute;
+  z-index: 0;
+  top: 16px;
+  width: 144px;
+  height: 152px;
+  overflow: hidden;
+  border: 4px solid #111827;
+  background: #e5e7eb;
+}
+.p1 { left: 16px; }
+.p2 { left: 168px; }
+.p3 { left: 320px; }
+.p4 { left: 472px; }
+.layer { position: absolute; width: 96px; height: 96px; }
+.a { left: 16px; top: 16px; background: #ef233c; }
+.b { left: 48px; top: 48px; background: #2563eb; }
+.positive .a { z-index: 3; }
+.positive .b { z-index: 1; }
+.negative .a { z-index: -1; }
+.negative .b {
+  position: static;
+  margin-left: 48px;
+  margin-top: 48px;
+}
+.source .a { z-index: auto; }
+.source .b { z-index: 0; }
+.escape .a { z-index: 10; }
+.escape .b { z-index: 1; }
+</style>
+</head>
+<body>
+<section class="panel p1 positive"><div class="layer a"></div><div class="layer b"></div></section>
+<section class="panel p2 negative"><div class="layer a"></div><div class="layer b"></div></section>
+<section class="panel p3 source"><div class="layer a"></div><div class="layer b"></div></section>
+<section class="panel p4 escape"><div class="ordinary"><div class="layer a"></div></div><div class="layer b"></div></section>
+</body>
+</html>

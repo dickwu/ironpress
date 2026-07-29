@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* A `column-span: all` heading interrupts the column flow. The runs before
+     and after it balance independently, and the later run continues on page 2.
+     This fixture uses an integral CSS-pixel page margin so it isolates multicol
+     fragmentation; absolute-unit conversion is covered by units-values cases. */
+  @page { size: 400px 304px; margin: 30px; }
+  * { margin: 0; box-sizing: border-box; }
+  html { font-family: ParitySans; line-height: 1.5; background: #ffffff; color: #111111; }
+  .cols { column-count: 2; column-gap: 16px; }
+  .cols p { font-size: 14px; margin: 0 0 8px; background: #eef3ff; padding: 4px; }
+  h2 { column-span: all; height: 32px; background: #11305f; margin: 8px 0; }
+</style>
+</head>
+<body>
+  <div class="cols">
+    <p>Column body one alpha bravo charlie delta echo foxtrot golf hotel india.</p>
+    <p>Column body two juliet kilo lima mike november oscar papa quebec romeo.</p>
+    <h2 aria-label="spanning heading"></h2>
+    <p>Column body three sierra tango uniform victor whiskey xray yankee zulu one.</p>
+    <p>Column body four alpha bravo charlie delta echo foxtrot golf hotel india two.</p>
+    <p>Column body five juliet kilo lima mike november oscar papa quebec romeo three.</p>
+    <p>Column body six sierra tango uniform victor whiskey xray yankee zulu four.</p>
+  </div>
+</body>
+</html>

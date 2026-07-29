@@ -10,3 +10,19 @@ fuzz/target/
 tests/fixtures/references/**/*.png
 bindings/python/target/
 bindings/ruby/target/
+# Visual parity harness scratch. Browser PDFs under tests/parity/oracles are the
+# committed source of truth; all PNGs are generated previews.
+tests/parity/diffs/
+target/parity-tmp/
+/tmp/ironpress-parity-fontcache/
+
+# IDE
+.idea/
+
+# generated parity render artifacts (browsable on the parity-report branch)
+/tests/parity/refs/
+/tests/parity/out/
+/tests/parity/reports/
+/tests/parity/_svgtmp/
+/tests/parity/_diag/
+/tests/parity/.chtmp/

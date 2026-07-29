@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>units-calc-arithmetic-red-team</title>
+<style>
+  /* Visual reduction of WPT css/css-values calc grammar and nesting coverage. */
+  @page { size: 480px 520px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; }
+  body { padding: 18px; }
+  .lane { position: relative; width: 400px; height: 54px; margin-bottom: 10px; background: #f1f1f1; border: 3px solid #111; }
+  .bar { height: 100%; background: #e63946; border-right: 6px solid #087e8b; }
+  .a .bar { width: calc(25% + 40px); }
+  .b .bar { width: calc(2 * (10% + 20px)); }
+  .c .bar { width: calc(calc(50% - 30px) * .5); }
+  .d .bar { width: calc(300px / 3); }
+  .e .bar { width: calc((20px + 10px) * 4); }
+  .f .bar { width: calc(90px - -30px); }
+  .g .bar { width: calc(100px + 20px * 2); }
+</style></head><body>
+  <div class="lane a"><div class="bar"></div></div>
+  <div class="lane b"><div class="bar"></div></div>
+  <div class="lane c"><div class="bar"></div></div>
+  <div class="lane d"><div class="bar"></div></div>
+  <div class="lane e"><div class="bar"></div></div>
+  <div class="lane f"><div class="bar"></div></div>
+  <div class="lane g"><div class="bar"></div></div>
+</body></html>

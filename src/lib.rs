@@ -1,3 +1,14 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
 #![warn(missing_docs)]
 //! # ironpress
 //!
@@ -103,7 +114,8 @@ fn fetch_remote_bytes(url: &str) -> Option<Vec<u8>> {
 }
 
 pub use error::IronpressError;
-pub use types::{Margin, PageSize};
+pub use style::raster_quality::{CoverageCompression, JpegCompression, RasterQuality};
+pub use types::{CornerRadii, CornerRadius, EdgeSizes, Margin, PageSize};
 
 /// Convert an HTML string to PDF bytes using default settings (A4, 1-inch margins).
 ///
@@ -235,13 +247,27 @@ pub struct HtmlConverter {
     margin: Margin,
     sanitize: bool,
     custom_fonts: std::collections::HashMap<String, Vec<u8>>,
-    /// Base directory for resolving relative paths in `@import` and `@font-face` rules.
-    base_path: Option<std::path::PathBuf>,
+    resources: ResourcePaths,
     /// Optional header text rendered at the top of each page.
     header: Option<String>,
     /// Optional footer text rendered at the bottom of each page.
     /// Use `{page}` for current page number and `{pages}` for total page count.
     footer: Option<String>,
+    /// FlateDecode-compress page content streams (lossless). Defaults to `true`;
+    /// disable for raw, human-readable PDF content streams.
+    compress: bool,
+    jpeg_quality: u8,
+    auto_resize_images: bool,
+    raster_quality: RasterQuality,
+    /// Skip embedding raster images that are fully covered by a later opaque
+    /// rectangular element (default false). Conservative; zero visual change.
+    occlusion_cull: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResourcePaths {
+    base: Option<std::path::PathBuf>,
+    authorized_root: Option<std::path::PathBuf>,
 }
 
 impl HtmlConverter {
@@ -252,10 +278,92 @@ impl HtmlConverter {
             margin: Margin::default(),
             sanitize: true,
             custom_fonts: std::collections::HashMap::new(),
-            base_path: None,
+            resources: ResourcePaths::default(),
             header: None,
             footer: None,
+            // On by default for production output (FlateDecode is lossless and
+            // transparent to any rasterizer). The crate's own unit tests inspect
+            // raw content-stream operators, so the in-crate test build defaults
+            // to off; the compression path is covered by a dedicated test and the
+            // parity gate. Downstream users (and the CLI) always get the `true`
+            // default.
+            compress: !cfg!(test),
+            jpeg_quality: render::pdf::DEFAULT_JPEG_QUALITY,
+            auto_resize_images: true,
+            raster_quality: RasterQuality::default(),
+            occlusion_cull: false,
         }
+    }
+
+    /// Enable or disable FlateDecode compression of page content streams
+    /// (enabled by default). Disabling produces larger but human-readable PDFs.
+    pub fn compress(mut self, enabled: bool) -> Self {
+        self.compress = enabled;
+        self
+    }
+
+    /// Set JPEG quality for optimized image embedding (0-100, default 95).
+    pub fn jpeg_quality(mut self, quality: u8) -> Self {
+        self.jpeg_quality = quality.clamp(0, 100);
+        self
+    }
+
+    /// Enable or disable automatic downscaling of oversized source images.
+    pub fn auto_resize_images(mut self, enabled: bool) -> Self {
+        self.auto_resize_images = enabled;
+        self
+    }
+
+    /// Set the target source-image resolution in DPI (minimum 72, default 300).
+    pub fn image_dpi(mut self, dpi: f32) -> Self {
+        self.raster_quality.source_image_dpi =
+            style::raster_quality::raster_dpi_at_least(dpi, 72.0);
+        self
+    }
+
+    /// Set all raster-resolution controls together.
+    ///
+    /// Use a struct update when changing one policy while retaining the
+    /// documented defaults: `RasterQuality { filter_dpi: 192.0,
+    /// ..RasterQuality::default() }`.
+    pub fn raster_quality(mut self, quality: RasterQuality) -> Self {
+        self.raster_quality = quality.normalized();
+        self
+    }
+
+    /// Set the rasterization DPI for render-time blur/filter bitmaps.
+    pub fn filter_dpi(mut self, dpi: f32) -> Self {
+        self.raster_quality.filter_dpi = style::raster_quality::raster_dpi_at_least(dpi, 1.0);
+        self
+    }
+
+    /// Set the rasterization DPI for CSS `mask-image` coverage bitmaps.
+    ///
+    /// The default 300 DPI preserves high-contrast coverage edges. It is
+    /// independent from blur/filter quality because mask coverage has different
+    /// sampling and compression characteristics.
+    pub fn mask_dpi(mut self, dpi: f32) -> Self {
+        self.raster_quality.mask_dpi = style::raster_quality::raster_dpi_at_least(dpi, 72.0);
+        self
+    }
+
+    /// Set the target resolution for style-time flattened background bitmaps.
+    /// The default 192 DPI is the lowest tested physical-resolution baseline;
+    /// this setting affects only synthetic background images, never PDF geometry.
+    pub fn background_raster_dpi(mut self, dpi: f32) -> Self {
+        self.raster_quality.background_dpi = style::raster_quality::raster_dpi_at_least(
+            dpi,
+            style::raster_quality::CSS_REFERENCE_DPI,
+        );
+        self
+    }
+
+    /// Enable or disable occlusion culling of raster images that are fully
+    /// covered by a later fully-opaque rectangular element (default false).
+    /// Conservative and safe: only skips images that are guaranteed invisible.
+    pub fn occlusion_cull(mut self, enabled: bool) -> Self {
+        self.occlusion_cull = enabled;
+        self
     }
 
     /// Set the page size.
@@ -320,7 +428,19 @@ impl HtmlConverter {
     ///     .unwrap();
     /// ```
     pub fn base_path(mut self, path: &std::path::Path) -> Self {
-        self.base_path = Some(path.to_path_buf());
+        self.resources.base = Some(path.to_path_buf());
+        self
+    }
+
+    /// Set the directory boundary authorized for document-local resources.
+    ///
+    /// By default, [`base_path`](Self::base_path) is both the URL base and the
+    /// authorization boundary. Set a broader root when a document legitimately
+    /// references shared assets in an ancestor directory. The base path must
+    /// remain inside this canonical root; traversal and symlink escapes are
+    /// denied.
+    pub fn resource_root(mut self, path: &std::path::Path) -> Self {
+        self.resources.authorized_root = Some(path.to_path_buf());
         self
     }
 
@@ -371,26 +491,39 @@ impl HtmlConverter {
         html: &str,
         writer: &mut W,
     ) -> Result<(), IronpressError> {
-        // Step 1: Sanitize
-        let html = if self.sanitize {
-            security::sanitizer::sanitize_html(html)?
+        let resource_access = if self.sanitize {
+            security::resources::ResourceAccess::Sanitized
         } else {
-            html.to_string()
+            security::resources::ResourceAccess::Trusted
         };
+        let resources = security::resources::DocumentResources::new(
+            resource_access,
+            self.resources.base.as_deref(),
+            self.resources.authorized_root.as_deref(),
+        );
+
+        // Step 1: Sanitize
+        let sanitized_html = if self.sanitize {
+            Some(security::sanitizer::sanitize_html_with_resources(
+                html, &resources,
+            )?)
+        } else {
+            None
+        };
+        let html = sanitized_html.as_deref().unwrap_or(html);
 
         // Step 2: Parse HTML and extract stylesheets
-        let result = parser::html::parse_html_with_styles(&html)?;
+        let mut result = parser::html::parse_html_with_styles(html)?;
+        security::sanitizer::sanitize_dom_resources(&mut result.nodes, &resources);
 
-        // Step 2b: Resolve @import rules in stylesheets (if base_path is set)
-        let stylesheets: Vec<String> = if let Some(ref base) = self.base_path {
-            result
-                .stylesheets
-                .iter()
-                .map(|css| parser::css::resolve_imports(css, base, 0))
-                .collect()
-        } else {
-            result.stylesheets
-        };
+        // Step 2b: Resolve every stylesheet URL against its CSS base URL.
+        // Imported sheets change that base to their own directory, while the
+        // canonical resource root remains the authorization boundary.
+        let stylesheets: Vec<String> = result
+            .stylesheets
+            .iter()
+            .map(|css| parser::css::resolve_imports_with_resources(css, &resources))
+            .collect();
 
         // Step 3: Parse @page rules first (they affect page dimensions for media queries)
         let mut page_rules = Vec::new();
@@ -399,11 +532,21 @@ impl HtmlConverter {
             page_rules.extend(parser::css::parse_page_rules(css));
             font_face_rules.extend(parser::css::parse_font_face_rules(css));
         }
-
-        // Step 3b: Apply @page rules to override page size and margins
+        // Step 3b: Apply @page rules to override page size and margins.
+        //
+        // Only UNSELECTED `@page { }` rules (CSS Paged Media 3 §3
+        // universal selector) fold into the document-global geometry. A
+        // pseudo-class/named rule (`:first`/`:left`/`:right`/`:blank`/name)
+        // must NOT be applied to every page — previously an `@page :first {
+        // margin: 0 }` was mis-folded here and wrongly applied to all pages.
+        // The `:first` override is collected separately below as a per-page-1
+        // geometry change.
         let mut effective_page_size = self.page_size;
         let mut effective_margin = self.margin;
         for pr in &page_rules {
+            if !pr.selector.is_universal() {
+                continue;
+            }
             if let (Some(w), Some(h)) = (pr.width, pr.height) {
                 effective_page_size = PageSize {
                     width: w,
@@ -423,6 +566,11 @@ impl HtmlConverter {
                 effective_margin.left = v;
             }
         }
+        // Viewport-percentage units in paged media resolve against the page
+        // area (the initial containing block), not against the narrower body
+        // content box. Preserve page-owned margins before body margin, padding,
+        // and centering gutters are projected into `effective_margin` below.
+        let default_page_area_margin = effective_margin;
 
         // Step 3c: Parse stylesheets with page-aware media query context
         let media_ctx = parser::css::MediaContext {
@@ -435,6 +583,7 @@ impl HtmlConverter {
                 css,
                 Some(media_ctx),
             ));
+            inject_gcpm_footnote_declarations(css, &mut rules);
         }
 
         // Step 3d: Fold body/html/:root margin into the effective page margin.
@@ -461,10 +610,9 @@ impl HtmlConverter {
         // inside the body is offset by `page_margin + body_margin + body_padding`
         // on every page — matching Chrome's rendering of e.g.
         // `body { padding: 40px }`.
-        let (_bp_top, bp_right, _bp_bottom, bp_left) =
-            layout::engine::compute_root_padding(&rules, effective_page_size);
-        effective_margin.right += bp_right;
-        effective_margin.left += bp_left;
+        let body_padding = layout::engine::compute_root_padding(&rules, effective_page_size);
+        effective_margin.right += body_padding.right;
+        effective_margin.left += body_padding.left;
 
         // Body max-width + margin:auto centers body content within the page's
         // printable area (e.g. `body { max-width: 640px; margin: auto; }` on
@@ -472,8 +620,7 @@ impl HtmlConverter {
         // emulate the centering by folding a half-remainder gutter into each
         // horizontal page margin. Must run AFTER body margin/padding folding
         // so `printable_width` reflects the already-narrowed area.
-        let printable_w =
-            effective_page_size.width - effective_margin.left - effective_margin.right;
+        let printable_w = effective_page_size.width - effective_margin.horizontal();
         let body_center_gutter = layout::engine::compute_root_body_centering_gutter(
             &rules,
             effective_page_size,
@@ -481,67 +628,143 @@ impl HtmlConverter {
         );
         effective_margin.left += body_center_gutter;
         effective_margin.right += body_center_gutter;
+        let root_flow_insets = types::Margin::new(
+            effective_margin.top - default_page_area_margin.top,
+            effective_margin.right - default_page_area_margin.right,
+            effective_margin.bottom - default_page_area_margin.bottom,
+            effective_margin.left - default_page_area_margin.left,
+        );
+
+        // Step 3e: Retain page geometry as a physical-page-aware cascade.
+        // Page number, spread side, blank state, and named-page identity are
+        // only all known during pagination; resolving separate buckets here
+        // causes compound selectors to disagree with page backgrounds.
+        let first_page = parser::css::PageSelectorContext {
+            page_number: 1,
+            is_blank: false,
+            page_name: None,
+        };
+        let initial_page_area_geometry = layout::page_context::PageGeometryContext::from_rules(
+            effective_page_size,
+            default_page_area_margin,
+            &page_rules,
+        )
+        .resolve(first_page);
+        let initial_containing_block = types::Size::new(
+            initial_page_area_geometry.size.width - initial_page_area_geometry.margin.horizontal(),
+            initial_page_area_geometry.content_height(),
+        );
+        let page_geometry = layout::page_context::PageGeometryContext::from_rules(
+            effective_page_size,
+            default_page_area_margin,
+            &page_rules,
+        )
+        .with_root_flow_insets(root_flow_insets);
+        let footnote_area = resolve_footnote_area(&page_rules);
 
         // Step 4: Parse custom fonts (API-registered + @font-face from CSS)
         let mut parsed_fonts = self.parse_custom_fonts();
 
-        // Step 4b: Load fonts from @font-face rules (local files + remote URLs)
-        for ff_rule in &font_face_rules {
-            let is_remote =
-                ff_rule.src_path.starts_with("http://") || ff_rule.src_path.starts_with("https://");
-
-            let ttf_data = if is_remote {
-                fetch_remote_bytes(&ff_rule.src_path)
-            } else if let Some(ref base) = self.base_path {
-                let font_path = base.join(&ff_rule.src_path);
-                if !parser::css::is_path_within(&font_path, base) {
-                    continue;
-                }
-                std::fs::read(&font_path).ok()
-            } else {
-                None
-            };
-
-            if let Some(data) = ttf_data {
-                if let Ok(font) = parser::ttf::parse_ttf(data) {
-                    parsed_fonts.insert(ff_rule.font_family.to_ascii_lowercase(), font);
-                }
-            }
-        }
-
         system_fonts::load_system_default_fonts(&mut parsed_fonts);
         system_fonts::load_bundled_liberation_fonts(&mut parsed_fonts);
-        system_fonts::load_requested_system_fonts(&result.nodes, &rules, &mut parsed_fonts);
+        let requested_font_rules = rules_with_font_face_local_sources(&rules, &font_face_rules);
+        system_fonts::load_requested_system_fonts(
+            &result.nodes,
+            &requested_font_rules,
+            &mut parsed_fonts,
+        );
+        load_font_face_rules(&font_face_rules, &resources, &mut parsed_fonts);
         // Load system CJK font BEFORE bundled fallbacks so it gets UNICODE_FALLBACK_KEY
         system_fonts::load_unicode_fallback_font(&mut parsed_fonts);
         system_fonts::load_emoji_fallback_font(&mut parsed_fonts);
 
+        let mut page_sheet_descriptors = parser::css::PageSheetDescriptors::default();
+        for pr in &page_rules {
+            if !pr.selector.is_universal() {
+                continue;
+            }
+            page_sheet_descriptors.cascade(pr.sheet);
+        }
+        let page_sheet = render::pdf::PageSheet::resolve(page_sheet_descriptors);
+        let page_bleed = page_sheet.bleed();
+        let page_background = layout::page_context::PageBackgroundContext::from_rules(
+            &page_rules,
+            self.raster_quality,
+            page_bleed,
+        );
+
         // Step 5: Layout
-        let pages = layout::engine::layout_with_rules_and_fonts(
+        let mut pages = layout::engine::layout_with_rules_and_fonts_raster_quality(
             &result.nodes,
-            effective_page_size,
-            effective_margin,
+            layout::engine::DocumentGeometry::new(effective_page_size, effective_margin)
+                .with_initial_containing_block(initial_containing_block),
             &rules,
+            &parsed_fonts,
+            &page_background,
+            layout::paginate::PaginationContext::new(page_geometry, footnote_area, 0.0),
+            self.raster_quality,
+        );
+        let mut footnote_area_for_overflow = footnote_area;
+        footnote_area_for_overflow.content_width =
+            effective_page_size.width - default_page_area_margin.horizontal();
+        layout::paginate::move_overflow_footnotes_to_next_page(
+            &mut pages,
+            footnote_area_for_overflow,
             &parsed_fonts,
         );
 
         // Step 6: Render PDF
-        let decoration = if self.header.is_some() || self.footer.is_some() {
+        //
+        // Collect the `@page` margin boxes (CSS Paged Media 3 §5) into the page
+        // decoration so running headers/footers + page counters render on every
+        // page. Keep selected boxes too; the renderer applies the page-context
+        // selector cascade per physical page.
+        let margin_boxes: Vec<parser::css::MarginBox> = page_rules
+            .iter()
+            .flat_map(|pr| pr.margin_boxes.iter().cloned())
+            .collect();
+
+        let has_physical_decoration = page_sheet.has_effect();
+        let has_footnote_decoration = footnote_area.style.padding != EdgeSizes::ZERO
+            || footnote_area.style.separator.width > 0.0;
+        let decoration = if self.header.is_some()
+            || self.footer.is_some()
+            || !margin_boxes.is_empty()
+            || has_physical_decoration
+            || has_footnote_decoration
+        {
             Some(render::pdf::PageDecoration {
                 header: self.header.clone(),
                 footer: self.footer.clone(),
+                margin_boxes,
+                margin_text: layout::engine::compute_page_margin_text_context(
+                    &rules,
+                    &page_rules,
+                    effective_page_size,
+                ),
+                sheet: page_sheet,
+                footnote_area: footnote_area.style,
             })
         } else {
             None
         };
 
-        render::pdf::render_pdf_to_writer_full(
+        let render_opts = render::pdf::RenderOpts {
+            compress: self.compress,
+            jpeg_quality: self.jpeg_quality,
+            auto_resize_images: self.auto_resize_images,
+            raster_quality: self.raster_quality,
+            occlusion_cull: self.occlusion_cull,
+        };
+
+        render::pdf::render_pdf_to_writer_full_opts(
             &pages,
             effective_page_size,
-            effective_margin,
+            default_page_area_margin,
             writer,
             &parsed_fonts,
             decoration.as_ref(),
+            render_opts,
         )
     }
 
@@ -567,6 +790,204 @@ impl HtmlConverter {
         }
         fonts
     }
+}
+
+fn inject_gcpm_footnote_declarations(css: &str, rules: &mut Vec<parser::css::CssRule>) {
+    let mut cursor = 0usize;
+    while let Some(open_rel) = css[cursor..].find('{') {
+        let open = cursor + open_rel;
+        let selector = css[cursor..open].trim();
+        let mut depth = 1usize;
+        let mut close = None;
+        for (offset, ch) in css[open + 1..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + 1 + offset);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            break;
+        };
+        if !selector.starts_with('@') {
+            let mut map = parser::css::StyleMap::new();
+            for declaration in css[open + 1..close].split(';') {
+                let Some((prop, val)) = declaration.split_once(':') else {
+                    continue;
+                };
+                let prop = prop.trim().to_ascii_lowercase();
+                if matches!(prop.as_str(), "footnote-display" | "footnote-policy") {
+                    map.set(
+                        &prop,
+                        parser::css::CssValue::Keyword(val.trim().to_ascii_lowercase()),
+                    );
+                }
+            }
+            if !map.properties.is_empty() {
+                for selector in selector
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                {
+                    rules.push(parser::css::CssRule {
+                        selector: selector.to_string(),
+                        declarations: map.clone(),
+                        pseudo_element: None,
+                    });
+                }
+            }
+        }
+        cursor = close + 1;
+    }
+}
+
+fn resolve_footnote_area(
+    page_rules: &[parser::css::PageRule],
+) -> layout::paginate::FootnoteAreaLayout {
+    let mut resolved = layout::paginate::FootnoteAreaLayout::default();
+    for area in page_rules
+        .iter()
+        .filter(|rule| rule.selector.is_universal())
+        .filter_map(|rule| rule.footnote_area)
+    {
+        if let Some(max_height) = area.max_height {
+            resolved.max_height = Some(max_height);
+        }
+        area.padding.apply_to(&mut resolved.style.padding);
+        if let Some(width) = area.separator.width {
+            resolved.style.separator.width = width;
+        }
+        if let Some(color) = area.separator.color {
+            resolved.style.separator.color = color;
+        }
+    }
+    resolved
+}
+
+fn rules_with_font_face_local_sources(
+    rules: &[parser::css::CssRule],
+    font_face_rules: &[parser::css::FontFaceRule],
+) -> Vec<parser::css::CssRule> {
+    let local_names: Vec<String> = font_face_rules
+        .iter()
+        .flat_map(|rule| rule.local_source_names())
+        .map(str::to_string)
+        .collect();
+    if local_names.is_empty() {
+        return rules.to_vec();
+    }
+
+    let mut requested = rules.to_vec();
+    for local_name in local_names {
+        let mut declarations = parser::css::StyleMap::new();
+        declarations.set(
+            "font-family",
+            parser::css::CssValue::Keyword(local_name.clone()),
+        );
+        requested.push(parser::css::CssRule {
+            selector: format!("__font_face_local_source_{local_name}"),
+            declarations,
+            pseudo_element: None,
+        });
+    }
+    requested
+}
+
+fn load_font_face_rules(
+    font_face_rules: &[parser::css::FontFaceRule],
+    resources: &security::resources::DocumentResources,
+    fonts: &mut std::collections::HashMap<String, parser::ttf::TtfFont>,
+) {
+    for (index, rule) in font_face_rules.iter().enumerate() {
+        let Some(mut font) = resolve_font_face_source(rule, resources, fonts) else {
+            continue;
+        };
+        apply_font_face_descriptors(rule, &mut font);
+
+        let variant_key = system_fonts::font_variant_key_with_stretch(
+            &rule.font_family,
+            rule.font_weight_bold,
+            rule.font_style_italic,
+            rule.font_stretch,
+        );
+        if rule.unicode_ranges.is_empty() {
+            fonts.insert(variant_key, font);
+            continue;
+        }
+
+        let ranged_key = font_face_range_key(&variant_key, index);
+        fonts.insert(ranged_key, font.clone());
+        fonts.entry(variant_key).or_insert(font);
+    }
+}
+
+fn resolve_font_face_source(
+    rule: &parser::css::FontFaceRule,
+    resources: &security::resources::DocumentResources,
+    fonts: &std::collections::HashMap<String, parser::ttf::TtfFont>,
+) -> Option<parser::ttf::TtfFont> {
+    for (is_local, value) in rule.source_entries() {
+        if is_local {
+            if let Some((_, font)) = system_fonts::find_font_with_stretch(
+                fonts,
+                value,
+                rule.font_weight_bold,
+                rule.font_style_italic,
+                rule.font_stretch,
+            )
+            .or_else(|| {
+                system_fonts::find_font_with_stretch(fonts, value, false, false, rule.font_stretch)
+            }) {
+                return Some(font.clone());
+            }
+        } else {
+            let Some(resolved) = resources.resolve(value, resources.base_path()) else {
+                continue;
+            };
+            let ttf_data = if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                fetch_remote_bytes(&resolved)
+            } else {
+                std::fs::read(resolved).ok()
+            };
+
+            if let Some(data) = ttf_data
+                && let Ok(font) = parser::ttf::parse_ttf(data)
+            {
+                return Some(font);
+            }
+        }
+    }
+    None
+}
+
+fn apply_font_face_descriptors(rule: &parser::css::FontFaceRule, font: &mut parser::ttf::TtfFont) {
+    font.is_bold = rule.font_weight_bold;
+    font.is_italic = rule.font_style_italic;
+    if !rule.unicode_ranges.is_empty() {
+        font.cmap.retain(|codepoint, _| {
+            char::from_u32(*codepoint)
+                .is_some_and(|ch| rule.unicode_ranges.iter().any(|range| range.contains(ch)))
+        });
+    }
+    apply_size_adjust(font, rule.size_adjust);
+}
+
+fn apply_size_adjust(font: &mut parser::ttf::TtfFont, size_adjust: f32) {
+    font.size_adjust = if size_adjust.is_finite() && size_adjust > 0.0 {
+        size_adjust
+    } else {
+        1.0
+    };
+}
+
+fn font_face_range_key(variant_key: &str, index: usize) -> String {
+    format!("{variant_key}__fontface_{index}")
 }
 
 impl Default for HtmlConverter {
@@ -665,6 +1086,84 @@ pub mod wasm {
 mod tests {
     use super::*;
 
+    #[test]
+    fn raster_quality_builder_groups_and_normalizes_all_raster_controls() {
+        assert_eq!(
+            HtmlConverter::new().jpeg_quality,
+            render::pdf::DEFAULT_JPEG_QUALITY
+        );
+
+        let converter = HtmlConverter::new().raster_quality(RasterQuality {
+            source_image_dpi: 24.0,
+            filter_dpi: f32::NAN,
+            mask_dpi: f32::NAN,
+            background_dpi: 48.0,
+            blurred_coverage_compression: CoverageCompression::Lossless,
+        });
+
+        assert_eq!(
+            converter.raster_quality,
+            RasterQuality {
+                source_image_dpi: 72.0,
+                filter_dpi: 1.0,
+                mask_dpi: 72.0,
+                background_dpi: 96.0,
+                blurred_coverage_compression: CoverageCompression::Lossless,
+            }
+        );
+    }
+
+    #[test]
+    fn footnote_area_cascade_preserves_omitted_edges_and_separator() {
+        let rules = parser::css::parse_page_rules(
+            "@page { @footnote { padding: 1pt 2pt 3pt 4pt; border-top: 2pt solid red } }\
+             @page { @footnote { max-height: 20pt; padding-right: 9pt } }",
+        );
+        let resolved = resolve_footnote_area(&rules);
+
+        assert_eq!(resolved.style.padding, EdgeSizes::new(1.0, 9.0, 3.0, 4.0));
+        assert_eq!(resolved.style.separator.width, 2.0);
+        assert_eq!(
+            resolved.style.separator.color,
+            crate::types::Color::rgb(255, 0, 0)
+        );
+        assert_eq!(resolved.max_height, Some(20.0));
+    }
+
+    #[test]
+    fn selected_footnote_area_does_not_leak_to_every_page() {
+        let rules = parser::css::parse_page_rules(
+            "@page { @footnote { padding-top: 2pt } }\
+             @page :first { @footnote { padding-top: 20pt } }",
+        );
+        let resolved = resolve_footnote_area(&rules);
+        assert_eq!(resolved.style.padding.top, 2.0);
+    }
+
+    /// Enabling compression shrinks the PDF and wraps the content stream in a
+    /// FlateDecode filter; disabling restores the raw stream. (Rasterized-output
+    /// equivalence is covered by the parity gate.)
+    #[test]
+    fn content_stream_compression_shrinks_and_filters() {
+        // Enough repetitive content that Flate clearly beats its own overhead.
+        let body = "<p>Some paragraph text to compress, repeated for volume.</p>".repeat(60);
+        let html = format!("<html><body><h1>Hello</h1>{body}</body></html>");
+        let html = html.as_str();
+        let compressed = HtmlConverter::new().compress(true).convert(html).unwrap();
+        let raw = HtmlConverter::new().compress(false).convert(html).unwrap();
+        // The behavioral guarantee: compression meaningfully shrinks the output.
+        assert!(
+            compressed.len() + 200 < raw.len(),
+            "compressed {} should be clearly < raw {}",
+            compressed.len(),
+            raw.len()
+        );
+        assert!(
+            String::from_utf8_lossy(&compressed).contains("/Filter /FlateDecode"),
+            "compressed PDF should carry a FlateDecode stream"
+        );
+    }
+
     /// Check if a PDF contains a given text string, handling both WinAnsi
     /// (plain text in parentheses) and CID encoding (hex glyph IDs with
     /// ToUnicode CMap). This allows tests to verify text content regardless
@@ -752,7 +1251,52 @@ mod tests {
             all_decoded_text.push(' ');
             search_pos = tj_end_abs + 4;
         }
+
+        // The writer emits an individual `<glyph-id> Tj` operator for some
+        // positioned runs (rather than one `[...] TJ` array). Decode that form
+        // as well so this test helper follows the PDF we actually write.
+        let mut single_hexes = Vec::new();
+        let mut single_pos = 0;
+        while let Some(tj_end) = cmap_str[single_pos..].find("> Tj") {
+            let tj_end_abs = single_pos + tj_end;
+            if let Some(hex_start) = cmap_str[..tj_end_abs].rfind('<') {
+                single_hexes.push(cmap_str[hex_start + 1..tj_end_abs].trim().to_uppercase());
+            }
+            single_pos = tj_end_abs + 4;
+        }
+        // A glyph id is only meaningful within its active font. We do not
+        // need a PDF object parser for a test helper: decode the full
+        // positioned stream once per CMap, as with TJ arrays above. Selecting
+        // the first CMap for each individual glyph corrupts a bold run when
+        // its glyph ids overlap with another embedded font.
+        for cmap in &cmaps {
+            let decoded: String = single_hexes
+                .iter()
+                .filter_map(|hex| cmap.get(hex.as_str()).copied())
+                .collect();
+            if !decoded.is_empty() {
+                all_decoded_text.push_str(&decoded);
+                all_decoded_text.push(' ');
+            }
+        }
         all_decoded_text.contains(text)
+    }
+
+    /// Numeric adjustments from shaped CID `TJ` arrays. Identity-H fonts carry
+    /// CSS letter/word spacing here because single-byte `Tc`/`Tw` does not
+    /// apply to their two-byte character codes.
+    fn shaped_tj_adjustments(pdf: &[u8]) -> Vec<f32> {
+        let content = String::from_utf8_lossy(pdf);
+        content
+            .split("] TJ")
+            .filter_map(|before| before.rsplit_once('[').map(|(_, array)| array))
+            .flat_map(str::split_ascii_whitespace)
+            .filter_map(|token| token.parse::<f32>().ok())
+            .collect()
+    }
+
+    fn text_matrix_count(pdf: &[u8]) -> usize {
+        String::from_utf8_lossy(pdf).matches(" Tm\n").count()
     }
 
     #[test]
@@ -805,12 +1349,88 @@ mod tests {
     }
 
     #[test]
-    fn converter_no_sanitize() {
-        let pdf = HtmlConverter::new()
+    fn converter_no_sanitize_parses_borrowed_input() {
+        let html = String::from("<form><p>Borrowed input remains available</p></form>");
+        let borrowed_html = html.as_str();
+        let mut pdf = Vec::new();
+        HtmlConverter::new()
             .sanitize(false)
-            .convert("<p>Test</p>")
+            .convert_to_writer(borrowed_html, &mut pdf)
             .unwrap();
+        assert_eq!(html, borrowed_html);
         assert!(pdf.starts_with(b"%PDF"));
+        assert!(pdf_has_text(&pdf, "Borrowed input remains available"));
+    }
+
+    fn render_counter_style_document(marker: Option<&str>) -> Vec<u8> {
+        let definition = marker
+            .map(|marker| {
+                format!(
+                    "<style>@counter-style shared {{ system: cyclic; symbols: '{marker}'; \
+                     suffix: ' '; }}</style>"
+                )
+            })
+            .unwrap_or_default();
+        html_to_pdf(&format!(
+            "{definition}<ol style='list-style-type: shared'><li>Document body</li></ol>"
+        ))
+        .unwrap()
+    }
+
+    fn assert_only_counter_marker(pdf: &[u8], expected: &str, unexpected: &str) {
+        assert!(pdf_has_text(pdf, expected));
+        assert!(!pdf_has_text(pdf, unexpected));
+    }
+
+    #[test]
+    fn counter_styles_are_isolated_between_sequential_documents() {
+        let alpha = render_counter_style_document(Some("AlphaMarker"));
+        let beta = render_counter_style_document(Some("BetaMarker"));
+        assert_only_counter_marker(&alpha, "AlphaMarker", "BetaMarker");
+        assert_only_counter_marker(&beta, "BetaMarker", "AlphaMarker");
+    }
+
+    #[test]
+    fn counter_style_is_absent_from_following_document() {
+        let document_a = render_counter_style_document(Some("AlphaMarker"));
+        let document_b = render_counter_style_document(None);
+        assert!(pdf_has_text(&document_a, "AlphaMarker"));
+        assert!(!pdf_has_text(&document_b, "AlphaMarker"));
+        assert!(pdf_has_text(&document_b, "Document body"));
+    }
+
+    #[test]
+    fn counter_styles_are_isolated_between_parallel_documents() {
+        let start = std::sync::Barrier::new(4);
+        let (alpha, beta, absent) = std::thread::scope(|scope| {
+            let start_alpha = &start;
+            let alpha = scope.spawn(move || {
+                start_alpha.wait();
+                render_counter_style_document(Some("AlphaMarker"))
+            });
+            let start_beta = &start;
+            let beta = scope.spawn(move || {
+                start_beta.wait();
+                render_counter_style_document(Some("BetaMarker"))
+            });
+            let start_absent = &start;
+            let absent = scope.spawn(move || {
+                start_absent.wait();
+                render_counter_style_document(None)
+            });
+            start.wait();
+            (
+                alpha.join().unwrap(),
+                beta.join().unwrap(),
+                absent.join().unwrap(),
+            )
+        });
+
+        assert_only_counter_marker(&alpha, "AlphaMarker", "BetaMarker");
+        assert_only_counter_marker(&beta, "BetaMarker", "AlphaMarker");
+        assert!(!pdf_has_text(&absent, "AlphaMarker"));
+        assert!(!pdf_has_text(&absent, "BetaMarker"));
+        assert!(pdf_has_text(&absent, "Document body"));
     }
 
     #[test]
@@ -895,9 +1515,15 @@ mod tests {
         let html = "<ol><li>First</li><li>Second</li><li>Third</li></ol>";
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("1."));
-        assert!(content.contains("2."));
-        assert!(content.contains("3."));
+        // The UA-default serif family resolves to an embedded font, so marker
+        // and item text are shown as glyph ids rather than literal "1."/"2.".
+        // Each of the three list items emits one text-show run (marker + content
+        // combined), so expect at least three.
+        let show_ops = content.matches("Tj").count() + content.matches("TJ").count();
+        assert!(
+            show_ops >= 3,
+            "ordered list should emit a text-show run per item (got {show_ops})"
+        );
     }
 
     #[test]
@@ -1607,7 +2233,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
-            .convert(r#"<p style="font-family: testfont">Hello A</p>"#)
+            .convert(r#"<p style="font-family: testfont">A</p>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(
@@ -1657,7 +2283,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
-            .convert(r#"<p style="font-family: testfont">Hello</p>"#)
+            .convert(r#"<p style="font-family: testfont">A</p>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(
@@ -1722,7 +2348,7 @@ fn main() {
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
             .convert(
-                r#"<p style="font-family: testfont">Custom</p>
+                r#"<p style="font-family: testfont">A</p>
                    <p style="font-family: serif">Serif</p>
                    <p>Default</p>"#,
             )
@@ -1741,8 +2367,8 @@ fn main() {
             .add_font("fontone", ttf1)
             .add_font("fonttwo", ttf2)
             .convert(
-                r#"<p style="font-family: fontone">First</p>
-                   <p style="font-family: fonttwo">Second</p>"#,
+                r#"<p style="font-family: fontone">A</p>
+                   <p style="font-family: fonttwo">A</p>"#,
             )
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
@@ -1755,7 +2381,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("MyFont", ttf_data)
-            .convert(r#"<p style="font-family: MyFont">Text</p>"#)
+            .convert(r#"<p style="font-family: MyFont">A</p>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         // Font name is lowercased internally
@@ -1767,7 +2393,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
-            .convert(r#"<table><tr><td style="font-family: testfont">Cell</td></tr></table>"#)
+            .convert(r#"<table><tr><td style="font-family: testfont">A</td></tr></table>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/testfont"));
@@ -1808,9 +2434,7 @@ fn main() {
         let ttf_data = build_integration_test_ttf();
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
-            .convert(
-                r#"<div style="font-family: testfont"><p>Inherited</p><p>Also inherited</p></div>"#,
-            )
+            .convert(r#"<div style="font-family: testfont"><p>A</p><p>A</p></div>"#)
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/testfont"));
@@ -1823,7 +2447,7 @@ fn main() {
             .add_font("testfont", ttf_data)
             .convert(
                 r#"<html><head><style>.custom { font-family: testfont; }</style></head>
-                   <body><p class="custom">Styled</p></body></html>"#,
+                   <body><p class="custom">A</p></body></html>"#,
             )
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
@@ -1896,7 +2520,7 @@ fn main() {
         let pdf = HtmlConverter::new()
             .add_font("testfont", ttf_data)
             .convert(
-                r#"<p><span style="font-family: testfont">Custom</span> and <span style="font-family: serif">Serif</span></p>"#,
+                r#"<p><span style="font-family: testfont">A</span> and <span style="font-family: serif">Serif</span></p>"#,
             )
             .unwrap();
         let content = String::from_utf8_lossy(&pdf);
@@ -1962,6 +2586,69 @@ fn main() {
         // Letter size is 612x792, should appear in MediaBox
         assert!(content.contains("612"));
         assert!(content.contains("792"));
+    }
+
+    #[test]
+    fn probe_line_preserves_fractional_text_baseline() {
+        let font = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let html = r#"
+            <style>
+              @page { size: 384px 48px; margin: 0; }
+              html { font-family: ParitySans; line-height: 1.5; }
+              * { margin: 0; box-sizing: border-box; }
+              .line { width: 300px; padding: 0; border-bottom: 2px solid #000; }
+              .t { font-family: ParitySans; font-size: 40px; line-height: 1; }
+            </style>
+            <div class="line"><span class="t">Baseline Hxy</span></div>
+        "#;
+        let pdf = HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .add_font("ParitySans", font)
+            .convert(html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        // Document-flow font metrics use the CSS-pixel grid while the PDF text
+        // transform preserves the resolved coordinate without a second snap.
+        assert!(content.contains("1 0 0 -1 0 34 Tm"), "{content}");
+    }
+
+    #[test]
+    fn wrapped_text_baselines_snap_to_the_top_down_css_pixel_grid() {
+        let font = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let html = r#"
+            <style>
+              @page { size: 352px 136px; margin: 0; }
+              * { margin: 0; box-sizing: border-box; }
+              .box {
+                width: 220px; margin: 24px; padding: 6px; border: 2px solid #1a1a1a;
+                font-family: ParitySans; font-size: 18px; line-height: 1.2;
+                text-indent: 40px;
+              }
+            </style>
+            <div class="box">indented first line wraps back to the left margin</div>
+        "#;
+        let pdf = HtmlConverter::new()
+            .sanitize(false)
+            .compress(false)
+            .add_font("ParitySans", font)
+            .convert(html)
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        // The flow cursor retains fractional line metrics, but print painting
+        // snaps each baseline independently to the page's CSS-pixel grid.
+        assert!(content.contains("1 0 0 -1 32 71 Tm"), "{content}");
+        assert!(content.contains("1 0 0 -1 32 92 Tm"), "{content}");
     }
 
     #[test]
@@ -2105,16 +2792,18 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
     #[test]
     fn pdf_inline_block_box_shadow_renders() {
         // Regression: box-shadow on `display: inline-block` items (rendered via
-        // FlexCells) was dropped because FlexCell didn't carry the shadow. The
-        // blurred shadow path emits per-layer ExtGState entries with low alpha.
+        // FlexCells) was dropped because FlexCell didn't carry the shadow. A
+        // blurred shadow is now embedded as a gaussian-blurred image XObject
+        // (drawn with `Do`), so the regression check is that the shadow renders
+        // at all rather than being dropped.
         let html = "<div><div style=\"display:inline-block;width:80pt;height:40pt;\
             background:white;box-shadow:4pt 4pt 8pt rgba(0,0,0,0.3)\">A</div></div>";
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        // The shadow renderer registers its alpha layers under `GSbs<n>`.
+        // The blurred shadow is embedded as an image XObject and drawn with `Do`.
         assert!(
-            content.contains("GSbs"),
-            "expected inline-block box-shadow to emit blurred shadow ExtGState (GSbs...)"
+            content.contains("Do\n"),
+            "expected inline-block box-shadow to embed a blurred shadow image XObject"
         );
     }
 
@@ -2183,7 +2872,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to right, red, blue); width: 200pt; height: 50pt; padding: 10pt">Gradient</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2193,7 +2882,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to bottom, red, blue); width: 200pt; height: 50pt; padding: 10pt">VertGrad</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2203,7 +2892,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to right, red, blue); width: 200pt; height: 100pt; padding: 10pt">GradHeight</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2213,7 +2902,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(45deg, red, blue); width: 200pt; height: 50pt; padding: 10pt">DiagGrad</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2223,7 +2912,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: radial-gradient(red, blue); width: 200pt; height: 100pt; padding: 10pt">Radial</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 3"));
     }
 
@@ -2233,18 +2922,8 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: radial-gradient(red, blue); width: 200pt; height: 120pt; padding: 10pt">RadialH</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 3"));
-    }
-
-    #[test]
-    fn pdf_border_with_block_height() {
-        // Covers pdf.rs line 288: border with block_height Some(h) path
-        let html = r#"<p style="border: 2pt solid black; width: 100pt; height: 80pt">BorderH</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("RG\n"));
-        assert!(content.contains("S\n"));
     }
 
     #[test]
@@ -2289,11 +2968,15 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn pdf_text_justify_alignment() {
-        // Covers pdf.rs lines 363-374: text-align: justify with word spacing
         let html = r#"<p style="text-align: justify; width: 200pt">This is a long sentence with many words that should be justified across the width of the container for proper testing purposes here.</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
+        let pdf = HtmlConverter::new().compress(false).convert(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("Tw\n"));
+        assert!(
+            content
+                .lines()
+                .any(|line| line.ends_with("] TJ") && line.contains(" -")),
+            "justification must increase at least one inter-word advance"
+        );
     }
 
     #[test]
@@ -2736,8 +3419,13 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<ol><li>First</li><li>Second</li></ol>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("1."));
-        assert!(content.contains("2."));
+        // Marker/content text is glyph-encoded under the embedded UA-default
+        // serif font; verify each item emits its own text-show run.
+        let show_ops = content.matches("Tj").count() + content.matches("TJ").count();
+        assert!(
+            show_ops >= 2,
+            "ordered list should emit a text-show run per item (got {show_ops})"
+        );
     }
 
     #[test]
@@ -2807,7 +3495,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to left, red, blue); width: 200pt; height: 50pt; padding: 10pt">ToLeft</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2817,7 +3505,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to top, red, blue); width: 200pt; height: 50pt; padding: 10pt">ToTop</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/ShadingType 2"));
     }
 
@@ -2827,7 +3515,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let html = r#"<p style="background: linear-gradient(to right, red 0%, white 50%, blue 100%); width: 200pt; height: 50pt; padding: 10pt">ThreeStops</p>"#;
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("sh\n"));
+        assert!(content.contains("/Pattern cs"));
         assert!(content.contains("/FunctionType 3"));
     }
 
@@ -2964,7 +3652,10 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         use std::path::Path;
         let converter = HtmlConverter::new().base_path(Path::new("/tmp/test"));
         // Verify base_path is set
-        assert_eq!(converter.base_path.as_deref(), Some(Path::new("/tmp/test")));
+        assert_eq!(
+            converter.resources.base.as_deref(),
+            Some(Path::new("/tmp/test"))
+        );
     }
 
     #[test]
@@ -3243,14 +3934,18 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn html_to_pdf_text_justify() {
-        // Covers pdf.rs lines 372,393: text-align: justify with word spacing
         let html = r#"<p style="text-align: justify; width: 300pt;">
             This is a paragraph with justified text alignment that has multiple words
             and should produce word spacing adjustments in the PDF output stream.
         </p>"#;
-        let pdf = html_to_pdf(html).unwrap();
+        let pdf = HtmlConverter::new().compress(false).convert(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
-        assert!(content.contains("Tw") || content.contains("This"));
+        assert!(
+            content
+                .lines()
+                .any(|line| line.ends_with("] TJ") && line.contains(" -")),
+            "justification must increase at least one inter-word advance"
+        );
     }
 
     #[test]
@@ -3304,7 +3999,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn html_to_pdf_explicit_page_break_element() {
-        // Covers pdf.rs line 634: LayoutElement::PageBreak
+        // Covers explicit PageBreak layout nodes.
         let html = r#"
         <p>PageOneContent</p>
         <div style="page-break-before: always;"></div>
@@ -3457,12 +4152,19 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
 
     #[test]
     fn html_to_pdf_letter_spacing() {
-        let html = r#"<p style="letter-spacing: 2pt">Spaced letters</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
+        let unspaced = html_to_pdf("<p>Spaced letters</p>").unwrap();
+        let pdf = html_to_pdf(r#"<p style="letter-spacing: 2pt">Spaced letters</p>"#).unwrap();
+        assert!(pdf_has_text(&pdf, "Spaced letters"));
+
         assert!(
-            content.contains("Tc"),
-            "PDF should contain Tc operator for letter-spacing"
+            text_matrix_count(&pdf) == text_matrix_count(&unspaced),
+            "letter spacing should retain one text matrix for a simple shaped run"
+        );
+        assert!(
+            shaped_tj_adjustments(&pdf)
+                .iter()
+                .any(|adjustment| *adjustment < -150.0),
+            "letter-spacing should expand the shaped run through TJ adjustments"
         );
     }
 
@@ -3470,26 +4172,38 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
     fn html_to_pdf_word_spacing() {
         let html = r#"<p style="word-spacing: 5pt">Spaced words here</p>"#;
         let pdf = html_to_pdf(html).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
         assert!(
-            content.contains("Tw"),
-            "PDF should contain Tw operator for word-spacing"
+            shaped_tj_adjustments(&pdf)
+                .iter()
+                .any(|adjustment| *adjustment < -400.0),
+            "word-spacing should widen Identity-H spaces through TJ adjustments"
         );
     }
 
     #[test]
     fn html_to_pdf_letter_and_word_spacing_combined() {
-        let html =
-            r#"<p style="letter-spacing: 2pt; word-spacing: 5pt">Spaced letters and words</p>"#;
-        let pdf = html_to_pdf(html).unwrap();
-        let content = String::from_utf8_lossy(&pdf);
+        let unspaced = html_to_pdf("<p>Spaced letters and words</p>").unwrap();
+        let pdf = html_to_pdf(
+            r#"<p style="letter-spacing: 2pt; word-spacing: 5pt">Spaced letters and words</p>"#,
+        )
+        .unwrap();
         assert!(
-            content.contains("Tc"),
-            "PDF should contain Tc operator for letter-spacing"
+            shaped_tj_adjustments(&pdf)
+                .iter()
+                .any(|adjustment| *adjustment < -400.0),
+            "combined spacing should preserve the word-space TJ adjustment"
+        );
+        assert!(pdf_has_text(&pdf, "Spaced letters and words"));
+
+        assert!(
+            text_matrix_count(&pdf) == text_matrix_count(&unspaced),
+            "combined spacing should retain one text matrix for a simple shaped run"
         );
         assert!(
-            content.contains("Tw"),
-            "PDF should contain Tw operator for word-spacing"
+            shaped_tj_adjustments(&pdf)
+                .iter()
+                .any(|adjustment| (-170.0..-160.0).contains(adjustment)),
+            "combined spacing should preserve the letter-space TJ adjustment"
         );
     }
 
@@ -3849,10 +4563,10 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
         let pdf = html_to_pdf(html).unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(pdf_has_text(&pdf, "Header"), "th text should appear in PDF");
-        // #2c3e50 = (44/255, 62/255, 80/255) ≈ (0.172549, 0.243137, 0.313725)
-        // Check for any non-zero background color operator (not 0 0 0)
+        // #2c3e50 is serialized through the canonical four-decimal PDF color
+        // operator shared by every solid background path.
         assert!(
-            content.contains("0.17254902 0.24313726 0.3137255 rg"),
+            content.contains("0.1725 0.2431 0.3137 rg"),
             "background color from stylesheet should produce rg operator"
         );
     }

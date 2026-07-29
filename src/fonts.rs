@@ -8,6 +8,33 @@ use crate::style::computed::FontFamily;
 use crate::{parser::ttf::TtfFont, system_fonts, text};
 use std::collections::HashMap;
 
+/// One CSS reference pixel expressed in the point-based layout coordinate system.
+pub(crate) const PT_PER_CSS_PX: f32 = 0.75;
+
+/// Round a point-space value to the CSS-pixel grid used by browser layout.
+pub(crate) fn round_to_css_pixel(value: f32) -> f32 {
+    (value / PT_PER_CSS_PX).round() * PT_PER_CSS_PX
+}
+
+/// Round a block-start distance toward the preceding CSS-pixel grid line.
+///
+/// CSS inline layout gives an odd amount of leading to the block-end side, so
+/// the top-side share must round toward block start before it establishes the
+/// line baseline.
+pub(crate) fn floor_to_css_pixel(value: f32) -> f32 {
+    (value / PT_PER_CSS_PX).floor() * PT_PER_CSS_PX
+}
+
+/// Round a point-space distance toward the block-end CSS-pixel grid line.
+///
+/// Table-cell `vertical-align: middle` distributes an odd CSS-pixel remainder
+/// toward the block start, leaving the centred content one CSS pixel farther
+/// from that edge. Keeping this conversion beside the point/CSS-pixel constant
+/// makes that direction explicit at each call site.
+pub(crate) fn ceil_to_css_pixel(value: f32) -> f32 {
+    (value / PT_PER_CSS_PX).ceil() * PT_PER_CSS_PX
+}
+
 /// Helvetica character widths (AFM units, 1000 per em) for ASCII 32–126.
 /// Index 0 corresponds to codepoint 32 (space).
 static HELVETICA_WIDTHS: [u16; 95] = [
@@ -439,15 +466,85 @@ pub(crate) fn font_metrics_ratios(
 ) -> (f32, f32) {
     if let FontFamily::Custom(name) = font_family {
         if let Some((_, ttf)) = system_fonts::find_font(custom_fonts, name, bold, italic) {
-            let metrics = ttf.pdf_vertical_metrics();
+            // CSS line-box layout uses the OS/2 usWin* metrics (matching Chrome's
+            // line-height:normal source), NOT the hhea metrics used for PDF font
+            // embedding. Using hhea here mispositions the text baseline within the
+            // line box relative to Chrome.
+            let metrics = ttf.layout_vertical_metrics();
             return (
-                metrics.ascender_ratio(ttf.units_per_em),
-                metrics.descender_ratio(ttf.units_per_em),
+                metrics.ascender_ratio(ttf.units_per_em) * ttf.size_adjust_factor(),
+                metrics.descender_ratio(ttf.units_per_em) * ttf.size_adjust_factor(),
             );
         }
     }
 
     (ascender_ratio(font_family), descender_ratio(font_family))
+}
+
+/// Size-resolved vertical metrics used by HTML inline layout.
+pub(crate) struct FontLineMetrics {
+    pub(crate) ascent: f32,
+    pub(crate) descent: f32,
+    pub(crate) line_gap: f32,
+}
+
+impl FontLineMetrics {
+    pub(crate) fn normal_line_height(&self) -> f32 {
+        self.ascent + self.descent + self.line_gap
+    }
+
+    /// Convert scaled metrics to document flow's CSS-pixel used-value grid.
+    pub(crate) fn rounded_to_css_pixel_grid(self) -> Self {
+        Self {
+            ascent: round_to_css_pixel(self.ascent),
+            descent: round_to_css_pixel(self.descent),
+            line_gap: round_to_css_pixel(self.line_gap),
+        }
+    }
+}
+
+/// Resolve selected-face metrics without changing their fractional geometry.
+pub(crate) fn exact_font_line_metrics(
+    font_family: &FontFamily,
+    font_size: f32,
+    bold: bool,
+    italic: bool,
+    custom_fonts: &HashMap<String, TtfFont>,
+) -> FontLineMetrics {
+    let (ascent_ratio, descent_ratio, line_gap_ratio) = if let FontFamily::Custom(name) =
+        font_family
+        && let Some((_, ttf)) = system_fonts::find_font(custom_fonts, name, bold, italic)
+    {
+        let metrics = ttf.layout_vertical_metrics();
+        let size_adjust = ttf.size_adjust_factor();
+        (
+            metrics.ascender_ratio(ttf.units_per_em) * size_adjust,
+            metrics.descender_ratio(ttf.units_per_em) * size_adjust,
+            metrics.line_gap_ratio(ttf.units_per_em) * size_adjust,
+        )
+    } else {
+        let ascent = ascender_ratio(font_family);
+        let descent = descender_ratio(font_family);
+        let normal = normal_line_height_factor(font_family, bold, italic, custom_fonts);
+        (ascent, descent, (normal - ascent - descent).max(0.0))
+    };
+    FontLineMetrics {
+        ascent: ascent_ratio * font_size,
+        descent: descent_ratio * font_size,
+        line_gap: line_gap_ratio * font_size,
+    }
+}
+
+/// Resolve metrics on the CSS-pixel used-value grid used by document flow.
+pub(crate) fn font_line_metrics(
+    font_family: &FontFamily,
+    font_size: f32,
+    bold: bool,
+    italic: bool,
+    custom_fonts: &HashMap<String, TtfFont>,
+) -> FontLineMetrics {
+    exact_font_line_metrics(font_family, font_size, bold, italic, custom_fonts)
+        .rounded_to_css_pixel_grid()
 }
 
 pub(crate) fn normal_line_height_factor(
@@ -766,6 +863,52 @@ pub(crate) fn is_emoji_char(code: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounds_point_dimensions_to_the_css_pixel_grid() {
+        assert_eq!(round_to_css_pixel(145.734_38), 145.5);
+        assert_eq!(round_to_css_pixel(112.218_75), 112.5);
+    }
+
+    fn parity_sans_fonts() -> HashMap<String, TtfFont> {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySans.ttf"),
+        )
+        .expect("ParitySans test font");
+        let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans TTF");
+        HashMap::from([("paritysans".to_string(), font)])
+    }
+
+    #[test]
+    fn font_line_metrics_resolve_at_each_css_font_size() {
+        let fonts = parity_sans_fonts();
+        let family = FontFamily::Custom("ParitySans".to_string());
+        let cases = [(12.0, 11.25, 3.0), (18.0, 16.5, 4.5), (30.0, 27.75, 6.75)];
+
+        for (font_size, expected_ascent, expected_descent) in cases {
+            let metrics = font_line_metrics(&family, font_size, false, false, &fonts);
+            assert_eq!(metrics.ascent, expected_ascent, "font size {font_size}pt");
+            assert_eq!(metrics.descent, expected_descent, "font size {font_size}pt");
+            assert_eq!(metrics.line_gap, 0.0, "font size {font_size}pt");
+        }
+    }
+
+    #[test]
+    fn normal_line_height_uses_size_resolved_metrics_and_gap() {
+        let fonts = parity_sans_fonts();
+        let family = FontFamily::Custom("ParitySans".to_string());
+        let cases = [(12.0, 14.25), (18.0, 21.0), (30.0, 34.5)];
+
+        for (font_size, expected_height) in cases {
+            let metrics = font_line_metrics(&family, font_size, false, false, &fonts);
+            assert_eq!(
+                metrics.normal_line_height(),
+                expected_height,
+                "font size {font_size}pt"
+            );
+        }
+    }
 
     #[test]
     fn helvetica_space_width() {

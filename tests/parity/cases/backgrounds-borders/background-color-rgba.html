@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>background-color rgba over solid</title>
+<style>
+  @page { size: 280px 120px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .under {
+    width: 200px;
+    height: 120px;
+    background-color: #1565c0;
+    position: relative;
+  }
+  .over {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 120px;
+    height: 80px;
+    background-color: rgba(255, 235, 59, 0.6);
+  }
+</style>
+</head>
+<body>
+  <div class="under"><div class="over"></div></div>
+</body>
+</html>

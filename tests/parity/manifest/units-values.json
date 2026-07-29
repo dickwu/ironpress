@@ -1,0 +1,621 @@
+[
+  {
+    "id": "units-length-pt",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "pt",
+    "description": "Box sized in pt (180pt x 90pt = 240x120px) with a 3pt solid border; verifies pt->px length resolution.",
+    "file": "cases/units-values/units-length-pt.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-in",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "in",
+    "description": "Box sized in inches (2.5in x 1.25in = 240x120px) verifying absolute inch unit resolution (1in=96px).",
+    "file": "cases/units-values/units-length-in.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-cm",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "cm",
+    "description": "Box sized in centimetres (5cm x 3cm ~= 189x113px) verifying absolute metric cm unit resolution.",
+    "file": "cases/units-values/units-length-cm.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-em",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "em",
+    "description": "Box with font-size:20px sized 12em x 6em (=240x120px) and 0.2em border; verifies em resolves against element font-size.",
+    "file": "cases/units-values/units-length-em.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-rem",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "rem",
+    "description": "Box sized 15rem x 7.5rem against root font-size:16px (=240x120px) inside a 40px-font ancestor; rem ignores local font-size.",
+    "file": "cases/units-values/units-length-rem.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-percent-width-height",
+    "category": "units-values",
+    "feature": "percentage",
+    "subfeature": "width-height-resolution",
+    "description": "Child width:75% / height:50% of a 400x200px parent resolves to 300x100px; verifies percentage length resolution against the containing block.",
+    "file": "cases/units-values/units-percent-width-height.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-calc-mixed-percent",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "mixed-percent-px",
+    "description": "With border-box sizing, calc(50% - 40px) and calc(100% - 60px) resolve against the parent’s 396x156px content box, producing a 158x96px child.",
+    "file": "cases/units-values/units-calc-mixed-percent.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-var-custom-property",
+    "category": "units-values",
+    "feature": "custom-properties",
+    "subfeature": "var-resolution",
+    "description": "Box dimensions and colors driven entirely by :root custom properties via var() (240x120px blue box); verifies var() resolution for lengths and colors.",
+    "file": "cases/units-values/units-var-custom-property.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-var-fallback",
+    "category": "units-values",
+    "feature": "custom-properties",
+    "subfeature": "var-fallback",
+    "description": "var() with undefined custom properties falls back to literal length/color fallbacks (240x120px green box); verifies the var() fallback argument path.",
+    "file": "cases/units-values/units-var-fallback.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-viewport-vw-vh",
+    "category": "units-values",
+    "feature": "viewport-units",
+    "subfeature": "vw-vh",
+    "description": "Aspirational: box sized 30vw x 20vh resolves against the printable page (viewport) box; ironpress vw/vh resolution is only partial.",
+    "file": "cases/units-values/units-viewport-vw-vh.html",
+    "kind": "feature",
+    "expected_support": "partial",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-min-max",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "min-max",
+    "description": "width:max(150px,240px) and height:min(120px,300px) resolve to 240x120px; verifies standalone min()/max() value functions (css-values-4 §10.2).",
+    "file": "cases/units-values/units-min-max.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-clamp",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "clamp",
+    "description": "clamp(120px,50%,240px) x clamp(80px,50%,200px) against a 600x160px parent resolves to a 240x80px child; verifies clamp() (css-values-4 §10.2).",
+    "file": "cases/units-values/units-clamp.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-pc",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "pc",
+    "description": "Box sized in picas (15pc x 7.5pc = 240x120px) with a 0.25pc border; verifies the absolute pica unit (css-values-4 §6.2, 1pc=16px).",
+    "file": "cases/units-values/units-length-pc.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-mm",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "mm",
+    "description": "Box sized in millimetres (63.5mm x 31.75mm = 240x120px) verifying the absolute metric mm unit (css-values-4 §6.2, 1mm=cm/10).",
+    "file": "cases/units-values/units-length-mm.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-q",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "Q",
+    "description": "Box sized in quarter-millimetres (254Q x 127Q = 240x120px) verifying the absolute Q unit (css-values-4 §6.2, 1Q=cm/40).",
+    "file": "cases/units-values/units-length-q.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-em-font-size",
+    "category": "units-values",
+    "feature": "length-units",
+    "subfeature": "em-on-font-size",
+    "description": "Parent font-size:20px; .box font-size:2em resolves against the PARENT (=40px), then 6em x 3em = 240x120px and a 0.1em border; verifies the em-on-font-* rule (css-values-4 §6.1.1).",
+    "file": "cases/units-values/units-em-font-size.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-calc-precedence",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "precedence-mul",
+    "description": "calc(50% + 10px * 2) x calc(50% + 5px * 4) against a 400x200px parent resolves to 220x120px; verifies * binds tighter than + (css-values-4 §10.9) through ironpress's own evaluator (percentage defeats lightningcss folding).",
+    "file": "cases/units-values/units-calc-precedence.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-calc-division",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "division",
+    "description": "calc(50% / 1) x calc(100% / 2) against a 480x240px parent resolves to 240x120px; verifies division of a dimension by a unitless number (css-values-4 §10.9).",
+    "file": "cases/units-values/units-calc-division.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-clamp-min",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "clamp-min-wins",
+    "description": "clamp(200px, 10%, 240px) x clamp(100px, 10%, 200px) against a 400x200px parent resolves to 200x100px (MIN bound wins); verifies clamp() lower-bound clamping (css-values-4 §10.2).",
+    "file": "cases/units-values/units-clamp-min.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-percent-padding",
+    "category": "units-values",
+    "feature": "percentage",
+    "subfeature": "padding-cb-width",
+    "description": "padding:25% on a 200px-wide content-box child of a 400px parent paints a 400x200px box; verifies padding percentages resolve against containing-block WIDTH on both axes (css-values-4 §5.5).",
+    "file": "cases/units-values/units-percent-padding.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-percent-margin",
+    "category": "units-values",
+    "feature": "percentage",
+    "subfeature": "margin-cb-width",
+    "description": "margin-left:25% and margin-top:25% (both 25% of the 400px parent width = 100px) offset a 200x60px child; verifies margin percentages resolve against containing-block WIDTH (css-values-4 §5.5).",
+    "file": "cases/units-values/units-percent-margin.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-var-nested-fallback",
+    "category": "units-values",
+    "feature": "custom-properties",
+    "subfeature": "var-nested-fallback",
+    "description": "var(--w, var(--w2, 240px)) and nested var() fallbacks for height/colors with all custom properties undefined resolve to a 240x120px blue box; verifies nested var() fallback (css-values-4 var() fallback).",
+    "file": "cases/units-values/units-var-nested-fallback.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-number-scientific",
+    "category": "units-values",
+    "feature": "number",
+    "subfeature": "scientific-notation",
+    "description": "Box sized 2.4e2px x 1.2e2px = 240x120px; verifies scientific-notation numbers in lengths (css-values-4 §5.2).",
+    "file": "cases/units-values/units-number-scientific.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-viewport-vmin-vmax",
+    "category": "units-values",
+    "feature": "viewport-units",
+    "subfeature": "vmin-vmax",
+    "description": "Aspirational: 40vmin/10vmin and 30vmax/8vmax boxes against the page viewport; ironpress resolves only vw/vh, so vmin/vmax are unsupported (css-values-4 §6.1.2.2).",
+    "file": "cases/units-values/units-viewport-vmin-vmax.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-calc-nested-parens",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "nested-parens",
+    "description": "calc(2 * (10% + 20px)) x calc(2 * (10% + 10px)) against a 400x200px parent resolves to 120x60px; verifies parenthesised sub-expressions in calc() (css-values-4 §10.9). The percentage defeats lightningcss folding so the grouping is honoured end-to-end.",
+    "file": "cases/units-values/units-calc-nested-parens.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-ch-layout-width",
+    "category": "units-values",
+    "feature": "font-relative-length",
+    "subfeature": "ch-width",
+    "description": "width:20ch in ParityMono uses the zero glyph advance and is wider than a 10em reference; catches hard-coded 0.5em ch fallback.",
+    "file": "cases/units-values/units-ch-layout-width.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-intrinsic-vmin-aspect-ratio",
+    "category": "units-values",
+    "feature": "intrinsic-sizing",
+    "subfeature": "min-max-content-vmin-aspect-ratio",
+    "description": "min-content and max-content text widths plus a 40vmin aspect-ratio box lock intrinsic sizing and viewport-unit resolution; catches auto intrinsic widths, default viewport units, or dropped aspect-ratio.",
+    "file": "cases/units-values/units-intrinsic-vmin-aspect-ratio.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-length-ex-x-height",
+    "category": "units-values",
+    "feature": "font-relative-length",
+    "subfeature": "ex-x-height",
+    "description": "The ex unit uses the font x-height in layout lengths; catches treating ex as em, unsupported, or a hard-coded unrelated ratio.",
+    "file": "cases/units-values/units-length-ex-x-height.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-aspect-ratio-height-derived-width",
+    "category": "units-values",
+    "feature": "aspect-ratio",
+    "subfeature": "auto-width-from-height",
+    "description": "A box with definite height and width:auto derives its width from aspect-ratio; catches only implementing width-to-height derivation.",
+    "file": "cases/units-values/units-aspect-ratio-height-derived-width.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-round-function",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "round",
+    "description": "round(down,137px,20px) snaps a length to the 120px step; catches parsers that drop CSS Values math round().",
+    "file": "cases/units-values/units-round-function.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-mod-function",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "mod",
+    "description": "mod(50px,30px) contributes 20px inside calc(), making a 120px bar; catches dropping CSS Values math mod().",
+    "file": "cases/units-values/units-mod-function.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-sin-function",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "sin",
+    "description": "sin(30deg) resolves to 0.5 in calc(), making a 120px bar; catches dropping CSS Values trigonometric math functions.",
+    "file": "cases/units-values/units-sin-function.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-lh-line-height",
+    "category": "units-values",
+    "feature": "font-relative-length",
+    "subfeature": "lh",
+    "description": "The lh unit resolves against the element's computed line-height, so width:4lh with line-height:30px is 120px; catches unsupported lh units.",
+    "file": "cases/units-values/units-lh-line-height.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-cap-height",
+    "category": "units-values",
+    "feature": "font-relative-length",
+    "subfeature": "cap",
+    "description": "The cap unit resolves from font cap height and is visibly shorter than a 10em reference; catches treating cap as em or unsupported.",
+    "file": "cases/units-values/units-cap-height.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-viewport-svw-svh",
+    "category": "units-values",
+    "feature": "viewport-units",
+    "subfeature": "svw-svh",
+    "description": "Small viewport units resolve in static print layout, making a 50svw by 25svh box on a fixed page; catches parsers limited to vw/vh.",
+    "file": "cases/units-values/units-viewport-svw-svh.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
+    "id": "units-calc-arithmetic-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "grammar-precedence-nesting-unary",
+    "description": "WPT-derived visual lanes cover mixed percentage arithmetic, scalar multiplication on both sides, division, grouping, nested calc(), unary signs and operator precedence; result edges must hit conspicuous markers.",
+    "file": "cases/units-values/units-calc-arithmetic-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-length-units-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "absolute-font-viewport-percentage-units",
+    "description": "WPT-derived unit matrix combines calc() with em, rem, in, cm, mm, viewport, vmin, inherited lh, distinct root rlh and percentage terms, using a common 120px visual target where applicable.",
+    "file": "cases/units-values/units-calc-length-units-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-comparison-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "min-max-clamp-nested-mixed",
+    "description": "WPT-derived loud lanes exercise min(), max(), clamp(), nested comparison functions and calc/comparison composition with unresolved percentages.",
+    "file": "cases/units-values/units-math-comparison-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-stepped-sign-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "round-mod-rem-abs-sign-hypot",
+    "description": "WPT-derived matrix covers every rounding strategy, positive and negative mod/rem semantics, abs(), sign() and hypot() with large result-edge markers.",
+    "file": "cases/units-values/units-math-stepped-sign-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-math-trig-exponential-red-team",
+    "category": "units-values",
+    "feature": "math-functions",
+    "subfeature": "trig-inverse-pow-sqrt-log-exp-constants",
+    "description": "WPT-derived matrix covers trig, inverse trig nesting, pow(), sqrt(), log(), exp() and numeric constants; each expression produces the same unmistakable 120px boundary.",
+    "file": "cases/units-values/units-math-trig-exponential-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-invalid-type-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "grammar-dimensional-type-rejection",
+    "description": "WPT-derived invalid matrix proves unmatched compound dimensions, mixed number/length sums, angle/length sums, malformed expressions, incompatible comparisons and wrong function arity are discarded without overriding a loud 120px fallback.",
+    "file": "cases/units-values/units-calc-invalid-type-red-team.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  },
+  {
+    "id": "units-calc-typed-arithmetic-red-team",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "typed-dimensional-products-and-quotients",
+    "description": "WPT-derived loud lanes require compound length, percentage, angle, time, frequency, resolution, flex and font-relative dimensions to cancel to a 120px used width; old number-only multiplication rules leave an unmistakable 8px fallback. The authenticated standards-derived source materializes the specified flex cancellation because Chromium's print path still drops that valid lane.",
+    "file": "cases/units-values/units-calc-typed-arithmetic-red-team.html",
+    "reference_file": "references/units-values/units-calc-typed-arithmetic-red-team.html",
+    "reference": { "status": "verified" },
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "depends_on": ["probe-fill-box", "probe-border-box"]
+  }
+]

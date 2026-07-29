@@ -1,6 +1,6 @@
 [package]
 name = "ironpress"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2024"
 rust-version = "1.85"
 description = "Pure Rust HTML/CSS/Markdown to PDF converter with layout engine, LaTeX math, tables, images, custom fonts, and streaming output. No browser, no system dependencies."
@@ -26,8 +26,14 @@ remote = ["ureq"]
 wasm = ["wasm-bindgen", "js-sys", "getrandom/wasm_js"]
 
 [dependencies]
+cssparser-color = "0.1"
+cssparser = "0.33"
 html5ever = "0.38"
-lightningcss = { version = "1.0.0-alpha.71", default-features = false }
+lightningcss = { version = "=1.0.0-alpha.71", default-features = false }
+# lightningcss alpha.71 declares `parcel_selectors = "0.28.2"`, which also
+# admits 0.28.3 even though that release moved to an incompatible cssparser.
+# Keep the transitive selector API on the version alpha.71 was built against.
+parcel_selectors = "=0.28.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 png_decoder = { package = "png", version = "0.18" }
 pulldown-cmark = "0.13"
@@ -36,7 +42,9 @@ fontdb = "0.23"
 flate2 = "1"
 resvg = "0.47"
 rustybuzz = "0.20"
-subsetter = "0.2.3"
+sha2 = "0.10"
+skrifa = "=0.42.1"
+subsetter = "=0.2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "rt"], optional = true }
 ureq = { version = "3", optional = true }
@@ -44,13 +52,25 @@ wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 getrandom = { version = "0.3", optional = true }
 unicode-bidi = "0.3.18"
+unicode-linebreak = "0.1.5"
+unicode-segmentation = "1.13.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 proptest = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
+# Visual parity harness (tests/feature_parity.rs) deps.
+serde = { version = "1", features = ["derive"] }
+rayon = "1"
+fs2 = "0.4.3"
+tempfile = "3"
 
 [[bench]]
 name = "conversion"
 harness = false
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

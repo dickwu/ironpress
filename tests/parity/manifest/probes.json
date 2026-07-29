@@ -1,0 +1,68 @@
+[
+  {
+    "id": "probe-fill-box",
+    "category": "probes",
+    "feature": "box-sizing",
+    "subfeature": "solid-fill-geometry",
+    "description": "Substrate probe: one solid-filled box of known px size. Trust anchor for box-sizing + fill paint + page geometry.",
+    "file": "cases/probes/probe-fill-box.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  },
+  {
+    "id": "probe-color-swatch",
+    "category": "probes",
+    "feature": "background-color",
+    "subfeature": "solid-paint",
+    "description": "Substrate probe: a pure background-color rectangle. Trust anchor for background-color paint.",
+    "file": "cases/probes/probe-color-swatch.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  },
+  {
+    "id": "probe-border-box",
+    "category": "probes",
+    "feature": "pdf-stroke-encoding",
+    "subfeature": "solid-border-edge-coverage",
+    "description": "Exact-output canary: one known thick solid border. Its current failure measures PDF coordinate, stroke-state, and painted-edge encoding after the shared pdftoppm path; it does not by itself prove incorrect CSS border geometry.",
+    "file": "cases/probes/probe-border-box.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  },
+  {
+    "id": "probe-block-flow",
+    "category": "probes",
+    "feature": "pdf-fill-encoding",
+    "subfeature": "stacked-rectangle-edge-coverage",
+    "description": "Exact-output canary: two known, correctly stacked rectangles. Its current failure measures PDF coordinate serialization and painted-edge coverage after the shared pdftoppm path; it does not by itself prove incorrect block flow.",
+    "file": "cases/probes/probe-block-flow.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  },
+  {
+    "id": "probe-text-baseline",
+    "category": "probes",
+    "feature": "font-metrics",
+    "subfeature": "baseline",
+    "description": "Substrate compatibility probe: a short line of ParitySans text at a known size on a baseline rule. It retains the raw Chromium comparison without treating Chromium's coordinate quantization as the sole geometry oracle.",
+    "file": "cases/probes/probe-text-baseline.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  },
+  {
+    "id": "probe-image-render",
+    "category": "probes",
+    "feature": "pdf-image-encoding",
+    "subfeature": "data-uri-image-edge-coverage",
+    "description": "Exact-output canary: a known data:-URI PNG at a known CSS size. Its current failure measures PDF image placement encoding and painted-edge coverage after the shared pdftoppm path; it does not by itself prove incorrect CSS image sizing or decoding.",
+    "file": "cases/probes/probe-image-render.html",
+    "kind": "probe",
+    "expected_support": "implemented",
+    "depends_on": []
+  }
+]

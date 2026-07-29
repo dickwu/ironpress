@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid overflow preserves hidden</title>
+<style>
+  @page { size: 256px 184px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .stage {
+    width: 130px;
+    height: 90px;
+    margin: 30px;
+    overflow: hidden;
+    overflow: definitely-invalid;
+    border: 4px solid #111111;
+    background: #e8eaf6;
+  }
+  .oversized {
+    width: 205px;
+    height: 135px;
+    margin: 14px;
+    background: #c62828;
+    border: 10px solid #1565c0;
+  }
+</style>
+</head>
+<body><div class="stage"><div class="oversized"></div></div></body>
+</html>

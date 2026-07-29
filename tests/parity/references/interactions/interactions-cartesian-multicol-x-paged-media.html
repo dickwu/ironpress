@@ -1,0 +1,124 @@
+<!doctype html>
+<!--
+  Standards-derived print oracle for multicol x paged-media.
+
+  CSS Break 3 section 4.3 requires the inner break-before:page to break
+  through the multicol fragmentation context. CSS Multicol 1 sections 2 and
+  8.2 require the subsequent column box to move to the next page, while the
+  multicol principal box continues there. Sections 2 and 4 require the two
+  columns to use the multicol content box's 50px used height and paint a rule
+  of that same length between them.
+
+  Chromium 150 instead leaves the inner box in page 2's second column and
+  therefore produces only three pages. This source materializes the specified
+  four page fragments as ordinary CSS boxes. Its dimensions and edge removal
+  come directly from the authored box model and box-decoration-break:slice;
+  no raster is translated, registered, jittered, cropped, resized, filtered,
+  resampled, or replaced.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>multicol x paged-media interaction — standards-derived reference</title>
+<style>
+  @page { size: 192px 200px; margin: 0; }
+
+  @font-face {
+    font-family: MatrixSans;
+    src: url('../../fonts/ParitySans.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+  }
+  html { font-family: ParitySans; font-size: 16px; line-height: 1.2; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #ffffff; }
+  body { color: #17324d; font-size: 16px; }
+
+  .stage {
+    width: 156px;
+    min-height: 164px;
+    break-before: page;
+    background: #f7fafc;
+    border: 1px solid #cbd5e1;
+  }
+  .node {
+    width: 126px;
+    min-height: 68px;
+    margin: 47px auto 0;
+    padding: 7px;
+    border: 2px solid #577590;
+    background: #e7f5ff;
+    color: #17324d;
+  }
+  .outer { margin-top: 33px; }
+  .inner {
+    width: 58px;
+    height: 48px;
+    min-height: 0;
+    margin: 0;
+    padding: 5px;
+  }
+  .inner.multicol { position: relative; }
+  .inner.multicol::after {
+    content: '';
+    position: absolute;
+    left: 26px;
+    top: 5px;
+    width: 2px;
+    height: 34px;
+    background: #577590;
+  }
+  .node.wide-multicol { position: relative; }
+  .node.wide-multicol::after {
+    content: '';
+    position: absolute;
+    left: 60px;
+    top: 7px;
+    width: 2px;
+    height: 50px;
+    background: #577590;
+  }
+  .own { height: 22px; white-space: nowrap; }
+
+  .stage-open {
+    height: 200px;
+    border-bottom: 0;
+  }
+  .outer-open {
+    height: 166px;
+    border-bottom: 0;
+  }
+
+  .stage-close {
+    min-height: 0;
+    height: 65px;
+    border-top: 0;
+  }
+  .outer-close {
+    height: 64px;
+    min-height: 0;
+    margin: 0 auto;
+    padding-top: 7px;
+    border-top: 0;
+  }
+  .outer-close > .inner { margin-left: 57.5px; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="node wide-multicol"><div class="own"><span>Ag</span><span>Bb</span></div></div>
+  </div>
+  <div class="stage stage-open">
+    <div class="node outer outer-open"><div class="own"><span>Ag</span><span>Bb</span></div></div>
+  </div>
+  <div class="stage stage-close">
+    <div class="node outer outer-close"><div class="node inner"><div class="own"><span>A</span><span>B</span></div></div></div>
+  </div>
+  <div class="stage">
+    <div class="node outer">
+      <div class="own"><span>Ag</span><span>Bb</span></div>
+      <div class="node inner multicol"><div class="own"><span>A</span><span>B</span></div></div>
+    </div>
+  </div>
+</body>
+</html>

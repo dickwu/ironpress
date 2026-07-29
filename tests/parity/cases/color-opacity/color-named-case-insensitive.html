@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>color named keyword case-insensitive</title>
+<style>
+  @page { size: 280px 120px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 200px;
+    height: 120px;
+    /* css-color-4 §6.1: named colors are ASCII case-insensitive -> navy (0 0 128) */
+    background-color: NavY;
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+</body>
+</html>

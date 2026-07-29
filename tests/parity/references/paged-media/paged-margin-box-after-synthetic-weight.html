@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-margin-box-after-synthetic-weight.
+
+  CSS Page 3 paints document content before page-margin boxes. The top-center
+  box occupies the 32px top margin, and its line is vertically centered in that
+  fixed band. Chromium does not implement page-margin box generated content, so
+  this source materializes that required page geometry without using candidate
+  output. The ordinary body blocks preserve the font transition that exposed
+  the PDF carrier defect.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>page margin box after synthetic weight reference</title>
+  <style>
+    @page { size: 192px 192px; margin: 0; }
+    html {
+      color: #111827;
+      font-family: ParitySans;
+      line-height: 1.5;
+    }
+    * { margin: 0; box-sizing: border-box; }
+    .margin-header {
+      height: 32px;
+      color: #ffffff;
+      background: #111827;
+      font-size: 24px;
+      font-weight: normal;
+      line-height: 32px;
+      text-align: center;
+    }
+    h2 {
+      height: 24px;
+      color: #111827;
+      background: #ffd166;
+      font-size: 12px;
+      font-weight: bold;
+      line-height: 24px;
+    }
+    .body { height: 136px; background: #bfdbfe; }
+  </style>
+</head>
+<body>
+  <div class="margin-header">ALPHA ALPHA</div>
+  <h2>SYNTHETIC BOLD</h2>
+  <div class="body"></div>
+</body>
+</html>

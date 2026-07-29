@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>invalid fractional column-count preserves prior value</title>
+<style>
+  @page { size: 280px 160px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .columns {
+    column-count: 2;
+    column-count: 1.5;
+    column-gap: 20px;
+    column-fill: auto;
+    width: 240px;
+    height: 120px;
+    margin: 20px;
+    padding: 8px;
+    border: 3px solid #111111;
+    background: #eeeeee;
+  }
+  .item { height: 92px; break-inside: avoid; }
+  .one { background: #1565c0; }
+  .two { background: #0a7f2e; }
+</style>
+</head>
+<body><div class="columns"><div class="item one"></div><div class="item two"></div></div></body>
+</html>

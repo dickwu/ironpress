@@ -7,8 +7,10 @@ on:
     paths:
       - 'src/**'
       - 'playground/**'
-      - 'tests/fixtures/**'
-      - 'scripts/**'
+      - 'tests/parity/**'
+      - 'tests/parity_support/**'
+      - 'tests/feature_parity.rs'
+      - 'scripts/parity*.sh'
       - 'Cargo.toml'
       - '.github/workflows/playground.yml'
 
@@ -29,197 +31,46 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
       - uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-v1
-      - run: command -v wasm-pack || cargo install wasm-pack
-      - run: wasm-pack build --target web --features wasm --no-default-features
-      - run: |
+          path: |
+            ~/.cargo/bin/wasm-pack
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: playground-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+
+      - name: Install build tools
+        run: |
+          command -v wasm-pack || cargo install wasm-pack
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils fonts-liberation fonts-dejavu-core fonts-noto-cjk
+          mkdir -p "$HOME/.local/share/fonts"
+          cp tests/parity/fonts/Parity*.ttf "$HOME/.local/share/fonts/"
+          fc-cache -f
+
+      - name: Build playground
+        run: |
+          wasm-pack build --target web --features wasm --no-default-features
           cp pkg/ironpress.js playground/
           cp pkg/ironpress_bg.wasm playground/
 
-      # Generate parity comparison images for the dashboard
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-parity-${{ runner.os }}-v2
-      - name: Install parity dependencies
-        timeout-minutes: 10
+      - name: Build feature parity report
+        env:
+          FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
+        run: scripts/parity.sh
+
+      - name: Stage feature parity report
         run: |
-          # Restore cached .deb packages if available
-          if [ -d ~/apt-cache ]; then
-            sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          fi
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq poppler-utils imagemagick fonts-noto-core fonts-noto-color-emoji fonts-noto-cjk
-          # Cache downloaded .deb files for next run
-          mkdir -p ~/apt-cache
-          cp /var/cache/apt/archives/*.deb ~/apt-cache/ 2>/dev/null || true
-
-      - name: Build ironpress release
-        run: cargo build --release
-
-      - name: Render fixtures to PDF
-        run: bash scripts/render-fixtures.sh /tmp/parity-pdfs
-
-      - name: Generate Chromium reference PNGs
-        run: bash scripts/generate-references.sh
-
-      - name: Generate comparison images
-        shell: bash
-        run: |
-          set +e  # compare/grep return non-zero normally
-          mkdir -p playground/parity/images
-          REFS_DIR=tests/fixtures/references
-          for layer in features combined edge-cases; do
-            mkdir -p "playground/parity/images/$layer"
-            for ref_png in "$REFS_DIR/$layer"/*.png; do
-              [ -f "$ref_png" ] || continue
-              base=$(basename "$ref_png" .png)
-              name=$(echo "$base" | sed 's/-p[0-9]*$//')
-              page_suffix=$(echo "$base" | grep -o '\-p[0-9]*$' || true)
-              pdf_file="/tmp/parity-pdfs/$layer/$name.pdf"
-              [ -f "$pdf_file" ] || continue
-
-              if [ -n "$page_suffix" ]; then
-                page_num=$(echo "$page_suffix" | sed 's/-p//')
-              else
-                page_num=1
-              fi
-
-              pdftoppm -r 150 -png -f "$page_num" -l "$page_num" "$pdf_file" "/tmp/ironpress_${base}" 2>/dev/null || true
-              iron_png=""
-              for c in "/tmp/ironpress_${base}-${page_num}.png" "/tmp/ironpress_${base}-0${page_num}.png" "/tmp/ironpress_${base}-00${page_num}.png"; do
-                [ -f "$c" ] && iron_png="$c" && break
-              done
-              [ -z "$iron_png" ] && continue
-
-              ref_dims=$(identify -format "%wx%h" "$ref_png" 2>/dev/null || true)
-              [ -n "$ref_dims" ] && convert "$iron_png" -resize "${ref_dims}!" "$iron_png" 2>/dev/null || true
-
-              cp "$ref_png" "playground/parity/images/$layer/${base}_chromium.png"
-              cp "$iron_png" "playground/parity/images/$layer/${base}_ironpress.png"
-
-              compare "$ref_png" "$iron_png" -compose src -highlight-color red -lowlight-color white \
-                "playground/parity/images/$layer/${base}_diff.png" 2>/dev/null || true
-              if [ ! -f "playground/parity/images/$layer/${base}_diff.png" ]; then
-                ref_size=$(identify -format '%wx%h' "$ref_png" 2>/dev/null || echo '800x1132')
-                convert -size "$ref_size" xc:gray \
-                  "playground/parity/images/$layer/${base}_diff.png" 2>/dev/null || true
-              fi
-            done
-          done
-
-      - name: Collect render times
-        run: |
-          # Run the benchmark and extract raw microsecond values. The human
-          # table rounds to 1 decimal place (1.1 s bucket = 1050-1149 ms), so
-          # we parse the machine-readable BENCH_US lines instead.
-          cargo test --test parity_tests --release -- --ignored parity_benchmark_report --nocapture 2>&1 | \
-            awk '/^BENCH_US / {print $2 " " $3}' \
-            > /tmp/render_times.txt || true
-          cat /tmp/render_times.txt
-
-      - name: Inject parity data into dashboard
-        run: |
-          # Build JSON results from the generated images
-          node -e "
-          const fs = require('fs');
-          const path = require('path');
-          const { execSync } = require('child_process');
-          const results = {};
-          const imgDir = 'playground/parity/images';
-          const pdfDir = '/tmp/parity-pdfs';
-          for (const layer of ['features', 'combined', 'edge-cases']) {
-            const dir = path.join(imgDir, layer);
-            if (!fs.existsSync(dir)) continue;
-            const files = fs.readdirSync(dir).filter(f => f.endsWith('_chromium.png'));
-            for (const f of files) {
-              const name = f.replace('_chromium.png', '');
-              const key = layer + '/' + name;
-              const entry = {
-                chromium_img: 'images/' + layer + '/' + name + '_chromium.png',
-                ironpress_img: 'images/' + layer + '/' + name + '_ironpress.png',
-                diff_img: 'images/' + layer + '/' + name + '_diff.png',
-              };
-              // PDF file size
-              const pdfPath = path.join(pdfDir, layer, name + '.pdf');
-              if (fs.existsSync(pdfPath)) {
-                entry.size_bytes = fs.statSync(pdfPath).size;
-              }
-              // Pixel diff percentage — resize to identical dimensions first
-              try {
-                const chromPng = path.join(dir, name + '_chromium.png');
-                const ironPng = path.join(dir, name + '_ironpress.png');
-                const refDims = execSync(
-                  'identify -format \"%wx%h\" ' + chromPng,
-                  { encoding: 'utf8', timeout: 5000 }
-                ).trim();
-                if (refDims) {
-                  execSync('convert ' + ironPng + ' -resize ' + refDims + '! ' + ironPng,
-                    { timeout: 10000 });
-                }
-                const diffOut = execSync(
-                  'compare -metric AE ' + chromPng + ' ' + ironPng + ' null: 2>&1 || true',
-                  { encoding: 'utf8', timeout: 10000 }
-                ).trim();
-                // parseFloat handles both '453785' and '2.10375e+06' notation;
-                // parseInt would truncate scientific notation to '2'.
-                const diffPixels = parseFloat(diffOut) || 0;
-                const totalOut = execSync(
-                  'identify -format \"%[fx:int(w*h)]\" ' + chromPng,
-                  { encoding: 'utf8', timeout: 5000 }
-                ).trim();
-                const totalPixels = parseFloat(totalOut) || 1;
-                entry.diff_pct = Math.min(
-                  parseFloat(((diffPixels / totalPixels) * 100).toFixed(2)),
-                  100
-                );
-              } catch (e) {}
-              results[key] = entry;
-            }
-          }
-          // Read render times from benchmark output (raw microseconds:
-          // '<fixture-key> <us>' per line).
-          try {
-            const timesRaw = fs.readFileSync('/tmp/render_times.txt', 'utf8');
-            for (const line of timesRaw.split('\\n')) {
-              const parts = line.trim().split(/\\s+/);
-              if (parts.length === 2) {
-                const key = parts[0];
-                const us = parseInt(parts[1], 10);
-                if (!isNaN(us) && results[key]) {
-                  results[key].render_time_us = us;
-                }
-              }
-            }
-          } catch (e) {}
-          // Read expectations for visual_assertions
-          const expDir = 'tests/fixtures/expectations';
-          if (fs.existsSync(expDir)) {
-            for (const f of fs.readdirSync(expDir)) {
-              if (!f.endsWith('.json')) continue;
-              const exp = JSON.parse(fs.readFileSync(path.join(expDir, f), 'utf8'));
-              const key = exp.layer + '/' + exp.fixture;
-              if (results[key] && exp.visual_assertions) {
-                results[key].visual_assertions = exp.visual_assertions;
-              }
-            }
-          }
-          // Inject into HTML
-          const html = fs.readFileSync('playground/parity/index.html', 'utf8');
-          const injected = html.replace(
-            /\/\/ <!-- PARITY_DATA_START -->[\s\S]*?\/\/ <!-- PARITY_DATA_END -->/,
-            '// <!-- PARITY_DATA_START -->\nconst RESULTS = ' + JSON.stringify(results, null, 2) + ';\n// <!-- PARITY_DATA_END -->'
-          );
-          fs.writeFileSync('playground/parity/index.html', injected);
-          console.log('Injected', Object.keys(results).length, 'fixtures into dashboard');
-          "
+          mkdir -p playground/parity
+          cp -R tests/parity/reports playground/parity/
+          cp -R tests/parity/refs playground/parity/
+          cp -R tests/parity/out playground/parity/
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

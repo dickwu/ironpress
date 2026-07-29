@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tables-vertical-align-baseline</title>
+<style>
+  @page { size: 472px 128px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; font-family: ParitySans; }
+  table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 360px;
+    font-size: 16px;
+  }
+  td {
+    width: 120px;
+    height: 90px;
+    border: 3px solid #14213d;
+    vertical-align: baseline;
+    padding: 8px;
+    line-height: 20px;
+  }
+  .a { background: #ffcad4; }
+  .b { background: #b8e0d2; }
+  .c { background: #d6eadf; }
+</style>
+</head>
+<body>
+  <table>
+    <tr>
+      <td class="a">Ag</td>
+      <td class="b">Ag</td>
+      <td class="c">Ag</td>
+    </tr>
+  </table>
+</body>
+</html>

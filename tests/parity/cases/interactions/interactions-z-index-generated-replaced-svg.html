@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>z-index generated and replaced content</title>
+<style>
+@page { size: 720px 336px; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 720px; height: 336px; background: #fff; }
+.panel {
+  position: absolute;
+  z-index: 0;
+  width: 160px;
+  height: 144px;
+  overflow: hidden;
+  border: 4px solid #111827;
+  background: #e5e7eb;
+}
+.p1 { left: 16px; top: 16px; }
+.p2 { left: 184px; top: 16px; }
+.p3 { left: 352px; top: 16px; }
+.p4 { left: 520px; top: 16px; }
+.p5 { left: 16px; top: 168px; }
+.p6 { left: 184px; top: 168px; }
+.p7 { left: 352px; top: 168px; }
+.p8 { left: 520px; top: 168px; }
+.base { position: absolute; z-index: 2; left: 52px; top: 48px; width: 88px; height: 88px; background: #2563eb; }
+.top { position: absolute; z-index: 3; left: 16px; top: 12px; width: 96px; height: 96px; object-fit: fill; }
+.before::before { content: ""; display: block; position: absolute; z-index: 3; left: 16px; top: 12px; width: 96px; height: 96px; background: #ef233c; }
+.after::after { content: ""; display: block; position: absolute; z-index: 1; left: 16px; top: 12px; width: 96px; height: 96px; background: #ef233c; }
+.generated { overflow: hidden; }
+.generated::before { content: ""; display: block; width: 96px; height: 96px; background-size: 100% 100%; }
+.generated-png::before { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="); }
+.generated-svg::before { background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%208%208'%3E%3Crect%20width='8'%20height='8'%20fill='%23ef233c'/%3E%3Crect%20x='4'%20width='4'%20height='4'%20fill='%232b2d42'/%3E%3Crect%20y='4'%20width='4'%20height='4'%20fill='%2306d6a0'/%3E%3Crect%20x='4'%20y='4'%20width='4'%20height='4'%20fill='%23ffd166'/%3E%3C/svg%3E"); }
+</style>
+</head>
+<body>
+<section class="panel p1 before"><div class="base"></div></section>
+<section class="panel p2 after"><div class="base"></div></section>
+<section class="panel p3"><div class="top generated generated-png"></div><div class="base"></div></section>
+<section class="panel p4"><div class="top generated generated-svg"></div><div class="base"></div></section>
+<section class="panel p5"><img class="top" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAIElEQVR42mM4IScHR3I9NnDEgFNCzu0EHN1ZJQJHOCUAni4lgeO2HLIAAAAASUVORK5CYII="><div class="base"></div></section>
+<section class="panel p6"><img class="top" alt="" src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAAAAAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAAIAAgDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EACIQAAEBBgcAAAAAAAAAAAAAABETAAIECBIVFBcnQUVhg//EABUBAQEAAAAAAAAAAAAAAAAAAAUG/8QAJhEAAgEBBAsAAAAAAAAAAAAAERITBQAUQWECAwcWGCEiJENiY//aAAwDAQACEQMRAD8AGDlAzgr1DtFoHE4hVX2cpCfZOwaUq1Z3HTollOKhRlpEtkBZOm7ZOIFuyudzHkmeY/PVKsXsWwHP/9k="><div class="base"></div></section>
+<section class="panel p7"><img class="top" alt="" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%208%208'%3E%3Crect%20width='8'%20height='8'%20fill='%23ef233c'/%3E%3Crect%20x='4'%20width='4'%20height='4'%20fill='%232b2d42'/%3E%3Crect%20y='4'%20width='4'%20height='4'%20fill='%2306d6a0'/%3E%3Crect%20x='4'%20y='4'%20width='4'%20height='4'%20fill='%23ffd166'/%3E%3C/svg%3E"><div class="base"></div></section>
+<section class="panel p8"><svg class="top" viewBox="0 0 8 8" xmlns="http://www.w3.org/2000/svg"><rect width="8" height="8" fill="#ef233c"/><rect x="4" width="4" height="4" fill="#2b2d42"/><rect y="4" width="4" height="4" fill="#06d6a0"/><rect x="4" y="4" width="4" height="4" fill="#ffd166"/></svg><div class="base"></div></section>
+</body>
+</html>

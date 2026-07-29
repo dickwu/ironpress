@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-background-named-compound-list.
+
+  CSS Paged Media 3 requires page type selectors to be case-sensitive, every
+  component of a compound selector to match, selector lists to match through
+  any member, and the (f,g,h) cascade to choose the winning declaration.
+  Chromium does not apply the named-plus-spread compound on page two, so this
+  Foundation source materializes the five specified page backgrounds without
+  using candidate output or raster edits.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>named compound page background selector reference</title>
+  <style>
+    @page { size: 160px 120px; margin: 0; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    .sheet { width: 160px; height: 120px; }
+    .sheet + .sheet { break-before: page; }
+    .first { background: #06d6a0; }
+    .compound { background: #3a86ff; }
+    .unmatched { background: #ef476f; }
+    .mark { width: 48px; height: 40px; background: #111827; }
+  </style>
+</head>
+<body>
+  <div class="sheet first"><div class="mark"></div></div>
+  <div class="sheet compound"><div class="mark"></div></div>
+  <div class="sheet compound"><div class="mark"></div></div>
+  <div class="sheet unmatched"><div class="mark"></div></div>
+  <div class="sheet unmatched"><div class="mark"></div></div>
+</body>
+</html>

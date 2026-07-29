@@ -4,7 +4,7 @@
 //! so that all logic is covered by `cargo test`.
 
 use crate::error::IronpressError;
-use crate::{HtmlConverter, Margin, PageSize};
+use crate::{HtmlConverter, Margin, PageSize, RasterQuality};
 
 /// Parsed CLI options.
 #[derive(Debug, Clone)]
@@ -21,6 +21,18 @@ pub struct CliOptions {
     pub footer: Option<String>,
     /// Enable HTML sanitization.
     pub sanitize: bool,
+    /// FlateDecode-compress page content streams (default true).
+    pub compress: bool,
+    /// JPEG quality for optimized image embedding.
+    pub jpeg_quality: u8,
+    /// Downscale oversized source images before embedding.
+    pub auto_resize_images: bool,
+    /// One physical-resolution policy for source images and renderer-owned
+    /// raster fallbacks. The CLI flags update individual fields in this
+    /// cohesive value.
+    pub raster_quality: RasterQuality,
+    /// Skip embedding raster images fully covered by a later opaque element.
+    pub occlusion_cull: bool,
     /// Read from stdin instead of a file.
     pub from_stdin: bool,
     /// Positional arguments (input, output).
@@ -29,6 +41,8 @@ pub struct CliOptions {
     pub help: bool,
     /// Print version and exit.
     pub version: bool,
+    /// Base directory for resolving relative `@import` / `@font-face` URLs.
+    pub base_path: Option<std::path::PathBuf>,
 }
 
 impl Default for CliOptions {
@@ -40,10 +54,18 @@ impl Default for CliOptions {
             header: None,
             footer: None,
             sanitize: true,
+            // The real CLI compresses by default; the in-crate test build renders
+            // raw so cli tests can inspect content-stream operators (see lib.rs).
+            compress: !cfg!(test),
+            jpeg_quality: crate::render::pdf::DEFAULT_JPEG_QUALITY,
+            auto_resize_images: true,
+            raster_quality: RasterQuality::default(),
+            occlusion_cull: false,
             from_stdin: false,
             positional: Vec::new(),
             help: false,
             version: false,
+            base_path: None,
         }
     }
 }
@@ -107,6 +129,75 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
                 let val = args.get(i).ok_or("--sanitize requires a value")?;
                 opts.sanitize = val != "false" && val != "0";
             }
+            "--compress" => {
+                i += 1;
+                let val = args.get(i).ok_or("--compress requires a value")?;
+                opts.compress = val != "false" && val != "0";
+            }
+            "--jpeg-quality" => {
+                i += 1;
+                let val = args.get(i).ok_or("--jpeg-quality requires a value")?;
+                let quality: i32 = val
+                    .parse()
+                    .map_err(|_| format!("--jpeg-quality requires a number, got: {val}"))?;
+                opts.jpeg_quality = quality.clamp(0, 100) as u8;
+            }
+            "--auto-resize-images" => {
+                i += 1;
+                let val = args.get(i).ok_or("--auto-resize-images requires a value")?;
+                opts.auto_resize_images = val != "false" && val != "0";
+            }
+            "--image-dpi" => {
+                i += 1;
+                let val = args.get(i).ok_or("--image-dpi requires a value")?;
+                let dpi: f32 = val
+                    .parse()
+                    .map_err(|_| format!("--image-dpi requires a number, got: {val}"))?;
+                opts.raster_quality.source_image_dpi =
+                    crate::style::raster_quality::raster_dpi_at_least(dpi, 72.0);
+            }
+            "--filter-dpi" => {
+                i += 1;
+                let val = args.get(i).ok_or("--filter-dpi requires a value")?;
+                let dpi: f32 = val
+                    .parse()
+                    .map_err(|_| format!("--filter-dpi requires a number, got: {val}"))?;
+                opts.raster_quality.filter_dpi =
+                    crate::style::raster_quality::raster_dpi_at_least(dpi, 1.0);
+            }
+            "--mask-dpi" => {
+                i += 1;
+                let val = args.get(i).ok_or("--mask-dpi requires a value")?;
+                let dpi: f32 = val
+                    .parse()
+                    .map_err(|_| format!("--mask-dpi requires a number, got: {val}"))?;
+                opts.raster_quality.mask_dpi =
+                    crate::style::raster_quality::raster_dpi_at_least(dpi, 72.0);
+            }
+            "--background-raster-dpi" => {
+                i += 1;
+                let val = args
+                    .get(i)
+                    .ok_or("--background-raster-dpi requires a value")?;
+                let dpi: f32 = val.parse().map_err(|_| {
+                    format!("--background-raster-dpi requires a number, got: {val}")
+                })?;
+                opts.raster_quality.background_dpi =
+                    crate::style::raster_quality::raster_dpi_at_least(
+                        dpi,
+                        crate::style::raster_quality::CSS_REFERENCE_DPI,
+                    );
+            }
+            "--occlusion-cull" => {
+                i += 1;
+                let val = args.get(i).ok_or("--occlusion-cull requires a value")?;
+                opts.occlusion_cull = val != "false" && val != "0";
+            }
+            "--base-path" => {
+                i += 1;
+                let val = args.get(i).ok_or("--base-path requires a value")?;
+                opts.base_path = Some(std::path::PathBuf::from(val));
+            }
             "--stdin" => opts.from_stdin = true,
             arg if arg.starts_with('-') => {
                 return Err(format!("Unknown option: {arg}"));
@@ -129,13 +220,21 @@ pub fn convert(opts: &CliOptions, html: &str) -> Result<Vec<u8>, IronpressError>
     let mut converter = HtmlConverter::new()
         .page_size(page_size)
         .margin(opts.margin)
-        .sanitize(opts.sanitize);
+        .sanitize(opts.sanitize)
+        .compress(opts.compress)
+        .jpeg_quality(opts.jpeg_quality)
+        .auto_resize_images(opts.auto_resize_images)
+        .raster_quality(opts.raster_quality)
+        .occlusion_cull(opts.occlusion_cull);
 
     if let Some(ref h) = opts.header {
         converter = converter.header(h.as_str());
     }
     if let Some(ref f) = opts.footer {
         converter = converter.footer(f.as_str());
+    }
+    if let Some(ref bp) = opts.base_path {
+        converter = converter.base_path(bp);
     }
 
     converter.convert(html)
@@ -151,13 +250,21 @@ pub fn convert_markdown(opts: &CliOptions, md: &str) -> Result<Vec<u8>, Ironpres
     let mut converter = HtmlConverter::new()
         .page_size(page_size)
         .margin(opts.margin)
-        .sanitize(opts.sanitize);
+        .sanitize(opts.sanitize)
+        .compress(opts.compress)
+        .jpeg_quality(opts.jpeg_quality)
+        .auto_resize_images(opts.auto_resize_images)
+        .raster_quality(opts.raster_quality)
+        .occlusion_cull(opts.occlusion_cull);
 
     if let Some(ref h) = opts.header {
         converter = converter.header(h.as_str());
     }
     if let Some(ref f) = opts.footer {
         converter = converter.footer(f.as_str());
+    }
+    if let Some(ref bp) = opts.base_path {
+        converter = converter.base_path(bp);
     }
 
     converter.convert_markdown(md)
@@ -182,6 +289,17 @@ OPTIONS:
     --header <TEXT>         Header text on each page
     --footer <TEXT>         Footer text ({page} and {pages} for numbering)
     --sanitize <BOOL>       Enable/disable HTML sanitization (default: true)
+    --compress <BOOL>       FlateDecode-compress content streams (default: true)
+    --jpeg-quality <N>      JPEG quality for optimized image embedding (default: 95)
+    --auto-resize-images <BOOL>
+                            Downscale oversized source images (default: true)
+    --image-dpi <DPI>       Target source-image resolution (default: 300)
+    --filter-dpi <DPI>      Rasterization DPI for blur/filter bitmaps (default: 300)
+    --mask-dpi <DPI>        Rasterization DPI for CSS masks (default: 300)
+    --background-raster-dpi <DPI>
+                            Rasterization DPI for flattened backgrounds (default: 192)
+    --occlusion-cull <BOOL> Skip raster images fully covered by a later opaque element (default: false)
+    --base-path <DIR>       Base dir for relative @import / @font-face URLs
     --stdin                 Read HTML from stdin instead of a file
     --version               Print version
     --help                  Print this help
@@ -383,6 +501,35 @@ mod tests {
         assert!((opts.margin.top - 36.0).abs() < 0.1);
         assert_eq!(opts.header.as_deref(), Some("Title"));
         assert_eq!(opts.positional, vec!["in.html", "out.pdf"]);
+    }
+
+    #[test]
+    fn parse_background_raster_dpi() {
+        let opts = parse_args(&args("--background-raster-dpi 300 in.html out.pdf")).unwrap();
+        assert_eq!(opts.raster_quality.background_dpi, 300.0);
+
+        let clamped = parse_args(&args("--background-raster-dpi 24 in.html out.pdf")).unwrap();
+        assert_eq!(
+            clamped.raster_quality.background_dpi,
+            crate::style::raster_quality::CSS_REFERENCE_DPI
+        );
+    }
+
+    #[test]
+    fn parse_mask_dpi() {
+        let opts = parse_args(&args("--mask-dpi 240 in.html out.pdf")).unwrap();
+        assert_eq!(opts.raster_quality.mask_dpi, 240.0);
+
+        let clamped = parse_args(&args("--mask-dpi 24 in.html out.pdf")).unwrap();
+        assert_eq!(clamped.raster_quality.mask_dpi, 72.0);
+    }
+
+    #[test]
+    fn defaults_keep_automatic_jpeg_reencoding_visually_lossless() {
+        assert_eq!(
+            CliOptions::default().jpeg_quality,
+            crate::render::pdf::DEFAULT_JPEG_QUALITY
+        );
     }
 
     #[test]

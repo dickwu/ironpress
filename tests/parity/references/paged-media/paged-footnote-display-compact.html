@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-footnote-display-compact.
+
+  CSS GCPM places fitting compact footnotes in one inline footnote-area line.
+  The call representation follows the CSS Fonts 4 synthesized-super rule:
+  it is visually reduced and raised, while relative positioning preserves the
+  baseline-aligned inline box and its line height. No candidate output is used.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>footnote compact display reference</title>
+  <style>
+    @page { size: 220px 140px; margin: 10px; }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .page { position: relative; height: 120px; }
+    .content { height: 70px; background: #fef3c7; }
+    .footnote-call {
+      font-size: 80%;
+      line-height: inherit;
+      position: relative;
+      bottom: 4.56px;
+    }
+    .footnote-area { position: absolute; right: 0; bottom: 0; left: 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <p class="content">Text<span class="footnote-call">1</span> and more text<span class="footnote-call">2</span>.</p>
+    <div class="footnote-area">1. short one2. short two</div>
+  </div>
+</body>
+</html>

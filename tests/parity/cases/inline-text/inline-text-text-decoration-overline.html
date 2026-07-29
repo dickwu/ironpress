@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: 424px 96px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .box {
+    width: 300px;
+    margin: 20px;
+    padding: 8px;
+    border: 2px solid #1a1a1a;
+    background: #f2f2f2;
+    font-family: ParitySans;
+    font-size: 20px;
+    color: #1a1a1a;
+  }
+  .over { text-decoration: overline; }
+</style>
+</head>
+<body>
+  <!-- text-decoration-line:overline draws a line above the text
+       (css-text-decor-3 §2.1). -->
+  <div class="box">Head <span class="over">overlined text</span> end</div>
+</body>
+</html>

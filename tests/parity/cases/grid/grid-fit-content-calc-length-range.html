@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>grid-fit-content-calc-length-range</title>
+<style>
+  @page { size: 656px 480px; margin: 0; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: #fff; color: #111; font: 16px/1 ParitySans; }
+  body { padding: 18px; }
+  .probe {
+    display: grid;
+    grid-template-columns: fit-content(var(--limit)) minmax(0, 1fr);
+    width: 590px;
+    height: 72px;
+    margin-bottom: 10px;
+    border: 4px solid #111;
+  }
+  .label { min-width: 52px; padding: 9px; overflow: hidden; white-space: nowrap; color: #fff; background: #6a4c93; }
+  .remainder { padding: 9px; color: #111; background: #ffca3a; }
+  .length { --limit: 144px; }
+  .minus { --limit: calc(30% - 18px); }
+  .plus { --limit: calc(20% + 36px); }
+  .over { --limit: calc(100% + 60px); }
+  .zero { --limit: calc(0% + 52px); }
+</style>
+</head>
+<body>
+  <div class="probe length"><div class="label">144px FIXED LIMIT</div><div class="remainder">FLEX REMAINDER</div></div>
+  <div class="probe minus"><div class="label">30% MINUS 18px</div><div class="remainder">FLEX REMAINDER</div></div>
+  <div class="probe plus"><div class="label">20% PLUS 36px</div><div class="remainder">FLEX REMAINDER</div></div>
+  <div class="probe over"><div class="label">100% PLUS 60px CLAMPED BY MAX CONTENT</div><div class="remainder">FLEX REMAINDER</div></div>
+  <div class="probe zero"><div class="label">ZERO PLUS 52px</div><div class="remainder">FLEX REMAINDER</div></div>
+</body>
+</html>

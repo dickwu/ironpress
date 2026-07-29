@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-blank-selector-background.
+
+  CSS Paged Media 3 classifies the page inserted by break-after:right as both
+  :blank and :left. The :blank background has higher specificity than :left;
+  a later non-blank left page retains the :left background. Chromium does not
+  insert the required blank page, so this Foundation source materializes the
+  four specified page boxes without using candidate output or raster edits.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: 160px 120px; margin: 0; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    .sheet { width: 160px; height: 120px; }
+    .sheet + .sheet { break-before: page; }
+    .first-page, .third-page { background: #ffffff; }
+    .blank-left-page { background: #ffd166; }
+    .nonblank-left-page { background: #ef476f; }
+    .block { width: 64px; height: 48px; }
+    .first { background: #1d4ed8; }
+    .second { background: #06d6a0; }
+    .third { background: #7c3aed; }
+    .mark { width: 16px; height: 16px; background: #111827; }
+  </style>
+</head>
+<body>
+  <div class="sheet first-page"><div class="block first"><div class="mark"></div></div></div>
+  <div class="sheet blank-left-page"></div>
+  <div class="sheet third-page"><div class="block second"><div class="mark"></div></div></div>
+  <div class="sheet nonblank-left-page"><div class="block third"><div class="mark"></div></div></div>
+</body>
+</html>

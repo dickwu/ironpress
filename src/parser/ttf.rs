@@ -5,12 +5,118 @@
 
 use std::collections::HashMap;
 
+/// Index of a face inside an OpenType font collection.
+///
+/// A plain TTF/OTF has [`Self::DEFAULT`]. Keeping the selected TTC face with
+/// the parsed metrics is essential: shaping, outline inspection, and PDF
+/// subsetting must all operate on that same face.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FontFaceIndex(u32);
+
+impl FontFaceIndex {
+    pub const DEFAULT: Self = Self(0);
+
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Parsed TrueType font data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FontVerticalMetrics {
     pub ascent: i16,
     pub descent: i16,
     pub line_gap: i16,
+}
+
+/// The distinct vertical metric sources a font exposes.
+///
+/// PDF embedding, ordinary CSS line layout, and explicit OpenType typographic
+/// metrics can use different font-table values. Keeping those sources together
+/// avoids accidentally applying the primary face's CSS line metrics to a
+/// fallback CJK glyph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontVerticalMetricSet {
+    pub pdf: FontVerticalMetrics,
+    pub layout: FontVerticalMetrics,
+    pub typographic: FontVerticalMetrics,
+}
+
+/// Font metrics used to resolve CSS text-relative sizing and initial letters.
+///
+/// These are optical or advance measurements rather than line-box metrics, so
+/// they stay separate from [`FontVerticalMetricSet`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FontTextMetrics {
+    /// The font's x-height and the source that controls whether it scales
+    /// linearly or must be measured from a grid-fitted glyph outline.
+    pub x_height: FontXHeightMetric,
+    /// The font's cap-height in font units.
+    pub cap_height: u16,
+    /// Advance width of the ZERO glyph in font units.
+    pub zero_advance: u16,
+}
+
+/// Source-aware x-height used by CSS font-relative units.
+///
+/// OpenType's explicit `sxHeight` is a scalable font metric. A measured `x`
+/// outline is different: its used height depends on the active grid-fitting
+/// mode and point size. Keeping the distinction in the type prevents those
+/// two rules from being accidentally collapsed into one ratio.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontXHeightMetric {
+    #[default]
+    Unavailable,
+    OpenType(u16),
+    GlyphOutline(u16),
+}
+
+impl FontXHeightMetric {
+    const fn open_type(value: u16) -> Self {
+        if value == 0 {
+            Self::Unavailable
+        } else {
+            Self::OpenType(value)
+        }
+    }
+
+    const fn font_units(self) -> Option<u16> {
+        match self {
+            Self::OpenType(value) | Self::GlyphOutline(value) if value != 0 => Some(value),
+            Self::Unavailable | Self::OpenType(_) | Self::GlyphOutline(_) => None,
+        }
+    }
+}
+
+impl FontVerticalMetricSet {
+    pub const fn new(
+        pdf: FontVerticalMetrics,
+        layout: FontVerticalMetrics,
+        typographic: FontVerticalMetrics,
+    ) -> Self {
+        Self {
+            pdf,
+            layout,
+            typographic,
+        }
+    }
+
+    /// Distance from the vertical line-over edge to a synthesized central
+    /// baseline. The `hhea` values used for PDF embedding define the face's
+    /// ascender and descender edges for this calculation.
+    pub fn central_baseline_from_over_ratio(self, units_per_em: u16) -> f32 {
+        self.pdf.central_baseline_from_over_ratio(units_per_em)
+    }
+}
+
+impl From<FontVerticalMetrics> for FontVerticalMetricSet {
+    fn from(metrics: FontVerticalMetrics) -> Self {
+        Self::new(metrics, metrics, metrics)
+    }
 }
 
 impl FontVerticalMetrics {
@@ -36,6 +142,26 @@ impl FontVerticalMetrics {
         (-f32::from(self.descent)).max(0.0) / f32::from(units_per_em)
     }
 
+    pub fn line_gap_ratio(self, units_per_em: u16) -> f32 {
+        if units_per_em == 0 {
+            return 0.0;
+        }
+        f32::from(self.line_gap).max(0.0) / f32::from(units_per_em)
+    }
+
+    /// Distance from the vertical line-over edge to the midpoint between this
+    /// face's ascender and descender edges, expressed in ems.
+    ///
+    /// This is the central-baseline fallback for a face without an explicit
+    /// central-baseline record. `descent` is signed, as it is in OpenType.
+    pub fn central_baseline_from_over_ratio(self, units_per_em: u16) -> f32 {
+        if units_per_em == 0 {
+            return 0.5;
+        }
+        let central_from_alphabetic = (f32::from(self.ascent) + f32::from(self.descent)) * 0.5;
+        1.0 - central_from_alphabetic / f32::from(units_per_em)
+    }
+
     pub fn line_height_ratio(self, units_per_em: u16) -> f32 {
         if units_per_em == 0 {
             return 1.0;
@@ -50,15 +176,19 @@ impl FontVerticalMetrics {
 pub struct TtfFont {
     /// Font family name from the `name` table.
     pub font_name: String,
+    /// Selected face in the raw OpenType data. This is non-zero for a parsed
+    /// TTC/OTC face other than the collection's first face.
+    pub face_index: FontFaceIndex,
     /// Units per em from the `head` table.
     pub units_per_em: u16,
+    /// CSS Fonts `@font-face size-adjust` multiplier for this selected face.
+    /// The embedded OpenType program remains byte-for-byte authentic; layout
+    /// and PDF text painting apply this scale through the used font size.
+    pub size_adjust: f32,
     /// Font bounding box [xMin, yMin, xMax, yMax] from the `head` table.
     pub bbox: [i16; 4],
-    /// Vertical metrics used for PDF embedding, sourced from `hhea`.
-    pub pdf_metrics: FontVerticalMetrics,
-    /// Vertical metrics used for CSS layout, sourced from `OS/2 sTypo*`
-    /// when available and falling back to `hhea`.
-    pub layout_metrics: FontVerticalMetrics,
+    /// Metrics selected from the font's PDF, layout, and typographic tables.
+    pub vertical_metrics: FontVerticalMetricSet,
     /// Character code (Unicode codepoint) to glyph ID mapping from the `cmap` table.
     /// Uses u32 keys to support astral plane characters (emoji, CJK extensions).
     pub cmap: HashMap<u32, u16>,
@@ -68,18 +198,65 @@ pub struct TtfFont {
     pub num_h_metrics: u16,
     /// Font flags for the PDF FontDescriptor.
     pub flags: u32,
+    /// Whether this face is itself a bold weight (OS/2 `usWeightClass` >= 600,
+    /// or the `head.macStyle` bold bit). Lets the renderer tell a genuine bold
+    /// face from a regular face that a font query merely *substituted* for a
+    /// missing bold, so it can synthesise (faux) bold only when truly needed.
+    pub is_bold: bool,
+    /// Whether this face is itself italic/oblique (OS/2 `fsSelection` ITALIC bit
+    /// or `head.macStyle` italic bit). Lets the renderer synthesise (faux) italic
+    /// — an algorithmic shear — only when an italic request resolves to a face
+    /// that is not genuinely italic (CSS Fonts 4 §2.4 `font-synthesis: style`).
+    pub is_italic: bool,
+    /// Optical and advance measurements used by CSS `ex`, `cap`, `ch`, and
+    /// initial-letter sizing.
+    pub text_metrics: FontTextMetrics,
     /// Raw TTF data for embedding. Wrapped in Arc so cloning a TtfFont
     /// (e.g. from the bundled font cache) is O(1) instead of copying ~400KB.
     pub data: std::sync::Arc<Vec<u8>>,
 }
 
+/// The non-negative inline side bearings of a glyph at a used font size.
+///
+/// They describe the empty inline space between a glyph's ink bounds and its
+/// advance edges. Initial-letter layout uses them to kern its margin box around
+/// the glyph ink without inventing a PDF-coordinate adjustment.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GlyphSideBearings {
+    pub start: f32,
+    pub end: f32,
+}
+
 impl TtfFont {
+    /// The glyph-painting font size after this face's `size-adjust` descriptor.
+    pub fn adjusted_font_size(&self, font_size: f32) -> f32 {
+        font_size * self.size_adjust_factor()
+    }
+
+    /// The valid `@font-face size-adjust` multiplier for this face.
+    ///
+    /// Invalid descriptors resolve to the descriptor's initial value, `1`.
+    /// Keeping that normalization here ensures glyph painting, shaping, and
+    /// vertical metrics cannot disagree about a face's effective scale.
+    pub fn size_adjust_factor(&self) -> f32 {
+        if self.size_adjust.is_finite() && self.size_adjust > 0.0 {
+            self.size_adjust
+        } else {
+            1.0
+        }
+    }
+
     pub const fn pdf_vertical_metrics(&self) -> FontVerticalMetrics {
-        self.pdf_metrics
+        self.vertical_metrics.pdf
     }
 
     pub const fn layout_vertical_metrics(&self) -> FontVerticalMetrics {
-        self.layout_metrics
+        self.vertical_metrics.layout
+    }
+
+    /// Explicit typographic metrics from the font's `OS/2` table.
+    pub const fn typographic_vertical_metrics(&self) -> FontVerticalMetrics {
+        self.vertical_metrics.typographic
     }
 
     /// Get the advance width for a glyph ID, in font units.
@@ -98,10 +275,146 @@ impl TtfFont {
         self.glyph_width(glyph_id)
     }
 
-    /// Get the advance width for a glyph in PDF units (1/1000 of text space).
-    #[cfg(test)]
-    pub fn glyph_width_pdf(&self, glyph_id: u16) -> u16 {
-        self.glyph_width_pdf_value(glyph_id).trunc() as u16
+    /// The actual glyph bounding-box top (`yMax`) for `ch`, as a fraction of the
+    /// em. Used to seat a floated `::first-letter` drop cap so its visual cap top
+    /// aligns with the surrounding line's text top (css-pseudo-4 §2.2): the font
+    /// ascender overshoots the glyph (it reserves accent space), so aligning by
+    /// ascender would push the drop cap too low. Returns `None` when the glyph has
+    /// no outline/bounds (e.g. whitespace) so the caller can fall back.
+    pub fn glyph_top_ratio(&self, ch: char) -> Option<f32> {
+        if self.units_per_em == 0 {
+            return None;
+        }
+        let y_max = measure_glyph_y_max(&self.data, self.face_index, ch)?;
+        Some(f32::from(y_max) / f32::from(self.units_per_em))
+    }
+
+    /// The visual centre of a glyph's outline above its baseline, as a
+    /// fraction of the em. This places a glyph used as a mark by its ink
+    /// rather than the font's full ascent.
+    pub fn glyph_center_ratio(&self, ch: char) -> Option<f32> {
+        if self.units_per_em == 0 {
+            return None;
+        }
+        let face = rustybuzz::ttf_parser::Face::parse(&self.data, self.face_index.get()).ok()?;
+        let glyph_id = face.glyph_index(ch)?;
+        let bounds = face.glyph_bounding_box(glyph_id)?;
+        let center = (f32::from(bounds.y_min) + f32::from(bounds.y_max)) / 2.0;
+        Some(center / f32::from(self.units_per_em))
+    }
+
+    /// Measure the glyph's inline side bearings at `font_size` CSS pixels.
+    /// Returns `None` when the font has no measurable outline for `ch`.
+    pub fn glyph_side_bearings(&self, ch: char, font_size: f32) -> Option<GlyphSideBearings> {
+        if self.units_per_em == 0 || !font_size.is_finite() {
+            return None;
+        }
+        let face = rustybuzz::ttf_parser::Face::parse(&self.data, self.face_index.get()).ok()?;
+        let glyph_id = face.glyph_index(ch)?;
+        let bounds = face.glyph_bounding_box(glyph_id)?;
+        let advance = f32::from(face.glyph_hor_advance(glyph_id)?);
+        let scale = font_size.max(0.0) / f32::from(self.units_per_em);
+        Some(GlyphSideBearings {
+            start: f32::from(bounds.x_min).max(0.0) * scale,
+            end: (advance - f32::from(bounds.x_max)).max(0.0) * scale,
+        })
+    }
+
+    /// x-height as a fraction of the em (css-values-4 §6.1.1 `ex`). Falls back
+    /// to the CSS-recommended 0.5em when the metric could not be determined.
+    pub fn x_height_ratio(&self) -> f32 {
+        let Some(x_height) = self.text_metrics.x_height.font_units() else {
+            return 0.5;
+        };
+        if self.units_per_em == 0 {
+            return 0.5;
+        }
+        f32::from(x_height) / f32::from(self.units_per_em)
+    }
+
+    /// X-height exposed to CSS layout at this point size.
+    ///
+    /// TrueType instructions grid-fit the lowercase `x` differently at
+    /// different CSS sizes, so scaling the design-space bounding box is not
+    /// the font's used x-height. When the hinted outline cannot be obtained,
+    /// retain the metric/fallback ratio required by CSS Values.
+    pub fn used_x_height(&self, font_size: f32) -> f32 {
+        let scaled_metric = || self.x_height_ratio() * font_size.max(0.0);
+        match self.text_metrics.x_height {
+            FontXHeightMetric::GlyphOutline(_) => self
+                .hinted_x_height(font_size)
+                .unwrap_or_else(scaled_metric),
+            FontXHeightMetric::OpenType(_) | FontXHeightMetric::Unavailable => scaled_metric(),
+        }
+    }
+
+    fn hinted_x_height(&self, font_size: f32) -> Option<f32> {
+        use skrifa::MetadataProvider as _;
+        use skrifa::instance::{LocationRef, Size};
+        use skrifa::outline::{
+            Engine, HintingInstance, HintingOptions, SmoothMode, Target, pen::ControlBoundsPen,
+        };
+
+        if !font_size.is_finite() || font_size <= 0.0 {
+            return None;
+        }
+        let font_size_px = font_size / crate::fonts::PT_PER_CSS_PX;
+        let font = skrifa::FontRef::from_index(&self.data, self.face_index.get()).ok()?;
+        let outlines = font.outline_glyphs();
+        let glyph = outlines.get(font.charmap().map('x')?)?;
+        let hinting = HintingInstance::new(
+            &outlines,
+            Size::new(font_size_px),
+            LocationRef::default(),
+            HintingOptions {
+                engine: Engine::Auto(None),
+                target: Target::from(SmoothMode::Light),
+            },
+        )
+        .ok()?;
+        let mut bounds = ControlBoundsPen::new();
+        glyph.draw(&hinting, &mut bounds).ok()?;
+        let bounds = bounds.bounding_box()?;
+        let x_height_px = bounds.y_max - bounds.y_min;
+        (x_height_px.is_finite() && x_height_px > 0.0)
+            .then_some(x_height_px * crate::fonts::PT_PER_CSS_PX)
+    }
+
+    /// The x-height aspect Blink exposes to `font-size-adjust` for this CSS
+    /// font size. Font metric units become CSS layout geometry before the
+    /// property computes its used font size, so preserve the CSS-pixel metric
+    /// rather than applying an unbounded outline ratio directly.
+    pub fn font_size_adjust_x_height_ratio(&self, computed_font_size: f32) -> f32 {
+        if !computed_font_size.is_finite() || computed_font_size <= 0.0 {
+            return self.x_height_ratio();
+        }
+        let used_x_height = self.used_x_height(computed_font_size);
+        if used_x_height > 0.0 {
+            used_x_height / computed_font_size
+        } else {
+            self.x_height_ratio()
+        }
+    }
+
+    /// `ch` advance (the `'0'` glyph) as a fraction of the em (css-values-4
+    /// §6.1.1). Falls back to the CSS-recommended 0.5em when undeterminable.
+    pub fn ch_ratio(&self) -> f32 {
+        if self.units_per_em == 0 || self.text_metrics.zero_advance == 0 {
+            return 0.5;
+        }
+        f32::from(self.text_metrics.zero_advance) / f32::from(self.units_per_em)
+    }
+
+    /// CSS Inline's cap-height ratio for initial-letter sizing.
+    ///
+    /// Prefer the OpenType `OS/2.sCapHeight` metric. If the font omits it,
+    /// parsing records the measured `H` glyph height; the CSS Inline 3 fallback
+    /// is `.66em` only when neither source is available.
+    pub fn cap_height_ratio(&self) -> f32 {
+        if self.units_per_em == 0 || self.text_metrics.cap_height == 0 {
+            return 0.66;
+        }
+        f32::from(self.text_metrics.cap_height) / f32::from(self.units_per_em)
     }
 
     /// Get the advance width for a glyph in PDF units (1/1000 of text space).
@@ -172,10 +485,13 @@ pub fn parse_ttf_with_index(data: Vec<u8>, face_index: usize) -> Result<TtfFont,
         if font_offset >= data.len() {
             return Err("TTC font offset out of bounds".to_string());
         }
-        return parse_ttf_at_offset(data, font_offset);
+        let selected_face = u32::try_from(face_index)
+            .map(FontFaceIndex::new)
+            .map_err(|_| "TTC face index exceeds PDF font index range".to_string())?;
+        return parse_ttf_at_offset(data, font_offset, selected_face);
     }
 
-    parse_ttf_at_offset(data, 0)
+    parse_ttf_at_offset(data, 0, FontFaceIndex::DEFAULT)
 }
 
 pub fn parse_ttf(data: Vec<u8>) -> Result<TtfFont, String> {
@@ -190,13 +506,17 @@ pub fn parse_ttf(data: Vec<u8>) -> Result<TtfFont, String> {
             return Err("TTC first font offset out of bounds".to_string());
         }
         // Parse using the full data but starting at the first font's offset table.
-        return parse_ttf_at_offset(data, first_offset);
+        return parse_ttf_at_offset(data, first_offset, FontFaceIndex::DEFAULT);
     }
 
-    parse_ttf_at_offset(data, 0)
+    parse_ttf_at_offset(data, 0, FontFaceIndex::DEFAULT)
 }
 
-fn parse_ttf_at_offset(data: Vec<u8>, base: usize) -> Result<TtfFont, String> {
+fn parse_ttf_at_offset(
+    data: Vec<u8>,
+    base: usize,
+    face_index: FontFaceIndex,
+) -> Result<TtfFont, String> {
     if data.len() < base + 12 {
         return Err("TTF data too short for offset table".to_string());
     }
@@ -250,7 +570,9 @@ fn parse_ttf_at_offset(data: Vec<u8>, base: usize) -> Result<TtfFont, String> {
 
     let pdf_metrics = FontVerticalMetrics::new(hhea_ascent, hhea_descent, hhea_line_gap);
     let layout_metrics =
-        parse_os2_typographic_metrics(&data, tables.get(b"OS/2")).unwrap_or(pdf_metrics);
+        parse_os2_layout_metrics(&data, tables.get(b"OS/2")).unwrap_or(pdf_metrics);
+    let typographic_metrics =
+        parse_os2_typographic_metrics(&data, tables.get(b"OS/2")).unwrap_or(layout_metrics);
 
     // Parse maxp table for num_glyphs
     let maxp = tables.get(b"maxp").ok_or("Missing maxp table")?;
@@ -290,24 +612,117 @@ fn parse_ttf_at_offset(data: Vec<u8>, base: usize) -> Result<TtfFont, String> {
     // Compute flags: bit 5 (Nonsymbolic) = 32 for Latin text
     let flags = 32u32;
 
+    // Detect a genuine bold weight: OS/2 usWeightClass (offset +4) >= 600, or
+    // the head.macStyle bold bit (bit 0 of the u16 at head +44).
+    let os2_bold = tables.get(b"OS/2").is_some_and(|os2| {
+        let off = os2.offset as usize;
+        data.len() >= off + 6 && read_u16(&data, off + 4) >= 600
+    });
+    let mac_style_bold = data.len() >= head_off + 46 && (read_u16(&data, head_off + 44) & 0x1) != 0;
+    let is_bold = os2_bold || mac_style_bold;
+
+    // Detect a genuine italic/oblique face: OS/2 fsSelection (offset +62) ITALIC
+    // bit, or the head.macStyle italic bit (bit 1 of the u16 at head +44).
+    let os2_italic = tables.get(b"OS/2").is_some_and(|os2| {
+        let off = os2.offset as usize;
+        data.len() >= off + 64 && (read_u16(&data, off + 62) & 0x1) != 0
+    });
+    let mac_style_italic =
+        data.len() >= head_off + 46 && (read_u16(&data, head_off + 44) & 0x2) != 0;
+    let is_italic = os2_italic || mac_style_italic;
+
+    // x-height for the CSS `ex` unit. Prefer OS/2.sxHeight (version >= 2,
+    // offset +86 as a signed FWORD); when absent or non-positive, measure the
+    // 'x' glyph's bounding-box top — this mirrors Chrome's `ex` resolution for
+    // fonts (such as the bundled DejaVu-derived faces) whose OS/2 table predates
+    // version 2 and therefore carries no sxHeight field.
+    let os2 = tables.get(b"OS/2");
+    let os2_x_height = parse_os2_positive_metric(&data, os2, 86);
+    let x_height = os2_x_height.map_or_else(
+        || {
+            measure_glyph_y_max(&data, face_index, 'x').map_or(
+                FontXHeightMetric::Unavailable,
+                FontXHeightMetric::GlyphOutline,
+            )
+        },
+        FontXHeightMetric::open_type,
+    );
+    // CSS Inline 3 initial-letter sizing uses cap-height rather than a
+    // first-letter outline. Prefer OS/2.sCapHeight (version >= 2), then the
+    // conventional Latin H measurement when the metric is absent.
+    let cap_height = parse_os2_positive_metric(&data, os2, 88)
+        .or_else(|| measure_glyph_y_max(&data, face_index, 'H'))
+        .unwrap_or(0);
+    // ch unit: advance of the '0' (ZERO) glyph.
+    let zero_advance = cmap
+        .get(&u32::from('0'))
+        .map(|&gid| {
+            if (gid as usize) < glyph_widths.len() {
+                glyph_widths[gid as usize]
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0);
+
     Ok(TtfFont {
         font_name,
+        face_index,
         units_per_em,
+        size_adjust: 1.0,
         bbox,
-        pdf_metrics,
-        layout_metrics,
+        vertical_metrics: FontVerticalMetricSet::new(
+            pdf_metrics,
+            layout_metrics,
+            typographic_metrics,
+        ),
         cmap,
         glyph_widths,
         num_h_metrics,
         flags,
+        is_bold,
+        is_italic,
+        text_metrics: FontTextMetrics {
+            x_height,
+            cap_height,
+            zero_advance,
+        },
         data: std::sync::Arc::new(data),
     })
 }
 
-fn parse_os2_typographic_metrics(
+/// Read a positive version-2-or-later signed metric from the OS/2 table.
+///
+/// `sxHeight` and `sCapHeight` share this shape: both were introduced in
+/// version 2 and both are optional in practice even when the table version
+/// permits them. A short or older table simply leaves metric selection to the
+/// caller's documented fallback.
+fn parse_os2_positive_metric(
     data: &[u8],
     os2: Option<&TableRecord>,
-) -> Option<FontVerticalMetrics> {
+    field_offset: usize,
+) -> Option<u16> {
+    let os2 = os2?;
+    let offset = os2.offset as usize;
+    if data.len() < offset + field_offset + 2 || read_u16(data, offset) < 2 {
+        return None;
+    }
+    let value = read_i16(data, offset + field_offset);
+    (value > 0).then_some(value as u16)
+}
+
+/// Measure the bounding-box top (`yMax`, in font units) of the glyph for `ch`.
+///
+/// Used to derive the x-height for the CSS `ex` unit when `OS/2.sxHeight` is
+/// absent. Returns `None` when the character has no glyph or no contour bounds.
+fn measure_glyph_y_max(data: &[u8], face_index: FontFaceIndex, ch: char) -> Option<u16> {
+    let face = rustybuzz::ttf_parser::Face::parse(data, face_index.get()).ok()?;
+    let gid = face.glyph_index(ch)?;
+    let bbox = face.glyph_bounding_box(gid)?;
+    (bbox.y_max > 0).then_some(bbox.y_max as u16)
+}
+
+fn parse_os2_layout_metrics(data: &[u8], os2: Option<&TableRecord>) -> Option<FontVerticalMetrics> {
     let os2 = os2?;
     let os2_off = os2.offset as usize;
     if data.len() < os2_off + 78 {
@@ -322,6 +737,28 @@ fn parse_os2_typographic_metrics(
     // Use line_gap=0 with usWin metrics (Chrome doesn't add sTypoLineGap
     // when using usWin metrics).
     Some(FontVerticalMetrics::new(win_ascent, -win_descent, 0))
+}
+
+/// Parse the explicit typographic metrics from the `OS/2` table.
+///
+/// These are distinct from the Windows metrics selected for ordinary
+/// `line-height: normal`. When the table is absent or declares no typographic
+/// extent, the normal layout metrics are the only safe fallback.
+fn parse_os2_typographic_metrics(
+    data: &[u8],
+    os2: Option<&TableRecord>,
+) -> Option<FontVerticalMetrics> {
+    let os2 = os2?;
+    let os2_off = os2.offset as usize;
+    if data.len() < os2_off + 74 {
+        return None;
+    }
+    let metrics = FontVerticalMetrics::new(
+        read_i16(data, os2_off + 68),
+        read_i16(data, os2_off + 70),
+        read_i16(data, os2_off + 72),
+    );
+    (metrics.ascent != 0 || metrics.descent != 0).then_some(metrics)
 }
 
 /// Parse the cmap table. Prefers format 12 (full Unicode including astral
@@ -758,11 +1195,49 @@ mod tests {
         buf
     }
 
+    /// Wrap copies of the minimal TTF in a TTC, fixing each face's table
+    /// offsets from face-relative to collection-relative positions.
+    fn build_test_ttc(face_count: usize) -> Vec<u8> {
+        let face = build_test_ttf();
+        let mut collection = Vec::with_capacity(12 + 4 * face_count + face.len() * face_count);
+        collection.extend_from_slice(b"ttcf");
+        collection.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        collection.extend_from_slice(&(face_count as u32).to_be_bytes());
+        let offsets_start = collection.len();
+        collection.resize(offsets_start + 4 * face_count, 0);
+
+        for face_number in 0..face_count {
+            while collection.len() % 4 != 0 {
+                collection.push(0);
+            }
+            let face_offset = collection.len();
+            collection.extend_from_slice(&face);
+            collection[offsets_start + 4 * face_number..offsets_start + 4 * (face_number + 1)]
+                .copy_from_slice(&(face_offset as u32).to_be_bytes());
+
+            let table_count = read_u16(&collection, face_offset + 4) as usize;
+            for table in 0..table_count {
+                let table_offset = face_offset + 12 + table * 16 + 8;
+                let relative = read_u32(&collection, table_offset);
+                collection[table_offset..table_offset + 4]
+                    .copy_from_slice(&(relative + face_offset as u32).to_be_bytes());
+            }
+        }
+        collection
+    }
+
     #[test]
     fn parse_ttf_offset_table() {
         let data = build_test_ttf();
         let font = parse_ttf(data).unwrap();
         assert_eq!(font.units_per_em, 1000);
+    }
+
+    #[test]
+    fn parse_ttf_with_index_preserves_selected_ttc_face() {
+        let font = parse_ttf_with_index(build_test_ttc(2), 1).unwrap();
+        assert_eq!(font.face_index, FontFaceIndex::new(1));
+        assert_eq!(font.font_name, "TestFont");
     }
 
     #[test]
@@ -777,8 +1252,24 @@ mod tests {
         let data = build_test_ttf();
         let font = parse_ttf(data).unwrap();
         // No OS/2 table, should fall back to hhea values
-        assert_eq!(font.pdf_metrics, FontVerticalMetrics::new(800, -200, 0));
-        assert_eq!(font.layout_metrics, FontVerticalMetrics::new(800, -200, 0));
+        assert_eq!(
+            font.pdf_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
+        assert_eq!(
+            font.layout_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
+    }
+
+    #[test]
+    fn central_baseline_from_over_uses_signed_face_metrics() {
+        let metrics = FontVerticalMetrics::new(1160, -288, 0);
+        let ratio = metrics.central_baseline_from_over_ratio(1000);
+        assert!((ratio - 0.564).abs() < f32::EPSILON, "ratio={ratio}");
+
+        let metric_set = FontVerticalMetricSet::from(metrics);
+        assert!((metric_set.central_baseline_from_over_ratio(1000) - ratio).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -862,10 +1353,11 @@ mod tests {
         // Line 39/41: glyph_id >= glyph_widths.len() -> use last entry
         let font = TtfFont {
             font_name: String::new(),
+            face_index: Default::default(),
             units_per_em: 1000,
+            size_adjust: 1.0,
             bbox: [0; 4],
-            pdf_metrics: FontVerticalMetrics::new(0, 0, 0),
-            layout_metrics: FontVerticalMetrics::new(0, 0, 0),
+            vertical_metrics: FontVerticalMetricSet::from(FontVerticalMetrics::new(0, 0, 0)),
             cmap: {
                 let mut m = HashMap::new();
                 m.insert(65, 999); // glyph 999 is beyond widths vec
@@ -874,6 +1366,9 @@ mod tests {
             glyph_widths: vec![500, 700],
             num_h_metrics: 2,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: FontTextMetrics::default(),
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width(65), 700); // last width
@@ -884,14 +1379,18 @@ mod tests {
         // Line 43: empty glyph_widths -> 0
         let font = TtfFont {
             font_name: String::new(),
+            face_index: Default::default(),
             units_per_em: 1000,
+            size_adjust: 1.0,
             bbox: [0; 4],
-            pdf_metrics: FontVerticalMetrics::new(0, 0, 0),
-            layout_metrics: FontVerticalMetrics::new(0, 0, 0),
+            vertical_metrics: FontVerticalMetricSet::from(FontVerticalMetrics::new(0, 0, 0)),
             cmap: HashMap::<u32, u16>::new(),
             glyph_widths: vec![],
             num_h_metrics: 0,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: FontTextMetrics::default(),
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width(65), 0);
@@ -1166,9 +1665,57 @@ mod tests {
 
         let data = build_full_ttf(&head, &hhea, &maxp, &hmtx, &cmap, &name, Some(&os2));
         let font = parse_ttf(data).unwrap();
-        assert_eq!(font.pdf_metrics, FontVerticalMetrics::new(800, -200, 0));
+        assert_eq!(
+            font.pdf_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
         // layout_metrics uses usWinAscent/usWinDescent for Chrome parity
-        assert_eq!(font.layout_metrics, FontVerticalMetrics::new(950, -350, 0));
+        assert_eq!(
+            font.layout_vertical_metrics(),
+            FontVerticalMetrics::new(950, -350, 0)
+        );
+        assert_eq!(
+            font.typographic_vertical_metrics(),
+            FontVerticalMetrics::new(900, -300, 50)
+        );
+    }
+
+    #[test]
+    fn parse_ttf_uses_os2_cap_height_for_initial_letters() {
+        let head = make_head_table(1000);
+        let hhea = make_hhea_table(800, -200, 1);
+        let maxp = make_maxp_table(1);
+        let hmtx = make_hmtx_table(&[500]);
+        let cmap = make_cmap_format4(65, 65, -64);
+        let name = make_name_table_ascii(1, b"Test");
+        let mut os2 = vec![0u8; 90];
+        os2[..2].copy_from_slice(&2u16.to_be_bytes());
+        os2[88..90].copy_from_slice(&731i16.to_be_bytes());
+
+        let data = build_full_ttf(&head, &hhea, &maxp, &hmtx, &cmap, &name, Some(&os2));
+        let font = parse_ttf(data).unwrap();
+
+        assert_eq!(font.text_metrics.cap_height, 731);
+        assert!((font.cap_height_ratio() - 0.731).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_ttf_uses_os2_x_height_as_a_linear_metric() {
+        let head = make_head_table(1000);
+        let hhea = make_hhea_table(800, -200, 1);
+        let maxp = make_maxp_table(1);
+        let hmtx = make_hmtx_table(&[500]);
+        let cmap = make_cmap_format4(65, 65, -64);
+        let name = make_name_table_ascii(1, b"Test");
+        let mut os2 = vec![0u8; 90];
+        os2[..2].copy_from_slice(&2u16.to_be_bytes());
+        os2[86..88].copy_from_slice(&537i16.to_be_bytes());
+
+        let data = build_full_ttf(&head, &hhea, &maxp, &hmtx, &cmap, &name, Some(&os2));
+        let font = parse_ttf(data).unwrap();
+
+        assert_eq!(font.text_metrics.x_height, FontXHeightMetric::OpenType(537));
+        assert!((font.used_x_height(20.0) - 10.74).abs() < 1e-6);
     }
 
     #[test]
@@ -1184,8 +1731,18 @@ mod tests {
         let os2 = vec![0u8; 10]; // too short for ascent/descent fields
         let data = build_full_ttf(&head, &hhea, &maxp, &hmtx, &cmap, &name, Some(&os2));
         let font = parse_ttf(data).unwrap();
-        assert_eq!(font.pdf_metrics, FontVerticalMetrics::new(800, -200, 0));
-        assert_eq!(font.layout_metrics, FontVerticalMetrics::new(800, -200, 0));
+        assert_eq!(
+            font.pdf_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
+        assert_eq!(
+            font.layout_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
+        assert_eq!(
+            font.typographic_vertical_metrics(),
+            FontVerticalMetrics::new(800, -200, 0)
+        );
     }
 
     #[test]
@@ -1252,7 +1809,7 @@ mod tests {
     fn parse_cmap_subtable_record_break() {
         // Line 196: subtable record truncated
         // cmap header says 2 subtables but data only has room for partial second
-        let mut data = vec![0u8; 100];
+        let mut data = [0u8; 100];
         // offset 0: version=0, numSubtables=2
         data[2] = 0;
         data[3] = 2;
@@ -1262,7 +1819,7 @@ mod tests {
         // Should find no suitable subtable (first one at platform 0 would match but
         // second record breaks)
         // Actually platform_id=0 matches, so let's set first to non-matching
-        let mut data2 = vec![0u8; 20];
+        let mut data2 = [0u8; 20];
         data2[3] = 2; // 2 subtables
         // First record: platform 5 (no match)
         data2[4] = 0;
@@ -1275,7 +1832,7 @@ mod tests {
     #[test]
     fn parse_cmap_subtable_too_short() {
         // Line 213: subtable offset valid but data too short to read format
-        let mut data = vec![0u8; 20];
+        let mut data = [0u8; 20];
         data[3] = 1; // 1 subtable
         // platform 3, encoding 1
         data[4] = 0;
@@ -1602,10 +2159,11 @@ mod tests {
     fn char_width_pdf_large_width_no_overflow() {
         let font = TtfFont {
             font_name: String::new(),
+            face_index: Default::default(),
             units_per_em: 1000,
+            size_adjust: 1.0,
             bbox: [0; 4],
-            pdf_metrics: FontVerticalMetrics::new(0, 0, 0),
-            layout_metrics: FontVerticalMetrics::new(0, 0, 0),
+            vertical_metrics: FontVerticalMetricSet::from(FontVerticalMetrics::new(0, 0, 0)),
             cmap: {
                 let mut m = HashMap::new();
                 m.insert(65, 0);
@@ -1614,6 +2172,9 @@ mod tests {
             glyph_widths: vec![u16::MAX], // 65535 — would overflow u32 with * 1000
             num_h_metrics: 1,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: FontTextMetrics::default(),
             data: std::sync::Arc::new(vec![]),
         };
         // Should not panic; 65535 * 1000 / 1000 = 65535
@@ -1625,10 +2186,11 @@ mod tests {
     fn char_width_scaled_zero_upm_returns_zero() {
         let font = TtfFont {
             font_name: String::new(),
+            face_index: Default::default(),
             units_per_em: 0,
+            size_adjust: 1.0,
             bbox: [0; 4],
-            pdf_metrics: FontVerticalMetrics::new(0, 0, 0),
-            layout_metrics: FontVerticalMetrics::new(0, 0, 0),
+            vertical_metrics: FontVerticalMetricSet::from(FontVerticalMetrics::new(0, 0, 0)),
             cmap: {
                 let mut m = HashMap::new();
                 m.insert(65, 0);
@@ -1637,10 +2199,86 @@ mod tests {
             glyph_widths: vec![500],
             num_h_metrics: 1,
             flags: 32,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: FontTextMetrics::default(),
             data: std::sync::Arc::new(vec![]),
         };
         assert_eq!(font.char_width_scaled(65, 12.0), 0.0);
         assert_eq!(font.char_width_pdf(65), 0);
+    }
+
+    fn metrics_font(
+        units_per_em: u16,
+        x_height: u16,
+        cap_height: u16,
+        zero_advance: u16,
+    ) -> TtfFont {
+        TtfFont {
+            font_name: String::new(),
+            face_index: Default::default(),
+            units_per_em,
+            size_adjust: 1.0,
+            bbox: [0; 4],
+            vertical_metrics: FontVerticalMetricSet::from(FontVerticalMetrics::new(0, 0, 0)),
+            cmap: HashMap::new(),
+            glyph_widths: Vec::new(),
+            num_h_metrics: 0,
+            flags: 32,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: FontTextMetrics {
+                x_height: FontXHeightMetric::open_type(x_height),
+                cap_height,
+                zero_advance,
+            },
+            data: std::sync::Arc::new(vec![]),
+        }
+    }
+
+    #[test]
+    fn x_height_ratio_uses_metric_when_present() {
+        let font = metrics_font(2048, 1120, 0, 0);
+        assert!((font.x_height_ratio() - 1120.0 / 2048.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn font_size_adjust_uses_the_css_x_height_metric() {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts/ParitySerif.ttf"),
+        )
+        .expect("ParitySerif test font");
+        let font = parse_ttf(bytes).expect("valid ParitySerif TTF");
+        let font_size = 30.0 * crate::fonts::PT_PER_CSS_PX;
+
+        // Current Chromium/Skia Fontations exposes a 16px hinted contour
+        // height at 30 CSS px for this face, which has no OS/2.sxHeight.
+        assert!((font.font_size_adjust_x_height_ratio(font_size) - 16.0 / 30.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn x_height_ratio_falls_back_to_half_em() {
+        // No x-height metric -> css-values-4 fallback of 0.5em.
+        assert_eq!(metrics_font(2048, 0, 0, 0).x_height_ratio(), 0.5);
+        assert_eq!(metrics_font(0, 1120, 0, 0).x_height_ratio(), 0.5);
+    }
+
+    #[test]
+    fn ch_ratio_uses_zero_advance_when_present() {
+        let font = metrics_font(2048, 0, 0, 1024);
+        assert!((font.ch_ratio() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ch_ratio_falls_back_to_half_em() {
+        assert_eq!(metrics_font(2048, 0, 0, 0).ch_ratio(), 0.5);
+    }
+
+    #[test]
+    fn cap_height_ratio_uses_metric_then_css_fallback() {
+        assert!((metrics_font(2048, 0, 1493, 0).cap_height_ratio() - 1493.0 / 2048.0).abs() < 1e-6);
+        assert_eq!(metrics_font(2048, 0, 0, 0).cap_height_ratio(), 0.66);
     }
 
     #[test]

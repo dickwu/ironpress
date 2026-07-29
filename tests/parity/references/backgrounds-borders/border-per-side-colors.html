@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>exclusive polygon reference for unequal border sides</title>
+<style>
+  @page { size: 280px 128px; margin: 0; }
+  html, body { width: 280px; height: 128px; background: #fff; }
+  html, body, svg { box-sizing: border-box; margin: 0; padding: 0; }
+  svg { display: block; width: 200px; height: 120px; }
+</style>
+</head>
+<body>
+  <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-label="four exclusive border side polygons">
+    <rect width="200" height="120" fill="#fafafa"/>
+    <path d="M0 0H200L192 4H16Z" fill="#d50000"/>
+    <path d="M200 0V120L192 108V4Z" fill="#00c853"/>
+    <path d="M200 120H0L16 108H192Z" fill="#2962ff"/>
+    <path d="M0 120V0L16 4V108Z" fill="#ff6d00"/>
+  </svg>
+</body>
+</html>

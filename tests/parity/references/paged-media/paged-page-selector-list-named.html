@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-page-selector-list-named.
+
+  CSS Paged Media 3 defines an @page selector list as comma-separated page
+  selectors and applies the declarations when at least one selector matches.
+  Chromium parses the fixture but omits the named-list margin on both pages, so
+  this Foundation source materializes the specified page boxes without using
+  candidate output or raster edits.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>page selector list named pages reference</title>
+  <style>
+    @page { size: 184px 120px; margin: 0; }
+    html { font-family: ParitySans; line-height: 1.5; }
+    * { margin: 0; box-sizing: border-box; }
+    .sheet {
+      width: 144px;
+      height: 120px;
+      margin-left: 40px;
+    }
+    .sheet + .sheet { break-before: page; }
+    .title { background: #ffd166; }
+    .chapter { background: #118ab2; }
+  </style>
+</head>
+<body>
+  <div class="sheet title"></div>
+  <div class="sheet chapter"></div>
+</body>
+</html>

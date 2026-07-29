@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* A single table row whose cell is taller than the page content box. Its
+     background must slice across page boundaries. */
+  /* All page edges land on device pixels at the 300 DPI parity rasterization
+     contract, leaving fragmentation—not subpixel edge coverage—as the asserted
+     behavior. */
+  @page { size: 320px 200px; margin: 32px; }
+  * { margin: 0; box-sizing: border-box; }
+  html { font-family: ParitySans; line-height: 1.5; background: #ffffff; color: #111111; }
+  table { border-collapse: collapse; width: 100%; }
+  td {
+    background: #cfe3ff;
+    height: 360px;
+    vertical-align: top;
+  }
+</style>
+</head>
+<body>
+  <table>
+    <tr><td></td></tr>
+  </table>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>exclusive polygon reference for a transparent top border</title>
+<style>
+  @page { size: 280px 128px; margin: 0; }
+  html, body { width: 280px; height: 128px; background: #fff; }
+  html, body, svg { box-sizing: border-box; margin: 0; padding: 0; }
+  svg { display: block; width: 200px; height: 120px; }
+</style>
+</head>
+<body>
+  <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-label="three exclusive visible border side polygons">
+    <rect width="200" height="120" fill="#fff"/>
+    <path d="M200 0V120L188 108V12Z" fill="#00695c"/>
+    <path d="M200 120H0L12 108H188Z" fill="#00695c"/>
+    <path d="M0 120V0L12 12V108Z" fill="#00695c"/>
+  </svg>
+</body>
+</html>

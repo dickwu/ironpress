@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* A geometry-only GCPM probe: the navy box must move from normal flow into
+     the centered top margin box, leaving the gold flow box at the content top. */
+  @page {
+    size: 400px 300px;
+    margin: 48px 24px 24px;
+    @top-center { content: element(runhead); }
+  }
+  * { margin: 0; box-sizing: border-box; }
+  .runhead { position: running(runhead); width: 160px; height: 24px; background: #11305f; }
+  .body-probe { height: 32px; background: #f4b942; }
+</style>
+</head>
+<body>
+  <div class="runhead"></div>
+  <div class="body-probe"></div>
+</body>
+</html>

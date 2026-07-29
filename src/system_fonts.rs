@@ -1,10 +1,11 @@
-use crate::parser::css::{CssRule, CssValue, parse_inline_style};
+use crate::parser::css::{CssRule, CssValue, FontStretch, parse_inline_style};
 use crate::parser::dom::DomNode;
-use crate::parser::ttf::{TtfFont, parse_ttf, parse_ttf_with_index};
+use crate::parser::ttf::{FontFaceIndex, TtfFont, parse_ttf_with_index};
 use crate::style::computed::{FontFamily, FontStack, parse_font_stack};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 const FONT_VARIANTS: &[FontVariant] = &[
     FontVariant::new(false, false),
@@ -127,6 +128,21 @@ pub(crate) fn font_variant_key(family: &str, bold: bool, italic: bool) -> String
     }
 }
 
+/// Stable storage key for an `@font-face` width/weight/style variant.
+/// Normal width keeps the established key unchanged, which preserves every
+/// existing font registration; other widths are an explicit suffix.
+pub(crate) fn font_variant_key_with_stretch(
+    family: &str,
+    bold: bool,
+    italic: bool,
+    stretch: FontStretch,
+) -> String {
+    let Some(suffix) = stretch.key_suffix() else {
+        return font_variant_key(family, bold, italic);
+    };
+    font_variant_key(&format!("{family}__{suffix}"), bold, italic)
+}
+
 fn exact_font_variant_key(family: &str, bold: bool, italic: bool) -> String {
     let base = family.trim();
     match (bold, italic) {
@@ -135,6 +151,33 @@ fn exact_font_variant_key(family: &str, bold: bool, italic: bool) -> String {
         (false, true) => format!("{base}__italic"),
         (true, true) => format!("{base}__bold_italic"),
     }
+}
+
+fn exact_font_variant_key_with_stretch(
+    family: &str,
+    bold: bool,
+    italic: bool,
+    stretch: FontStretch,
+) -> String {
+    let Some(suffix) = stretch.key_suffix() else {
+        return exact_font_variant_key(family, bold, italic);
+    };
+    exact_font_variant_key(&format!("{family}__{suffix}"), bold, italic)
+}
+
+/// Returns `true` when the map holds a face for `family` matching the *exact*
+/// requested weight/style — without [`find_font`]'s fallback to the regular
+/// variant. Used so a generic-name registration (e.g. `add_font("serif", …)`)
+/// that supplies only a regular face does not shadow a genuine bold/italic face
+/// from the bundled fallback.
+fn has_exact_variant(
+    fonts: &HashMap<String, TtfFont>,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> bool {
+    fonts.contains_key(&font_variant_key(family, bold, italic))
+        || fonts.contains_key(&exact_font_variant_key(family, bold, italic))
 }
 
 pub(crate) fn find_font<'a>(
@@ -157,52 +200,164 @@ pub(crate) fn find_font<'a>(
     })
 }
 
+/// Resolve a face using CSS Fonts' discrete width matching order before style
+/// and weight fallback. Callers that retain the returned map key can then keep
+/// using [`find_font`] for shaping, metrics, and PDF embedding.
+pub(crate) fn find_font_with_stretch<'a>(
+    fonts: &'a HashMap<String, TtfFont>,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    stretch: FontStretch,
+) -> Option<(&'a str, &'a TtfFont)> {
+    stretch.matching_order().into_iter().find_map(|width| {
+        let candidates = [
+            font_variant_key_with_stretch(family, bold, italic, width),
+            font_variant_key_with_stretch(family, false, false, width),
+            exact_font_variant_key_with_stretch(family, bold, italic, width),
+            exact_font_variant_key_with_stretch(family, false, false, width),
+        ];
+        candidates.into_iter().find_map(|key| {
+            fonts
+                .get_key_value(&key)
+                .map(|(name, font)| (name.as_str(), font))
+        })
+    })
+}
+
+/// Returns `true` when a *bold* face is requested for `family` but no genuine
+/// bold variant is loaded (so [`find_font`] resolves to the regular weight).
+///
+/// In that case the renderer synthesises bold by stroking the glyph outlines —
+/// matching browsers, which apply algorithmic (faux) bold when a family lacks a
+/// real bold face (CSS Fonts 4 §2.3 "synthetic bold"). Returns `false` when the
+/// run is not bold, when a real bold face exists, or when no face is found.
+pub(crate) fn needs_faux_bold(
+    fonts: &HashMap<String, TtfFont>,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> bool {
+    if !bold {
+        return false;
+    }
+    // The face a bold request actually resolves to. A font *query* (e.g. system
+    // fontdb) often substitutes the regular weight for a missing bold and even
+    // registers it under the `__bold` key, so key presence alone is not enough —
+    // check the resolved face's true weight. Synthesise bold only when a face is
+    // found AND it is not itself bold.
+    match find_font(fonts, family, true, italic) {
+        Some((_, font)) => !font.is_bold,
+        None => false,
+    }
+}
+
+/// True when an `italic` request resolves to a face that is NOT genuinely
+/// italic — so the renderer must synthesise (faux) italic with an algorithmic
+/// shear (CSS Fonts 4 §2.4 `font-synthesis: style`). Mirrors `needs_faux_bold`:
+/// a font query often substitutes the upright face for a missing italic, so we
+/// check the resolved face's real style, not key presence.
+pub(crate) fn needs_faux_italic(
+    fonts: &HashMap<String, TtfFont>,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> bool {
+    if !italic {
+        return false;
+    }
+    match find_font(fonts, family, bold, true) {
+        Some((_, font)) => !font.is_italic,
+        None => false,
+    }
+}
+
 pub(crate) fn resolve_font_family(
     stack: &FontStack,
     fonts: &HashMap<String, TtfFont>,
     bold: bool,
     italic: bool,
+    stretch: FontStretch,
 ) -> FontFamily {
     for family in stack.families() {
         match family {
-            FontFamily::Custom(name) if find_font(fonts, name, bold, italic).is_some() => {
-                return FontFamily::Custom(name.clone());
+            FontFamily::Custom(name) => {
+                if let Some((key, _)) = find_font_with_stretch(fonts, name, bold, italic, stretch) {
+                    return FontFamily::Custom(key.to_string());
+                }
             }
             FontFamily::TimesRoman => {
+                // A font explicitly registered under the generic CSS name `serif`
+                // (e.g. via `add_font("serif", …)`) takes precedence over the
+                // engine's bundled fallback, so the caller's chosen face — and
+                // its `line-height: normal` metrics — are honoured. Only honour it
+                // when the *requested* weight/style is actually present under that
+                // name, so a regular-only generic registration does not shadow a
+                // genuine bold/italic face from the bundled fallback.
+                if has_exact_variant(fonts, "serif", bold, italic)
+                    && let Some((key, _)) =
+                        find_font_with_stretch(fonts, "serif", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
+                }
                 // Prefer system Times New Roman (exact Chromium match),
                 // fall back to bundled Liberation Serif.
-                if find_font(fonts, "Times New Roman", bold, italic).is_some() {
-                    return FontFamily::Custom("Times New Roman".to_string());
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Times New Roman", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
-                if find_font(fonts, "Liberation Serif", bold, italic).is_some() {
-                    return FontFamily::Custom("Liberation Serif".to_string());
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Liberation Serif", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
                 return FontFamily::TimesRoman;
             }
             FontFamily::Helvetica => {
-                if find_font(fonts, "Arial", bold, italic).is_some() {
-                    return FontFamily::Custom("Arial".to_string());
+                if has_exact_variant(fonts, "sans-serif", bold, italic)
+                    && let Some((key, _)) =
+                        find_font_with_stretch(fonts, "sans-serif", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
-                if find_font(fonts, "Liberation Sans", bold, italic).is_some() {
-                    return FontFamily::Custom("Liberation Sans".to_string());
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Arial", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
+                }
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Liberation Sans", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
                 return FontFamily::Helvetica;
             }
             FontFamily::Courier => {
-                if find_font(fonts, "Courier New", bold, italic).is_some() {
-                    return FontFamily::Custom("Courier New".to_string());
+                if has_exact_variant(fonts, "monospace", bold, italic)
+                    && let Some((key, _)) =
+                        find_font_with_stretch(fonts, "monospace", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
-                if find_font(fonts, "Liberation Mono", bold, italic).is_some() {
-                    return FontFamily::Custom("Liberation Mono".to_string());
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Courier New", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
+                }
+                if let Some((key, _)) =
+                    find_font_with_stretch(fonts, "Liberation Mono", bold, italic, stretch)
+                {
+                    return FontFamily::Custom(key.to_string());
                 }
                 return FontFamily::Courier;
             }
-            FontFamily::Custom(_) => {}
         }
     }
 
-    if find_font(fonts, "Liberation Sans", bold, italic).is_some() {
-        return FontFamily::Custom("Liberation Sans".to_string());
+    if let Some((key, _)) = find_font_with_stretch(fonts, "Liberation Sans", bold, italic, stretch)
+    {
+        return FontFamily::Custom(key.to_string());
     }
 
     stack
@@ -237,6 +392,9 @@ const EMOJI_FALLBACK_FAMILIES: &[&str] = &[
 /// Includes macOS-specific CJK fonts (Hiragino, PingFang, STHeiti) alongside
 /// cross-platform options (Noto Sans CJK, Arial Unicode MS, DejaVu Sans).
 const UNICODE_FALLBACK_FAMILIES: &[&str] = &[
+    // The authenticated parity oracle's unqualified CJK fallback is the JP
+    // face. Prefer it explicitly instead of relying on the TTC's face order.
+    "Noto Sans CJK JP",
     "Noto Sans CJK SC",
     "Noto Sans CJK",
     "Noto Sans SC",
@@ -260,28 +418,37 @@ const UNICODE_FALLBACK_FAMILIES: &[&str] = &[
 /// This enables CJK and other non-Latin characters to render correctly
 /// instead of appearing as rectangles/tofu when the document uses a
 /// standard PDF font (Helvetica, Times-Roman, Courier).
+/// The resolved+parsed system CJK fallback font (large; ~parse cost), cached so
+/// it isn't re-parsed on every conversion.
+static UNICODE_FALLBACK_CACHE: OnceLock<Option<TtfFont>> = OnceLock::new();
+
 pub(crate) fn load_unicode_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
     if fonts.contains_key(UNICODE_FALLBACK_KEY) {
         return;
     }
 
-    let db = system_fontdb();
-
-    for family in UNICODE_FALLBACK_FAMILIES {
-        let query = SystemFontQuery::new(family, FontVariant::new(false, false));
-        if let Some(font) = query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-        {
-            fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font);
-            return;
+    let cached = UNICODE_FALLBACK_CACHE.get_or_init(|| {
+        let db = system_fontdb();
+        for family in UNICODE_FALLBACK_FAMILIES {
+            let query = SystemFontQuery::new(family, FontVariant::new(false, false));
+            if let Some(font) =
+                query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
+            {
+                return Some(font);
+            }
         }
+        None
+    });
+    if let Some(font) = cached {
+        fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font.clone());
+    } else {
+        // In WASM builds there are no system fonts available via fontdb —
+        // fall back to a bundled Noto Sans CJK subset so Chinese/Japanese
+        // kanji + kana at least render. Not bundled in native builds to keep
+        // the CLI binary small (users have access to real system CJK fonts).
+        #[cfg(feature = "wasm")]
+        load_bundled_cjk_font(fonts);
     }
-
-    // In WASM builds there are no system fonts available via fontdb —
-    // fall back to a bundled Noto Sans CJK subset so Chinese/Japanese
-    // kanji + kana at least render. Not bundled in native builds to keep
-    // the CLI binary small (users have access to real system CJK fonts).
-    #[cfg(feature = "wasm")]
-    load_bundled_cjk_font(fonts);
 }
 
 /// Bundled Noto Sans CJK subset (~1.4 MB TTF) — covers CJK Unified Ideographs
@@ -335,9 +502,13 @@ pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
 /// a system emoji font to be installed.
 fn load_bundled_emoji_font(fonts: &mut HashMap<String, TtfFont>) {
     static NOTO_EMOJI_DATA: &[u8] = include_bytes!("../assets/NotoEmoji-Regular.ttf");
+    // Parse the 295KB bundled emoji font once, not on every conversion.
+    static EMOJI_FONT_CACHE: OnceLock<Option<TtfFont>> = OnceLock::new();
 
-    if let Ok(font) = crate::parser::ttf::parse_ttf(NOTO_EMOJI_DATA.to_vec()) {
-        fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font);
+    let cached = EMOJI_FONT_CACHE
+        .get_or_init(|| crate::parser::ttf::parse_ttf(NOTO_EMOJI_DATA.to_vec()).ok());
+    if let Some(font) = cached {
+        fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font.clone());
     }
 }
 
@@ -455,27 +626,51 @@ fn parse_all_bundled_fonts() -> Vec<(String, TtfFont)> {
 /// Try to load the system's actual serif/sans-serif/monospace fonts
 /// (Times New Roman, Arial, Courier New) so the output matches Chromium
 /// exactly. Falls through to bundled Liberation fonts when unavailable.
-pub(crate) fn load_system_default_fonts(fonts: &mut HashMap<String, TtfFont>) {
-    let families = [
-        ("Times New Roman", "serif"),
-        ("Arial", "sans-serif"),
-        ("Courier New", "monospace"),
-    ];
-    let db = system_fontdb();
+///
+/// These literal Windows family names are resolved from the in-process
+/// `fontdb` **only** — never via `fc-match`. On a host where they are absent
+/// (the common Linux case, where only Liberation*/DejaVu* are installed),
+/// `fontdb` returns nothing and the family is left unloaded, so the document
+/// falls through to the bundled Liberation faces exactly as before.
+///
+/// The previous implementation fell through to `fc-match`, which spawned 12
+/// subprocesses per *cold* render (one per family × variant). Those spawns
+/// also never contributed a font: `fc-match` substitutes e.g. Liberation Serif
+/// for "Times New Roman", and the family-match guard in `query_fontconfig_font`
+/// rejected that mismatch, so nothing was inserted. Restricting this probe to
+/// `fontdb` therefore preserves byte-identical output while eliminating the
+/// per-cold-render subprocess spawns. (`fc-match` remains available, cached and
+/// at-most-once, for genuinely *requested* unknown families via
+/// `load_requested_system_fonts`.)
+/// Parsed default-family variants (Times/Arial/Courier x regular/bold/italic/
+/// bold-italic), resolved from the system fontdb once. Resolving + parsing these
+/// is ~12 TTF parses; caching avoids repeating that on every conversion (it was
+/// ~12ms per call), so warm/batch generation stays well under a millisecond.
+static DEFAULT_FONTS_CACHE: OnceLock<Vec<(String, TtfFont)>> = OnceLock::new();
 
-    for (family, _generic) in &families {
-        for variant in FONT_VARIANTS {
-            let query = SystemFontQuery::new(family, *variant);
-            let key = query.variant_key();
-            if fonts.contains_key(&key) {
-                continue;
-            }
-            if let Some(font) =
-                query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-            {
-                fonts.insert(key, font);
+pub(crate) fn load_system_default_fonts(fonts: &mut HashMap<String, TtfFont>) {
+    let cached = DEFAULT_FONTS_CACHE.get_or_init(|| {
+        let families = [
+            ("Times New Roman", "serif"),
+            ("Arial", "sans-serif"),
+            ("Courier New", "monospace"),
+        ];
+        let db = system_fontdb();
+        let mut out = Vec::new();
+        for (family, _generic) in &families {
+            for variant in FONT_VARIANTS {
+                let query = SystemFontQuery::new(family, *variant);
+                // fontdb-only: do not fall through to query_fontconfig_font (fc-match).
+                if let Some(font) = query_fontdb_font(db, &query) {
+                    out.push((query.variant_key(), font));
+                }
             }
         }
+        out
+    });
+    for (key, font) in cached {
+        // Don't override fonts already provided (e.g. @font-face, add_font).
+        fonts.entry(key.clone()).or_insert_with(|| font.clone());
     }
 }
 
@@ -590,51 +785,109 @@ fn load_preferred_family_font(
     })
 }
 
-fn query_fontconfig_font(query: &SystemFontQuery<'_>) -> Option<TtfFont> {
-    let mut child = Command::new("fc-match")
-        .args([
-            query.fontconfig_pattern().as_str(),
-            "-f",
-            "%{family}\n%{file}",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+/// Whether `fc-match` is available on this system. Probed at most once per
+/// process: if the binary is missing (the common case on minimal/CI hosts),
+/// every subsequent fontconfig query short-circuits without spawning anything.
+fn fontconfig_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("fc-match")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
+}
 
-    // Timeout after 1 second to avoid blocking on slow/absent fontconfig.
-    let timeout = std::time::Duration::from_secs(1);
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    return None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(_) => return None,
+/// A fontconfig match identifies both an OpenType file and, for a TTC/OTC, the
+/// face within that collection.
+#[derive(Clone)]
+struct ResolvedFontFile {
+    path: String,
+    face_index: FontFaceIndex,
+}
+
+/// Process-wide cache of resolved fontconfig font files, keyed by the exact
+/// `fc-match` pattern. Ensures `fc-match` is spawned **at most once per
+/// distinct pattern for the entire process lifetime** (and never on the hot
+/// path once warm), instead of once per font variant × family × render.
+///
+/// We cache the resolved file and its selected face, not the parsed `TtfFont`,
+/// so the entry is cheap to clone and shared across threads; the small per-call
+/// parse is negligible next to a subprocess spawn + fontconfig re-init.
+fn fontconfig_path_cache() -> &'static Mutex<HashMap<String, Option<ResolvedFontFile>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<ResolvedFontFile>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn query_fontconfig_font(query: &SystemFontQuery<'_>) -> Option<TtfFont> {
+    let pattern = query.fontconfig_pattern();
+
+    // Fast path: serve from the cache without spawning.
+    if let Ok(cache) = fontconfig_path_cache().lock() {
+        if let Some(cached) = cache.get(&pattern) {
+            return cached.as_ref().and_then(parse_resolved_font);
         }
     }
-    let output = child.wait_with_output().ok()?;
+
+    // Cache miss: resolve via fc-match at most once for this pattern, then store
+    // the result (including negative results) so it is never spawned again.
+    let resolved = resolve_fontconfig_font(query, &pattern);
+    if let Ok(mut cache) = fontconfig_path_cache().lock() {
+        cache.insert(pattern, resolved.clone());
+    }
+
+    resolved.as_ref().and_then(parse_resolved_font)
+}
+
+fn parse_resolved_font(resolved: &ResolvedFontFile) -> Option<TtfFont> {
+    parse_ttf_with_index(
+        std::fs::read(&resolved.path).ok()?,
+        usize::try_from(resolved.face_index.get()).ok()?,
+    )
+    .ok()
+}
+
+/// Spawn `fc-match` once for `pattern` and return the selected font file if the
+/// returned family matches the requested family (same guard as before). No
+/// sleep-polling: `output()` blocks on the child directly.
+fn resolve_fontconfig_font(query: &SystemFontQuery<'_>, pattern: &str) -> Option<ResolvedFontFile> {
+    if !fontconfig_available() {
+        return None;
+    }
+
+    let output = Command::new("fc-match")
+        .args([pattern, "-f", "%{family}\n%{file}\n%{index}"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
 
     let output = String::from_utf8(output.stdout).ok()?;
-    let (family, path) = output.split_once('\n')?;
+    parse_fontconfig_match(query, &output)
+}
+
+fn parse_fontconfig_match(query: &SystemFontQuery<'_>, output: &str) -> Option<ResolvedFontFile> {
+    let mut fields = output.lines();
+    let family = fields.next()?;
     if !fontconfig_family_matches(query, family) {
         return None;
     }
 
-    let path = path.trim();
+    let path = fields.next()?.trim();
     if path.is_empty() {
         return None;
     }
+    let face_index = fields.next()?.parse().ok().map(FontFaceIndex::new)?;
 
-    parse_ttf(std::fs::read(path).ok()?).ok()
+    Some(ResolvedFontFile {
+        path: path.to_string(),
+        face_index,
+    })
 }
 
 fn fontconfig_family_matches(query: &SystemFontQuery<'_>, family_output: &str) -> bool {
@@ -666,21 +919,25 @@ fn query_fontdb_font(db: &fontdb::Database, query: &SystemFontQuery<'_>) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ttf::{FontVerticalMetrics, TtfFont};
+    use crate::parser::ttf::{FontVerticalMetricSet, FontVerticalMetrics, TtfFont};
     use crate::style::computed::{FontFamily, FontStack, parse_font_stack};
 
     fn stub_font(name: &str) -> TtfFont {
         let metrics = FontVerticalMetrics::new(800, -200, 0);
         TtfFont {
             font_name: name.to_string(),
+            face_index: Default::default(),
             units_per_em: 1000,
+            size_adjust: 1.0,
             bbox: [0, -200, 1000, 800],
-            pdf_metrics: metrics,
-            layout_metrics: metrics,
+            vertical_metrics: FontVerticalMetricSet::from(metrics),
             cmap: std::collections::HashMap::new(),
             glyph_widths: vec![500],
             num_h_metrics: 1,
             flags: 0,
+            is_bold: false,
+            is_italic: false,
+            text_metrics: Default::default(),
             data: std::sync::Arc::new(vec![]),
         }
     }
@@ -709,6 +966,73 @@ mod tests {
         fonts.insert("arial__italic".to_string(), stub_font("Arial Italic"));
         let (key, _) = find_font(&fonts, "Arial", false, true).unwrap();
         assert_eq!(key, "arial__italic");
+    }
+
+    #[test]
+    fn stretch_selection_prefers_the_matching_face_key() {
+        let mut fonts = HashMap::new();
+        fonts.insert("pick".to_string(), stub_font("Pick Normal"));
+        fonts.insert(
+            font_variant_key_with_stretch("Pick", false, false, FontStretch::Condensed),
+            stub_font("Pick Condensed"),
+        );
+        fonts.insert(
+            font_variant_key_with_stretch("Pick", true, false, FontStretch::Condensed),
+            stub_font("Pick Condensed Bold"),
+        );
+        fonts.insert(
+            font_variant_key_with_stretch("Pick", false, false, FontStretch::Expanded),
+            stub_font("Pick Expanded"),
+        );
+
+        let (key, font) =
+            find_font_with_stretch(&fonts, "Pick", false, false, FontStretch::Condensed)
+                .expect("condensed face");
+        assert_eq!(key, "pick__condensed");
+        assert_eq!(font.font_name, "Pick Condensed");
+
+        let selected = resolve_font_family(
+            &parse_font_stack("Pick"),
+            &fonts,
+            false,
+            false,
+            FontStretch::Condensed,
+        );
+        assert_eq!(selected, FontFamily::Custom("pick__condensed".to_string()));
+
+        let (key, font) =
+            find_font_with_stretch(&fonts, "Pick", true, false, FontStretch::Condensed)
+                .expect("condensed bold face");
+        assert_eq!(key, "pick__condensed__bold");
+        assert_eq!(font.font_name, "Pick Condensed Bold");
+
+        let (key, _) = find_font(&fonts, "pick__condensed", true, false)
+            .expect("resolved condensed bold face");
+        assert_eq!(key, "pick__condensed__bold");
+
+        let (key, _) =
+            find_font_with_stretch(&fonts, "Pick", false, false, FontStretch::SemiCondensed)
+                .expect("closest condensed face");
+        assert_eq!(key, "pick__condensed");
+
+        let (key, _) =
+            find_font_with_stretch(&fonts, "Pick", false, false, FontStretch::SemiExpanded)
+                .expect("closest expanded face");
+        assert_eq!(key, "pick__expanded");
+    }
+
+    #[test]
+    fn stretch_matching_precedes_weight_fallback() {
+        let mut fonts = HashMap::new();
+        fonts.insert(
+            font_variant_key_with_stretch("Pick", false, false, FontStretch::Condensed),
+            stub_font("Pick Condensed"),
+        );
+        fonts.insert("pick__bold".to_string(), stub_font("Pick Normal Bold"));
+
+        let (key, _) = find_font_with_stretch(&fonts, "Pick", true, false, FontStretch::Condensed)
+            .expect("condensed face precedes normal-width bold");
+        assert_eq!(key, "pick__condensed");
     }
 
     #[test]
@@ -758,7 +1082,7 @@ mod tests {
         let mut fonts = HashMap::new();
         fonts.insert("roboto".to_string(), stub_font("Roboto"));
         let stack = parse_font_stack("Roboto, sans-serif");
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::Custom("roboto".to_string()));
     }
 
@@ -766,7 +1090,7 @@ mod tests {
     fn resolve_font_family_returns_builtin_helvetica() {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let stack = FontStack::from_family(FontFamily::Helvetica);
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::Helvetica);
     }
 
@@ -774,7 +1098,7 @@ mod tests {
     fn resolve_font_family_returns_builtin_times_roman() {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let stack = FontStack::from_family(FontFamily::TimesRoman);
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::TimesRoman);
     }
 
@@ -782,7 +1106,7 @@ mod tests {
     fn resolve_font_family_returns_builtin_courier() {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let stack = FontStack::from_family(FontFamily::Courier);
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::Courier);
     }
 
@@ -791,15 +1115,67 @@ mod tests {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         // "Roboto" is parsed as Custom; "serif" maps to TimesRoman.
         let stack = parse_font_stack("Roboto, serif");
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::TimesRoman);
+    }
+
+    #[test]
+    fn resolve_generic_prefers_font_registered_under_generic_name() {
+        // A face explicitly registered under the generic CSS family name
+        // (as `add_font("monospace", …)` does) wins over the bundled fallback,
+        // so the caller's chosen outlines and `line-height: normal` metrics win.
+        for (css, key) in [
+            ("monospace", "monospace"),
+            ("sans-serif", "sans-serif"),
+            ("serif", "serif"),
+        ] {
+            let mut fonts = HashMap::new();
+            fonts.insert(key.to_string(), stub_font(key));
+            let result = resolve_font_family(
+                &parse_font_stack(css),
+                &fonts,
+                false,
+                false,
+                FontStretch::Normal,
+            );
+            assert_eq!(result, FontFamily::Custom(key.to_string()), "css={css}");
+        }
+    }
+
+    #[test]
+    fn resolve_generic_regular_only_does_not_shadow_real_bold() {
+        // A regular-only generic registration must NOT shadow a genuine bold
+        // face available under another key: the bold request falls through.
+        let mut fonts = HashMap::new();
+        fonts.insert("sans-serif".to_string(), stub_font("Generic Sans"));
+        let mut bold = stub_font("Liberation Sans Bold");
+        bold.is_bold = true;
+        fonts.insert("liberation sans__bold".to_string(), bold);
+        // Regular -> the registered generic face.
+        let reg = resolve_font_family(
+            &parse_font_stack("sans-serif"),
+            &fonts,
+            false,
+            false,
+            FontStretch::Normal,
+        );
+        assert_eq!(reg, FontFamily::Custom("sans-serif".to_string()));
+        // Bold -> the real bold face, not the regular-only generic.
+        let b = resolve_font_family(
+            &parse_font_stack("sans-serif"),
+            &fonts,
+            true,
+            false,
+            FontStretch::Normal,
+        );
+        assert_eq!(b, FontFamily::Custom("liberation sans__bold".to_string()));
     }
 
     #[test]
     fn resolve_font_family_defaults_to_helvetica_when_all_custom_missing() {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         let stack = FontStack::from_family(FontFamily::Custom("Roboto".to_string()));
-        let result = resolve_font_family(&stack, &fonts, false, false);
+        let result = resolve_font_family(&stack, &fonts, false, false, FontStretch::Normal);
         assert_eq!(result, FontFamily::Helvetica);
     }
 
@@ -986,6 +1362,17 @@ mod tests {
             &query,
             "DejaVu Sans,DejaVu Sans Condensed"
         ));
+    }
+
+    #[test]
+    fn fontconfig_match_preserves_the_ttc_face_index() {
+        let query = SystemFontQuery::new("Noto Sans CJK SC", FontVariant::new(false, false));
+        let resolved =
+            parse_fontconfig_match(&query, "Noto Sans CJK SC\n/tmp/NotoSansCJK-Regular.ttc\n2")
+                .expect("valid fontconfig match");
+
+        assert_eq!(resolved.path, "/tmp/NotoSansCJK-Regular.ttc");
+        assert_eq!(resolved.face_index.get(), 2);
     }
 
     // ── load_unicode_fallback_font ──────────────────────────────────────────

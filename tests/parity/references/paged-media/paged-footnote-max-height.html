@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  Standards-derived oracle source for paged-footnote-max-height.
+
+  CSS GCPM §2.4.2 permits a footnote area to exceed its max-height when the
+  page contains only footnotes. WeasyPrint 69 clips the final line in that
+  situation. This source materializes the required second-page footnote area
+  as a bottom-aligned page-content box, preserving the page size, margins,
+  text metrics, separator, and complete footnote body without using candidate
+  output or raster manipulation. CSS Fonts 4 requires a synthesized reduced
+  superscript when ParitySans has no `sups` glyph. The static call below
+  materializes that conventional synthesis without changing its line box.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>footnote area max height reference</title>
+  <style>
+    @page { size: 200px 150px; margin: 10px; }
+    html { font-family: ParitySans; line-height: 1.5; font-size: 12px; }
+    * { margin: 0; box-sizing: border-box; }
+    .lead { height: 80px; background: #bfdbfe; }
+    .footnote-call {
+      font-size: 80%;
+      line-height: inherit;
+      position: relative;
+      /* 0.38 × originating 12px em. Relative positioning preserves the
+         baseline-aligned inline box required by font-variant-position. */
+      bottom: 4.56px;
+    }
+    .footnote-page { position: relative; height: 130px; break-before: page; }
+    .footnote-area {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      border-top: 2px solid #111;
+    }
+  </style>
+</head>
+<body>
+  <div class="lead"></div>
+  <p>Line with note<span class="footnote-call">1</span></p>
+  <div class="footnote-page">
+    <div class="footnote-area">1. long note one long note two long note three long note four</div>
+  </div>
+</body>
+</html>
