@@ -34,14 +34,16 @@ Criterion measures complete, in-process conversion to PDF bytes:
 
 | Document | Representative median | Approx. conversions/sec |
 |----------|----------------------:|------------------------:|
-| Simple HTML (`<h1>` + `<p>`) | **1.3 ms** | 770 |
-| Styled HTML (CSS, lists, links) | **5.8 ms** | 170 |
-| Markdown (headings, code, lists) | **11 ms** | 89 |
-| Table (5 rows, styled headers) | **13 ms** | 75 |
-| Full report (tables, flex, progress bars) | **30 ms** | 33 |
+| Simple HTML (`<h1>` + `<p>`) | **0.93 ms** | 1,080 |
+| Styled HTML (CSS, lists, links) | **3.5 ms** | 285 |
+| Table (5 rows, styled headers) | **5.9 ms** | 170 |
+| Markdown (headings, code, lists) | **7.0 ms** | 143 |
+| Full report (tables, flex, progress bars) | **15.9 ms** | 63 |
+| Full report + header/footer | **15.9 ms** | 63 |
+| 200 CJK text-emphasis spans | **310 ms** | 3.2 |
 
-Measured on Linux x86-64 with a Ryzen 9 5950X and Rust 1.97.1 at commit
-`b4536834`. The benchmark profile uses `opt-level=3`, fat LTO, and one codegen
+Measured on macOS ARM (Apple M2) with Rust 1.94.0 at commit
+`600aadb`. The benchmark profile uses `opt-level=3`, fat LTO, and one codegen
 unit. Results depend on hardware and document content; conversions/sec is not a
 page-throughput claim. Reproduce the measurements with:
 
