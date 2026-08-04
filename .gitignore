@@ -19,6 +19,14 @@ target/parity-tmp/
 # IDE
 .idea/
 
+# stray parity artifacts and scratch dirs at repo root (keep them out of the tree)
+/*-ch.pdf
+/*-rast.png
+/tmpdiag/
+/.scratch/
+/pdfcmp_tmp/
+/chtmp/
+
 # generated parity render artifacts (browsable on the parity-report branch)
 /tests/parity/refs/
 /tests/parity/out/
