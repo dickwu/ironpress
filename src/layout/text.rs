@@ -25,7 +25,7 @@ use super::engine::{
 };
 use super::helpers::DropCap;
 use super::inline_formatting::{
-    GeneratedContentStyles, InlineContentSequence, InlineSiblingCursor,
+    GeneratedContentStyles, InlineContentSequence, InlineFormattingRole, InlineSiblingCursor,
 };
 use super::list_markers::format_counter_value;
 use super::text_emphasis::TextEmphasisMetrics;
@@ -3341,35 +3341,36 @@ fn collect_text_runs_inner(
             }
             DomNode::Element(el) => {
                 let selector_ctx = siblings.next_context(el, ancestors);
-                if super::engine::collects_as_inline_text(el.tag) || el.tag == HtmlTag::Br {
-                    if el.tag == HtmlTag::Br {
-                        runs.push(TextRun {
-                            text: "\n".to_string(),
-                            font_size: used_font_size(parent_style, fonts),
-                            font_family: resolve_style_font_family(parent_style, fonts),
-                            line_height_factor: text_run_line_height_factor(parent_style, fonts),
-                            ..Default::default()
-                        });
-                    } else if el.attributes.contains_key("data-math") {
-                        // Skip math elements — they are rendered as MathBlock
-                        // by flatten_element, not as inline text runs.
+                if el.tag == HtmlTag::Br {
+                    runs.push(TextRun {
+                        text: "\n".to_string(),
+                        font_size: used_font_size(parent_style, fonts),
+                        font_family: resolve_style_font_family(parent_style, fonts),
+                        line_height_factor: text_run_line_height_factor(parent_style, fonts),
+                        ..Default::default()
+                    });
+                    continue;
+                }
+
+                let classes = el.class_list();
+                let style = compute_style_with_context_with_font_metrics(
+                    el.tag,
+                    el.style_attr(),
+                    parent_style,
+                    rules,
+                    el.tag_name(),
+                    &classes,
+                    el.id(),
+                    &el.attributes,
+                    &selector_ctx,
+                    FontMetrics::new(fonts),
+                );
+                let role = InlineFormattingRole::of(el, &style);
+                if role.uses_text_run_layout(el) {
+                    if el.attributes.contains_key("data-math") {
+                        // Math elements are rendered as MathBlock by
+                        // flatten_element, not as inline text runs.
                     } else {
-                        let classes = el.class_list();
-                        let style = compute_style_with_context_with_font_metrics(
-                            el.tag,
-                            el.style_attr(),
-                            parent_style,
-                            rules,
-                            el.tag_name(),
-                            &classes,
-                            el.id(),
-                            &el.attributes,
-                            &selector_ctx,
-                            FontMetrics::new(fonts),
-                        );
-                        if style.position.is_absolute() {
-                            continue;
-                        }
                         let counter_scope = counter_state.enter_element(&style);
                         if style.float == Float::Footnote {
                             let mut footnote_text = String::new();

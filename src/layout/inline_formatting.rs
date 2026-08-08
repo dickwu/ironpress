@@ -642,6 +642,14 @@ impl AtomicInlineKind {
 }
 
 impl InlineFormattingRole {
+    /// Text and the established embedded inline-block path are collected as
+    /// runs. Other atomic boxes are owned by their source-ordered row segment.
+    pub(crate) fn uses_text_run_layout(self, element: &ElementNode) -> bool {
+        matches!(self, Self::Text)
+            || matches!(self, Self::Atomic(AtomicInlineKind::InlineBlock))
+                && element.tag.is_inline()
+    }
+
     pub(crate) fn of(element: &ElementNode, style: &ComputedStyle) -> Self {
         if style.display == Display::None {
             return Self::Hidden;
@@ -782,15 +790,33 @@ impl<'a> InlineFormattingContext<'a> {
         saw_atomic
     }
 
-    /// Maximal source-order ranges that remain inside one inline formatting
-    /// context and contain an environment-aware atomic inline.
-    ///
-    /// Block/table participants split the ranges but do not force later inline
-    /// content onto the legacy per-element path. Each returned sequence retains
-    /// the complete sibling list for selector matching.
+    /// Maximal source-order ranges that contain any atomic inline and remain
+    /// inside one inline formatting context.
     pub(crate) fn atomic_layout_segments<'b>(
         &self,
         sequence: InlineContentSequence<'b>,
+    ) -> Vec<InlineContentSequence<'b>> {
+        self.atomic_layout_segments_requiring(sequence, |_| true)
+    }
+
+    /// Maximal source-order ranges that contain an atomic inline requiring
+    /// access to the layout environment.
+    pub(crate) fn environment_aware_atomic_layout_segments<'b>(
+        &self,
+        sequence: InlineContentSequence<'b>,
+    ) -> Vec<InlineContentSequence<'b>> {
+        self.atomic_layout_segments_requiring(sequence, |kind| {
+            kind.requires_environment_aware_layout()
+        })
+    }
+
+    /// Block/table participants split ranges without forcing later inline
+    /// content onto the legacy per-element path. Each returned sequence keeps
+    /// the complete sibling list for selector matching.
+    fn atomic_layout_segments_requiring<'b>(
+        &self,
+        sequence: InlineContentSequence<'b>,
+        requires_segment: impl Fn(AtomicInlineKind) -> bool,
     ) -> Vec<InlineContentSequence<'b>> {
         let source = sequence.source_nodes();
         let mut siblings =
@@ -820,7 +846,7 @@ impl<'a> InlineFormattingContext<'a> {
 
             match InlineFormattingRole::of(element, &style) {
                 InlineFormattingRole::Atomic(kind) => {
-                    segment_has_atomic |= kind.requires_environment_aware_layout();
+                    segment_has_atomic |= requires_segment(kind);
                 }
                 InlineFormattingRole::OutOfFlow => {}
                 InlineFormattingRole::Outside => {
