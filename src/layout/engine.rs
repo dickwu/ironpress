@@ -2931,7 +2931,7 @@ pub(crate) fn flatten_nodes(
     }
     let atomic_inline_segments =
         InlineFormattingContext::new(parent_style, env.rules, ancestors, env.font_metrics())
-            .atomic_layout_segments(inline_sequence);
+            .environment_aware_atomic_layout_segments(inline_sequence);
     let mut atomic_inline_segments = atomic_inline_segments.into_iter().peekable();
     let mut element_index = 0;
     let mut preceding_siblings: Vec<(String, Vec<String>)> = Vec::new();

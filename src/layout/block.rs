@@ -1081,8 +1081,51 @@ pub(crate) fn layout_block_element(
             } else {
                 output
             };
+            // Atomic inlines need one source-ordered row before a block sibling
+            // splits the surrounding formatting context.
+            let mut atomic_inline_segments =
+                InlineFormattingContext::new(style, env.rules, child_ancestors, env.font_metrics())
+                    .atomic_layout_segments(inline_sequence)
+                    .into_iter()
+                    .peekable();
+            let mut emitted_atomic_until = 0;
             let mut child_el_idx = 0;
             for (child_index, child) in el.children.iter().enumerate() {
+                if atomic_inline_segments
+                    .peek()
+                    .is_some_and(|segment| segment.start() == child_index)
+                {
+                    flush_runs(
+                        &mut runs,
+                        inner_width,
+                        style,
+                        available_width,
+                        block_w,
+                        effective_height,
+                        auto_offset_left,
+                        el,
+                        target,
+                        env.fonts,
+                    );
+                    if let Some(segment) = atomic_inline_segments.next()
+                        && layout_inline_mixed_sequence_with_env(
+                            segment,
+                            style,
+                            &ctx.with_parent(inner_width, Some(available_height), style.font_size),
+                            target,
+                            child_ancestors,
+                            env,
+                        )
+                    {
+                        emitted_atomic_until = segment.end();
+                    }
+                }
+                if child_index < emitted_atomic_until {
+                    if matches!(child, DomNode::Element(_)) {
+                        child_el_idx += 1;
+                    }
+                    continue;
+                }
                 match child {
                     DomNode::Text(_) => {
                         InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
