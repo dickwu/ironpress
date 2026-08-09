@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.5.0] — 2026-08-09
+
+### Added
+
+- Python now exposes the complete `HtmlConverter` builder, custom fonts,
+  file output, and Markdown conversion.
+- Ruby now provides `Ironpress::HtmlConverter` with the same builder controls
+  as the Rust API.
+
+### Fixed
+
+- Inline and atomic inline siblings keep their source order when a block
+  splits the surrounding formatting context.
+
+### Security
+
+- Python bindings use PyO3 0.29.
+- The parity workflow now has explicit read-only repository permissions.
+
+### CI
+
+- Parity and playground reports use the same pinned Poppler and font runtime.
+
+### Documentation
+
+- Benchmarks now include Apple M2 results, headers and footers, and CJK text
+  emphasis.
+
 ## [1.4.4] — 2026-07-29
 
 ### Chromium visual parity
