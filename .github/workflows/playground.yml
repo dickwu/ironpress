@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -48,11 +48,7 @@ jobs:
       - name: Install build tools
         run: |
           command -v wasm-pack || cargo install wasm-pack
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq poppler-utils fonts-liberation fonts-dejavu-core fonts-noto-cjk
-          mkdir -p "$HOME/.local/share/fonts"
-          cp tests/parity/fonts/Parity*.ttf "$HOME/.local/share/fonts/"
-          fc-cache -f
+          scripts/parity-install-runtime.sh
 
       - name: Build playground
         run: |
@@ -63,6 +59,7 @@ jobs:
       - name: Build feature parity report
         env:
           FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
+          PARITY_PDFTOPPM: /usr/bin/pdftoppm
         run: scripts/parity.sh
 
       - name: Stage feature parity report
