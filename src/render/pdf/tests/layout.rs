@@ -285,13 +285,34 @@ fn absolute_position_offset() {
 }
 
 #[test]
-fn float_right_position() {
-    let html = r#"<div style="float: right; width: 100pt">Floated</div>"#;
-    let nodes = parse_html(html).unwrap();
-    let pages = layout(&nodes, PageSize::A4, Margin::default());
-    let pdf = render_pdf(&pages, PageSize::A4, Margin::default()).unwrap();
+fn nested_float_right_aligns_to_containing_block_edge() {
+    let html = r#"
+        <style>
+            @page { size: 400pt 200pt; margin: 0; }
+            html, body { margin: 0; }
+        </style>
+        <div style="width: 300pt; height: 100pt; background: #ff0000">
+            <div style="float: right; width: 75pt; height: 50pt; background: #00ff00">
+                Floated
+            </div>
+        </div>
+    "#;
+    let pdf = crate::HtmlConverter::new()
+        .compress(false)
+        .convert(html)
+        .unwrap();
     let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(pdf_str.contains("Floated"), "Should contain floated text");
+    let containing_block = rect_after_color(&pdf_str, "1 0 0 rg")
+        .expect("containing block background should be painted");
+    let floated_block =
+        rect_after_color(&pdf_str, "0 1 0 rg").expect("floated block background should be painted");
+
+    let containing_right = containing_block.0 + containing_block.2;
+    let floated_right = floated_block.0 + floated_block.2;
+    assert!(
+        (floated_right - containing_right).abs() < 0.01,
+        "float:right should align to its containing block's right edge: containing={containing_block:?}, floated={floated_block:?}"
+    );
 }
 
 #[test]

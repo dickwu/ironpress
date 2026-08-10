@@ -11820,54 +11820,6 @@ line 3</pre>
         );
     }
 
-    // --- Issue #101: float right positioning (layout side) ---
-    // Note: float positioning is handled by the renderer, not the layout engine.
-    // This test documents the current limitation: offset_left is 0 from layout.
-
-    #[test]
-    #[ignore] // TODO: fix float:right layout positioning (#101)
-    fn float_right_positions_at_right_edge() {
-        let html = r#"
-        <div style="width: 400px">
-            <div style="float: right; width: 100px; height: 50px; background: pink">Float</div>
-            <p>Text should wrap around the float.</p>
-        </div>
-        "#;
-        let nodes = parse_html(html).unwrap();
-        let pages = layout(&nodes, PageSize::A4, Margin::default());
-        // Find the floated element (pink background)
-        for (_, element) in &pages[0].elements {
-            if let Some(offset_left) = element
-                .inspect_text(|block| {
-                    (block.flow.float == Float::Right
-                        && !block.box_model.size.width.is_fill_available())
-                    .then_some(block.positioning.insets.left)
-                })
-                .flatten()
-            {
-                // Float right should have offset_left > 0 (pushed right)
-                // In a 400px (300pt) container with a 100px (75pt) float,
-                // the float should be near the right edge
-                assert!(
-                    offset_left > 50.0,
-                    "float:right should be positioned rightward, got offset_left={offset_left}"
-                );
-                return;
-            }
-        }
-        // Float right may not produce offset_left — the renderer handles it.
-        // Just verify the float property is preserved.
-        for (_, element) in &pages[0].elements {
-            if element
-                .inspect_text(|block| block.flow.float == Float::Right)
-                .unwrap_or(false)
-            {
-                return; // Float property is at least preserved
-            }
-        }
-        panic!("did not find any element with float:right");
-    }
-
     // --- Issue #103: horizontal separators via border-bottom ---
 
     #[test]
