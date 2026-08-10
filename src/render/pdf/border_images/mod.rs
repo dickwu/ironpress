@@ -353,7 +353,9 @@ pub(super) fn render_border_image(
     if image_area.is_empty() {
         return true;
     }
-    let Some(mut source) = resolve_border_image_source(&border_image.source) else {
+    let Some(mut source) =
+        resolve_border_image_source(&border_image.source, &mut pdf_writer.resources)
+    else {
         return false;
     };
     let clamp_slice_edges = source.needs_slice_edge_clamp();

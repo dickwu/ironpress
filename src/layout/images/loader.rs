@@ -6,38 +6,13 @@ use crate::layout::engine::{ImageFormat, LayoutBorder, PngMetadata, RasterImageA
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::dom::ElementNode;
 use crate::parser::png;
+use crate::security::resources::ResourceLoader;
 use crate::style::computed::ComputedStyle;
 use crate::types::Size;
-use crate::util::decode_base64;
 
 use super::placement::{ReplacedBoxSize, parse_html_image_dimension};
 use super::raster::decode_png_to_rgb_asset;
-use super::source::{fetch_remote_url, percent_decode};
 use super::svg::{resolve_svg_size, sync_svg_tree_to_layout_box};
-
-/// Load raw bytes from a `src` attribute value.
-pub(crate) fn load_src_bytes(src: &str) -> Option<(Vec<u8>, Option<String>)> {
-    if let Some(rest) = src.strip_prefix("data:") {
-        let (header, encoded) = rest.split_once(',')?;
-        let header_lower = header.to_ascii_lowercase();
-        let bytes = if header_lower.contains("base64") {
-            decode_base64(encoded)?
-        } else {
-            // Plain-text or percent-encoded data URI — decode %XX sequences.
-            percent_decode(encoded).into_bytes()
-        };
-        let mime = if header_lower.is_empty() {
-            None
-        } else {
-            Some(header_lower)
-        };
-        Some((bytes, mime))
-    } else if src.starts_with("http://") || src.starts_with("https://") {
-        Some((fetch_remote_url(src)?, None))
-    } else {
-        Some((std::fs::read(src).ok()?, None))
-    }
-}
 
 /// Heuristic SVG sniff over raw bytes (first 512 bytes, UTF-8-lossy so binary
 /// content is safely rejected): true when the content looks like an XML/SVG
@@ -136,6 +111,7 @@ pub(crate) fn load_image_bytes(raw: Vec<u8>) -> Option<RasterImageAsset> {
 /// is parsed as vector graphics ([`Svg`]); otherwise it falls back to a raster
 /// PNG/JPEG [`Image`].
 pub(crate) fn load_image_from_element(
+    resources: &mut ResourceLoader,
     el: &ElementNode,
     available_width: f32,
     available_height: f32,
@@ -145,7 +121,8 @@ pub(crate) fn load_image_from_element(
     let src = el.attributes.get("src")?;
 
     // Load bytes once.
-    let (raw, mime) = load_src_bytes(src)?;
+    let loaded = resources.load_document_resource(src)?;
+    let (raw, mime) = (loaded.bytes, loaded.media_type);
 
     // For data URIs with a non-SVG MIME type, skip the SVG probe entirely.
     let skip_svg = mime

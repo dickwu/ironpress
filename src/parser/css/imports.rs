@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::security::resources::DocumentResources;
 #[cfg(test)]
-use crate::security::resources::ResourceAccess;
+use crate::security::resources::NetworkPolicy;
 use crate::util::decode_base64;
 
 use super::{ImportRule, preprocess_media_queries};
@@ -75,7 +75,7 @@ pub fn parse_import_rules(css: &str) -> Vec<ImportRule> {
 /// Recursion is limited to [`MAX_IMPORT_DEPTH`] levels to prevent infinite loops.
 #[cfg(test)]
 pub(crate) fn resolve_imports(css: &str, base_dir: &Path, depth: usize) -> String {
-    let resources = DocumentResources::new(ResourceAccess::Trusted, Some(base_dir), None);
+    let resources = DocumentResources::new(Some(base_dir), None, NetworkPolicy::default());
     let mut total_imported = 0usize;
     resolve_imports_authorized(
         css,
@@ -189,7 +189,7 @@ pub(crate) fn resolve_imports_inner(
     total_imported: &mut usize,
     max_total: usize,
 ) -> String {
-    let resources = DocumentResources::new(ResourceAccess::Trusted, Some(base_dir), None);
+    let resources = DocumentResources::new(Some(base_dir), None, NetworkPolicy::default());
     resolve_imports_authorized(css, base_dir, depth, total_imported, max_total, &resources)
 }
 
@@ -517,7 +517,7 @@ mod tests {
         )
         .expect("imported stylesheet");
         let resources =
-            DocumentResources::new(ResourceAccess::Sanitized, Some(directory.path()), None);
+            DocumentResources::new(Some(directory.path()), None, NetworkPolicy::default());
 
         let resolved = resolve_imports_with_resources("@import \"styles/nested.css\";", &resources);
         assert!(

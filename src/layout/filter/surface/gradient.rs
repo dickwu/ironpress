@@ -98,6 +98,7 @@ impl FilterBackground {
             || background.layers.radial_gradient.is_some()
             || background.layers.conic_gradient.is_some()
             || background.layers.svg.is_some()
+            || background.layers.raster_source.is_some()
             || background.layers.blur_radius != 0.0
         {
             return None;

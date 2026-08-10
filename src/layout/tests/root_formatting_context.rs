@@ -121,6 +121,7 @@ fn projected_body_padding_is_not_subtracted_from_root_percentages_twice() {
     let page_margin = Margin::new(24.0, 6.0, 12.0, 18.0);
     let root_insets = Margin::new(0.0, 6.0, 0.0, 6.0);
     let flow_margin = page_margin + root_insets;
+    let mut resources = crate::security::resources::ResourceLoader::default();
     let pages = layout_with_rules_and_fonts_raster_quality(
         &document.nodes,
         DocumentGeometry::new(page, flow_margin)
@@ -139,6 +140,7 @@ fn projected_body_padding_is_not_subtracted_from_root_percentages_twice() {
             0.0,
         ),
         RasterQuality::default(),
+        &mut resources,
     );
     let mut width = GreenWidth::default();
     for (_, element) in &pages[0].elements {
@@ -201,6 +203,7 @@ fn viewport_math_uses_page_area_before_projected_body_padding() {
         0.0,
         RasterQuality::default(),
     );
+    let mut resources = crate::security::resources::ResourceLoader::default();
     let pages = layout_with_rules_and_fonts_raster_quality(
         &document.nodes,
         DocumentGeometry::new(page, projected_body_padding)
@@ -214,6 +217,7 @@ fn viewport_math_uses_page_area_before_projected_body_padding() {
             0.0,
         ),
         RasterQuality::default(),
+        &mut resources,
     );
     let mut width = BarWidth::default();
     for (_, element) in &pages[0].elements {

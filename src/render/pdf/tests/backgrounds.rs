@@ -245,7 +245,11 @@ fn render_fragmented_jpeg_background(
     clip_box: SvgViewportBox,
     repeat: BackgroundRepeat,
 ) -> (String, Vec<ImageRef>) {
-    let tree = crate::layout::images::build_raster_background_tree(TEST_JPEG_DATA_URI)
+    let mut resources = crate::security::resources::ResourceLoader::default();
+    let tree = crate::layout::images::build_raster_background_tree(
+        &mut resources,
+        TEST_JPEG_DATA_URI,
+    )
         .expect("test JPEG should produce a raster background tree");
     let mut content = String::new();
     let mut pdf_writer = PdfWriter::new();
@@ -461,9 +465,9 @@ fn root_svg_background_with_gradient_registers_shading_resources() {
 
 #[test]
 fn table_cell_nested_background_block_renders_image_xobject() {
-    let path = write_test_png_file("table-cell-pdf-bg", &build_minimal_test_png());
+    let encoded = crate::layout::images::base64_encode(&build_minimal_test_png());
     let html = format!(
-        r#"<table><tr><td><div style="display: flex; width: 40pt; aspect-ratio: 1 / 1; background-image: url('{path}'); background-repeat: no-repeat;"></div></td></tr></table>"#
+        r#"<table><tr><td><div style="display: flex; width: 40pt; aspect-ratio: 1 / 1; background-image: url('data:image/png;base64,{encoded}'); background-repeat: no-repeat;"></div></td></tr></table>"#
     );
     let nodes = parse_html(&html).unwrap();
     let pages = layout(&nodes, PageSize::A4, Margin::default());

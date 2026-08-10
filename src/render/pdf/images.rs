@@ -31,6 +31,13 @@ impl SvgPageImageSink<'_> {
 }
 
 impl crate::render::svg_to_pdf::SvgImageObjectSink for SvgPageImageSink<'_> {
+    fn load_resource(
+        &mut self,
+        reference: &str,
+    ) -> Option<crate::security::resources::LoadedResource> {
+        self.pdf_writer.resources.load_document_resource(reference)
+    }
+
     fn register_raster(
         &mut self,
         raw_image: &[u8],

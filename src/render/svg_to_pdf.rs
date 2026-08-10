@@ -17,6 +17,13 @@ use crate::types::Color;
 use std::fmt::Write as _;
 
 pub(crate) trait SvgImageObjectSink {
+    fn load_resource(
+        &mut self,
+        _reference: &str,
+    ) -> Option<crate::security::resources::LoadedResource> {
+        None
+    }
+
     fn register_raster(
         &mut self,
         raw_image: &[u8],
@@ -74,6 +81,19 @@ impl<'a> SvgPdfResources<'a> {
         self.image_sink
             .as_deref_mut()?
             .register_raster(raw_image, display_w_pt, display_h_pt)
+    }
+
+    fn load_resource(
+        &mut self,
+        reference: &str,
+    ) -> Option<crate::security::resources::LoadedResource> {
+        self.image_sink
+            .as_deref_mut()
+            .and_then(|sink| sink.load_resource(reference))
+            .or_else(|| {
+                crate::security::resources::ResourceLoader::default()
+                    .load_document_resource(reference)
+            })
     }
 
     fn raster_display_size(&self, width: f32, height: f32) -> (f32, f32) {
@@ -1699,9 +1719,10 @@ fn render_image_with_resources(
     let Some(href) = href else {
         return;
     };
-    let Some((raw, mime)) = crate::layout::images::load_src_bytes(href) else {
+    let Some(loaded) = resources.load_resource(href) else {
         return;
     };
+    let (raw, mime) = (loaded.bytes, loaded.media_type);
 
     if is_svg_image_resource(mime.as_deref(), &raw) {
         if let Some(tree) = parse_svg_image_tree(&raw) {
@@ -1973,7 +1994,6 @@ mod tests {
         SvgLinearGradient, SvgNode, SvgPaint, SvgPreserveAspectRatio, SvgStyle, SvgTextContext,
         SvgTransform, SvgTree,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn style_fill(r: f32, g: f32, b: f32) -> SvgStyle {
         SvgStyle {
@@ -2048,25 +2068,6 @@ mod tests {
             text_ctx: SvgTextContext::default(),
             source_markup: None,
         }
-    }
-
-    fn unique_temp_path(extension: &str) -> std::path::PathBuf {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "ironpress-svg-image-node-{}-{}.{}",
-            std::process::id(),
-            id,
-            extension
-        ))
-    }
-
-    fn unique_temp_svg_path() -> std::path::PathBuf {
-        unique_temp_path("svg")
-    }
-
-    fn unique_temp_png_path() -> std::path::PathBuf {
-        unique_temp_path("png")
     }
 
     struct TestImageSink {
@@ -3103,22 +3104,25 @@ mod tests {
 
     #[test]
     fn render_image_png_data_uri_uses_inline_image() {
-        let png_path = unique_temp_png_path();
+        let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0])))
-            .save_with_format(&png_path, image::ImageFormat::Png)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
+        let href = format!(
+            "data:image/png;base64,{}",
+            crate::layout::images::base64_encode(&png)
+        );
         let tree = tree_with(vec![SvgNode::Image {
             x: 0.0,
             y: 0.0,
             width: 30.0,
             height: 20.0,
-            href: png_path.to_string_lossy().into_owned(),
+            href,
             preserve_aspect_ratio: SvgPreserveAspectRatio::None,
             style: SvgStyle::default(),
         }]);
         let mut out = String::new();
         render_svg_tree(&tree, &mut out);
-        let _ = std::fs::remove_file(png_path);
         assert!(out.contains("BI\n"), "inline image should use BI");
         assert!(out.contains("/W 1\n"), "PNG width should be embedded");
         assert!(out.contains("/H 1\n"), "PNG height should be embedded");
@@ -3134,21 +3138,25 @@ mod tests {
 
     #[test]
     fn render_image_alpha_png_uses_xobject_when_sink_is_available() {
-        let png_path = unique_temp_png_path();
+        let mut png = Vec::new();
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             1,
             1,
             image::Rgba([255, 0, 0, 128]),
         ))
-        .save_with_format(&png_path, image::ImageFormat::Png)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
+        let href = format!(
+            "data:image/png;base64,{}",
+            crate::layout::images::base64_encode(&png)
+        );
 
         let tree = tree_with(vec![SvgNode::Image {
             x: 0.0,
             y: 0.0,
             width: 30.0,
             height: 20.0,
-            href: png_path.to_string_lossy().into_owned(),
+            href,
             preserve_aspect_ratio: SvgPreserveAspectRatio::None,
             style: SvgStyle::default(),
         }]);
@@ -3171,7 +3179,6 @@ mod tests {
         };
 
         render_svg_tree_with_resources(&tree, &mut out, &mut resources);
-        let _ = std::fs::remove_file(png_path);
 
         assert!(
             !out.contains("BI\n"),
@@ -3216,25 +3223,23 @@ mod tests {
 
     #[test]
     fn render_image_svg_file_renders_nested_svg() {
-        let svg_path = unique_temp_svg_path();
-        std::fs::write(
-            &svg_path,
-            r#"<svg width="10" height="5"><rect width="10" height="5"/></svg>"#,
-        )
-        .unwrap();
+        let svg = r#"<svg width="10" height="5"><rect width="10" height="5"/></svg>"#;
+        let href = format!(
+            "data:image/svg+xml;base64,{}",
+            crate::layout::images::base64_encode(svg.as_bytes())
+        );
 
         let tree = tree_with(vec![SvgNode::Image {
             x: 0.0,
             y: 0.0,
             width: 20.0,
             height: 10.0,
-            href: svg_path.to_string_lossy().into_owned(),
+            href,
             preserve_aspect_ratio: SvgPreserveAspectRatio::default(),
             style: SvgStyle::default(),
         }]);
         let mut out = String::new();
         render_svg_tree(&tree, &mut out);
-        let _ = std::fs::remove_file(svg_path);
 
         assert!(
             out.contains("2 0 0 2"),

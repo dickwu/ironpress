@@ -1,5 +1,39 @@
 use super::*;
 
+fn load_svg_mask(
+    resources: &mut crate::security::resources::ResourceLoader,
+    reference: &str,
+) -> Option<Vec<u8>> {
+    let loaded = resources.load_document_resource(reference)?;
+    crate::layout::images::looks_like_svg(&loaded.bytes).then_some(loaded.bytes)
+}
+
+fn resolve_mask_layer(
+    resources: &mut crate::security::resources::ResourceLoader,
+    layer: &MaskLayer,
+) -> Option<MaskLayer> {
+    let mut layer = layer.clone();
+    if let MaskLayerSource::Url(reference) = &layer.source {
+        layer.source = MaskLayerSource::Svg(load_svg_mask(resources, reference)?);
+    }
+    Some(layer)
+}
+
+fn resolve_mask_source(
+    resources: &mut crate::security::resources::ResourceLoader,
+    source: &MaskSource,
+) -> Option<MaskSource> {
+    match source {
+        MaskSource::Url(reference) => load_svg_mask(resources, reference).map(MaskSource::Svg),
+        MaskSource::Layers(layers) => layers
+            .iter()
+            .map(|layer| resolve_mask_layer(resources, layer))
+            .collect::<Option<Vec<_>>>()
+            .map(MaskSource::Layers),
+        source => Some(source.clone()),
+    }
+}
+
 mod coverage;
 mod radial;
 
@@ -62,6 +96,8 @@ impl PdfWriter {
         mode: MaskMode,
         geometry: PaintBoxGeometry,
     ) -> Option<String> {
+        let source = resolve_mask_source(&mut self.resources, source)?;
+        let source = &source;
         let border_box = geometry.border_box;
         if border_box.is_empty() {
             return None;

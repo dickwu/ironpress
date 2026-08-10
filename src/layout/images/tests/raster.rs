@@ -9,17 +9,6 @@ fn try_parse_svg_bytes_accepts_utf8_bom_prefix() {
 }
 
 #[test]
-fn fetch_remote_url_returns_none_without_feature() {
-    // Without the "remote" feature, fetch_remote_url always returns None
-    let result = fetch_remote_url("https://example.com/image.png");
-    #[cfg(not(feature = "remote"))]
-    assert!(result.is_none());
-    // With the feature enabled, it would attempt a real HTTP request
-    // (which may or may not succeed depending on network)
-    let _ = result;
-}
-
-#[test]
 fn load_image_data_http_without_feature() {
     let result = load_image_data("http://example.com/test.jpg");
     #[cfg(not(feature = "remote"))]
@@ -175,10 +164,4 @@ fn try_parse_svg_bytes_rejects_comment_without_svg() {
         try_parse_svg_bytes(raw).is_none(),
         "Comment without <svg> should return None"
     );
-}
-#[test]
-fn percent_decode_basic() {
-    assert_eq!(percent_decode("%3Csvg%3E"), "<svg>");
-    assert_eq!(percent_decode("hello%20world"), "hello world");
-    assert_eq!(percent_decode("no%encoding"), "no%encoding");
 }

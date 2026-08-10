@@ -28,7 +28,11 @@ pub(super) fn render_flex_child(
     let background_gradient = &child.paint.background.layers.gradient;
     let background_radial_gradient = &child.paint.background.layers.radial_gradient;
     let background_conic_gradient = &child.paint.background.layers.conic_gradient;
-    let background_svg = &child.paint.background.layers.svg;
+    let background_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&child.paint.background.layers);
+    let background_svg = &background_svg;
     let background_blur_radius = &child.paint.background.layers.blur_radius;
     let flex_bg_size = &child.paint.background.layers.size;
     let flex_bg_pos = &child.paint.background.layers.position;

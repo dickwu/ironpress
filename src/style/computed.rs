@@ -480,9 +480,10 @@ pub enum MaskSource {
     Radial(RadialGradient),
     /// `conic-gradient(...)` / `repeating-conic-gradient(...)`.
     Conic(ConicGradient),
-    /// `url(...)` pointing at an SVG image (data URI or file). Holds the raw SVG
-    /// bytes; rasterised to a coverage buffer at paint time (css-masking-1 §3.2).
-    Svg(std::sync::Arc<Vec<u8>>),
+    /// An SVG image already available as bytes.
+    Svg(Vec<u8>),
+    /// A `url(...)` retained until the render-owned resource loader runs.
+    Url(String),
     /// A resolved CSS mask layer list.
     Layers(Vec<MaskLayer>),
     /// `mask-border-*` represented as a border-box ring coverage mask.
@@ -496,7 +497,8 @@ pub enum MaskLayerSource {
     Linear(LinearGradient),
     Radial(RadialGradient),
     Conic(ConicGradient),
-    Svg(std::sync::Arc<Vec<u8>>),
+    Svg(Vec<u8>),
+    Url(String),
     Ref(String),
 }
 
@@ -11660,7 +11662,7 @@ fn parse_mask_layer_source(raw: &str, current_color: Color) -> Option<MaskLayerS
         }
     }
     if lower.starts_with("url(") {
-        return parse_mask_url_svg(raw).map(MaskLayerSource::Svg);
+        return parse_mask_url(raw).map(MaskLayerSource::Url);
     }
     None
 }
@@ -11693,6 +11695,7 @@ fn mask_source_from_layers(layers: Vec<MaskLayer>) -> Option<Option<MaskSource>>
                     MaskLayerSource::Radial(g) => Some(Some(MaskSource::Radial(g))),
                     MaskLayerSource::Conic(g) => Some(Some(MaskSource::Conic(g))),
                     MaskLayerSource::Svg(bytes) => Some(Some(MaskSource::Svg(bytes))),
+                    MaskLayerSource::Url(url) => Some(Some(MaskSource::Url(url))),
                     MaskLayerSource::Ref(id) => Some(Some(MaskSource::Ref(id))),
                 }
             } else {
@@ -11845,6 +11848,10 @@ fn apply_mask_longhands(map: &StyleMap, style: &mut ComputedStyle, current_color
             MaskLayerSource::Svg(bytes),
             style.mask_mode,
         )],
+        MaskSource::Url(url) => vec![mask_layer_from_source(
+            MaskLayerSource::Url(url),
+            style.mask_mode,
+        )],
         MaskSource::Ref(id) => vec![mask_layer_from_source(
             MaskLayerSource::Ref(id),
             style.mask_mode,
@@ -11909,11 +11916,7 @@ fn apply_mask_longhands(map: &StyleMap, style: &mut ComputedStyle, current_color
     style.mask_image = Some(MaskSource::Layers(layers));
 }
 
-/// Resolve a `url(...)` mask reference to raw SVG bytes (css-masking-1 §3.1).
-///
-/// Returns `Some(bytes)` only when the reference loads and looks like SVG;
-/// otherwise `None` so the caller leaves the existing mask value untouched.
-fn parse_mask_url_svg(val: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+fn parse_mask_url(val: &str) -> Option<String> {
     let inner = val.strip_prefix("url(")?.strip_suffix(')')?.trim();
     // Strip optional surrounding quotes.
     let url = inner
@@ -11922,17 +11925,7 @@ fn parse_mask_url_svg(val: &str) -> Option<std::sync::Arc<Vec<u8>>> {
         .or_else(|| inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
         .unwrap_or(inner)
         .trim();
-    if url.is_empty() {
-        return None;
-    }
-    let (bytes, _mime) = crate::layout::images::load_src_bytes(url)?;
-    // Accept only sources whose bytes actually sniff as SVG, since the mask
-    // rasteriser only understands SVG image sources. The MIME alone is not
-    // trusted (it can mislabel non-SVG payloads).
-    if !crate::layout::images::looks_like_svg(&bytes) {
-        return None;
-    }
-    Some(std::sync::Arc::new(bytes))
+    (!url.is_empty()).then(|| url.to_string())
 }
 
 /// Parse a CSS Grid box-alignment keyword (`start`/`end`/`center`/`stretch`).
@@ -17759,23 +17752,21 @@ mod tests {
     }
 
     #[test]
-    fn mask_image_url_non_svg_is_left_unset() {
-        // A url() that doesn't resolve to SVG content (here invalid base64 bytes
-        // that don't sniff as SVG) must not panic and must leave `mask_image` as
-        // None rather than a bogus value — only SVG image masks are modelled.
+    fn mask_image_url_is_retained_until_the_resource_boundary() {
         let parent = ComputedStyle::default();
         let style = compute_style(
             HtmlTag::Div,
             Some("mask-image: url(\"data:image/svg+xml;base64,AAAA\")"),
             &parent,
         );
-        assert!(style.mask_image.is_none());
+        assert!(matches!(
+            single_mask_layer(&style).source,
+            MaskLayerSource::Url(_)
+        ));
     }
 
     #[test]
-    fn mask_image_url_svg_data_uri_is_loaded() {
-        // A url() data-URI SVG mask (css-masking-1 §3.1) must populate
-        // `mask_image` with an Svg source carrying the raw bytes.
+    fn mask_image_url_svg_data_uri_is_retained_for_loading() {
         // base64 of: <svg xmlns="http://www.w3.org/2000/svg" width="10"
         //   height="10"><circle cx="5" cy="5" r="4" fill="#fff"/></svg>
         let b64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjQiIGZpbGw9IiNmZmYiLz48L3N2Zz4=";
@@ -17788,13 +17779,13 @@ mod tests {
             &parent,
         );
         assert!(
-            matches!(single_mask_layer(&style).source, MaskLayerSource::Svg(_)),
-            "a data-URI SVG url() mask must populate mask_image as Svg"
+            matches!(single_mask_layer(&style).source, MaskLayerSource::Url(_)),
+            "a data-URI SVG mask must remain a URL until rendering"
         );
     }
 
     #[test]
-    fn webkit_mask_image_url_svg_alias_is_loaded() {
+    fn webkit_mask_image_url_svg_alias_is_retained_for_loading() {
         // The -webkit-mask-image alias of a url() SVG mask must behave the same.
         let b64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PGNpcmNsZSBjeD0iNSIgY3k9IjUiIHI9IjQiIGZpbGw9IiNmZmYiLz48L3N2Zz4=";
         let parent = ComputedStyle::default();
@@ -17806,8 +17797,8 @@ mod tests {
             &parent,
         );
         assert!(
-            matches!(single_mask_layer(&style).source, MaskLayerSource::Svg(_)),
-            "the -webkit-mask-image url() SVG alias must populate mask_image"
+            matches!(single_mask_layer(&style).source, MaskLayerSource::Url(_)),
+            "the -webkit-mask-image alias must remain a URL until rendering"
         );
     }
 

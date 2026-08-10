@@ -22,7 +22,7 @@ path = "src/bin/cli.rs"
 [features]
 default = []
 async = ["tokio"]
-remote = ["ureq"]
+remote = ["bogon", "core-net", "ureq", "url"]
 wasm = ["wasm-bindgen", "js-sys", "getrandom/wasm_js"]
 
 [dependencies]
@@ -47,7 +47,12 @@ skrifa = "=0.42.1"
 subsetter = "=0.2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "rt"], optional = true }
-ureq = { version = "3", optional = true }
+bogon = { version = "0.3", optional = true }
+core-net = { version = "0.1", optional = true }
+# The custom resolver lives in ureq's `unversioned` API. Pin the exact release
+# so a compatible-looking minor update cannot change that private contract.
+ureq = { version = "=3.3.0", optional = true }
+url = { version = "2.5", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 getrandom = { version = "0.3", optional = true }

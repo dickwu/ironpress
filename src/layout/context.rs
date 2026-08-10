@@ -14,6 +14,7 @@ pub(crate) struct LayoutEnv<'a> {
     pub rules: &'a [CssRule],
     pub fonts: &'a HashMap<String, TtfFont>,
     pub counter_state: &'a mut CounterState,
+    pub resources: &'a mut crate::security::resources::ResourceLoader,
     /// Document-wide `id -> element` map used to resolve `filter: url(#id)`
     /// (css-filter-effects-1 §3) to the inline SVG `<filter>` element. Built
     /// once over the whole DOM before the traversal begins.

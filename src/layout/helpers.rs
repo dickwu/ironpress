@@ -506,7 +506,6 @@ use super::elements::{
 use super::engine::{
     CounterState, InlineBox, InlineBoxPaint, LayoutBorder, LayoutElement, TextLine, TextRun,
 };
-use super::images::build_raster_background_tree;
 use super::list_markers::{build_list_bullet_marker, format_counter_value, format_list_marker};
 use super::text::{
     TextWrapOptions, collapse_whitespace, estimate_word_width, parent_line_strut,
@@ -1554,6 +1553,7 @@ pub(crate) fn append_pseudo_inline_run(
     el: &ElementNode,
     fonts: &HashMap<String, TtfFont>,
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) {
     if let Some(pseudo_style) = pseudo_style {
         if !pseudo_is_block_like(pseudo_style) {
@@ -1562,6 +1562,7 @@ pub(crate) fn append_pseudo_inline_run(
                 el,
                 fonts,
                 counter_state,
+                resources,
             ));
         }
     }
@@ -1573,44 +1574,40 @@ pub(crate) fn append_pseudo_inline_run(
 /// not independent DOM nodes. Keeping their containing block and resource
 /// resolution together prevents formatting-context-specific paths from
 /// silently dropping properties such as SVG/CSS filters.
-#[derive(Clone, Copy)]
 pub(crate) struct PseudoBoxContext<'a> {
     available_width: f32,
     fonts: &'a HashMap<String, TtfFont>,
     filter_defs: &'a HashMap<String, ElementNode>,
+    resources: &'a mut crate::security::resources::ResourceLoader,
     containing_block: Option<ContainingBlock>,
     positioned_ancestor_depth: usize,
 }
 
 impl<'a> PseudoBoxContext<'a> {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         available_width: f32,
         fonts: &'a HashMap<String, TtfFont>,
         filter_defs: &'a HashMap<String, ElementNode>,
+        resources: &'a mut crate::security::resources::ResourceLoader,
     ) -> Self {
         Self {
             available_width,
             fonts,
             filter_defs,
+            resources,
             containing_block: None,
             positioned_ancestor_depth: 0,
         }
     }
 
-    pub(crate) const fn with_containing_block(
-        self,
-        containing_block: Option<ContainingBlock>,
-    ) -> Self {
+    pub(crate) fn with_containing_block(self, containing_block: Option<ContainingBlock>) -> Self {
         Self {
             containing_block,
             ..self
         }
     }
 
-    pub(crate) const fn with_positioned_ancestor_depth(
-        self,
-        positioned_ancestor_depth: usize,
-    ) -> Self {
+    pub(crate) fn with_positioned_ancestor_depth(self, positioned_ancestor_depth: usize) -> Self {
         Self {
             positioned_ancestor_depth,
             ..self
@@ -1658,6 +1655,7 @@ pub(crate) fn build_pseudo_block(
         filter_defs,
         containing_block: containing_block_info,
         positioned_ancestor_depth,
+        resources,
     } = context;
     // Generated boxes do not pass through `flatten_element`, so resolve their
     // filter list here before constructing paint state. The resolved filter is
@@ -1737,7 +1735,7 @@ pub(crate) fn build_pseudo_block(
     }
     text_indent -= marker_hang;
 
-    let generated_run = build_pseudo_inline_run(pseudo_style, el, fonts, counter_state);
+    let generated_run = build_pseudo_inline_run(pseudo_style, el, fonts, counter_state, resources);
     if !generated_run.text.is_empty() || generated_run.inline_box.is_some() {
         push_text_run_with_fallback(generated_run, &mut runs, fonts);
     }
@@ -1947,6 +1945,7 @@ pub(crate) fn build_pseudo_inline_run(
     el: &ElementNode,
     fonts: &HashMap<String, TtfFont>,
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) -> TextRun {
     let content_text = resolve_content_with_quotes(
         &pseudo_style.content,
@@ -1958,7 +1957,7 @@ pub(crate) fn build_pseudo_inline_run(
     // `content: url(...)` makes the pseudo a replaced inline image
     // (css-content-3 §1). Decode it and emit an image-bearing InlineBox.
     if let Some(url) = content_image_url(&pseudo_style.content)
-        && let Some(inline) = build_pseudo_image_box(pseudo_style, url)
+        && let Some(inline) = build_pseudo_image_box(pseudo_style, url, resources)
     {
         return TextRun {
             font_size: used_font_size(pseudo_style, fonts),
@@ -2111,10 +2110,14 @@ fn build_pseudo_inline_box(
 /// `url(...)` (css-content-3 §1). The box uses the explicit CSS width/height
 /// when given, otherwise the image's intrinsic pixel dimensions. Returns `None`
 /// if the image cannot be decoded (the pseudo then produces no box).
-fn build_pseudo_image_box(pseudo_style: &ComputedStyle, url: &str) -> Option<InlineBox> {
+fn build_pseudo_image_box(
+    pseudo_style: &ComputedStyle,
+    url: &str,
+    resources: &mut crate::security::resources::ResourceLoader,
+) -> Option<InlineBox> {
     let image_src = crate::parser::css::extract_url_path(url).unwrap_or_else(|| url.to_string());
-    let (raw, _mime) = crate::layout::images::load_src_bytes(&image_src)?;
-    let image = crate::layout::images::load_image_bytes(raw)?;
+    let loaded = resources.load_document_resource(&image_src)?;
+    let image = crate::layout::images::load_image_bytes(loaded.bytes)?;
 
     // Intrinsic image pixels map to CSS px at 1x, and CSS px → PDF points at
     // 1px = 0.75pt (96dpi). The same conversion is applied to `<img>` intrinsic
@@ -2155,10 +2158,14 @@ fn build_pseudo_image_box(pseudo_style: &ComputedStyle, url: &str) -> Option<Inl
 /// raster, with a small right margin so the following text does not touch it.
 /// Returns `None` when the URL is absent or cannot be decoded, so the caller can
 /// fall back to the `list-style-type` glyph marker.
-pub(crate) fn build_list_image_marker(value: &str, gap: f32) -> Option<InlineBox> {
+pub(crate) fn build_list_image_marker(
+    resources: &mut crate::security::resources::ResourceLoader,
+    value: &str,
+    gap: f32,
+) -> Option<InlineBox> {
     let url = crate::parser::css::extract_url_path(value).unwrap_or_else(|| value.to_string());
-    let (raw, _mime) = crate::layout::images::load_src_bytes(&url)?;
-    let image = crate::layout::images::load_image_bytes(raw)?;
+    let loaded = resources.load_document_resource(&url)?;
+    let image = crate::layout::images::load_image_bytes(loaded.bytes)?;
     // The InlineBox dimensions are in PDF points; the image's intrinsic size is
     // in CSS px, so convert px -> pt (1px = 0.75pt) exactly as `load_image_bytes`
     // consumers do for ordinary <img>. Without this the marker paints at its raw
@@ -2187,6 +2194,7 @@ pub(crate) struct BackgroundFields {
     pub(crate) radial_gradient: Option<RadialGradient>,
     pub(crate) conic_gradient: Option<ConicGradient>,
     pub(crate) svg: Option<crate::parser::svg::SvgTree>,
+    pub(crate) raster_source: Option<String>,
     pub(crate) blur_radius: f32,
     pub(crate) size: BackgroundSize,
     pub(crate) position: BackgroundPosition,
@@ -2201,7 +2209,8 @@ impl BackgroundFields {
             gradient: style.background_gradient.clone(),
             radial_gradient: style.background_radial_gradient.clone(),
             conic_gradient: style.background_conic_gradient.clone(),
-            svg: background_svg_for_style(style),
+            svg: style.background_svg.clone(),
+            raster_source: style.background_image.clone(),
             // CSS `filter` belongs to the composited box, not its background
             // image layer. The post-layout filter compositor applies it once
             // to the complete SourceGraphic.
@@ -2219,6 +2228,7 @@ impl BackgroundFields {
             || self.radial_gradient.is_some()
             || self.conic_gradient.is_some()
             || self.svg.is_some()
+            || self.raster_source.is_some()
     }
 
     /// Initial/fallback painting values inherited by an individual gradient
@@ -2243,6 +2253,7 @@ impl Default for BackgroundFields {
             radial_gradient: None,
             conic_gradient: None,
             svg: None,
+            raster_source: None,
             blur_radius: 0.0,
             size: BackgroundSize::Auto,
             position: BackgroundPosition::default(),
@@ -2260,17 +2271,6 @@ pub(crate) fn has_background_paint(style: &ComputedStyle) -> bool {
         || style.background_conic_gradient.is_some()
         || style.background_image.is_some()
         || style.background_svg.is_some()
-}
-
-pub(crate) fn background_svg_for_style(
-    style: &ComputedStyle,
-) -> Option<crate::parser::svg::SvgTree> {
-    style.background_svg.clone().or_else(|| {
-        style
-            .background_image
-            .as_deref()
-            .and_then(build_raster_background_tree)
-    })
 }
 
 pub(crate) fn aspect_ratio_height(width: f32, style: &ComputedStyle) -> Option<f32> {

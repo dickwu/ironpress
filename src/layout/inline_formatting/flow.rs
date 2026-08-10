@@ -46,13 +46,14 @@ pub(crate) fn layout_mixed_flow_children<'dom>(
 
     for (node_index, node) in nodes.iter().enumerate() {
         let DomNode::Element(element) = node else {
-            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
-                sequence.item(node_index),
-                parent_style,
-                runs,
-                None,
-                ancestors,
-            );
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+                .collect(
+                    sequence.item(node_index),
+                    parent_style,
+                    runs,
+                    None,
+                    ancestors,
+                );
             continue;
         };
 
@@ -68,13 +69,14 @@ pub(crate) fn layout_mixed_flow_children<'dom>(
         if independent_layout.lays_out_independently(element, child) {
             independent_layout.layout_independently(element, child, env);
         } else {
-            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
-                sequence.item(node_index),
-                parent_style,
-                runs,
-                None,
-                ancestors,
-            );
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+                .collect(
+                    sequence.item(node_index),
+                    parent_style,
+                    runs,
+                    None,
+                    ancestors,
+                );
         }
     }
 }

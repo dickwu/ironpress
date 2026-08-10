@@ -23,7 +23,11 @@ pub(in crate::render::pdf) fn render_flex_row(
     let background_gradient = &element.paint.background.layers.gradient;
     let background_radial_gradient = &element.paint.background.layers.radial_gradient;
     let background_conic_gradient = &element.paint.background.layers.conic_gradient;
-    let background_svg = &element.paint.background.layers.svg;
+    let background_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&element.paint.background.layers);
+    let background_svg = &background_svg;
     let background_blur_radius = &element.paint.background.layers.blur_radius;
     let flex_bg_size = &element.paint.background.layers.size;
     let flex_bg_pos = &element.paint.background.layers.position;
@@ -307,6 +311,10 @@ pub(in crate::render::pdf) fn render_flex_row(
                 cell.paint.border_radii,
             );
             let cell_background_clip = cell_background.painting_box;
+            let cell_background_svg = ctx
+                .text
+                .pdf_writer
+                .resolve_background_svg(&cell.paint.background.layers);
             let cell_shadows = FlexCellShadows::new(cell, cell_fragment_geometry);
             let cell_inner_w = cell_geometry.content_box().width;
             let cell_group = PaintGroupScope::begin(content, cell, cell_fragment_geometry, ctx);
@@ -322,7 +330,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 && cell.paint.background.layers.gradient.is_none()
                 && cell.paint.background.layers.radial_gradient.is_none()
                 && cell.paint.background.layers.conic_gradient.is_none()
-                && cell.paint.background.layers.svg.is_none()
+                && cell_background_svg.is_none()
                 && cell.paint.border_radii.is_zero()
                 && let Some(blurred) = crate::render::blur::blur_box(
                     cell_paint_box.width,
@@ -385,7 +393,7 @@ pub(in crate::render::pdf) fn render_flex_row(
                 );
             }
 
-            if let Some(svg_tree) = &cell.paint.background.layers.svg {
+            if let Some(svg_tree) = &cell_background_svg {
                 render_svg_background(
                     content,
                     svg_tree,

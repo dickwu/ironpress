@@ -94,26 +94,8 @@ pub(crate) mod text;
 pub mod types;
 pub(crate) mod util;
 
-/// Fetch bytes from a remote URL (requires the `remote` feature).
-/// Returns `None` when the feature is disabled or the request fails.
-#[allow(unused_variables)]
-fn fetch_remote_bytes(url: &str) -> Option<Vec<u8>> {
-    #[cfg(feature = "remote")]
-    {
-        let resp = ureq::get(url).call().ok()?;
-        resp.into_body()
-            .with_config()
-            .limit(10 * 1024 * 1024)
-            .read_to_vec()
-            .ok()
-    }
-    #[cfg(not(feature = "remote"))]
-    {
-        None
-    }
-}
-
 pub use error::IronpressError;
+pub use security::resources::{InvalidRemoteHost, NetworkPolicy, RemoteHost};
 pub use style::raster_quality::{CoverageCompression, JpegCompression, RasterQuality};
 pub use types::{CornerRadii, CornerRadius, EdgeSizes, Margin, PageSize};
 
@@ -242,6 +224,7 @@ pub async fn convert_markdown_file_async(input: &str, output: &str) -> Result<()
 ///     .convert("<h1>Hello</h1>")
 ///     .unwrap();
 /// ```
+#[derive(Clone)]
 pub struct HtmlConverter {
     page_size: PageSize,
     margin: Margin,
@@ -268,6 +251,7 @@ pub struct HtmlConverter {
 struct ResourcePaths {
     base: Option<std::path::PathBuf>,
     authorized_root: Option<std::path::PathBuf>,
+    network: NetworkPolicy,
 }
 
 impl HtmlConverter {
@@ -406,15 +390,14 @@ impl HtmlConverter {
         self
     }
 
-    /// Set the base directory for resolving relative paths in CSS `@import`
-    /// and `@font-face` rules.
+    /// Set the base directory for resolving local document resources.
     ///
     /// When set, `@import "styles.css"` will resolve the path relative to
     /// this directory, and `@font-face { src: url("fonts/MyFont.ttf") }` will
     /// load the font file from this directory.
     ///
-    /// Only local file paths are supported. Remote URLs (http/https) are
-    /// rejected for security.
+    /// CSS `@import` supports local files only. Other HTTP/HTTPS resources use
+    /// the independent [`NetworkPolicy`].
     ///
     /// # Example
     ///
@@ -441,6 +424,54 @@ impl HtmlConverter {
     /// denied.
     pub fn resource_root(mut self, path: &std::path::Path) -> Self {
         self.resources.authorized_root = Some(path.to_path_buf());
+        self
+    }
+
+    /// Set the HTTP/HTTPS resource policy used by this conversion.
+    pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.resources.network = policy;
+        self
+    }
+
+    /// Replace the remote host allow list.
+    pub fn download_allow_list(mut self, hosts: impl IntoIterator<Item = RemoteHost>) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).with_allow_list(hosts);
+        self
+    }
+
+    /// Replace the remote host deny list.
+    pub fn download_deny_list(mut self, hosts: impl IntoIterator<Item = RemoteHost>) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).with_deny_list(hosts);
+        self
+    }
+
+    /// Enable or disable rejection of non-public remote addresses.
+    ///
+    /// This is enabled by default. A remote-resolving environment proxy moves
+    /// final-host IP enforcement to that operator-controlled proxy.
+    pub fn download_deny_private_ips(mut self, deny: bool) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).deny_private_ips(deny);
+        self
+    }
+
+    /// Enable or disable rejection of public remote addresses.
+    ///
+    /// Target host lists still apply when an environment proxy resolves the
+    /// final host, but the proxy must enforce final-host address classes.
+    pub fn download_deny_public_ips(mut self, deny: bool) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).deny_public_ips(deny);
+        self
+    }
+
+    /// Set the maximum number of remote redirects. Each hop is checked again.
+    pub fn download_max_redirects(mut self, max: u32) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).max_redirects(max);
+        self
+    }
+
+    /// Set the maximum remote response size in bytes.
+    pub fn download_max_body_size(mut self, max: u64) -> Self {
+        self.resources.network = std::mem::take(&mut self.resources.network).max_body_size(max);
         self
     }
 
@@ -491,21 +522,18 @@ impl HtmlConverter {
         html: &str,
         writer: &mut W,
     ) -> Result<(), IronpressError> {
-        let resource_access = if self.sanitize {
-            security::resources::ResourceAccess::Sanitized
-        } else {
-            security::resources::ResourceAccess::Trusted
-        };
         let resources = security::resources::DocumentResources::new(
-            resource_access,
             self.resources.base.as_deref(),
             self.resources.authorized_root.as_deref(),
+            self.resources.network.clone(),
         );
+        let mut resource_loader = security::resources::ResourceLoader::new(resources);
 
         // Step 1: Sanitize
         let sanitized_html = if self.sanitize {
             Some(security::sanitizer::sanitize_html_with_resources(
-                html, &resources,
+                html,
+                resource_loader.resources(),
             )?)
         } else {
             None
@@ -514,7 +542,7 @@ impl HtmlConverter {
 
         // Step 2: Parse HTML and extract stylesheets
         let mut result = parser::html::parse_html_with_styles(html)?;
-        security::sanitizer::sanitize_dom_resources(&mut result.nodes, &resources);
+        security::sanitizer::sanitize_dom_resources(&mut result.nodes, resource_loader.resources());
 
         // Step 2b: Resolve every stylesheet URL against its CSS base URL.
         // Imported sheets change that base to their own directory, while the
@@ -522,7 +550,9 @@ impl HtmlConverter {
         let stylesheets: Vec<String> = result
             .stylesheets
             .iter()
-            .map(|css| parser::css::resolve_imports_with_resources(css, &resources))
+            .map(|css| {
+                parser::css::resolve_imports_with_resources(css, resource_loader.resources())
+            })
             .collect();
 
         // Step 3: Parse @page rules first (they affect page dimensions for media queries)
@@ -673,7 +703,7 @@ impl HtmlConverter {
             &requested_font_rules,
             &mut parsed_fonts,
         );
-        load_font_face_rules(&font_face_rules, &resources, &mut parsed_fonts);
+        load_font_face_rules(&font_face_rules, &mut resource_loader, &mut parsed_fonts);
         // Load system CJK font BEFORE bundled fallbacks so it gets UNICODE_FALLBACK_KEY
         system_fonts::load_unicode_fallback_font(&mut parsed_fonts);
         system_fonts::load_emoji_fallback_font(&mut parsed_fonts);
@@ -703,6 +733,7 @@ impl HtmlConverter {
             &page_background,
             layout::paginate::PaginationContext::new(page_geometry, footnote_area, 0.0),
             self.raster_quality,
+            &mut resource_loader,
         );
         let mut footnote_area_for_overflow = footnote_area;
         footnote_area_for_overflow.content_width =
@@ -757,14 +788,17 @@ impl HtmlConverter {
             occlusion_cull: self.occlusion_cull,
         };
 
-        render::pdf::render_pdf_to_writer_full_opts(
-            &pages,
-            effective_page_size,
-            default_page_area_margin,
+        render::pdf::render_pdf_to_writer_full_opts_with_resources(
+            render::pdf::PdfRenderDocument::new(
+                &pages,
+                effective_page_size,
+                default_page_area_margin,
+                &parsed_fonts,
+                decoration.as_ref(),
+            ),
             writer,
-            &parsed_fonts,
-            decoration.as_ref(),
             render_opts,
+            resource_loader,
         )
     }
 
@@ -901,7 +935,7 @@ fn rules_with_font_face_local_sources(
 
 fn load_font_face_rules(
     font_face_rules: &[parser::css::FontFaceRule],
-    resources: &security::resources::DocumentResources,
+    resources: &mut security::resources::ResourceLoader,
     fonts: &mut std::collections::HashMap<String, parser::ttf::TtfFont>,
 ) {
     for (index, rule) in font_face_rules.iter().enumerate() {
@@ -929,7 +963,7 @@ fn load_font_face_rules(
 
 fn resolve_font_face_source(
     rule: &parser::css::FontFaceRule,
-    resources: &security::resources::DocumentResources,
+    resources: &mut security::resources::ResourceLoader,
     fonts: &std::collections::HashMap<String, parser::ttf::TtfFont>,
 ) -> Option<parser::ttf::TtfFont> {
     for (is_local, value) in rule.source_entries() {
@@ -947,14 +981,9 @@ fn resolve_font_face_source(
                 return Some(font.clone());
             }
         } else {
-            let Some(resolved) = resources.resolve(value, resources.base_path()) else {
-                continue;
-            };
-            let ttf_data = if resolved.starts_with("http://") || resolved.starts_with("https://") {
-                fetch_remote_bytes(&resolved)
-            } else {
-                std::fs::read(resolved).ok()
-            };
+            let ttf_data = resources
+                .load_document_resource(value)
+                .map(|loaded| loaded.bytes);
 
             if let Some(data) = ttf_data
                 && let Ok(font) = parser::ttf::parse_ttf(data)
@@ -1009,18 +1038,10 @@ impl HtmlConverter {
         output: &str,
     ) -> Result<(), IronpressError> {
         let html = tokio::fs::read_to_string(input).await?;
-        let page_size = self.page_size;
-        let margin = self.margin;
-        let sanitize = self.sanitize;
-        let pdf = tokio::task::spawn_blocking(move || {
-            HtmlConverter::new()
-                .page_size(page_size)
-                .margin(margin)
-                .sanitize(sanitize)
-                .convert(&html)
-        })
-        .await
-        .map_err(|e| IronpressError::RenderError(format!("task join error: {e}")))?;
+        let converter = self.clone();
+        let pdf = tokio::task::spawn_blocking(move || converter.convert(&html))
+            .await
+            .map_err(|e| IronpressError::RenderError(format!("task join error: {e}")))?;
         let pdf = pdf?;
         tokio::fs::write(output, pdf).await?;
         Ok(())
@@ -1864,6 +1885,7 @@ fn main() {
     }
 
     #[test]
+    #[cfg(not(feature = "remote"))]
     fn url_image_ignored_without_remote_feature() {
         // Without the "remote" feature, remote URLs produce no image
         let html = r#"<img src="https://example.com/image.png" width="100" height="100">"#;
@@ -1872,12 +1894,17 @@ fn main() {
     }
 
     #[test]
-    fn fetch_remote_bytes_returns_none_without_feature() {
+    fn resource_loader_rejects_remote_bytes_without_feature() {
         #[cfg(not(feature = "remote"))]
-        assert!(fetch_remote_bytes("https://example.com/test").is_none());
+        assert!(
+            security::resources::ResourceLoader::default()
+                .load_document_resource("https://example.com/test")
+                .is_none()
+        );
     }
 
     #[test]
+    #[cfg(not(feature = "remote"))]
     fn remote_image_produces_valid_pdf() {
         // Remote images are silently ignored without the "remote" feature
         let html =
@@ -1888,6 +1915,7 @@ fn main() {
     }
 
     #[test]
+    #[cfg(not(feature = "remote"))]
     fn remote_font_face_produces_valid_pdf() {
         // Remote font-face URLs are parsed but font loading is skipped without "remote" feature
         let html = r#"
@@ -1899,6 +1927,118 @@ fn main() {
         "#;
         let pdf = html_to_pdf(html).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[cfg(feature = "remote")]
+    fn remote_fixture_server() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (requests, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                2,
+                image::Rgb([240, 80, 40]),
+            ))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+            let font: &[u8] = include_bytes!("../tests/parity/fonts/ParitySans.ttf");
+            let mask: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="white"/></svg>"#;
+
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0; 2048];
+                let read = stream.read(&mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..read]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body: &[u8] = match path {
+                    "/font.ttf" => font,
+                    "/mask.svg" => mask,
+                    _ => &png,
+                };
+                let content_type = if path.ends_with(".ttf") {
+                    "font/ttf"
+                } else if path.ends_with(".svg") {
+                    "image/svg+xml"
+                } else {
+                    "image/png"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = requests.send(path.to_string());
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), received)
+    }
+
+    #[test]
+    #[cfg(feature = "remote")]
+    fn every_remote_resource_sink_uses_one_policy_while_html_stays_sanitized() {
+        use std::collections::HashSet;
+        use std::time::Duration;
+
+        let (server, requests) = remote_fixture_server();
+        let blocked = format!(r#"<img src="{server}/blocked.png"><script>bad()</script>"#);
+        HtmlConverter::new()
+            .sanitize(false)
+            .convert(&blocked)
+            .unwrap();
+        assert!(requests.recv_timeout(Duration::from_millis(100)).is_err());
+
+        let html = format!(
+            r#"<style>
+                @font-face {{ font-family: RemoteFixture; src: url("{server}/font.ttf"); }}
+                .font {{ font-family: RemoteFixture; }}
+                .generated::before {{ content: url("{server}/generated.png"); }}
+                .marker {{ list-style-image: url("{server}/marker.png"); }}
+                .background {{ width: 12pt; height: 12pt; background-image: url("{server}/background.png"); }}
+                .border {{ width: 12pt; height: 12pt; border: 3pt solid; border-image-source: url("{server}/border.png"); border-image-slice: 1; }}
+                .mask {{ width: 12pt; height: 12pt; background: red; mask-image: url("{server}/mask.svg"); }}
+            </style>
+            <p class="font">font</p>
+            <img src="{server}/img.png" width="2" height="2">
+            <span class="generated"></span>
+            <ul><li class="marker">marker</li></ul>
+            <div class="background"></div>
+            <div class="border"></div>
+            <svg width="10" height="10"><image href="{server}/nested.png" width="10" height="10"/></svg>
+            <div class="mask"></div>
+            <script>must not render</script>"#
+        );
+        let host = "127.0.0.1".parse::<RemoteHost>().unwrap();
+        let pdf = HtmlConverter::new()
+            .download_allow_list([host])
+            .convert(&html)
+            .unwrap();
+        assert!(!pdf_has_text(&pdf, "must not render"));
+
+        let expected = HashSet::from([
+            "/font.ttf",
+            "/img.png",
+            "/generated.png",
+            "/marker.png",
+            "/background.png",
+            "/border.png",
+            "/nested.png",
+            "/mask.svg",
+        ])
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+        let mut seen = HashSet::new();
+        while seen.len() < expected.len() {
+            let Ok(path) = requests.recv_timeout(Duration::from_secs(1)) else {
+                break;
+            };
+            seen.insert(path);
+        }
+        assert_eq!(seen, expected);
     }
 
     #[test]
@@ -3659,6 +3799,7 @@ body { background: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy
     }
 
     #[test]
+    #[cfg(not(feature = "remote"))]
     fn font_face_remote_url_rejected() {
         // Remote URLs in @font-face should be silently ignored
         let html = r#"<html><head><style>

@@ -1447,7 +1447,7 @@ fn collect_grid_item_runs(
 ) -> Vec<super::engine::TextRun> {
     let mut runs = Vec::new();
     let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
-    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources).collect(
         InlineContentSequence::with_generated(&child_el.children, cs.generated_content(child_el)),
         &cs.principal,
         &mut runs,
@@ -1480,7 +1480,7 @@ fn collect_grid_item_leading_runs(
     }
     let mut runs = Vec::new();
     let descendant_ancestors = cs.descendant_ancestors(child_el, ancestors);
-    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources).collect(
         InlineContentSequence::with_generated(
             &leading.children,
             GeneratedInlineContent::from_boxes(cs.generated_content(child_el).before(), None),
@@ -2033,6 +2033,7 @@ fn layout_grid_item_content_inner(
             &mut after_runs,
             env.fonts,
             env.counter_state,
+            &mut *env.resources,
         );
         if let Some(after) =
             AnonymousInlineFormattingContext::new(&item_style.principal, content_width, env.fonts)

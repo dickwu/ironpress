@@ -198,7 +198,7 @@ fn authorized_local_font_face_url_is_canonicalized() {
     let directory = tempfile::tempdir().expect("temporary resource root");
     let font = directory.path().join("F.ttf");
     std::fs::write(&font, b"font").expect("font fixture");
-    let resources = DocumentResources::new(ResourceAccess::Sanitized, Some(directory.path()), None);
+    let resources = DocumentResources::new(Some(directory.path()), None, NetworkPolicy::default());
     let css = r#"<style>@font-face { font-family: F; src: url("F.ttf"); }</style>"#;
     let sanitized = sanitize_html_with_resources(css, &resources).expect("sanitized HTML");
     assert!(
@@ -229,7 +229,7 @@ fn parsed_resource_attributes_share_the_authorized_root_boundary() {
     std::fs::write(directory.path().join("allowed.png"), b"png").expect("allowed fixture");
     let outside = tempfile::tempdir().expect("outside directory");
     std::fs::write(outside.path().join("private.png"), b"private").expect("private fixture");
-    let resources = DocumentResources::new(ResourceAccess::Sanitized, Some(directory.path()), None);
+    let resources = DocumentResources::new(Some(directory.path()), None, NetworkPolicy::default());
     let html = format!(
         r#"<img id="allowed" src="allowed.png" style="background:url(allowed.png)">
                 <img id="denied" src="{}" style="mask-image:url('{}')">
@@ -293,12 +293,11 @@ fn expression_with_space_removed() {
 }
 
 #[test]
-fn url_with_quoted_external_removed() {
-    // Exercises remove_dangerous_urls with quoted external URL
+fn quoted_external_url_is_left_for_the_network_policy() {
     let result =
         sanitize_html(r#"<style>body { background: url("http://evil.com/img.png") }</style>"#)
             .unwrap();
-    assert!(!result.contains("evil.com"));
+    assert!(result.contains("evil.com"));
 }
 
 #[test]

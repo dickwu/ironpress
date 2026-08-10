@@ -384,7 +384,54 @@ pub(crate) fn render_pdf_to_writer_full_opts<W: std::io::Write>(
     decoration: Option<&PageDecoration>,
     opts: RenderOpts,
 ) -> Result<(), IronpressError> {
-    let mut pdf_writer = PdfWriter::new();
+    render_pdf_to_writer_full_opts_with_resources(
+        PdfRenderDocument::new(pages, page_size, margin, custom_fonts, decoration),
+        writer,
+        opts,
+        crate::security::resources::ResourceLoader::default(),
+    )
+}
+
+pub(crate) struct PdfRenderDocument<'a> {
+    pages: &'a [Page],
+    page_size: PageSize,
+    margin: Margin,
+    custom_fonts: &'a HashMap<String, TtfFont>,
+    decoration: Option<&'a PageDecoration>,
+}
+
+impl<'a> PdfRenderDocument<'a> {
+    pub(crate) fn new(
+        pages: &'a [Page],
+        page_size: PageSize,
+        margin: Margin,
+        custom_fonts: &'a HashMap<String, TtfFont>,
+        decoration: Option<&'a PageDecoration>,
+    ) -> Self {
+        Self {
+            pages,
+            page_size,
+            margin,
+            custom_fonts,
+            decoration,
+        }
+    }
+}
+
+pub(crate) fn render_pdf_to_writer_full_opts_with_resources<W: std::io::Write>(
+    document: PdfRenderDocument<'_>,
+    writer: &mut W,
+    opts: RenderOpts,
+    resources: crate::security::resources::ResourceLoader,
+) -> Result<(), IronpressError> {
+    let PdfRenderDocument {
+        pages,
+        page_size,
+        margin,
+        custom_fonts,
+        decoration,
+    } = document;
+    let mut pdf_writer = PdfWriter::with_resources(resources);
     pdf_writer.opts = opts;
     pdf_writer.svg_defs = collect_document_svg_defs(pages);
     // `available_width` is derived per page inside the loop below, since a page

@@ -3007,6 +3007,7 @@ fn build_inline_box(
     fonts: &HashMap<String, TtfFont>,
     ancestors: &[AncestorInfo],
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) -> Option<InlineBox> {
     let has_explicit_width = style.width.is_some();
     let child_w = style.width.unwrap_or(0.0);
@@ -3027,7 +3028,7 @@ fn build_inline_box(
     };
 
     let mut runs = Vec::new();
-    InlineRunCollector::new(rules, fonts, counter_state).collect(
+    InlineRunCollector::new(rules, fonts, counter_state, resources).collect(
         InlineContentSequence::new(&el.children),
         style,
         &mut runs,
@@ -3159,18 +3160,21 @@ pub(crate) struct InlineRunCollector<'a> {
     rules: &'a [CssRule],
     fonts: &'a HashMap<String, TtfFont>,
     counter_state: &'a mut CounterState,
+    resources: &'a mut crate::security::resources::ResourceLoader,
 }
 
 impl<'a> InlineRunCollector<'a> {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         rules: &'a [CssRule],
         fonts: &'a HashMap<String, TtfFont>,
         counter_state: &'a mut CounterState,
+        resources: &'a mut crate::security::resources::ResourceLoader,
     ) -> Self {
         Self {
             rules,
             fonts,
             counter_state,
+            resources,
         }
     }
 
@@ -3193,6 +3197,7 @@ impl<'a> InlineRunCollector<'a> {
             false,
             ancestors,
             self.counter_state,
+            self.resources,
         );
         let boundary_start = first_new_run.saturating_sub(1);
         runs[boundary_start..].resolve_unclaimed_boundaries(
@@ -3229,9 +3234,10 @@ fn collect_text_runs_inner(
     inline_parent: bool,
     ancestors: &[AncestorInfo],
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) {
     let first_run = runs.len();
-    sequence.append_before(runs, fonts, counter_state);
+    sequence.append_before(runs, fonts, counter_state, resources);
     let mut siblings = InlineSiblingCursor::starting_at(
         sequence.source_nodes(),
         sequence.starting_element_index(),
@@ -3511,6 +3517,7 @@ fn collect_text_runs_inner(
                                 fonts,
                                 &child_ancestors,
                                 counter_state,
+                                resources,
                             ) {
                                 runs.push(TextRun {
                                     font_size: used_font_size(parent_style, fonts),
@@ -3550,6 +3557,7 @@ fn collect_text_runs_inner(
                             true,
                             &child_ancestors,
                             counter_state,
+                            resources,
                         );
                         apply_inline_parent_background(runs, element_start, &style);
                         resolve_target_attrs(&mut runs[element_start..], el);
@@ -3562,7 +3570,7 @@ fn collect_text_runs_inner(
             }
         }
     }
-    sequence.append_after(runs, fonts, counter_state);
+    sequence.append_after(runs, fonts, counter_state, resources);
     runs[first_run..].resolve_unclaimed_boundaries(
         crate::layout::elements::TextSpacing::from_style(parent_style),
     );
@@ -3612,6 +3620,7 @@ mod indent_tests {
         let style =
             crate::style::computed::compute_style(element.tag, element.style_attr(), &parent);
         let mut counter_state = CounterState::default();
+        let mut resources = crate::security::resources::ResourceLoader::default();
         build_inline_box(
             &style,
             element,
@@ -3619,6 +3628,7 @@ mod indent_tests {
             &HashMap::new(),
             &[],
             &mut counter_state,
+            &mut resources,
         )
         .expect("atomic inline box")
     }

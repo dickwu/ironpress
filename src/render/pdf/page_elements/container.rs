@@ -35,7 +35,11 @@ pub(in crate::render::pdf) fn render_container(
     let c_bg_gradient = &element.paint.background.layers.gradient;
     let c_bg_radial = &element.paint.background.layers.radial_gradient;
     let c_bg_conic = &element.paint.background.layers.conic_gradient;
-    let c_bg_svg = &element.paint.background.layers.svg;
+    let c_bg_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&element.paint.background.layers);
+    let c_bg_svg = &c_bg_svg;
     let c_bg_blur = &element.paint.background.layers.blur_radius;
     let c_bg_clip = &element.paint.background.layers.clip;
     let c_positioned_depth = &element.positioning.containing_block_depth;

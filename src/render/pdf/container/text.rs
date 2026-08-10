@@ -36,7 +36,11 @@ pub(super) fn render_text_child(
     let tb_bg_gradient = &child.paint.background.layers.gradient;
     let tb_bg_radial = &child.paint.background.layers.radial_gradient;
     let tb_bg_conic = &child.paint.background.layers.conic_gradient;
-    let tb_bg_svg = &child.paint.background.layers.svg;
+    let tb_bg_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&child.paint.background.layers);
+    let tb_bg_svg = &tb_bg_svg;
     let tb_bg_blur = &child.paint.background.layers.blur_radius;
     let tb_bg_size = &child.paint.background.layers.size;
     let tb_bg_position = &child.paint.background.layers.position;

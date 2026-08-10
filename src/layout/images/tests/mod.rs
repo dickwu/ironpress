@@ -1,5 +1,4 @@
 use super::placement::{ReplacedBoxSize, parse_html_image_dimension};
-use super::source::{fetch_remote_url, percent_decode};
 use super::svg::{contain_object_size, resolve_svg_size, svg_natural_ratio};
 use super::*;
 use crate::layout::engine::ImageFormat;

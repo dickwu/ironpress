@@ -477,16 +477,17 @@ impl TableRowNode<'_> {
 struct GeneratedCellLayout<'a> {
     runs: &'a mut Vec<TextRun>,
     blocks: &'a mut Vec<LayoutNode>,
+    parent_style: &'a ComputedStyle,
+    available_width: f32,
+    fonts: &'a HashMap<String, TtfFont>,
+    filter_defs: &'a HashMap<String, ElementNode>,
+    counter_state: &'a mut CounterState,
+    resources: &'a mut crate::security::resources::ResourceLoader,
 }
 
 fn append_generated_cell_layout(
     generated: Option<GeneratedBox<'_>>,
     output: GeneratedCellLayout<'_>,
-    parent_style: &ComputedStyle,
-    available_width: f32,
-    fonts: &HashMap<String, TtfFont>,
-    filter_defs: &HashMap<String, ElementNode>,
-    counter_state: &mut CounterState,
 ) {
     let Some(generated) = generated else {
         return;
@@ -494,16 +495,22 @@ fn append_generated_cell_layout(
     if pseudo_is_block_like(generated.style()) {
         if let Some(block) = generated_table_cell_boundary(
             generated,
-            parent_style,
-            available_width,
-            fonts,
-            filter_defs,
-            counter_state,
+            output.parent_style,
+            output.available_width,
+            output.fonts,
+            output.filter_defs,
+            output.counter_state,
+            &mut *output.resources,
         ) {
             output.blocks.push(block);
         }
     } else {
-        generated.append_inline(output.runs, fonts, counter_state);
+        generated.append_inline(
+            output.runs,
+            output.fonts,
+            output.counter_state,
+            output.resources,
+        );
     }
 }
 
@@ -688,19 +695,20 @@ fn generated_table_cell_boundary(
     fonts: &HashMap<String, TtfFont>,
     filter_defs: &HashMap<String, ElementNode>,
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) -> Option<LayoutNode> {
     if pseudo_is_block_like(generated.style()) {
         return Some(build_pseudo_block(
             generated.style(),
             generated.originating_element(),
-            PseudoBoxContext::new(available_width, fonts, filter_defs),
+            PseudoBoxContext::new(available_width, fonts, filter_defs, resources),
             counter_state,
             generated.style().display == Display::ListItem,
         ));
     }
 
     let mut runs = Vec::new();
-    generated.append_inline(&mut runs, fonts, counter_state);
+    generated.append_inline(&mut runs, fonts, counter_state, resources);
     AnonymousInlineFormattingContext::new(parent_style, available_width, fonts).layout_runs(runs)
 }
 
@@ -1325,6 +1333,7 @@ fn measure_caption_min_width(
     filter_defs: &HashMap<String, ElementNode>,
     filter_dpi: f32,
     counter_state: &mut CounterState,
+    resources: &mut crate::security::resources::ResourceLoader,
     available_width: f32,
     descendant_layout: TableDescendantLayout,
 ) -> f32 {
@@ -1344,6 +1353,7 @@ fn measure_caption_min_width(
             rules,
             fonts,
             counter_state,
+            resources,
             filter_defs,
             filter_dpi,
         };
@@ -1778,6 +1788,7 @@ pub(crate) fn flatten_table(
     let filter_defs = env.filter_defs;
     let filter_dpi = env.filter_dpi;
     let counter_state = &mut *env.counter_state;
+    let resources = &mut *env.resources;
     let mut measurement_counter_state = counter_state.clone();
     let table_border = LayoutBorder::from_computed(&style.border, style.color);
     let effective_border_spacing = style.border_spacing;
@@ -2013,6 +2024,7 @@ pub(crate) fn flatten_table(
                 filter_defs,
                 filter_dpi,
                 &mut measurement_counter_state,
+                &mut *resources,
                 inner_width,
                 descendant_layout,
             )
@@ -2424,17 +2436,20 @@ pub(crate) fn flatten_table(
                             &mut runs,
                             fonts,
                             &mut measurement_counter_state,
+                            &mut *resources,
                         );
                         authored_generated.append_before_measurement(
                             &mut runs,
                             fonts,
                             &mut measurement_counter_state,
+                            &mut *resources,
                         );
                         {
                             let mut measurement_env = LayoutEnv {
                                 rules,
                                 fonts,
                                 counter_state: &mut measurement_counter_state,
+                                resources: &mut *resources,
                                 filter_defs,
                                 filter_dpi,
                             };
@@ -2455,11 +2470,13 @@ pub(crate) fn flatten_table(
                             &mut runs,
                             fonts,
                             &mut measurement_counter_state,
+                            &mut *resources,
                         );
                         authored_generated.append_after_measurement(
                             &mut runs,
                             fonts,
                             &mut measurement_counter_state,
+                            &mut *resources,
                         );
                         runs.as_mut_slice().resolve_unclaimed_boundaries(
                             crate::layout::elements::TextSpacing::from_style(&cell_style),
@@ -3088,6 +3105,7 @@ pub(crate) fn flatten_table(
                     fonts,
                     filter_defs,
                     counter_state,
+                    &mut *resources,
                 )
             {
                 nested_rows.push(boundary);
@@ -3097,18 +3115,20 @@ pub(crate) fn flatten_table(
                 GeneratedCellLayout {
                     runs: &mut runs,
                     blocks: &mut nested_rows,
+                    parent_style: &cell_content_style,
+                    available_width: cell_inner,
+                    fonts,
+                    filter_defs,
+                    counter_state,
+                    resources: &mut *resources,
                 },
-                &cell_content_style,
-                cell_inner,
-                fonts,
-                filter_defs,
-                counter_state,
             );
             {
                 let mut flow_env = LayoutEnv {
                     rules,
                     fonts,
                     counter_state: &mut *counter_state,
+                    resources: &mut *resources,
                     filter_defs,
                     filter_dpi,
                 };
@@ -3133,6 +3153,7 @@ pub(crate) fn flatten_table(
                     fonts,
                     filter_defs,
                     counter_state,
+                    &mut *resources,
                 )
             {
                 nested_rows.push(boundary);
@@ -3142,12 +3163,13 @@ pub(crate) fn flatten_table(
                 GeneratedCellLayout {
                     runs: &mut runs,
                     blocks: &mut nested_rows,
+                    parent_style: &cell_content_style,
+                    available_width: cell_inner,
+                    fonts,
+                    filter_defs,
+                    counter_state,
+                    resources: &mut *resources,
                 },
-                &cell_content_style,
-                cell_inner,
-                fonts,
-                filter_defs,
-                counter_state,
             );
             runs.as_mut_slice().resolve_unclaimed_boundaries(
                 crate::layout::elements::TextSpacing::from_style(&cell_content_style),
@@ -3528,6 +3550,7 @@ pub(crate) fn flatten_table(
                 rules,
                 fonts,
                 counter_state: &mut *counter_state,
+                resources: &mut *resources,
                 filter_defs,
                 filter_dpi,
             };
