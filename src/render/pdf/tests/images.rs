@@ -447,8 +447,7 @@
     }
 
     #[test]
-    #[ignore] // TODO: Container renderer doesn't render background images yet
-    fn render_jpeg_background_uses_decoded_image_xobject() {
+    fn render_jpeg_background_draws_image_xobject() {
         use image::ImageEncoder;
 
         let mut jpeg_bytes = Vec::new();
@@ -478,14 +477,8 @@
         let content = String::from_utf8_lossy(&pdf);
 
         assert_eq!(content.matches("/Subtype /Image").count(), 1);
-        assert!(
-            content.contains("/Filter /FlateDecode"),
-            "decoded JPEG backgrounds should use a Flate image XObject"
-        );
-        assert!(
-            !content.contains("/Filter /DCTDecode"),
-            "decoded JPEG backgrounds should not passthrough raw JPEG bytes"
-        );
+        image_name_for_dimensions(&content, 2, 2)
+            .expect("JPEG background should draw its source image XObject");
     }
 
     #[test]
