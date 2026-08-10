@@ -236,6 +236,9 @@ Migration note: `.sanitize(false)` no longer grants implicit access to files in
 the process working directory. Configure `.base_path(...)` for document assets,
 and `.resource_root(...)` when those assets need a broader directory boundary.
 
+See [Resource Security](../../wiki/Resource-Security) for the complete threat
+model, proxy boundary, and server deployment guidance.
+
 ## How it works
 
 ```

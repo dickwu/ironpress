@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.5.1] — 2026-08-10
+
+### Security
+
+- Document resources now use explicit per-conversion authorization. Local
+  files are denied until `base_path` or `resource_root` grants a canonical
+  directory; traversal and symlink escapes are rejected.
+- Remote fetching now checks schemes, host allow/deny lists, non-public address
+  classes, every redirect, pinned DNS results, and response-size limits.
+- HTML sanitization no longer controls resource authorization.
+  `.sanitize(false)` does not grant local or remote access; projects that
+  relied on working-directory file access must configure `.base_path(...)`.
+
+### Tests
+
+- `float: right` and JPEG background regressions now run against rendered PDF
+  output instead of remaining ignored.
+
+### Documentation
+
+- The README links to the complete resource-security threat model and server
+  deployment guidance in the wiki.
+
 ## [1.5.0] — 2026-08-09
 
 ### Added
