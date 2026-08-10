@@ -180,7 +180,7 @@ pub(crate) fn layout_multicol_container(
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,
-            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs)
+            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs, &mut *env.resources)
                 .with_positioned_ancestor_depth(positioned_depth),
             env.counter_state,
             false,
@@ -240,7 +240,7 @@ pub(crate) fn layout_multicol_container(
         let pseudo = build_pseudo_block(
             pseudo_style,
             el,
-            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs)
+            PseudoBoxContext::new(col_width, env.fonts, env.filter_defs, &mut *env.resources)
                 .with_positioned_ancestor_depth(positioned_depth),
             env.counter_state,
             false,

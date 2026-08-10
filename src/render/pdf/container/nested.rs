@@ -66,7 +66,11 @@ pub(super) fn render_nested_container(
     let nk_box_transform = &child.paint.group.transform;
     let nk_transform = &nk_box_transform.value;
     let nk_box_shadow = &child.paint.shadows;
-    let nk_bg_svg = &child.paint.background.layers.svg;
+    let nk_bg_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&child.paint.background.layers);
+    let nk_bg_svg = &nk_bg_svg;
     let nk_bg_size = &child.paint.background.layers.size;
     let nk_bg_position = &child.paint.background.layers.position;
     let nk_bg_repeat = &child.paint.background.layers.repeat;

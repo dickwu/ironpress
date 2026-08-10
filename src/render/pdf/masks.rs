@@ -134,6 +134,7 @@ pub(super) fn rasterize_mask_coverage(
         // SVG `url()` masks are rasterised by `rasterize_svg_mask_coverage` and
         // never reach this gradient sampler.
         MaskSource::Svg(_)
+        | MaskSource::Url(_)
         | MaskSource::Layers(_)
         | MaskSource::BorderRing { .. }
         | MaskSource::Ref(_) => return None,
@@ -146,7 +147,7 @@ pub(super) fn source_from_layer_source(source: &MaskLayerSource) -> Option<MaskS
         MaskLayerSource::Linear(g) => Some(MaskSource::Linear(g.clone())),
         MaskLayerSource::Radial(g) => Some(MaskSource::Radial(g.clone())),
         MaskLayerSource::Conic(g) => Some(MaskSource::Conic(g.clone())),
-        MaskLayerSource::Svg(_) | MaskLayerSource::Ref(_) => None,
+        MaskLayerSource::Svg(_) | MaskLayerSource::Url(_) | MaskLayerSource::Ref(_) => None,
     }
 }
 
@@ -158,6 +159,7 @@ pub(super) fn rasterize_mask_layer_source(
 ) -> Option<Vec<u8>> {
     match source {
         MaskLayerSource::Svg(bytes) => rasterize_svg_mask_coverage(bytes, mode, window),
+        MaskLayerSource::Url(_) => None,
         MaskLayerSource::Ref(id) => {
             let mask = svg_defs.masks.get(id)?;
             rasterize_svg_mask_ref_coverage(
@@ -588,6 +590,7 @@ pub(super) fn rasterize_mask_source(
 ) -> Option<Vec<u8>> {
     match source {
         MaskSource::Svg(bytes) => rasterize_svg_mask_coverage(bytes, mode, window),
+        MaskSource::Url(_) => None,
         MaskSource::Layers(layers) => rasterize_mask_layers(layers, window, geometry, svg_defs),
         MaskSource::BorderRing { width } => rasterize_mask_border_ring(window, *width),
         MaskSource::Ref(id) => rasterize_svg_mask_ref_coverage(

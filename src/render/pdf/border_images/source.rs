@@ -86,9 +86,10 @@ fn prepare_svg_source(
     Some(geometry)
 }
 
-pub(super) fn resolve_border_image_source(
-    source: &BorderImageSource,
-) -> Option<ResolvedBorderImageSource<'_>> {
+pub(super) fn resolve_border_image_source<'a>(
+    source: &'a BorderImageSource,
+    resources: &mut crate::security::resources::ResourceLoader,
+) -> Option<ResolvedBorderImageSource<'a>> {
     match source {
         BorderImageSource::LinearGradient(gradient) => {
             Some(ResolvedBorderImageSource::Linear(gradient))
@@ -99,12 +100,16 @@ pub(super) fn resolve_border_image_source(
         BorderImageSource::ConicGradient(gradient) => {
             Some(ResolvedBorderImageSource::Conic(gradient))
         }
-        BorderImageSource::Url(url) => resolve_url_source(url),
+        BorderImageSource::Url(url) => resolve_url_source(url, resources),
     }
 }
 
-fn resolve_url_source(url: &str) -> Option<ResolvedBorderImageSource<'static>> {
-    let (bytes, mime) = crate::layout::images::load_src_bytes(url)?;
+fn resolve_url_source(
+    url: &str,
+    resources: &mut crate::security::resources::ResourceLoader,
+) -> Option<ResolvedBorderImageSource<'static>> {
+    let loaded = resources.load_document_resource(url)?;
+    let (bytes, mime) = (loaded.bytes, loaded.media_type);
     let skip_svg = mime
         .as_deref()
         .is_some_and(|mime| !mime.contains("svg") && !mime.contains("xml"));

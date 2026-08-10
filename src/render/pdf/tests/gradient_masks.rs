@@ -201,9 +201,9 @@ fn oversized_mask_layer_is_windowed_without_truncating_its_source_tile() {
         EdgeSizes::ZERO,
     );
     let layer = MaskLayer {
-            source: MaskLayerSource::Svg(std::sync::Arc::new(
+            source: MaskLayerSource::Svg(
                 br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="white"/></svg>"#.to_vec(),
-            )),
+            ),
             mode: MaskMode::Alpha,
             layer_box: crate::style::computed::GradientLayerBox {
                 size: Some(BackgroundSize::Explicit {

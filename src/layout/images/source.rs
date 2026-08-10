@@ -1,59 +1,26 @@
 use crate::parser::png;
 
-use super::loader::load_src_bytes;
+use crate::security::resources::ResourceLoader;
 
 #[cfg(test)]
 use super::loader::load_image_bytes;
 #[cfg(test)]
 use crate::layout::engine::RasterImageAsset;
 
-/// Maximum size for remote resources (10 MB).
-#[cfg(feature = "remote")]
-const MAX_REMOTE_SIZE: usize = 10 * 1024 * 1024;
-
-/// Fetch bytes from an HTTP/HTTPS URL (requires the `remote` feature).
-/// Returns `None` if the feature is disabled, the request fails, or the response exceeds 10 MB.
-pub(crate) fn fetch_remote_url(url: &str) -> Option<Vec<u8>> {
-    #[cfg(feature = "remote")]
-    {
-        let resp = ureq::get(url).call().ok()?;
-        let len = resp
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-        if len > MAX_REMOTE_SIZE {
-            return None;
-        }
-        let buf = resp
-            .into_body()
-            .with_config()
-            .limit(MAX_REMOTE_SIZE as u64)
-            .read_to_vec()
-            .ok()?;
-        Some(buf)
-    }
-    #[cfg(not(feature = "remote"))]
-    {
-        let _ = url;
-        None
-    }
-}
-
-/// Load image data from a src attribute (supports data: URIs, local files, and remote URLs).
-///
-/// This is a convenience wrapper around `load_src_bytes` + `load_image_bytes`.
+/// Load image data from an inline source in tests.
 #[cfg(test)]
 pub(crate) fn load_image_data(src: &str) -> Option<RasterImageAsset> {
-    let (raw, _mime) = load_src_bytes(src)?;
-    load_image_bytes(raw)
+    let loaded = ResourceLoader::default().load_document_resource(src)?;
+    load_image_bytes(loaded.bytes)
 }
 
-pub(crate) fn build_raster_background_tree(src: &str) -> Option<crate::parser::svg::SvgTree> {
+pub(crate) fn build_raster_background_tree(
+    resources: &mut ResourceLoader,
+    src: &str,
+) -> Option<crate::parser::svg::SvgTree> {
     let image_src = crate::parser::css::extract_url_path(src).unwrap_or_else(|| src.to_string());
-    let (raw, _mime) = load_src_bytes(&image_src)?;
-    let (width, height) = raster_image_dimensions(&raw)?;
+    let loaded = resources.load_document_resource(&image_src)?;
+    let (width, height) = raster_image_dimensions(&loaded.bytes)?;
 
     Some(crate::parser::svg::SvgTree {
         width: width as f32,
@@ -164,34 +131,5 @@ pub(crate) fn base64_encode(data: &[u8]) -> String {
 fn append_base64_char(out: &mut String, table: &[u8], index: usize) {
     if let Some(&byte) = table.get(index) {
         out.push(char::from(byte));
-    }
-}
-
-/// Decode percent-encoded strings (e.g. `%3C` → `<`).  Used for plain-text SVG
-/// data URIs like `data:image/svg+xml,%3Csvg ...%3E`.
-pub(crate) fn percent_decode(input: &str) -> String {
-    let mut out = Vec::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
-                out.push((hi << 4) | lo);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_default()
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
     }
 }

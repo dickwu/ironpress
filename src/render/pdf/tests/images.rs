@@ -1080,16 +1080,3 @@
         }
         result
     }
-
-    fn write_test_png_file(name: &str, bytes: &[u8]) -> String {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "ironpress-{name}-{}-{nonce}.png",
-            std::process::id()
-        ));
-        std::fs::write(&path, bytes).unwrap();
-        path.to_string_lossy().into_owned()
-    }

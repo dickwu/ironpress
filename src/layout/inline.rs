@@ -362,6 +362,7 @@ fn inline_atomic_cell(
     if kind == AtomicInlineKind::ReplacedImage {
         let mut replaced = add_inline_replaced_baseline_gap(
             load_image_from_element(
+                &mut *env.resources,
                 child_el,
                 ctx.available_width(),
                 ctx.available_height(),
@@ -692,7 +693,12 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
     let mut pending_trailing_space = false;
     let mut pending_space_after_atomic = false;
 
-    sequence.append_before(&mut pending_runs, env.fonts, env.counter_state);
+    sequence.append_before(
+        &mut pending_runs,
+        env.fonts,
+        env.counter_state,
+        &mut *env.resources,
+    );
 
     for (node_index, node) in nodes.iter().enumerate() {
         match node {
@@ -700,7 +706,13 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                 if last_item_was_atomic && text.chars().next().is_some_and(char::is_whitespace) {
                     pending_space_after_atomic = true;
                 }
-                InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+                InlineRunCollector::new(
+                    env.rules,
+                    env.fonts,
+                    env.counter_state,
+                    &mut *env.resources,
+                )
+                .collect(
                     sequence.item(node_index),
                     parent_style,
                     &mut pending_runs,
@@ -800,7 +812,13 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
                         pending_trailing_space = false;
                     }
                     InlineFormattingRole::Text => {
-                        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
+                        InlineRunCollector::new(
+                            env.rules,
+                            env.fonts,
+                            env.counter_state,
+                            &mut *env.resources,
+                        )
+                        .collect(
                             sequence.item(node_index),
                             parent_style,
                             &mut pending_runs,
@@ -822,7 +840,12 @@ pub(crate) fn layout_inline_mixed_sequence_with_env(
             }
         }
     }
-    sequence.append_after(&mut pending_runs, env.fonts, env.counter_state);
+    sequence.append_after(
+        &mut pending_runs,
+        env.fonts,
+        env.counter_state,
+        &mut *env.resources,
+    );
     if let Some((cell, advance)) =
         inline_text_cell(std::mem::take(&mut pending_runs), parent_style, env.fonts)
     {
@@ -1172,13 +1195,15 @@ fn layout_inline_block_group_inner(
             );
         } else {
             let mut counter_state = CounterState::default();
-            InlineRunCollector::new(rules, fonts, &mut counter_state).collect_box_content(
-                &child_el.children,
-                &child_style,
-                &mut runs,
-                None,
-                &child_ancestors,
-            );
+            let mut resources = crate::security::resources::ResourceLoader::default();
+            InlineRunCollector::new(rules, fonts, &mut counter_state, &mut resources)
+                .collect_box_content(
+                    &child_el.children,
+                    &child_style,
+                    &mut runs,
+                    None,
+                    &child_ancestors,
+                );
         }
 
         let wrap_inner_width = if !has_explicit_width

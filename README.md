@@ -173,7 +173,68 @@ See [WASM & Playground](../../wiki/WASM-Playground).
 
 ## Security
 
-HTML is sanitized by default: `<script>`, `<iframe>`, event handlers, and `javascript:` URLs are stripped. Resources are sandboxed (local-only by default, 10 MB cap). SVG sanitizer strips dangerous elements. PNG decompression capped at 50 MB. Disable with `.sanitize(false)` if you trust the input.
+HTML is sanitized by default. Scripts, iframes, event handlers, and
+`javascript:` URLs are removed. SVG sanitization and image decoder limits also
+apply.
+
+Local files are denied unless `base_path` or `resource_root` grants a canonical
+directory. Traversal and symlink escapes outside that directory are rejected.
+
+Remote fetching is disabled unless the crate is built with `remote`:
+
+```bash
+cargo add ironpress --features remote
+```
+
+With that feature, public HTTP and HTTPS resources are allowed by default.
+Loopback, private, link-local, metadata, multicast, documentation, and reserved
+addresses are denied. Redirects are checked again, DNS results are pinned to
+the connection, and response bodies are limited to 10 MB by default.
+
+Use an allow list for a known CDN, or combine it with `deny_public_ips(true)`
+to deny every host that was not explicitly allowed:
+
+```rust
+use ironpress::{HtmlConverter, NetworkPolicy, RemoteHost};
+
+let cdn: RemoteHost = "cdn.example.com".parse().expect("valid host");
+let policy = NetworkPolicy::default()
+    .with_allow_list([cdn])
+    .deny_public_ips(true)
+    .max_redirects(4)
+    .max_body_size(2 * 1024 * 1024);
+
+let pdf = HtmlConverter::new()
+    .network_policy(policy)
+    .convert("<img src='https://cdn.example.com/logo.png'>")
+    .expect("conversion succeeds");
+```
+
+A deny-list match always wins. An allow-list match explicitly trusts that host
+and bypasses its IP-class check.
+
+Environment proxies are respected. They are operator configuration, not
+document input. If the proxy resolves the target hostname, Ironpress can still
+check target IP literals and host lists, but the proxy must enforce the final
+IP policy.
+
+For a server that converts untrusted documents, also enforce egress outside the
+process:
+
+- Block cloud metadata, loopback, private, and link-local networks at the host
+  or network namespace.
+- Restrict outbound DNS and traffic to required destinations or a controlled
+  proxy.
+- Apply time, memory, and process limits to conversions.
+- Treat image malware scanning as a server concern. Ironpress controls resource
+  access; it is not an antivirus.
+
+HTML sanitization, local-file access, and remote access are independent.
+Calling `.sanitize(false)` does not disable either resource policy.
+
+Migration note: `.sanitize(false)` no longer grants implicit access to files in
+the process working directory. Configure `.base_path(...)` for document assets,
+and `.resource_root(...)` when those assets need a broader directory boundary.
 
 ## How it works
 

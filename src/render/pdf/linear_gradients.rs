@@ -33,7 +33,8 @@ pub(super) fn paint_box_gradient_backgrounds(
                 paint.background.color,
                 layers.radial_gradient.is_some()
                     || layers.conic_gradient.is_some()
-                    || layers.svg.is_some(),
+                    || layers.svg.is_some()
+                    || layers.raster_source.is_some(),
                 crate::style::computed::BlendMode::Normal,
             ),
             paint_area,

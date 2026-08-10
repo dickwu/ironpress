@@ -2,7 +2,7 @@ use crate::error::IronpressError;
 use crate::parser::dom::{DomNode, HtmlTag};
 use crate::security::resources::DocumentResources;
 #[cfg(test)]
-use crate::security::resources::ResourceAccess;
+use crate::security::resources::NetworkPolicy;
 
 /// Maximum allowed HTML input size (10 MB).
 const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
@@ -15,7 +15,7 @@ const MAX_NESTING_DEPTH: usize = 500;
 pub(crate) fn sanitize_html(html: &str) -> Result<String, IronpressError> {
     sanitize_html_with_resources(
         html,
-        &DocumentResources::new(ResourceAccess::Sanitized, None, None),
+        &DocumentResources::new(None, None, NetworkPolicy::default()),
     )
 }
 
@@ -95,7 +95,7 @@ fn authorize_attribute(
     };
     match resources.resolve(value, resources.base_path()) {
         Some(authorized) => {
-            attributes.insert(name.to_string(), authorized);
+            attributes.insert(name.to_string(), authorized.reference());
         }
         None => {
             attributes.remove(name);

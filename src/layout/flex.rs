@@ -200,9 +200,14 @@ impl AbsoluteFlexContext<'_, '_> {
         output.push(super::helpers::build_pseudo_block(
             style,
             generated.originating_element(),
-            PseudoBoxContext::new(self.inner_width, env.fonts, env.filter_defs)
-                .with_containing_block(self.containing_block)
-                .with_positioned_ancestor_depth(self.positioned_depth),
+            PseudoBoxContext::new(
+                self.inner_width,
+                env.fonts,
+                env.filter_defs,
+                &mut *env.resources,
+            )
+            .with_containing_block(self.containing_block)
+            .with_positioned_ancestor_depth(self.positioned_depth),
             env.counter_state,
             style.display == Display::ListItem,
         ));
@@ -1600,7 +1605,12 @@ pub(crate) fn layout_flex_container(
             let counter_replay = env.counter_state.clone();
             let measurement_scope = env.counter_state.enter_element(generated_style);
             let mut runs = Vec::new();
-            generated.append_measurement_run(&mut runs, env.fonts, env.counter_state);
+            generated.append_measurement_run(
+                &mut runs,
+                env.fonts,
+                env.counter_state,
+                &mut *env.resources,
+            );
             env.counter_state.leave_element(measurement_scope);
             *env.counter_state = counter_replay.clone();
             runs.as_mut_slice().resolve_unclaimed_boundaries(
@@ -1657,7 +1667,7 @@ pub(crate) fn layout_flex_container(
             let element = super::helpers::build_pseudo_block(
                 generated_style,
                 generated.originating_element(),
-                PseudoBoxContext::new(width, env.fonts, env.filter_defs)
+                PseudoBoxContext::new(width, env.fonts, env.filter_defs, &mut *env.resources)
                     .with_positioned_ancestor_depth(positioned_depth),
                 env.counter_state,
                 generated_style.display == Display::ListItem,
@@ -2006,13 +2016,14 @@ pub(crate) fn layout_flex_container(
             let mut in_flow_runs = Vec::new();
             let live_counters = env.counter_state.clone();
             let counter_scope = env.counter_state.enter_element(&child_style);
-            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
-                InlineContentSequence::with_generated(&child_el.children, generated_children),
-                &child_style,
-                &mut in_flow_runs,
-                None,
-                &child_ancestors,
-            );
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+                .collect(
+                    InlineContentSequence::with_generated(&child_el.children, generated_children),
+                    &child_style,
+                    &mut in_flow_runs,
+                    None,
+                    &child_ancestors,
+                );
             env.counter_state.leave_element(counter_scope);
             *env.counter_state = live_counters;
             (!in_flow_runs.is_empty()).then(|| {
@@ -2221,13 +2232,14 @@ pub(crate) fn layout_flex_container(
         // Simple flex items: collect text runs and wrap
         let mut runs = Vec::new();
         let counter_scope = env.counter_state.enter_element(&child_style);
-        InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect(
-            InlineContentSequence::with_generated(&child_el.children, generated_children),
-            &child_style,
-            &mut runs,
-            None,
-            &child_ancestors,
-        );
+        InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+            .collect(
+                InlineContentSequence::with_generated(&child_el.children, generated_children),
+                &child_style,
+                &mut runs,
+                None,
+                &child_ancestors,
+            );
         env.counter_state.leave_element(counter_scope);
         // Automatic minimum sizing and `flex-basis:min-content` must use the
         // same tokenization as line layout. In particular, a forced `<br>`
@@ -3409,17 +3421,22 @@ pub(crate) fn layout_flex_container(
                             );
                             let counter_scope =
                                 env.counter_state.enter_element(&relayout_child_style);
-                            InlineRunCollector::new(env.rules, env.fonts, env.counter_state)
-                                .collect(
-                                    InlineContentSequence::with_generated(
-                                        &child_el.children,
-                                        relayout_generated_styles.boxes(child_el),
-                                    ),
-                                    &relayout_child_style,
-                                    &mut runs,
-                                    None,
-                                    &relayout_ancestors,
-                                );
+                            InlineRunCollector::new(
+                                env.rules,
+                                env.fonts,
+                                env.counter_state,
+                                &mut *env.resources,
+                            )
+                            .collect(
+                                InlineContentSequence::with_generated(
+                                    &child_el.children,
+                                    relayout_generated_styles.boxes(child_el),
+                                ),
+                                &relayout_child_style,
+                                &mut runs,
+                                None,
+                                &relayout_ancestors,
+                            );
                             env.counter_state.leave_element(counter_scope);
                             let content_w = (final_w
                                 - relayout_child_style.padding.horizontal()

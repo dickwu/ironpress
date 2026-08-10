@@ -99,6 +99,7 @@ impl<'a> GeneratedBox<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         append_pseudo_inline_run(
             runs,
@@ -106,6 +107,7 @@ impl<'a> GeneratedBox<'a> {
             self.originating_element,
             fonts,
             counter_state,
+            resources,
         );
     }
 
@@ -117,12 +119,14 @@ impl<'a> GeneratedBox<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         runs.push(build_pseudo_inline_run(
             self.style,
             self.originating_element,
             fonts,
             counter_state,
+            resources,
         ));
     }
 }
@@ -303,9 +307,10 @@ impl<'a> GeneratedInlineContent<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(before) = self.before {
-            before.append_inline(runs, fonts, counter_state);
+            before.append_inline(runs, fonts, counter_state, resources);
         }
     }
 
@@ -314,9 +319,10 @@ impl<'a> GeneratedInlineContent<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(after) = self.after {
-            after.append_inline(runs, fonts, counter_state);
+            after.append_inline(runs, fonts, counter_state, resources);
         }
     }
 
@@ -325,9 +331,10 @@ impl<'a> GeneratedInlineContent<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(before) = self.before {
-            before.append_measurement_run(runs, fonts, counter_state);
+            before.append_measurement_run(runs, fonts, counter_state, resources);
         }
     }
 
@@ -336,9 +343,10 @@ impl<'a> GeneratedInlineContent<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(after) = self.after {
-            after.append_measurement_run(runs, fonts, counter_state);
+            after.append_measurement_run(runs, fonts, counter_state, resources);
         }
     }
 }
@@ -434,9 +442,10 @@ impl<'a> InlineContentSequence<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(generated) = self.generated {
-            generated.append_before(runs, fonts, counter_state);
+            generated.append_before(runs, fonts, counter_state, resources);
         }
     }
 
@@ -445,9 +454,10 @@ impl<'a> InlineContentSequence<'a> {
         runs: &mut Vec<TextRun>,
         fonts: &HashMap<String, TtfFont>,
         counter_state: &mut CounterState,
+        resources: &mut crate::security::resources::ResourceLoader,
     ) {
         if let Some(generated) = self.generated {
-            generated.append_after(runs, fonts, counter_state);
+            generated.append_after(runs, fonts, counter_state, resources);
         }
     }
 }

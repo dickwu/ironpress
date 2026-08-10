@@ -1899,6 +1899,7 @@ pub fn layout_with_rules_and_fonts(
     page_bleed: f32,
     footnote_area: FootnoteAreaLayout,
 ) -> Vec<Page> {
+    let mut resources = crate::security::resources::ResourceLoader::default();
     let page_background = super::page_context::PageBackgroundContext::uniform(
         page_background,
         page_bleed,
@@ -1916,6 +1917,7 @@ pub fn layout_with_rules_and_fonts(
             0.0,
         ),
         crate::style::raster_quality::RasterQuality::default(),
+        &mut resources,
     )
 }
 
@@ -1930,6 +1932,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     page_background: &super::page_context::PageBackgroundContext,
     pagination_context: super::paginate::PaginationContext,
     raster_quality: crate::style::raster_quality::RasterQuality,
+    resources: &mut crate::security::resources::ResourceLoader,
 ) -> Vec<Page> {
     let DocumentGeometry {
         page_size,
@@ -2037,6 +2040,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         rules,
         fonts: custom_fonts,
         counter_state: &mut counter_state,
+        resources,
         filter_defs: &filter_defs,
         filter_dpi: raster_quality.filter_dpi,
     };
@@ -2421,13 +2425,8 @@ fn build_running_element(
     env: &mut LayoutEnv,
 ) -> Option<LayoutNode> {
     let mut runs = Vec::new();
-    InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
-        &el.children,
-        style,
-        &mut runs,
-        None,
-        ancestors,
-    );
+    InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+        .collect_box_content(&el.children, style, &mut runs, None, ancestors);
     if runs.is_empty() {
         let mut text = String::new();
         collect_plain_text(&el.children, &mut text);
@@ -3461,6 +3460,7 @@ pub(crate) fn flatten_element(
 
         if el.tag == HtmlTag::Img {
             if let Some(img_element) = load_image_from_element(
+                &mut *env.resources,
                 el,
                 available_width,
                 available_height,
@@ -4027,7 +4027,11 @@ pub(crate) fn flatten_element(
                 None
             } else {
                 style.list_style_image.as_deref().and_then(|v| {
-                    crate::layout::helpers::build_list_image_marker(v, style.font_size * 0.3)
+                    crate::layout::helpers::build_list_image_marker(
+                        &mut *env.resources,
+                        v,
+                        style.font_size * 0.3,
+                    )
                 })
             };
 
@@ -4255,19 +4259,15 @@ pub(crate) fn flatten_element(
             }
 
             let runs_before_inline = runs.len();
-            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
-                &el.children,
-                &style,
-                &mut runs,
-                None,
-                ancestors,
-            );
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+                .collect_box_content(&el.children, &style, &mut runs, None, ancestors);
             append_pseudo_inline_run(
                 &mut runs,
                 generated_styles.after(),
                 el,
                 env.fonts,
                 env.counter_state,
+                &mut *env.resources,
             );
 
             // "Loose" list items (Markdown with blank lines between items) wrap each
@@ -4569,8 +4569,19 @@ fn inline_loose_list_p(
                     &p_selector_ctx,
                     env.font_metrics(),
                 );
-                InlineRunCollector::new(env.rules, env.fonts, env.counter_state)
-                    .collect_box_content(&child_el.children, &p_style, runs, None, child_ancestors);
+                InlineRunCollector::new(
+                    env.rules,
+                    env.fonts,
+                    env.counter_state,
+                    &mut *env.resources,
+                )
+                .collect_box_content(
+                    &child_el.children,
+                    &p_style,
+                    runs,
+                    None,
+                    child_ancestors,
+                );
                 return (Some(raw_idx), p_style.margin.top, p_style.margin.bottom);
             }
             child_el_ordinal += 1;
@@ -4695,25 +4706,22 @@ fn route_element(
                 el,
                 env.fonts,
                 env.counter_state,
+                &mut *env.resources,
             );
             let link_url = if el.tag == HtmlTag::A {
                 el.attributes.get("href").map(String::as_str)
             } else {
                 None
             };
-            InlineRunCollector::new(env.rules, env.fonts, env.counter_state).collect_box_content(
-                &el.children,
-                style,
-                &mut runs,
-                link_url,
-                child_ancestors,
-            );
+            InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
+                .collect_box_content(&el.children, style, &mut runs, link_url, child_ancestors);
             append_pseudo_inline_run(
                 &mut runs,
                 generated_styles.after(),
                 el,
                 env.fonts,
                 env.counter_state,
+                &mut *env.resources,
             );
             resolve_target_text_placeholders_in_runs(&mut runs, env.filter_defs);
             let lines = wrap_text_runs(
@@ -8317,44 +8325,20 @@ mod tests {
             .any(|element| element_has_image_background(element.as_ref()))
     }
 
-    fn svg_tree_has_image(tree: &crate::parser::svg::SvgTree) -> bool {
-        tree.children
-            .iter()
-            .any(|node| matches!(node, crate::parser::svg::SvgNode::Image { .. }))
-    }
-
     fn element_has_image_background(element: &dyn LayoutElement) -> bool {
         struct ImageBackgroundSearch(bool);
 
         impl LayoutVisitor for ImageBackgroundSearch {
             fn visit_text_block(&mut self, element: &TextBlock) {
-                self.0 |= element
-                    .paint
-                    .background
-                    .layers
-                    .svg
-                    .as_ref()
-                    .is_some_and(svg_tree_has_image);
+                self.0 |= element.paint.background.layers.has_image();
             }
 
             fn visit_container(&mut self, element: &Container) {
-                self.0 |= element
-                    .paint
-                    .background
-                    .layers
-                    .svg
-                    .as_ref()
-                    .is_some_and(svg_tree_has_image);
+                self.0 |= element.paint.background.layers.has_image();
             }
 
             fn visit_flex_row(&mut self, element: &FlexRow) {
-                self.0 |= element
-                    .paint
-                    .background
-                    .layers
-                    .svg
-                    .as_ref()
-                    .is_some_and(svg_tree_has_image)
+                self.0 |= element.paint.background.layers.has_image()
                     || element
                         .content
                         .cells
@@ -8381,12 +8365,7 @@ mod tests {
     }
 
     fn flex_cell_has_image_background(cell: &FlexCell) -> bool {
-        cell.paint
-            .background
-            .layers
-            .svg
-            .as_ref()
-            .is_some_and(svg_tree_has_image)
+        cell.paint.background.layers.has_image()
             || elements_have_image_background(&cell.nested_elements)
     }
 
@@ -13129,18 +13108,6 @@ line 3</pre>
             "expected nested counter '1.1' from counters(), got: {:?}",
             texts
         );
-    }
-
-    #[test]
-    fn helpers_background_svg_for_style_raster() {
-        use crate::layout::helpers::background_svg_for_style;
-        use crate::style::computed::ComputedStyle;
-
-        let mut style = ComputedStyle::default();
-        assert!(background_svg_for_style(&style).is_none());
-
-        style.background_image = Some(TEST_JPEG_DATA_URI.to_string());
-        let _ = background_svg_for_style(&style);
     }
 
     #[test]

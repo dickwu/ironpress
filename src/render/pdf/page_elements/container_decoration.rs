@@ -19,7 +19,11 @@ pub(super) fn paint_container_decoration(
     let c_bg_gradient = &element.paint.background.layers.gradient;
     let c_bg_radial = &element.paint.background.layers.radial_gradient;
     let c_bg_conic = &element.paint.background.layers.conic_gradient;
-    let c_bg_svg = &element.paint.background.layers.svg;
+    let c_bg_svg = ctx
+        .text
+        .pdf_writer
+        .resolve_background_svg(&element.paint.background.layers);
+    let c_bg_svg = &c_bg_svg;
     let c_bg_size = &element.paint.background.layers.size;
     let c_bg_position = &element.paint.background.layers.position;
     let c_bg_repeat = &element.paint.background.layers.repeat;

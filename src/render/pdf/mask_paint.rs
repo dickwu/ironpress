@@ -101,9 +101,9 @@ mod geometry_consumer_tests {
 
     pub(super) fn solid_svg_layer() -> MaskLayer {
         MaskLayer {
-            source: MaskLayerSource::Svg(std::sync::Arc::new(
+            source: MaskLayerSource::Svg(
                 br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="white"/></svg>"#.to_vec(),
-            )),
+            ),
             mode: MaskMode::Alpha,
             layer_box: crate::style::computed::GradientLayerBox {
                 repeat: Some(BackgroundRepeat::NoRepeat),

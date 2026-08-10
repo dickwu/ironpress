@@ -28,6 +28,7 @@ impl Default for RenderOpts {
 /// Minimal PDF writer that produces valid PDF files.
 #[derive(Default)]
 pub(crate) struct PdfWriter {
+    pub(super) resources: crate::security::resources::ResourceLoader,
     pub(super) objects: Vec<String>,
     /// Raw binary objects stored separately (index corresponds to objects slot).
     pub(super) binary_objects: std::collections::HashMap<usize, Vec<u8>>,
@@ -75,8 +76,34 @@ pub(super) struct PdfGraphicsState {
 }
 
 impl PdfWriter {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         Self::default()
+    }
+
+    pub(super) fn with_resources(resources: crate::security::resources::ResourceLoader) -> Self {
+        Self {
+            resources,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn load_document_resource(
+        &mut self,
+        source: &str,
+    ) -> Option<crate::security::resources::LoadedResource> {
+        self.resources.load_document_resource(source)
+    }
+
+    pub(super) fn resolve_background_svg(
+        &mut self,
+        background: &crate::layout::helpers::BackgroundFields,
+    ) -> Option<crate::parser::svg::SvgTree> {
+        background.svg.clone().or_else(|| {
+            background.raster_source.as_deref().and_then(|source| {
+                crate::layout::images::build_raster_background_tree(&mut self.resources, source)
+            })
+        })
     }
 
     pub(super) fn paint_matrix(&self, local: PdfMatrix) -> PdfMatrix {

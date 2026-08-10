@@ -120,16 +120,16 @@ fn table_cell_absolute_pseudo_background_renders_blurred_copy() {
     );
     fn count_element_background_svgs(element: &dyn LayoutElement) -> usize {
         let own_text = element
-            .inspect_text(|text| usize::from(text.paint.background.layers.svg.is_some()))
+            .inspect_text(|text| usize::from(text.paint.background.layers.has_image()))
             .unwrap_or_default();
         let own_flex = element
             .inspect_flex(|flex| {
-                usize::from(flex.paint.background.layers.svg.is_some())
+                usize::from(flex.paint.background.layers.has_image())
                     + flex
                         .content
                         .cells
                         .iter()
-                        .map(|cell| usize::from(cell.paint.background.layers.svg.is_some()))
+                        .map(|cell| usize::from(cell.paint.background.layers.has_image()))
                         .sum::<usize>()
             })
             .unwrap_or_default();
