@@ -465,15 +465,17 @@ fn flex_item_content_height(element: &dyn LayoutElement) -> f32 {
         }
 
         fn visit_flex_row(&mut self, element: &FlexRow) {
-            let row_height = element
-                .content
-                .cells
-                .iter()
-                .map(|cell| {
-                    cell.lines.iter().map(|line| line.height).sum::<f32>() + cell.padding.vertical()
-                })
-                .fold(0.0, f32::max);
-            self.0 = Some(element.box_model.margins.total() + row_height);
+            let content_height = element
+                .box_model
+                .size
+                .height
+                .resolve(element.content.row_height);
+            self.0 = Some(
+                element.box_model.margins.total()
+                    + element.box_model.padding.vertical()
+                    + content_height
+                    + element.box_model.border.vertical_width(),
+            );
         }
     }
 
@@ -1171,10 +1173,15 @@ fn flex_intrinsic_container_width(
                 if child_style.display == Display::None || child_style.position.is_absolute() {
                     continue;
                 }
-                let width = child_style
-                    .flex_basis
-                    .definite_length()
-                    .or(child_style.width)
+                let preferred_width = child_style.flex_basis.definite_length().or_else(|| {
+                    child_style
+                        .flex_basis
+                        .content_keyword()
+                        .is_none()
+                        .then_some(child_style.width)
+                        .flatten()
+                });
+                let width = preferred_width
                     .map(|w| flex_style_outer_width(&child_style, w))
                     .or_else(|| {
                         child_style
@@ -1182,7 +1189,29 @@ fn flex_intrinsic_container_width(
                             .zip(child_style.aspect_ratio)
                             .map(|(h, ratio)| flex_style_outer_height(&child_style, h) * ratio)
                     })
-                    .unwrap_or(0.0)
+                    .unwrap_or_else(|| {
+                        let content_basis = child_style.flex_basis.content_keyword();
+                        let widths = if content_basis.is_some() {
+                            crate::layout::intrinsic_width::content_intrinsic_border_box_widths(
+                                child_el,
+                                &child_style,
+                                env.rules,
+                                env.fonts,
+                                ancestors,
+                                &selector_ctx,
+                            )
+                        } else {
+                            crate::layout::intrinsic_width::intrinsic_border_box_widths(
+                                child_el,
+                                &child_style,
+                                env.rules,
+                                env.fonts,
+                                ancestors,
+                                &selector_ctx,
+                            )
+                        };
+                        widths.resolve(content_basis.unwrap_or(keyword), available_width)
+                    })
                     + child_style.margin.horizontal();
                 contributions.push(width);
             }
@@ -1401,9 +1430,6 @@ pub(crate) fn layout_flex_container(
     // `block_w` is normalized to the border box for both box-sizing modes.
     let inner_width =
         (block_w - style.border.horizontal_width() - style.padding.horizontal()).max(0.0);
-
-    let resolved_border_radii =
-        style.resolve_corner_radii(block_w, style.height.unwrap_or(block_w));
 
     // Collect child elements and lay each one out into a temporary buffer.
     // Per CSS Flexbox §4.1, an absolutely-positioned child of a flex container
@@ -2035,8 +2061,47 @@ pub(crate) fn layout_flex_container(
         } else {
             None
         };
+        let intrinsic_keyword = content_basis.or(child_style.width_keyword).or_else(|| {
+            (!has_explicit_width && child_style.flex_grow == 0.0)
+                .then_some(IntrinsicWidthKeyword::MaxContent)
+        });
+        let intrinsic_width = (item_has_block_children && resolved_basis.is_none())
+            .then_some(intrinsic_keyword)
+            .flatten()
+            .map(|keyword| {
+                let widths = if content_basis.is_some() {
+                    crate::layout::intrinsic_width::content_intrinsic_border_box_widths(
+                        child_el,
+                        &child_style,
+                        env.rules,
+                        env.fonts,
+                        ancestors,
+                        &selector_ctx,
+                    )
+                } else {
+                    crate::layout::intrinsic_width::intrinsic_border_box_widths(
+                        child_el,
+                        &child_style,
+                        env.rules,
+                        env.fonts,
+                        ancestors,
+                        &selector_ctx,
+                    )
+                };
+                widths
+                    .resolve(keyword, width_for_percentages)
+                    .max(item_box_floor)
+            })
+            .filter(|width| {
+                content_basis.is_some()
+                    || child_style.width_keyword.is_some()
+                    || *width > item_box_floor
+            });
         let (child_w_for_flex, child_w_for_layout) = if let Some(hugged) = hugged_item_width {
             (hugged, hugged)
+        } else if let Some(intrinsic) = intrinsic_width {
+            hugged_item_width = Some(intrinsic);
+            (intrinsic, intrinsic)
         } else if item_has_block_children
             && !has_explicit_width
             && child_style.flex_grow == 0.0
@@ -2521,40 +2586,31 @@ pub(crate) fn layout_flex_container(
     }
 
     if items.is_empty() {
-        if has_background_paint(style)
-            || style.has_border_decoration()
-            || !resolved_border_radii.is_zero()
-            || !style.box_shadow.is_empty()
-            || style.aspect_ratio.is_some()
-            || style.height.is_some()
-            || !abs_output.is_empty()
-        {
-            let container_height = style
-                .height
-                .or_else(|| aspect_ratio_height(block_w, style))
-                .map(|height| match style.box_sizing {
-                    BoxSizing::ContentBox => height + style.padding.vertical(),
-                    BoxSizing::BorderBox => (height - style.border.vertical_width()).max(0.0),
-                })
-                .unwrap_or_default();
-            let mut background = TextBlock::from_style(
-                Vec::new(),
+        let container_height = style
+            .height
+            .or_else(|| aspect_ratio_height(block_w, style))
+            .map(|height| match style.box_sizing {
+                BoxSizing::ContentBox => height + style.padding.vertical(),
+                BoxSizing::BorderBox => (height - style.border.vertical_width()).max(0.0),
+            })
+            .unwrap_or_default();
+        let mut background = TextBlock::from_style(
+            Vec::new(),
+            style,
+            crate::layout::elements::BoxModel::from_style(
                 style,
-                crate::layout::elements::BoxModel::from_style(
-                    style,
-                    BlockMargins::new(style.margin.top, style.margin.bottom),
-                ),
-            );
-            background.box_model.size =
-                crate::layout::elements::LayoutSize::fixed(block_w, Some(container_height));
-            background.paint.border_radii = style.resolve_corner_radii(block_w, container_height);
-            background.positioning.containing_block_depth = positioned_depth;
-            background.clipping.rect = style
-                .overflow
-                .clips()
-                .then(|| Rect::from_xywh(0.0, 0.0, block_w, container_height));
-            output.push(background.boxed());
-        }
+                BlockMargins::new(style.margin.top, style.margin.bottom),
+            ),
+        );
+        background.box_model.size =
+            crate::layout::elements::LayoutSize::fixed(block_w, Some(container_height));
+        background.paint.border_radii = style.resolve_corner_radii(block_w, container_height);
+        background.positioning.containing_block_depth = positioned_depth;
+        background.clipping.rect = style
+            .overflow
+            .clips()
+            .then(|| Rect::from_xywh(0.0, 0.0, block_w, container_height));
+        output.push(background.boxed());
         output.append(&mut abs_output);
         return;
     }
