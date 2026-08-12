@@ -211,3 +211,45 @@ fn empty_flex_container_keeps_its_flow_margin() {
         );
     }
 }
+
+#[test]
+fn intrinsic_constraints_measure_content_not_the_preferred_width() {
+    let parsed = parse_html_with_styles(
+        r#"<style>
+            * { box-sizing: border-box; margin: 0; }
+            .max { width: 200pt; max-width: min-content; }
+            .min { width: 70pt; min-width: max-content; white-space: nowrap; }
+        </style>
+        <div class="max">alpha betabetabeta gamma</div>
+        <div class="min">unbreakablewideword</div>"#,
+    )
+    .expect("valid regression fixture");
+    let rules = parsed
+        .stylesheets
+        .iter()
+        .flat_map(|css| parse_stylesheet(css))
+        .collect::<Vec<_>>();
+    let pages = layout_with_rules(&parsed.nodes, PageSize::A4, Margin::default(), &rules);
+    let widths = pages[0]
+        .elements
+        .iter()
+        .filter_map(|(_, element)| {
+            element.inspect_text(|block| {
+                (!block.lines.is_empty())
+                    .then(|| block.box_model.size.width.fixed_value())
+                    .flatten()
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    assert_eq!(widths.len(), 2, "one principal box per constrained block");
+    assert!(
+        widths[0] < 200.0,
+        "max-width:min-content must ignore width:200pt: {widths:?}"
+    );
+    assert!(
+        widths[1] > 70.0,
+        "min-width:max-content must ignore width:70pt: {widths:?}"
+    );
+}

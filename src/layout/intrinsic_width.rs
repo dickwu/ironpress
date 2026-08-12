@@ -34,6 +34,14 @@ impl IntrinsicWidths {
                 .min(self.min_content.max(available_width.max(0.0))),
         }
     }
+
+    /// Append one atomic inline box to the current inline formatting sequence.
+    /// Its max-content contribution stays on the same unwrapped line, while
+    /// its min-content contribution remains one unbreakable unit.
+    fn append_atomic(&mut self, box_widths: Self) {
+        self.min_content = self.min_content.max(box_widths.min_content);
+        self.max_content += box_widths.max_content;
+    }
 }
 
 fn box_horizontal_extra(style: &ComputedStyle) -> f32 {
@@ -172,13 +180,25 @@ fn content_intrinsic_widths(
                 }
 
                 let is_flex_item = matches!(style.display, Display::Flex | Display::InlineFlex);
-                let establishes_box = is_flex_item
+                let is_atomic_inline = matches!(child_el.tag, crate::parser::dom::HtmlTag::Img)
                     || matches!(
                         child_style.display,
-                        Display::Block | Display::Flex | Display::Grid
+                        Display::InlineBlock
+                            | Display::InlineFlex
+                            | Display::InlineGrid
+                            | Display::InlineTable
+                    );
+                let establishes_block = is_flex_item
+                    || matches!(
+                        child_style.display,
+                        Display::Block
+                            | Display::ListItem
+                            | Display::Flex
+                            | Display::Grid
+                            | Display::Table
                     )
-                    || recurses_as_layout_child(child_el.tag);
-                if establishes_box && (is_flex_item || !collects_as_inline_text(child_el.tag)) {
+                    || (recurses_as_layout_child(child_el.tag) && !is_atomic_inline);
+                if establishes_block {
                     flush_inline(&mut contributions, &mut inline);
                     let border_box = intrinsic_border_box_widths_with(
                         child_el,
@@ -191,6 +211,18 @@ fn content_intrinsic_widths(
                         },
                     );
                     contributions.push(border_box.with_extra(child_style.margin.horizontal()));
+                } else if is_atomic_inline {
+                    let border_box = intrinsic_border_box_widths_with(
+                        child_el,
+                        &child_style,
+                        IntrinsicMeasurement {
+                            rules: measurement.rules,
+                            fonts: measurement.fonts,
+                            ancestors: &child_ancestors,
+                            selector: &child_selector,
+                        },
+                    );
+                    inline.append_atomic(border_box.with_extra(child_style.margin.horizontal()));
                 } else {
                     accumulate_inline_element(
                         child_el,
@@ -395,8 +427,18 @@ pub(crate) fn resolve_intrinsic_keyword_width(
     rules: &[CssRule],
     fonts: &HashMap<String, TtfFont>,
 ) -> f32 {
-    let widths =
-        intrinsic_border_box_widths(el, style, rules, fonts, &[], &SelectorContext::default());
+    // A min/max-width keyword constrains the preferred width; it does not
+    // measure that preferred width. Using `intrinsic_border_box_widths` here
+    // would feed `width` back into its own constraint (for example making
+    // `width: 200px; max-width: min-content` resolve to 200px).
+    let widths = content_intrinsic_border_box_widths(
+        el,
+        style,
+        rules,
+        fonts,
+        &[],
+        &SelectorContext::default(),
+    );
     let stretch = (available_width - style.margin.horizontal()).max(0.0);
     widths.resolve(keyword, stretch).max(0.0)
 }
