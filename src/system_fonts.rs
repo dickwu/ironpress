@@ -116,6 +116,32 @@ impl<'a> SystemFontQuery<'a> {
             family => vec![fontdb::Family::Name(family)],
         }
     }
+
+    fn fontdb_face(&self, db: &fontdb::Database) -> Option<fontdb::ID> {
+        let families = self.fontdb_families();
+        self.query_fontdb(db, &families).or_else(|| {
+            let requested = self.normalized_family();
+            let canonical = db
+                .faces()
+                .flat_map(|face| &face.families)
+                .map(|family| family.0.as_str())
+                .find(|family| family.eq_ignore_ascii_case(requested))?;
+            self.query_fontdb(db, &[fontdb::Family::Name(canonical)])
+        })
+    }
+
+    fn query_fontdb(
+        &self,
+        db: &fontdb::Database,
+        families: &[fontdb::Family<'_>],
+    ) -> Option<fontdb::ID> {
+        db.query(&fontdb::Query {
+            families,
+            weight: self.variant.weight(),
+            stretch: fontdb::Stretch::Normal,
+            style: self.variant.style(),
+        })
+    }
 }
 
 pub(crate) fn font_variant_key(family: &str, bold: bool, italic: bool) -> String {
@@ -904,13 +930,7 @@ fn build_fontconfig_pattern(query: &SystemFontQuery<'_>) -> String {
 }
 
 fn query_fontdb_font(db: &fontdb::Database, query: &SystemFontQuery<'_>) -> Option<TtfFont> {
-    let families = query.fontdb_families();
-    let face_id = db.query(&fontdb::Query {
-        families: &families,
-        weight: query.variant.weight(),
-        stretch: fontdb::Stretch::Normal,
-        style: query.variant.style(),
-    })?;
+    let face_id = query.fontdb_face(db)?;
     db.with_face_data(face_id, |data, face_index| {
         parse_ttf_with_index(data.to_vec(), face_index as usize).ok()
     })?
@@ -1312,6 +1332,17 @@ mod tests {
     fn fontdb_families_named_returns_name_family() {
         let q = SystemFontQuery::new("Roboto", FontVariant::new(false, false));
         assert_eq!(q.fontdb_families(), vec![fontdb::Family::Name("Roboto")]);
+    }
+
+    #[test]
+    fn fontdb_query_matches_named_family_without_case_sensitivity() {
+        let mut db = fontdb::Database::new();
+        db.load_font_data(include_bytes!("../tests/parity/fonts/ParitySans.ttf").to_vec());
+        let query = SystemFontQuery::new("paritysans", FontVariant::new(false, false));
+
+        let font = query_fontdb_font(&db, &query).expect("case-insensitive family match");
+
+        assert_eq!(font.font_name, "ParitySans");
     }
 
     #[test]
