@@ -40,8 +40,8 @@ use super::inline_formatting::{
 use super::paginate::estimate_element_height;
 use super::text::{
     InlineRunCollector, InlineTextSequence, TextWrapOptions, apply_text_overflow_ellipsis,
-    estimate_word_width, parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
-    text_run_line_height_factor, used_font_size, wrap_text_runs,
+    estimate_word_width, is_collapsible_space, parent_line_strut, resolve_style_font_family,
+    resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 use super::vertical_text::upright_lines;
 
@@ -250,13 +250,33 @@ fn trim_leading_collapsible_space(runs: &mut Vec<TextRun>) {
         if first.inline_box.is_some() {
             return;
         }
-        let trimmed = first.text.trim_start().to_string();
+        let trimmed = first
+            .text
+            .trim_start_matches(is_collapsible_space)
+            .to_string();
         if trimmed.is_empty() {
             runs.remove(0);
         } else {
             first.text = trimmed;
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod text_fragment_tests {
+    use super::*;
+
+    #[test]
+    fn first_line_trimming_preserves_non_breaking_space() {
+        let mut runs = vec![TextRun {
+            text: "\u{00a0}alpha".to_string(),
+            ..Default::default()
+        }];
+
+        trim_leading_collapsible_space(&mut runs);
+
+        assert_eq!(runs[0].text, "\u{00a0}alpha");
     }
 }
 

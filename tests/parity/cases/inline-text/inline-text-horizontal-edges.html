@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: 320px 240px; margin: 0; }
+  html { font-family: ParitySans; line-height: 1.5; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; color: #102a43; font-size: 16px; }
+  .row { height: 32px; white-space: nowrap; }
+  .padded { padding: 0 16px; background: #ffd166; }
+  .margined { margin: 0 16px; background: #06d6a0; }
+  .rtl { direction: rtl; }
+  .rtl-edge { padding-left: 8px; padding-right: 24px; background: #ef476f; }
+  .wrap { width: 128px; white-space: normal; line-height: 24px; }
+  .wrap-edge { padding: 0 12px; border-radius: 8px; background: #cdb4db; }
+</style>
+</head>
+<body>
+  <div class="row">A<span class="padded">B</span>C</div>
+  <div class="row">A<span class="margined">B</span>C</div>
+  <div class="row">A<span>B</span>C</div>
+  <div class="row rtl">א<span class="rtl-edge">ב</span>ג</div>
+  <div class="wrap">A <span class="wrap-edge">alpha <b>beta</b> gamma</span> Z</div>
+</body>
+</html>

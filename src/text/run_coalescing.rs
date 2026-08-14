@@ -21,6 +21,11 @@ pub(crate) fn coalesce_text_runs(runs: &[TextRun]) -> Vec<TextRun> {
             .is_some_and(|previous| text_runs_share_shaping_buffer(previous, run));
         if can_coalesce {
             if let Some(previous) = coalesced.last_mut() {
+                if runs_continue_inline_decoration(previous, run) {
+                    previous.padding.right = run.padding.right;
+                    previous.border_radii.top_right = run.border_radii.top_right;
+                    previous.border_radii.bottom_right = run.border_radii.bottom_right;
+                }
                 previous.text.push_str(&run.text);
                 previous.metadata.boundary = run.metadata.boundary;
             }
@@ -32,6 +37,7 @@ pub(crate) fn coalesce_text_runs(runs: &[TextRun]) -> Vec<TextRun> {
 }
 
 pub(crate) fn text_runs_share_shaping_buffer(previous: &TextRun, next: &TextRun) -> bool {
+    let continues_inline_decoration = runs_continue_inline_decoration(previous, next);
     previous.inline_box.is_none()
         && next.inline_box.is_none()
         && !previous.metadata.text_combine_upright.is_active()
@@ -45,8 +51,8 @@ pub(crate) fn text_runs_share_shaping_buffer(previous: &TextRun, next: &TextRun)
         && previous.font_family == next.font_family
         && previous.font_synthesis == next.font_synthesis
         && previous.background_color == next.background_color
-        && previous.padding == next.padding
-        && previous.border_radii == next.border_radii
+        && (continues_inline_decoration || previous.padding == next.padding)
+        && (continues_inline_decoration || previous.border_radii == next.border_radii)
         && resolved_metric_matches(previous.line_height_factor, next.line_height_factor)
         && resolved_metric_matches(previous.line_height_basis, next.line_height_basis)
         && previous.font_variant_position == next.font_variant_position
@@ -58,6 +64,11 @@ pub(crate) fn text_runs_share_shaping_buffer(previous: &TextRun, next: &TextRun)
         && crate::bidi::has_rtl_chars(&previous.text) == crate::bidi::has_rtl_chars(&next.text)
 }
 
+fn runs_continue_inline_decoration(previous: &TextRun, next: &TextRun) -> bool {
+    previous.metadata.inline_decoration.is_some()
+        && previous.metadata.inline_decoration == next.metadata.inline_decoration
+}
+
 fn resolved_metric_matches(previous: f32, next: f32) -> bool {
     previous == next || (previous.is_nan() && next.is_nan())
 }
@@ -65,6 +76,7 @@ fn resolved_metric_matches(previous: f32, next: f32) -> bool {
 fn metadata_matches(previous: TextRunMetadata, next: TextRunMetadata) -> bool {
     previous.emphasis == next.emphasis
         && previous.spacing == next.spacing
+        && previous.inline_decoration == next.inline_decoration
         && previous.is_drop_cap == next.is_drop_cap
         // A boundary can become ordinary intra-run tracking only when it
         // carries the same spacing as the run and no separate pair-positioning
@@ -156,5 +168,41 @@ mod tests {
                 "distinct run-local paint state must remain a shaping boundary"
             );
         }
+    }
+
+    #[test]
+    fn one_inline_fragment_keeps_one_shaping_buffer_and_its_outer_edges() {
+        let decoration = crate::layout::engine::InlineDecorationId::from_index(0);
+        let first = TextRun {
+            text: "Centered".to_string(),
+            padding: crate::types::EdgeSizes {
+                left: 3.0,
+                ..crate::types::EdgeSizes::ZERO
+            },
+            metadata: TextRunMetadata {
+                inline_decoration: Some(decoration),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let last = TextRun {
+            text: " Span".to_string(),
+            padding: crate::types::EdgeSizes {
+                right: 3.0,
+                ..crate::types::EdgeSizes::ZERO
+            },
+            metadata: TextRunMetadata {
+                inline_decoration: Some(decoration),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let coalesced = coalesce_text_runs(&[first, last]);
+
+        assert_eq!(coalesced.len(), 1);
+        assert_eq!(coalesced[0].text, "Centered Span");
+        assert_eq!(coalesced[0].padding.left, 3.0);
+        assert_eq!(coalesced[0].padding.right, 3.0);
     }
 }

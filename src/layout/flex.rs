@@ -29,8 +29,8 @@ use super::paginate::estimate_element_height;
 use super::roundoff::{equal_with_roundoff, exceeds_with_roundoff, is_positive_with_roundoff};
 use super::text::{
     InlineRunCollector, InlineTextSequence, TextWrapOptions, estimate_word_width,
-    measure_text_intrinsic_widths, parent_line_strut, resolve_style_font_family,
-    text_run_line_height_factor, used_font_size, wrap_text_runs,
+    is_collapsible_space, measure_text_intrinsic_widths, parent_line_strut,
+    resolve_style_font_family, text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -1043,7 +1043,10 @@ fn flex_direct_text_width(
     let family = resolve_style_font_family(style, fonts);
     let mut width = 0.0;
     let mut first = true;
-    for word in text.split_whitespace() {
+    for word in text
+        .split(is_collapsible_space)
+        .filter(|word| !word.is_empty())
+    {
         if !first {
             width += estimate_word_width(
                 " ",
@@ -1148,7 +1151,10 @@ fn flex_intrinsic_container_width(
     for child in &el.children {
         match child {
             DomNode::Text(text) => {
-                if text.split_whitespace().next().is_some() {
+                if text
+                    .split(is_collapsible_space)
+                    .any(|word| !word.is_empty())
+                {
                     contributions.push(flex_direct_text_width(text, style, env.fonts));
                 }
             }
@@ -1492,7 +1498,10 @@ pub(crate) fn layout_flex_container(
                 element_idx += 1;
             }
             DomNode::Text(text) => {
-                if text.split_whitespace().next().is_some() {
+                if text
+                    .split(is_collapsible_space)
+                    .any(|word| !word.is_empty())
+                {
                     let mut anon = ElementNode::new(HtmlTag::Div);
                     anon.children.push(DomNode::Text(text.clone()));
                     flex_child_storage.push(anon);
@@ -4580,7 +4589,7 @@ pub(crate) fn layout_flex_container(
 mod cutoff_tests {
     use super::{
         FlexIntrinsicWidth, FlexibleLength, apply_row_baseline_offsets, flex_cell_with_nested_item,
-        resolve_flexible_lengths,
+        flex_direct_text_width, resolve_flexible_lengths,
     };
     use crate::layout::elements::{
         BoxPaint, BoxTransform, IntoLayoutNode, LayoutElement, LayoutElementTestExt, PaintGroup,
@@ -4590,6 +4599,17 @@ mod cutoff_tests {
     use crate::parser::html::{parse_html, parse_html_with_styles};
     use crate::style::computed::{ComputedStyle, Transform};
     use crate::types::{Margin, PageSize};
+
+    #[test]
+    fn direct_flex_text_keeps_non_breaking_space_advance() {
+        let style = ComputedStyle::default();
+        let fonts = std::collections::HashMap::new();
+
+        let ordinary = flex_direct_text_width("A B", &style, &fonts);
+        let non_breaking = flex_direct_text_width("A\u{00a0}\u{00a0}B", &style, &fonts);
+
+        assert!(non_breaking > ordinary);
+    }
 
     fn flex_rows_in_element(element: &dyn LayoutElement, rows: &mut Vec<(Vec<FlexCell>, f32)>) {
         if let Some(row) = element.inspect_flex(|row| {

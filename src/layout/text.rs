@@ -72,6 +72,7 @@ fn apply_inline_parent_background(
     runs: &mut [TextRun],
     start: usize,
     parent_style: &ComputedStyle,
+    decoration_id: crate::layout::engine::InlineDecorationId,
 ) {
     if parent_style.white_space == WhiteSpace::Pre {
         return;
@@ -87,7 +88,113 @@ fn apply_inline_parent_background(
             run.padding = padding;
             run.border_radii = radius;
         }
+        if run.inline_box.is_none()
+            && run.background_color == Some(bg)
+            && !parent_style.writing_mode.is_vertical()
+            && run.metadata.inline_decoration.is_none()
+        {
+            run.metadata.inline_decoration = Some(decoration_id);
+        }
     }
+}
+
+/// Used advances at the opening and closing edge of an inline box.
+///
+/// Keeping the pair together makes edge ownership explicit after the DOM is
+/// flattened into text runs. Vertical edges are paint-only for non-replaced
+/// inline boxes and therefore do not belong in this inline-axis value.
+#[derive(Clone, Copy)]
+struct InlineHorizontalEdges {
+    start: f32,
+    end: f32,
+    decoration: crate::layout::engine::InlineDecoration,
+}
+
+impl InlineHorizontalEdges {
+    /// Resolve the physical horizontal edges of one computed inline style.
+    fn from_style(
+        style: &ComputedStyle,
+        parent_direction_rtl: bool,
+        decoration_id: crate::layout::engine::InlineDecorationId,
+    ) -> Self {
+        let left = style.margin.left + style.padding.left;
+        let right = style.padding.right + style.margin.right;
+        if parent_direction_rtl {
+            return Self {
+                start: right,
+                end: left,
+                decoration: Self::decoration(style, decoration_id),
+            };
+        }
+        Self {
+            start: left,
+            end: right,
+            decoration: Self::decoration(style, decoration_id),
+        }
+    }
+
+    fn decoration(
+        style: &ComputedStyle,
+        id: crate::layout::engine::InlineDecorationId,
+    ) -> crate::layout::engine::InlineDecoration {
+        let background_color = style.background_color;
+        crate::layout::engine::InlineDecoration {
+            id,
+            background_color,
+            padding: decoration_padding(style, background_color),
+            border_radii: decoration_radius(style, background_color),
+        }
+    }
+
+    /// Add edge advances to the flattened content owned by this inline box.
+    fn apply(self, runs: &mut Vec<TextRun>, start: usize) {
+        let retains_painted_edges = self.decoration.background_color.is_some()
+            && (!self.decoration.padding.is_zero() || !self.decoration.border_radii.is_zero());
+        if self.start != 0.0 || retains_painted_edges {
+            runs.insert(
+                start,
+                TextRun {
+                    inline_box: Some(Box::new(InlineBox::advance_only(self.start))),
+                    metadata: crate::layout::engine::TextRunMetadata {
+                        inline_edge: Some(crate::layout::engine::InlineEdge {
+                            side: crate::layout::engine::InlineEdgeSide::Opening,
+                            decoration: self.decoration,
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+        if self.end != 0.0 || retains_painted_edges {
+            runs.push(TextRun {
+                inline_box: Some(Box::new(InlineBox::advance_only(self.end))),
+                metadata: crate::layout::engine::TextRunMetadata {
+                    inline_edge: Some(crate::layout::engine::InlineEdge {
+                        side: crate::layout::engine::InlineEdgeSide::Closing,
+                        decoration: self.decoration,
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Add one non-replaced inline box's horizontal edges to its run sequence.
+fn apply_inline_horizontal_edges(
+    runs: &mut Vec<TextRun>,
+    start: usize,
+    style: &ComputedStyle,
+    parent_direction_rtl: bool,
+    decoration_id: crate::layout::engine::InlineDecorationId,
+) {
+    if style.writing_mode.is_vertical() {
+        return;
+    }
+    InlineHorizontalEdges::from_style(style, parent_direction_rtl, decoration_id)
+        .apply(runs, start);
 }
 
 // ---------------------------------------------------------------------------
@@ -487,11 +594,18 @@ fn line_primary_x_height_ratio(runs: &[TextRun], fonts: &HashMap<String, TtfFont
 // collapse_whitespace
 // ---------------------------------------------------------------------------
 
+/// CSS Text document white-space characters which collapse under `normal`.
+/// Unicode space separators such as NBSP, EN SPACE, and EM SPACE are text;
+/// Rust's broader `char::is_whitespace` predicate is not the CSS contract.
+pub(crate) const fn is_collapsible_space(character: char) -> bool {
+    matches!(character, '\u{0009}' | '\u{000A}' | '\u{000D}' | '\u{0020}')
+}
+
 pub(crate) fn collapse_whitespace(text: &str) -> String {
     let mut result = String::new();
     let mut last_was_space = false;
     for c in text.chars() {
-        if c.is_whitespace() {
+        if is_collapsible_space(c) {
             if !last_was_space && !result.is_empty() {
                 result.push(' ');
                 last_was_space = true;
@@ -501,7 +615,7 @@ pub(crate) fn collapse_whitespace(text: &str) -> String {
             last_was_space = false;
         }
     }
-    result.trim_end().to_string()
+    result.trim_end_matches(is_collapsible_space).to_string()
 }
 
 /// Collapse whitespace for `white-space: pre-line` (css-text-3 §4.1.1).
@@ -527,7 +641,7 @@ pub(crate) fn collapse_whitespace_pre_line(text: &str) -> String {
             }
             result.push('\n');
             last_was_space = true; // suppress a leading space on the next line
-        } else if c.is_whitespace() {
+        } else if is_collapsible_space(c) {
             // Collapse spaces/tabs to a single space, but never lead a segment
             // (start of string or just after a newline) with one.
             if !last_was_space {
@@ -1270,6 +1384,35 @@ fn measure_inline_token(
     }
 }
 
+/// Measure an opening edge together with the first token inside its inline box.
+///
+/// CSS2 keeps the opening edge on the fragment containing the inline's first
+/// content. Looking ahead here prevents the edge from fitting alone at the end
+/// of a line while preserving the source-order run sequence used for paint.
+fn opening_edge_group_width<'a>(
+    edge: &TextRun,
+    following: impl Iterator<Item = &'a StyledWord>,
+    runs: &[TextRun],
+    fonts: &HashMap<String, TtfFont>,
+) -> f32 {
+    let mut width = edge.atomic_inline_advance().unwrap_or_default();
+    for token in following {
+        let run = &runs[token.run_index];
+        if run.is_opening_inline_edge() {
+            width += run.atomic_inline_advance().unwrap_or_default();
+            continue;
+        }
+        if token.text == "\n" {
+            return width;
+        }
+        if run.inline_box.is_some() {
+            return width + run.atomic_inline_advance().unwrap_or_default();
+        }
+        return width + estimate_text_width_for_run(&strip_soft_hyphens(&token.text), run, fonts);
+    }
+    width
+}
+
 /// Split a segment of text that preserves its internal whitespace into
 /// alternating word-runs and space-runs. Used for `white-space: pre-wrap`,
 /// where spaces must be preserved verbatim but lines may still wrap at the
@@ -1442,6 +1585,71 @@ fn resolved_text_line(
         baseline_ascent: metrics.map(|(_, baseline)| baseline),
         x_offset: 0.0,
         metadata: Default::default(),
+    }
+}
+
+/// Retain horizontal decoration only where the inline's physical edge exists.
+///
+/// A non-replaced inline split across lines paints its background on every
+/// fragment, but its left padding/radii belong only to the leftmost fragment
+/// and its right padding/radii only to the rightmost one (CSS2 §9.4.2).
+fn resolve_inline_fragment_decorations(lines: &mut [TextLine]) {
+    for line in lines {
+        let edges: Vec<_> = line
+            .runs
+            .iter()
+            .filter_map(|run| run.metadata.inline_edge)
+            .collect();
+        let decoration_ids: Vec<_> = line
+            .runs
+            .iter()
+            .filter_map(|run| run.metadata.inline_decoration)
+            .fold(Vec::new(), |mut ids, id| {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+                ids
+            });
+        for decoration_id in decoration_ids {
+            let matching: Vec<_> = line
+                .runs
+                .iter()
+                .enumerate()
+                .filter(|(_, run)| run.metadata.inline_decoration == Some(decoration_id))
+                .map(|(index, _)| index)
+                .collect();
+            let (Some(first), Some(last)) = (matching.first().copied(), matching.last().copied())
+            else {
+                continue;
+            };
+            let opening = edges.iter().find(|edge| {
+                edge.decoration.id == decoration_id
+                    && edge.side == crate::layout::engine::InlineEdgeSide::Opening
+            });
+            let closing = edges.iter().find(|edge| {
+                edge.decoration.id == decoration_id
+                    && edge.side == crate::layout::engine::InlineEdgeSide::Closing
+            });
+            for index in matching {
+                let run = &mut line.runs[index];
+                run.padding.left = 0.0;
+                run.padding.right = 0.0;
+                run.border_radii = run.border_radii.clear_left();
+                run.border_radii = run.border_radii.clear_right();
+            }
+            if let Some(edge) = opening {
+                let run = &mut line.runs[first];
+                run.padding.left = edge.decoration.padding.left;
+                run.border_radii.top_left = edge.decoration.border_radii.top_left;
+                run.border_radii.bottom_left = edge.decoration.border_radii.bottom_left;
+            }
+            if let Some(edge) = closing {
+                let run = &mut line.runs[last];
+                run.padding.right = edge.decoration.padding.right;
+                run.border_radii.top_right = edge.decoration.border_radii.top_right;
+                run.border_radii.bottom_right = edge.decoration.border_radii.bottom_right;
+            }
+        }
     }
 }
 
@@ -1772,11 +1980,11 @@ fn tokenize_text_runs(runs: &[TextRun], options: TextWrapOptions) -> Vec<StyledW
     let mut styled_words = Vec::new();
     let mut prev_run_ends_ws = true;
     for (run_index, run) in runs.iter().enumerate() {
-        let run_starts_ws = run.text.chars().next().is_some_and(char::is_whitespace);
+        let run_starts_ws = run.text.chars().next().is_some_and(is_collapsible_space);
         // The first emitted word of this run is directly adjacent to the prior
         // content when neither side of the boundary had whitespace.
         let first_word_joins = !prev_run_ends_ws && !run_starts_ws;
-        let run_ends_ws = run.text.chars().last().is_some_and(char::is_whitespace);
+        let run_ends_ws = run.text.chars().last().is_some_and(is_collapsible_space);
 
         if run.inline_box.is_some() {
             // Atomic inline box (`display: inline-block`): a single, unbreakable
@@ -1839,8 +2047,8 @@ fn tokenize_text_runs(runs: &[TextRun], options: TextWrapOptions) -> Vec<StyledW
                 if segment.is_empty() {
                     continue;
                 }
-                let preserved = segment.chars().next().is_some_and(char::is_whitespace)
-                    || segment.chars().last().is_some_and(char::is_whitespace)
+                let preserved = segment.chars().next().is_some_and(is_collapsible_space)
+                    || segment.chars().last().is_some_and(is_collapsible_space)
                     || segment.contains("  ");
                 if preserved {
                     if options.whitespace.wrap_preserved {
@@ -1857,7 +2065,10 @@ fn tokenize_text_runs(runs: &[TextRun], options: TextWrapOptions) -> Vec<StyledW
                         });
                     }
                 } else {
-                    for word in segment.split_whitespace() {
+                    for word in segment
+                        .split(is_collapsible_space)
+                        .filter(|word| !word.is_empty())
+                    {
                         push_word_with_hyphen_breaks(
                             word,
                             run_index,
@@ -1883,7 +2094,11 @@ fn tokenize_text_runs(runs: &[TextRun], options: TextWrapOptions) -> Vec<StyledW
                 });
             }
         } else {
-            for word in run.text.split_whitespace() {
+            for word in run
+                .text
+                .split(is_collapsible_space)
+                .filter(|word| !word.is_empty())
+            {
                 push_word_with_hyphen_breaks(
                     word,
                     run_index,
@@ -1913,7 +2128,7 @@ fn tokenize_text_runs(runs: &[TextRun], options: TextWrapOptions) -> Vec<StyledW
         if keep_trailing_space_before_rtl
             && let Some(last) = styled_words.last_mut()
             && last.text != "\n"
-            && !last.text.ends_with(char::is_whitespace)
+            && !last.text.ends_with(is_collapsible_space)
         {
             last.text.push(' ');
             prev_run_ends_ws = false;
@@ -2087,7 +2302,7 @@ pub(crate) fn measure_text_intrinsic_widths(
         );
         push_token_shaping_context(&mut max_context, token, run);
         max_previous_ends_whitespace =
-            run.inline_box.is_none() && token.text.chars().last().is_some_and(char::is_whitespace);
+            run.inline_box.is_none() && token.text.chars().last().is_some_and(is_collapsible_space);
 
         if token.break_before || min_context.is_empty() {
             min_group_width = 0.0;
@@ -2122,7 +2337,7 @@ pub(crate) fn measure_text_intrinsic_widths(
         };
         min_content = min_content.max(required_outer_width(min_group_width, min_exclusion));
         min_previous_ends_whitespace =
-            run.inline_box.is_none() && token.text.chars().last().is_some_and(char::is_whitespace);
+            run.inline_box.is_none() && token.text.chars().last().is_some_and(is_collapsible_space);
     }
 
     max_content = max_content.max(required_outer_width(
@@ -2209,7 +2424,9 @@ pub(crate) fn wrap_text_runs(
     let styled_words = tokenize_text_runs(&runs, options);
 
     if styled_words.is_empty() && !runs.is_empty() {
-        return vec![resolved_text_line(runs, line_height, options, fonts)];
+        let mut lines = vec![resolved_text_line(runs, line_height, options, fonts)];
+        resolve_inline_fragment_decorations(&mut lines);
+        return lines;
     }
 
     // Use a VecDeque so hyphenation remainders can be re-queued for processing.
@@ -2391,7 +2608,7 @@ pub(crate) fn wrap_text_runs(
             let prev_emitted_ws = current_runs
                 .last()
                 .and_then(|r: &TextRun| r.text.chars().last())
-                .is_some_and(char::is_whitespace);
+                .is_some_and(is_collapsible_space);
             let mut measurement = measure_inline_token(
                 template,
                 current_width > 0.0,
@@ -2399,12 +2616,18 @@ pub(crate) fn wrap_text_runs(
                 joins_prev,
                 fonts,
             );
-            if current_width > 0.0
-                && break_before
-                && width_exceeds_limit(
-                    measurement.end_width(current_width),
-                    line_max_width(lines.len()),
-                )
+            let end_width = if template.is_opening_inline_edge() {
+                current_width
+                    + measurement.leading_width
+                    + opening_edge_group_width(template, queue.iter(), &runs, fonts)
+            } else {
+                measurement.end_width(current_width)
+            };
+            let has_preceding_content =
+                current_runs.iter().any(|run| !run.is_opening_inline_edge());
+            if has_preceding_content
+                && (break_before || template.is_opening_inline_edge())
+                && width_exceeds_limit(end_width, line_max_width(lines.len()))
             {
                 push_wrapped_line(&mut lines, &mut current_runs, line_height, options, fonts);
                 current_width = 0.0;
@@ -2419,6 +2642,10 @@ pub(crate) fn wrap_text_runs(
                 current_runs.push(space);
             }
             current_width = measurement.end_width(current_width);
+            if template.is_inline_edge() {
+                current_runs.push(template.clone());
+                continue;
+            }
             // CSS2 §10.8: the line box must be tall enough to contain every
             // inline-level box after vertical alignment. For baseline/sub/super
             // boxes the height is the sum of the line's total extent ABOVE the
@@ -2516,7 +2743,7 @@ pub(crate) fn wrap_text_runs(
         let previous_run = current_runs.last();
         let previous_ends_whitespace = previous_run
             .and_then(|run| run.text.chars().last())
-            .is_some_and(char::is_whitespace);
+            .is_some_and(is_collapsible_space);
         let mut measurement = measure_normal_token(
             &paint_word,
             template,
@@ -2703,6 +2930,8 @@ pub(crate) fn wrap_text_runs(
             line.x_offset += (options.max_width - line_width).max(0.0);
         }
     }
+
+    resolve_inline_fragment_decorations(&mut lines);
 
     lines
 }
@@ -3161,6 +3390,7 @@ pub(crate) struct InlineRunCollector<'a> {
     fonts: &'a HashMap<String, TtfFont>,
     counter_state: &'a mut CounterState,
     resources: &'a mut crate::security::resources::ResourceLoader,
+    next_inline_decoration: usize,
 }
 
 impl<'a> InlineRunCollector<'a> {
@@ -3175,6 +3405,7 @@ impl<'a> InlineRunCollector<'a> {
             fonts,
             counter_state,
             resources,
+            next_inline_decoration: 0,
         }
     }
 
@@ -3198,6 +3429,7 @@ impl<'a> InlineRunCollector<'a> {
             ancestors,
             self.counter_state,
             self.resources,
+            &mut self.next_inline_decoration,
         );
         let boundary_start = first_new_run.saturating_sub(1);
         runs[boundary_start..].resolve_unclaimed_boundaries(
@@ -3235,6 +3467,7 @@ fn collect_text_runs_inner(
     ancestors: &[AncestorInfo],
     counter_state: &mut CounterState,
     resources: &mut crate::security::resources::ResourceLoader,
+    next_inline_decoration: &mut usize,
 ) {
     let first_run = runs.len();
     sequence.append_before(runs, fonts, counter_state, resources);
@@ -3272,8 +3505,8 @@ fn collect_text_runs_inner(
                     // element space without synthesising spurious spaces elsewhere
                     // (e.g. between a `::before` run and the element's own text).
                     let mut collapsed = collapse_whitespace(text);
-                    let starts_ws = text.chars().next().is_some_and(char::is_whitespace);
-                    let ends_ws = text.chars().last().is_some_and(char::is_whitespace);
+                    let starts_ws = text.chars().next().is_some_and(is_collapsible_space);
+                    let ends_ws = text.chars().last().is_some_and(is_collapsible_space);
                     // An atomic inline box (`display: inline-block`) carries empty
                     // text but is still inline content: a collapsible space after it
                     // must be preserved (CSS2 §9.1 / css-text-3 §4.1), e.g.
@@ -3291,7 +3524,7 @@ fn collect_text_runs_inner(
                         let prev_ends_ws = runs
                             .last()
                             .and_then(|r: &TextRun| r.text.chars().last())
-                            .is_some_and(char::is_whitespace);
+                            .is_some_and(is_collapsible_space);
                         if !prev_ends_ws {
                             collapsed.insert(0, ' ');
                         }
@@ -3544,6 +3777,10 @@ fn collect_text_runs_inner(
                             fonts,
                         );
                         let element_start = runs.len();
+                        let decoration_id = crate::layout::engine::InlineDecorationId::from_index(
+                            *next_inline_decoration,
+                        );
+                        *next_inline_decoration += 1;
                         collect_text_runs_inner(
                             InlineContentSequence::with_generated(
                                 &el.children,
@@ -3558,8 +3795,16 @@ fn collect_text_runs_inner(
                             &child_ancestors,
                             counter_state,
                             resources,
+                            next_inline_decoration,
                         );
-                        apply_inline_parent_background(runs, element_start, &style);
+                        apply_inline_horizontal_edges(
+                            runs,
+                            element_start,
+                            &style,
+                            parent_style.direction_rtl,
+                            decoration_id,
+                        );
+                        apply_inline_parent_background(runs, element_start, &style, decoration_id);
                         resolve_target_attrs(&mut runs[element_start..], el);
                         runs[element_start..].resolve_unclaimed_boundaries(
                             crate::layout::elements::TextSpacing::from_style(&style),
@@ -3631,6 +3876,305 @@ mod indent_tests {
             &mut resources,
         )
         .expect("atomic inline box")
+    }
+
+    fn inline_runs(markup: &str) -> Vec<TextRun> {
+        let nodes = crate::parser::html::parse_html(markup).expect("valid inline fixture");
+        let DomNode::Element(element) = &nodes[0] else {
+            panic!("fixture root must be an element");
+        };
+        let parent = ComputedStyle::default();
+        let style =
+            crate::style::computed::compute_style(element.tag, element.style_attr(), &parent);
+        let fonts = HashMap::new();
+        let mut counter_state = CounterState::default();
+        let mut resources = crate::security::resources::ResourceLoader::default();
+        let mut runs = Vec::new();
+        InlineRunCollector::new(&[], &fonts, &mut counter_state, &mut resources)
+            .collect_box_content(&element.children, &style, &mut runs, None, &[]);
+        runs
+    }
+
+    fn inline_run_width(markup: &str) -> f32 {
+        crate::layout::helpers::measure_runs_width(&inline_runs(markup), &HashMap::new())
+    }
+
+    #[test]
+    fn inline_horizontal_padding_and_margin_add_layout_advance() {
+        let plain = inline_run_width("<div>A<span>B</span>C</div>");
+        let padded = inline_run_width("<div>A<span style='padding-right:40px'>B</span>C</div>");
+        let margined = inline_run_width("<div>A<span style='margin-right:40px'>B</span>C</div>");
+
+        assert!((padded - plain - 30.0).abs() < 0.001, "{padded} vs {plain}");
+        assert!(
+            (margined - plain - 30.0).abs() < 0.001,
+            "{margined} vs {plain}"
+        );
+    }
+
+    #[test]
+    fn inline_edges_compose_across_both_sides_and_nested_spans() {
+        let plain = inline_run_width("<div>A<span>B</span>C</div>");
+        let both_sides = inline_run_width(
+            "<div>A<span style='margin-left:8px;padding-left:12px;\
+             padding-right:16px;margin-right:4px'>B</span>C</div>",
+        );
+        let nested = inline_run_width(
+            "<div>A<span style='padding:0 10px'><span style='margin:0 6px'>\
+             B</span></span>C</div>",
+        );
+
+        assert!((both_sides - plain - 30.0).abs() < 0.001);
+        assert!((nested - plain - 24.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn negative_inline_margin_offsets_padding_advance() {
+        let plain = inline_run_width("<div>AB<span>C</span>D</div>");
+        let offset = inline_run_width(
+            "<div>AB<span style='padding-right:40px;margin-right:-10px'>C</span>D</div>",
+        );
+        let negative = inline_run_width("<div>AB<span style='margin-right:-8px'>C</span>D</div>");
+
+        assert!((offset - plain - 22.5).abs() < 0.001);
+        assert!((negative - plain + 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rtl_inline_edges_keep_their_physical_left_and_right_widths() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div style='direction:rtl'><span style='padding-left:12px;padding-right:40px'>\
+             שלום</span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(200.0, 12.0, 1.2, OverflowWrap::Normal).with_rtl(true),
+            &fonts,
+        );
+        let runs = &lines[0].runs;
+
+        assert!(runs[0].is_opening_inline_edge());
+        assert_eq!(runs[0].atomic_inline_advance(), Some(9.0));
+        assert_eq!(line_text(&lines[0]), "שלום");
+        assert_eq!(
+            runs.last().and_then(TextRun::atomic_inline_advance),
+            Some(30.0)
+        );
+    }
+
+    #[test]
+    fn inline_fragment_edges_follow_the_parent_inline_progression() {
+        let child = ComputedStyle {
+            direction_rtl: true,
+            padding: EdgeSizes {
+                left: 9.0,
+                right: 30.0,
+                ..EdgeSizes::ZERO
+            },
+            ..Default::default()
+        };
+        let decoration = crate::layout::engine::InlineDecorationId::from_index(0);
+
+        let ltr_parent = InlineHorizontalEdges::from_style(&child, false, decoration);
+        let rtl_parent = InlineHorizontalEdges::from_style(&child, true, decoration);
+
+        assert_eq!((ltr_parent.start, ltr_parent.end), (9.0, 30.0));
+        assert_eq!((rtl_parent.start, rtl_parent.end), (30.0, 9.0));
+    }
+
+    #[test]
+    fn physical_horizontal_edges_do_not_advance_vertical_inline_content() {
+        let runs = inline_runs(
+            "<div style='writing-mode:vertical-rl'><span \
+             style='padding-left:12px;margin-right:40px;background:#ddd;\
+             border-radius:8px'>縦</span></div>",
+        );
+
+        assert!(!runs.iter().any(TextRun::is_inline_edge));
+        assert!(
+            runs.iter()
+                .filter(|run| !run.text.is_empty())
+                .all(|run| run.metadata.inline_decoration.is_none())
+        );
+    }
+
+    #[test]
+    fn inline_edges_stay_with_their_content_when_wrapping() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div><span style='padding-left:20px;padding-right:20px'>\
+             alpha beta</span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(50.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0]
+                .runs
+                .first()
+                .is_some_and(|run| run.inline_box.is_some())
+        );
+        assert_eq!(line_text(&lines[0]), "alpha");
+        assert_eq!(line_text(&lines[1]), "beta");
+        assert!(
+            lines[1]
+                .runs
+                .last()
+                .is_some_and(|run| run.inline_box.is_some())
+        );
+    }
+
+    #[test]
+    fn wrapped_inline_decorations_keep_each_horizontal_edge_once() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div><span style='padding:0 12px;background:#ddd'>\
+             alpha <b>beta</b> gamma</span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(90.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+        let horizontal_padding = |line: &TextLine| {
+            line.runs.iter().fold((0.0, 0.0), |(left, right), run| {
+                (left + run.padding.left, right + run.padding.right)
+            })
+        };
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(horizontal_padding(&lines[0]), (9.0, 0.0));
+        assert_eq!(horizontal_padding(&lines[1]), (0.0, 9.0));
+    }
+
+    #[test]
+    fn rounded_inline_without_padding_retains_only_its_fragment_corners() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div><span style='background:#ddd;border-radius:8px'>\
+             alpha beta gamma</span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(70.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].runs.first().is_some_and(TextRun::is_inline_edge));
+        assert!(lines[1].runs.last().is_some_and(TextRun::is_inline_edge));
+        let first_text = lines[0]
+            .runs
+            .iter()
+            .find(|run| !run.text.is_empty())
+            .expect("first inline fragment text");
+        let last_text = lines[1]
+            .runs
+            .iter()
+            .rev()
+            .find(|run| !run.text.is_empty())
+            .expect("last inline fragment text");
+        assert_ne!(
+            first_text.border_radii.top_left,
+            crate::types::CornerRadius::ZERO
+        );
+        assert_eq!(
+            first_text.border_radii.top_right,
+            crate::types::CornerRadius::ZERO
+        );
+        assert_eq!(
+            last_text.border_radii.top_left,
+            crate::types::CornerRadius::ZERO
+        );
+        assert_ne!(
+            last_text.border_radii.top_right,
+            crate::types::CornerRadius::ZERO
+        );
+    }
+
+    #[test]
+    fn opening_inline_edge_wraps_with_the_first_span_word() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div>alpha <span style='padding-left:20px;padding-right:20px'>\
+             beta gamma</span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(50.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+
+        assert_eq!(line_text(&lines[0]), "alpha");
+        assert_eq!(line_text(&lines[1]), "beta");
+        assert!(
+            lines[1].runs.first().is_some_and(TextRun::is_inline_edge),
+            "the opening edge must move with beta"
+        );
+    }
+
+    #[test]
+    fn nested_opening_edges_wrap_with_the_innermost_word() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div>alpha <span style='padding-left:8px'><span style='padding-left:12px'>\
+             beta</span></span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(50.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+
+        assert_eq!(line_text(&lines[0]), "alpha");
+        assert_eq!(line_text(&lines[1]), "beta");
+        assert!(lines[1].runs[0].is_opening_inline_edge());
+        assert!(lines[1].runs[1].is_opening_inline_edge());
+    }
+
+    #[test]
+    fn nested_opening_edges_overflow_together_when_the_group_cannot_fit() {
+        let fonts = HashMap::new();
+        let runs = inline_runs(
+            "<div><span style='padding-left:12px'><span style='padding-left:12px'>\
+             beta</span></span></div>",
+        );
+        let lines = wrap_text_runs(
+            runs,
+            TextWrapOptions::new(10.0, 12.0, 1.2, OverflowWrap::Normal),
+            &fonts,
+        );
+
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].runs[0].is_opening_inline_edge());
+        assert!(lines[0].runs[1].is_opening_inline_edge());
+        assert_eq!(line_text(&lines[0]), "beta");
+    }
+
+    #[test]
+    fn vertical_inline_edges_do_not_enlarge_line_boxes() {
+        let fonts = HashMap::new();
+        let options = TextWrapOptions::new(200.0, 3.0, 1.0, OverflowWrap::Normal);
+        let plain = wrap_text_runs(
+            inline_runs("<div style='font-size:4px;line-height:1'>A<span>B</span>C</div>"),
+            options,
+            &fonts,
+        );
+        let padded = wrap_text_runs(
+            inline_runs(
+                "<div style='font-size:4px;line-height:1'>A<span style='padding:40px'>B</span>C</div>",
+            ),
+            options,
+            &fonts,
+        );
+
+        assert_eq!(padded[0].height, plain[0].height);
+        assert_eq!(padded[0].baseline_ascent, plain[0].baseline_ascent);
     }
 
     #[test]
@@ -4080,6 +4624,33 @@ mod indent_tests {
         assert_eq!(collapse_whitespace_pre_line("x\t\ty\n\nz"), "x y\n\nz");
         // Contrast with `normal` collapse, which drops the newline entirely.
         assert_eq!(collapse_whitespace("alpha\nbeta"), "alpha beta");
+    }
+
+    #[test]
+    fn unicode_spacing_characters_are_not_collapsible_css_spaces() {
+        let unicode_spaces = "\u{00A0}\u{00A0}\u{2002}\u{2003}";
+
+        assert_eq!(
+            collapse_whitespace(&format!(" \tX{unicode_spaces}Y{unicode_spaces}")),
+            format!("X{unicode_spaces}Y{unicode_spaces}"),
+        );
+    }
+
+    #[test]
+    fn no_break_space_keeps_one_unbreakable_intrinsic_group() {
+        let fonts = parity_sans_fonts();
+        let run = parity_run("Alpha\u{00A0}Beta");
+        let options = TextWrapOptions::new(500.0, 16.0, 1.2, OverflowWrap::Normal);
+        let intrinsic = measure_text_intrinsic_widths(vec![run.clone()], options, true, &fonts);
+
+        assert_eq!(intrinsic.min_content, intrinsic.max_content);
+        let lines = wrap_text_runs(
+            vec![run],
+            options_at_width(options, previous_f32(intrinsic.max_content)),
+            &fonts,
+        );
+        assert_eq!(lines.len(), 1, "NBSP is not a soft wrap opportunity");
+        assert_eq!(line_text(&lines[0]), "Alpha\u{00A0}Beta");
     }
 
     #[test]

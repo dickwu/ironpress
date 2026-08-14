@@ -482,11 +482,7 @@ pub(super) fn estimate_line_width_with_fonts(
 ) -> f32 {
     line.runs
         .iter()
-        .map(|r| {
-            let text_w = estimate_run_width_with_fonts(r, custom_fonts);
-            // Include inline padding (e.g. badge spans with horizontal padding)
-            text_w + r.padding.horizontal()
-        })
+        .map(|run| estimate_run_width_with_fonts(run, custom_fonts))
         .sum()
 }
 

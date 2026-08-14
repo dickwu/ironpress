@@ -697,5 +697,35 @@
       "probe-fill-box",
       "probe-color-swatch"
     ]
+  },
+  {
+    "id": "inline-text-horizontal-edges",
+    "category": "inline-text",
+    "feature": "inline non-replaced box edges",
+    "subfeature": "horizontal-padding-margin",
+    "description": "Horizontal padding and margins advance surrounding inline text across LTR, RTL, and wrapped fragments.",
+    "file": "cases/inline-text/inline-text-horizontal-edges.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box"
+    ]
+  },
+  {
+    "id": "inline-text-unicode-spaces",
+    "category": "inline-text",
+    "feature": "white-space",
+    "subfeature": "unicode-space-preservation",
+    "description": "NBSP, EN SPACE, and EM SPACE retain their authored advances while ordinary spaces still collapse.",
+    "file": "cases/inline-text/inline-text-unicode-spaces.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-color-swatch"
+    ]
   }
 ]

@@ -775,6 +775,20 @@ impl CornerRadii {
         self.bottom_left = CornerRadius::ZERO;
         self
     }
+
+    /// Remove rounding from the two left corners of an inline continuation.
+    pub fn clear_left(mut self) -> Self {
+        self.top_left = CornerRadius::ZERO;
+        self.bottom_left = CornerRadius::ZERO;
+        self
+    }
+
+    /// Remove rounding from the two right corners of an inline continuation.
+    pub fn clear_right(mut self) -> Self {
+        self.top_right = CornerRadius::ZERO;
+        self.bottom_right = CornerRadius::ZERO;
+        self
+    }
 }
 
 fn outset_shadow_axis(radius: f32, spread: f32) -> f32 {
@@ -902,6 +916,9 @@ mod box_geometry_tests {
         assert_eq!(radii.clear_top().bottom_left.x, 7.0);
         assert_eq!(radii.clear_bottom().top_right.y, 7.0);
         assert!(radii.clear_top().clear_bottom().is_zero());
+        assert_eq!(radii.clear_left().top_right.x, 7.0);
+        assert_eq!(radii.clear_right().bottom_left.y, 7.0);
+        assert!(radii.clear_left().clear_right().is_zero());
     }
 }
 

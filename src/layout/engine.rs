@@ -690,6 +690,48 @@ pub enum RunWhitespace {
     Preserve,
 }
 
+/// Physical background geometry shared by an inline edge and its text runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct InlineDecoration {
+    pub(crate) id: InlineDecorationId,
+    pub(crate) background_color: Option<crate::types::Color>,
+    pub(crate) padding: EdgeSizes,
+    pub(crate) border_radii: CornerRadii,
+}
+
+/// Identity of one authored inline decoration within a flattened run list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineDecorationId(usize);
+
+impl InlineDecorationId {
+    pub(crate) const fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+}
+
+/// Which visual edge of a non-replaced inline box a marker owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineEdgeSide {
+    Opening,
+    Closing,
+}
+
+/// One non-painting edge marker retained in the flattened inline sequence.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct InlineEdge {
+    pub(crate) side: InlineEdgeSide,
+    pub(crate) decoration: InlineDecoration,
+}
+
+impl InlineEdge {
+    pub(crate) fn reverse(&mut self) {
+        self.side = match self.side {
+            InlineEdgeSide::Opening => InlineEdgeSide::Closing,
+            InlineEdgeSide::Closing => InlineEdgeSide::Opening,
+        };
+    }
+}
+
 impl RunWhitespace {
     pub(crate) const fn preserves_source_spacing(self) -> bool {
         matches!(self, Self::Preserve)
@@ -790,6 +832,8 @@ pub struct TextRunMetadata {
     pub text_combine_upright: crate::style::computed::TextCombineUpright,
     pub is_drop_cap: bool,
     pub whitespace: RunWhitespace,
+    pub(crate) inline_edge: Option<InlineEdge>,
+    pub(crate) inline_decoration: Option<InlineDecorationId>,
     /// Inline geometry owned by the boundary after this run. Keeping tracking
     /// and contextual shaping together makes every width and paint consumer
     /// advance through one semantic boundary.
@@ -953,7 +997,29 @@ impl TextRun {
     }
 
     pub(crate) fn has_typographic_unit(&self) -> bool {
-        self.inline_box.is_some() || self.text.chars().any(|character| character != '\n')
+        self.metadata.inline_edge.is_none()
+            && (self.inline_box.is_some() || self.text.chars().any(|character| character != '\n'))
+    }
+
+    /// Whether this run carries only a non-painting inline edge advance.
+    pub(crate) fn is_inline_edge(&self) -> bool {
+        self.metadata.inline_edge.is_some()
+    }
+
+    /// Whether this run opens a non-replaced inline box.
+    pub(crate) fn is_opening_inline_edge(&self) -> bool {
+        self.metadata
+            .inline_edge
+            .is_some_and(|edge| edge.side == InlineEdgeSide::Opening)
+    }
+
+    /// Reverse the source-order edge role after bidi places an object on an
+    /// odd embedding level. Wrapping consumes visual order, so its opening and
+    /// closing roles must describe that order too.
+    pub(crate) fn reverse_inline_edge_role(&mut self) {
+        if let Some(edge) = self.metadata.inline_edge.as_mut() {
+            edge.reverse();
+        }
     }
 
     pub(crate) fn forces_line_break(&self) -> bool {

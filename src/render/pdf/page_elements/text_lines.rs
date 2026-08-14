@@ -194,21 +194,11 @@ pub(super) fn render_text_block_lines(
                 }
             }
             TextAlign::Center => {
-                let first_pad = line.runs.first().map_or(0.0, |r| r.padding.left);
                 padding_box_x
                     + first_line_indent
                     + (padding_box_w - first_line_indent - line_width) / 2.0
-                    + first_pad
             }
-            TextAlign::Right => {
-                // Account for inline padding: text_x is where the
-                // text characters start, but line_width includes the
-                // full visual width (with left+right padding of inline
-                // spans).  Offset by the first run's left padding so
-                // the visual right edge aligns with the right boundary.
-                let first_pad = line.runs.first().map_or(0.0, |r| r.padding.left);
-                padding_box_x + padding_box_w - padding.right - line_width + first_pad
-            }
+            TextAlign::Right => padding_box_x + padding_box_w - padding.right - line_width,
         };
         // Merge consecutive runs with the same style so
         // spaces between words stay in a single PDF text
@@ -356,31 +346,33 @@ pub(super) fn render_text_block_lines(
             if let Some(inline) = run.inline_box.as_deref() {
                 let ibx = bg_x + inline.margin_left;
                 let run_line_height = run_line_height_for_vertical_align(run);
-                if inline.rel_offset_x != 0.0 || inline.rel_offset_y != 0.0 {
-                    deferred_inline.push((inline, ibx, run.font_size, run_line_height));
-                } else {
-                    render_inline_box(
-                        content,
-                        inline,
-                        ibx,
-                        text_y,
-                        page_size.height,
-                        line_top_y,
-                        line_bottom_y,
-                        line_text_top_y,
-                        line_text_bottom_y,
-                        run.font_size,
-                        run_line_height,
-                        line_primary_x_height_ratio(&merged, ctx.text.custom_fonts),
-                        ctx.text.custom_fonts,
-                        ctx.text.prepared_custom_fonts,
-                        ctx.page_ext_gstates,
-                        ctx.bg_alpha_counter,
-                        ctx.shadings,
-                        ctx.shading_counter,
-                        ctx.text.pdf_writer,
-                        ctx.text.page_images,
-                    );
+                if !run.is_inline_edge() {
+                    if inline.rel_offset_x != 0.0 || inline.rel_offset_y != 0.0 {
+                        deferred_inline.push((inline, ibx, run.font_size, run_line_height));
+                    } else {
+                        render_inline_box(
+                            content,
+                            inline,
+                            ibx,
+                            text_y,
+                            page_size.height,
+                            line_top_y,
+                            line_bottom_y,
+                            line_text_top_y,
+                            line_text_bottom_y,
+                            run.font_size,
+                            run_line_height,
+                            line_primary_x_height_ratio(&merged, ctx.text.custom_fonts),
+                            ctx.text.custom_fonts,
+                            ctx.text.prepared_custom_fonts,
+                            ctx.page_ext_gstates,
+                            ctx.bg_alpha_counter,
+                            ctx.shadings,
+                            ctx.shading_counter,
+                            ctx.text.pdf_writer,
+                            ctx.text.page_images,
+                        );
+                    }
                 }
                 bg_x += run.atomic_inline_advance().unwrap_or_default();
                 continue;
