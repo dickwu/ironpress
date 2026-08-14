@@ -543,6 +543,10 @@ impl HtmlConverter {
         // Step 2: Parse HTML and extract stylesheets
         let mut result = parser::html::parse_html_with_styles(html)?;
         security::sanitizer::sanitize_dom_resources(&mut result.nodes, resource_loader.resources());
+        #[cfg(feature = "remote")]
+        resource_loader.preload_document_resources(security::sanitizer::document_image_references(
+            &result.nodes,
+        ));
 
         // Step 2b: Resolve every stylesheet URL against its CSS base URL.
         // Imported sheets change that base to their own directory, while the
@@ -1965,9 +1969,14 @@ fn main() {
                 } else {
                     "image/png"
                 };
+                let content_length = if path == "/oversized.png" {
+                    body.len() + 1024
+                } else {
+                    body.len()
+                };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
+                    content_length
                 );
                 let _ = stream.write_all(response.as_bytes());
                 let _ = stream.write_all(body);
@@ -2039,6 +2048,35 @@ fn main() {
             seen.insert(path);
         }
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    #[cfg(feature = "remote")]
+    fn repeated_remote_images_cache_successes_and_failures_for_one_conversion() {
+        use std::time::Duration;
+
+        let (server, requests) = remote_fixture_server();
+        let html = format!(
+            r#"<img src="{server}/shared.png"><img src="{server}/shared.png">
+                <img src="{server}/oversized.png"><img src="{server}/oversized.png">"#
+        );
+        let host = "127.0.0.1".parse::<RemoteHost>().expect("valid host");
+
+        HtmlConverter::new()
+            .download_allow_list([host])
+            .download_max_body_size(512)
+            .convert(&html)
+            .expect("missing images do not fail the conversion");
+
+        let mut seen = Vec::new();
+        while let Ok(path) = requests.recv_timeout(Duration::from_millis(200)) {
+            seen.push(path);
+        }
+        assert_eq!(seen.iter().filter(|path| *path == "/shared.png").count(), 1);
+        assert_eq!(
+            seen.iter().filter(|path| *path == "/oversized.png").count(),
+            1
+        );
     }
 
     #[test]

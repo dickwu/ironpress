@@ -174,3 +174,78 @@ fn sanitized_css_preserves_inline_and_fragment_urls() {
         "a{filter:url(\"#fx\");background:url(\"DATA:image/png;base64,AA==\")}"
     );
 }
+
+#[cfg(feature = "remote")]
+#[test]
+fn distinct_remote_resources_are_preloaded_concurrently() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    fn accept_before(listener: &TcpListener, deadline: Instant) -> Option<TcpStream> {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return Some(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn respond(mut stream: TcpStream) {
+        let mut request = [0; 1024];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHELLO");
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback fixture");
+    listener
+        .set_nonblocking(true)
+        .expect("non-blocking fixture");
+    let port = listener.local_addr().expect("fixture address").port();
+    let first_url = format!("http://127.0.0.1:{port}/first");
+    let second_url = format!("http://127.0.0.1:{port}/second");
+    let policy = NetworkPolicy::default()
+        .with_allow_list(["127.0.0.1".parse().expect("valid loopback host")]);
+    let resources = DocumentResources::new(None, None, policy);
+    let mut loader = ResourceLoader::new(resources);
+
+    let connected_concurrently = std::thread::scope(|scope| {
+        let preload = scope.spawn(|| {
+            loader.preload_document_resources([first_url.as_str(), second_url.as_str()]);
+        });
+        let first = accept_before(&listener, Instant::now() + Duration::from_secs(1))
+            .expect("first remote connection");
+        let second = accept_before(&listener, Instant::now() + Duration::from_secs(1));
+        if let Some(second) = second {
+            respond(first);
+            respond(second);
+            preload.join().expect("preload worker");
+            true
+        } else {
+            respond(first);
+            let second = accept_before(&listener, Instant::now() + Duration::from_secs(1))
+                .expect("sequential fallback connection");
+            respond(second);
+            preload.join().expect("preload worker");
+            false
+        }
+    });
+
+    assert!(
+        connected_concurrently,
+        "both requests must start before either response completes"
+    );
+    assert_eq!(
+        loader
+            .load_document_resource(&first_url)
+            .expect("cached first resource")
+            .bytes,
+        b"HELLO"
+    );
+}
