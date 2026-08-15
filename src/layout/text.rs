@@ -553,7 +553,7 @@ pub(crate) fn line_primary_font_size(runs: &[crate::layout::engine::TextRun]) ->
         .filter(|r| {
             r.inline_box.is_none()
                 && matches!(r.vertical_align, VerticalAlign::Baseline)
-                && !r.text.trim().is_empty()
+                && has_non_collapsible_text(&r.text)
         })
         .map(TextRun::line_height_font_size)
         .fold(0.0f32, f32::max);
@@ -572,7 +572,7 @@ fn line_primary_x_height_ratio(runs: &[TextRun], fonts: &HashMap<String, TtfFont
         .filter(|run| {
             run.inline_box.is_none()
                 && run.vertical_align == VerticalAlign::Baseline
-                && !run.text.trim().is_empty()
+                && has_non_collapsible_text(&run.text)
         })
         .max_by(|left, right| {
             left.font_size
@@ -599,6 +599,12 @@ fn line_primary_x_height_ratio(runs: &[TextRun], fonts: &HashMap<String, TtfFont
 /// Rust's broader `char::is_whitespace` predicate is not the CSS contract.
 pub(crate) const fn is_collapsible_space(character: char) -> bool {
     matches!(character, '\u{0009}' | '\u{000A}' | '\u{000D}' | '\u{0020}')
+}
+
+/// Whether text contains anything outside the CSS document whitespace set.
+pub(crate) fn has_non_collapsible_text(text: &str) -> bool {
+    text.chars()
+        .any(|character| !is_collapsible_space(character))
 }
 
 pub(crate) fn collapse_whitespace(text: &str) -> String {
@@ -1110,7 +1116,7 @@ fn resolve_line_box_metrics(
             below = below.max(box_below.max(0.0));
             continue;
         }
-        if is_drop_cap_marker_run(run) || run.text.trim().is_empty() {
+        if is_drop_cap_marker_run(run) || !has_non_collapsible_text(&run.text) {
             continue;
         }
         let factor = if run.line_height_factor.is_finite() {
@@ -4634,6 +4640,12 @@ mod indent_tests {
             collapse_whitespace(&format!(" \tX{unicode_spaces}Y{unicode_spaces}")),
             format!("X{unicode_spaces}Y{unicode_spaces}"),
         );
+    }
+
+    #[test]
+    fn unicode_spacing_characters_are_renderable_text() {
+        assert!(has_non_collapsible_text("\u{00A0}\u{2002}\u{2003}"));
+        assert!(!has_non_collapsible_text(" \t\n\r"));
     }
 
     #[test]

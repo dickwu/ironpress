@@ -69,8 +69,9 @@ pub(crate) use super::traversal::{
 use super::text::OverflowWrap;
 use super::text::{
     InlineRunCollector, TextWrapOptions, collapse_whitespace, estimate_word_width,
-    parent_line_strut, push_text_run_with_fallback, resolve_style_font_family,
-    text_run_line_height_factor, used_font_size, used_line_height, wrap_text_runs,
+    has_non_collapsible_text, parent_line_strut, push_text_run_with_fallback,
+    resolve_style_font_family, text_run_line_height_factor, used_font_size, used_line_height,
+    wrap_text_runs,
 };
 /// A single border side for layout rendering.
 #[derive(Debug, Clone, Copy)]
@@ -1921,7 +1922,7 @@ fn first_root_child_margin_top(
 ) -> f32 {
     for node in nodes {
         match node {
-            DomNode::Text(text) if text.trim().is_empty() => continue,
+            DomNode::Text(text) if !has_non_collapsible_text(text) => continue,
             DomNode::Text(_) => return 0.0,
             DomNode::Element(el) => {
                 let classes = el.class_list();
@@ -3352,7 +3353,7 @@ pub(crate) fn forward_siblings(
 pub(crate) fn element_is_empty(el: &ElementNode) -> bool {
     el.children.iter().all(|node| match node {
         DomNode::Element(_) => false,
-        DomNode::Text(text) => text.chars().all(|c| c.is_whitespace()),
+        DomNode::Text(text) => !has_non_collapsible_text(text),
     })
 }
 
@@ -4911,6 +4912,17 @@ mod tests {
         "DA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAA",
         "AAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q=="
     );
+
+    #[test]
+    fn non_breaking_space_keeps_an_element_non_empty() {
+        let mut element = ElementNode::new(HtmlTag::Div);
+        element.children.push(DomNode::Text("\u{00a0}".to_string()));
+
+        assert!(!element_is_empty(&element));
+
+        element.children = vec![DomNode::Text(" \t\n\r".to_string())];
+        assert!(element_is_empty(&element));
+    }
 
     fn table_rows(page: &Page) -> Vec<TableRow> {
         #[derive(Default)]

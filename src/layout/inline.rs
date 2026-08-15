@@ -36,8 +36,8 @@ use super::roundoff::exceeds_with_roundoff;
 use super::table::{TableLayoutContext, flatten_table};
 use super::text::{
     InlineRunCollector, InlineTextSequence, LineStrut, TextWrapOptions, estimate_word_width,
-    parent_line_strut, resolve_style_font_family, resolved_line_height_factor,
-    text_run_line_height_factor, used_font_size, wrap_text_runs,
+    has_non_collapsible_text, parent_line_strut, resolve_style_font_family,
+    resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
 mod row_cursor;
@@ -248,10 +248,11 @@ fn inline_text_cell(
         .iter()
         .map(|line| crate::layout::helpers::measure_runs_width(&line.runs, fonts))
         .fold(0.0f32, f32::max);
-    if lines
-        .iter()
-        .all(|line| line.runs.iter().all(|run| run.text.trim().is_empty()))
-    {
+    if lines.iter().all(|line| {
+        line.runs
+            .iter()
+            .all(|run| !has_non_collapsible_text(&run.text))
+    }) {
         width = width.min(parent_style.font_size * 0.3125);
     }
     let height = lines.iter().map(|line| line.height).sum::<f32>();
@@ -292,7 +293,7 @@ fn collapsed_inline_space_advance(
 
 fn runs_have_visible_inline_content(runs: &[crate::layout::engine::TextRun]) -> bool {
     runs.iter()
-        .any(|run| run.inline_box.is_some() || !run.text.trim().is_empty())
+        .any(|run| run.inline_box.is_some() || has_non_collapsible_text(&run.text))
 }
 
 /// The line-box extents contributed by one or more `vertical-align: middle`
