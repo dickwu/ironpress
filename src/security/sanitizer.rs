@@ -85,6 +85,30 @@ pub(crate) fn sanitize_dom_resources(nodes: &mut [DomNode], resources: &Document
     }
 }
 
+/// Image references that the HTML tree can request independently of layout.
+#[cfg(feature = "remote")]
+pub(crate) fn document_image_references(nodes: &[DomNode]) -> Vec<&str> {
+    fn collect<'a>(nodes: &'a [DomNode], references: &mut Vec<&'a str>) {
+        for node in nodes {
+            let DomNode::Element(element) = node else {
+                continue;
+            };
+            if element.tag == HtmlTag::Img {
+                references.extend(element.attributes.get("src").map(String::as_str));
+            }
+            if element.raw_tag_name.eq_ignore_ascii_case("image") {
+                references.extend(element.attributes.get("href").map(String::as_str));
+                references.extend(element.attributes.get("xlink:href").map(String::as_str));
+            }
+            collect(&element.children, references);
+        }
+    }
+
+    let mut references = Vec::new();
+    collect(nodes, &mut references);
+    references
+}
+
 fn authorize_attribute(
     attributes: &mut std::collections::HashMap<String, String>,
     name: &str,
