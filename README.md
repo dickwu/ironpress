@@ -112,7 +112,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
 | **WASM** | `npm install ironpress` - runs 100% client-side in the browser | [WASM & Playground](../../wiki/WASM-Playground) |
-| **Testing** | 3500+ unit tests, property-based tests, 6 fuzz targets, 1,662-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
+| **Testing** | 3,200+ unit tests, property-based tests, 6 fuzz targets, 1,664-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
 
 ## Custom fonts
 

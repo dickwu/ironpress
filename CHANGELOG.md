@@ -1,6 +1,15 @@
 # Changelog
 
-## [1.5.1] — 2026-08-11
+## [1.5.1] — 2026-08-15
+
+### Fixed
+
+- System font families now resolve case-insensitively through `fontdb`,
+  without relying on `fc-match` as a fallback (#189).
+- Nested flex items now use intrinsic content sizing, flex rows grow around
+  their content, and empty auto-height flex boxes retain margins (#190–#192).
+- Inline elements retain horizontal padding and margins. NBSP, EN SPACE, and
+  EM SPACE keep their advances under normal whitespace handling (#196, #197).
 
 ### Security
 
@@ -12,6 +21,11 @@
 - HTML sanitization no longer controls resource authorization.
   `.sanitize(false)` does not grant local or remote access; projects that
   relied on working-directory file access must configure `.base_path(...)`.
+
+### Performance
+
+- Resource loads, including failures, are cached for one conversion. Distinct
+  remote image URLs are preloaded with at most eight concurrent requests (#195).
 
 ### Tests
 
