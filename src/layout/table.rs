@@ -35,9 +35,9 @@ use super::inline_formatting::{
 #[cfg(test)]
 use super::paginate::estimate_element_height;
 use super::text::{
-    InlineTextSequence, TextWrapOptions, estimate_word_width, measure_text_intrinsic_widths,
-    parent_line_strut, required_outer_width, text_run_line_height_factor, used_font_size,
-    wrap_text_runs,
+    InlineTextSequence, TextWrapOptions, estimate_word_width, has_non_collapsible_text,
+    measure_text_intrinsic_widths, parent_line_strut, required_outer_width,
+    text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
 mod collapsed_borders;
@@ -1853,7 +1853,7 @@ pub(crate) fn flatten_table(
                 }
                 (child_el, role)
             }
-            DomNode::Text(text) if !text.trim().is_empty() => {
+            DomNode::Text(text) if has_non_collapsible_text(text) => {
                 improper_children.push((DomNode::Text(text.clone()), None));
                 continue;
             }

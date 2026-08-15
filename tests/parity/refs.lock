@@ -7868,6 +7868,20 @@
       "reference_file": "cases/inline-text/inline-text-decoration-subpoint-geometry.html",
       "reference_html_sha256": "226e50c9a831b310755b48a87e79fb7080038094290e6d0e72fb3cfb2575ac80"
     },
+    "inline-text-horizontal-edges": {
+      "category": "inline-text",
+      "file": "cases/inline-text/inline-text-horizontal-edges.html",
+      "html_sha256": "dba86a87ebb098153be5224d300a07e3191d3bf9fb697e9f960d3d4fcfadbe58",
+      "manifest_sha256": "2e35f1622ee03adba97c5aa06d4bb8b4aada4a77ae62c3952c1731887a6bee7d",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/inline-text/inline-text-horizontal-edges.pdf",
+        "sha256": "7b8dd9a5dd45b3945acf5e69a842dec71e5bb57b0d104b5547593e74c4c1f66e"
+      },
+      "provenance": "7a83b632c9ada0d623bab12adeb4aee1d1ab14a1865f6515efb64b164a528e18",
+      "reference_file": "cases/inline-text/inline-text-horizontal-edges.html",
+      "reference_html_sha256": "dba86a87ebb098153be5224d300a07e3191d3bf9fb697e9f960d3d4fcfadbe58"
+    },
     "inline-text-inline-block-baseline": {
       "category": "inline-text",
       "file": "cases/inline-text/inline-text-inline-block-baseline.html",
@@ -8245,6 +8259,20 @@
       "provenance": "5c78c8ba32f531a87b1ae51ea9c5acc95267d26b5ef1693c973ffd1ed7128a1f",
       "reference_file": "cases/inline-text/inline-text-text-underline-offset-length.html",
       "reference_html_sha256": "55c45bd218e421fdd001c6313f180b5af008b7cedb65c12eaf328c40acb329aa"
+    },
+    "inline-text-unicode-spaces": {
+      "category": "inline-text",
+      "file": "cases/inline-text/inline-text-unicode-spaces.html",
+      "html_sha256": "ddb1ff9761441715ffcd40141c4b30e93705d8a0c976a21a7f893e33a5d2438b",
+      "manifest_sha256": "dccb05126a37dd646dc1484f2f647cd874ef629c48421d15af705ea3ff9e7430",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/inline-text/inline-text-unicode-spaces.pdf",
+        "sha256": "6ef286a39bd123fa318f05dcb422941187e943502fb390e7eecaf2af459fa85d"
+      },
+      "provenance": "7a83b632c9ada0d623bab12adeb4aee1d1ab14a1865f6515efb64b164a528e18",
+      "reference_file": "cases/inline-text/inline-text-unicode-spaces.html",
+      "reference_html_sha256": "ddb1ff9761441715ffcd40141c4b30e93705d8a0c976a21a7f893e33a5d2438b"
     },
     "inline-text-vertical-align-baseline": {
       "category": "inline-text",
@@ -23309,6 +23337,27 @@
       "pagedjs": false,
       "renderer": "chromium",
       "renderer_version": "Chromium 150.0.7871.114 snap",
+      "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
+    },
+    "7a83b632c9ada0d623bab12adeb4aee1d1ab14a1865f6515efb64b164a528e18": {
+      "font_backend": {
+        "features": [
+          "FontationsFontBackend",
+          "FontationsLinuxSystemFonts"
+        ],
+        "launcher": {
+          "file": "scripts/chromium-fontations.sh",
+          "sha256": "512064356160e631cef2f1eda128f6815d5329dd16671af8fcbe6a6daaf20ece"
+        },
+        "name": "fontations"
+      },
+      "font_bundle_sha256": "14e0dabd41048ffc7d0ba142a3c166656b4d14dabba93dd9185fb9aa4d9e5542",
+      "generator": "scripts/parity-gen-refs.sh",
+      "generator_sha256": "58edd23b0dfe07611bbf291af7a0b1aa6e6a457891d23a316210f46d75f8c192",
+      "oracle": "chrome",
+      "pagedjs": false,
+      "renderer": "chromium",
+      "renderer_version": "Chromium 150.0.7871.128 ",
       "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
     },
     "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b": {

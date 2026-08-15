@@ -284,6 +284,10 @@ impl NestedRowsRenderer<'_, '_> {
                     };
                     let mut lx = text_x;
                     for (run_index, run) in merged.iter().enumerate() {
+                        if let Some(advance) = run.atomic_inline_advance() {
+                            lx += advance;
+                            continue;
+                        }
                         if run.text.is_empty() {
                             continue;
                         }

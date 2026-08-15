@@ -681,28 +681,30 @@ pub(super) fn render_text_child(
             // The glyph painter would shape its empty text and draw
             // nothing, dropping the marker entirely.
             if let Some(inline) = run.inline_box.as_deref() {
-                render_inline_box(
-                    content,
-                    inline,
-                    lx + inline.margin_left,
-                    text_y,
-                    ctx.text.page_height,
-                    line_top_y,
-                    line_bottom_y,
-                    line_text_top_y,
-                    line_text_bottom_y,
-                    run.font_size,
-                    run_line_height_for_vertical_align(run),
-                    line_primary_x_height_ratio(&merged, ctx.text.custom_fonts),
-                    ctx.text.custom_fonts,
-                    ctx.text.prepared_custom_fonts,
-                    ctx.page_ext_gstates,
-                    ctx.bg_alpha_counter,
-                    ctx.shadings,
-                    ctx.shading_counter,
-                    ctx.text.pdf_writer,
-                    ctx.text.page_images,
-                );
+                if !run.is_inline_edge() {
+                    render_inline_box(
+                        content,
+                        inline,
+                        lx + inline.margin_left,
+                        text_y,
+                        ctx.text.page_height,
+                        line_top_y,
+                        line_bottom_y,
+                        line_text_top_y,
+                        line_text_bottom_y,
+                        run.font_size,
+                        run_line_height_for_vertical_align(run),
+                        line_primary_x_height_ratio(&merged, ctx.text.custom_fonts),
+                        ctx.text.custom_fonts,
+                        ctx.text.prepared_custom_fonts,
+                        ctx.page_ext_gstates,
+                        ctx.bg_alpha_counter,
+                        ctx.shadings,
+                        ctx.shading_counter,
+                        ctx.text.pdf_writer,
+                        ctx.text.page_images,
+                    );
+                }
                 lx += run.atomic_inline_advance().unwrap_or_default();
                 continue;
             }

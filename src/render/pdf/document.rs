@@ -610,7 +610,11 @@ fn render_running_text_margin_element(
         let mut cursor_x = line_x;
         let parent_font_size = crate::layout::text::line_primary_font_size(&merged);
         for (run_index, run) in merged.iter().enumerate() {
-            if run.text.is_empty() || run.inline_box.is_some() {
+            if let Some(advance) = run.atomic_inline_advance() {
+                cursor_x += advance;
+                continue;
+            }
+            if run.text.is_empty() {
                 continue;
             }
             let run_width = estimate_run_width_with_fonts(run, custom_fonts);

@@ -403,6 +403,10 @@ pub(super) fn render_cell_text(
         };
         let mut x = text_x;
         for (run_index, run) in merged.iter().enumerate() {
+            if let Some(advance) = run.atomic_inline_advance() {
+                x += advance;
+                continue;
+            }
             if run.text.is_empty() {
                 continue;
             }

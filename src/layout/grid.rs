@@ -33,8 +33,9 @@ use super::inline_formatting::{
 };
 use super::table::TableLayoutContext;
 use super::text::{
-    InlineRunCollector, TextWrapOptions, measure_text_intrinsic_widths, parent_line_strut,
-    resolved_line_height_factor, text_run_line_height_factor, used_font_size, wrap_text_runs,
+    InlineRunCollector, TextWrapOptions, has_non_collapsible_text, measure_text_intrinsic_widths,
+    parent_line_strut, resolved_line_height_factor, text_run_line_height_factor, used_font_size,
+    wrap_text_runs,
 };
 
 mod fragmentation;
@@ -1949,7 +1950,7 @@ fn layout_grid_item_content_inner(
         let DomNode::Element(child_el) = child else {
             if after_block {
                 if let DomNode::Text(text) = child {
-                    if !text.trim().is_empty() {
+                    if has_non_collapsible_text(text) {
                         let mut text_block = ElementNode::new(crate::parser::dom::HtmlTag::Div);
                         text_block.attributes.insert(
                             "style".to_string(),
@@ -2797,7 +2798,7 @@ fn layout_grid_container_inner(
     for child in &el.children {
         match child {
             DomNode::Text(text) => {
-                if !text.trim().is_empty() {
+                if has_non_collapsible_text(text) {
                     let mut node = ElementNode::new(crate::parser::dom::HtmlTag::Span);
                     node.children.push(DomNode::Text(text.clone()));
                     element_children.push(node);
@@ -3278,7 +3279,7 @@ fn layout_grid_container_inner(
                 let cs = &child_styles[p.idx];
                 let child_el = &element_children[p.idx];
                 let has_text = child_el.children.iter().any(|child| match child {
-                    DomNode::Text(t) => !t.trim().is_empty(),
+                    DomNode::Text(text) => has_non_collapsible_text(text),
                     _ => false,
                 });
                 if let Some(baseline) = grid_item_first_baseline(cs, has_text, env) {

@@ -437,31 +437,29 @@ pub(in crate::render::pdf) fn render_flex_row(
                 // Calculate line width for text-align
                 let line_width: f32 = merged
                     .iter()
-                    .map(|r| {
-                        let w = estimate_run_width_with_fonts(r, ctx.text.custom_fonts);
-                        w + r.padding.horizontal()
-                    })
+                    .map(|run| estimate_run_width_with_fonts(run, ctx.text.custom_fonts))
                     .sum();
-                let first_pad = line.runs.first().map_or(0.0, |r| r.padding.left);
                 let text_x = match cell.text_align {
                     TextAlign::Right => {
                         cell_x
                             + cell.border.left.width
                             + cell.padding.left
                             + (cell_inner_w - line_width).max(0.0)
-                            + first_pad
                     }
                     TextAlign::Center => {
                         cell_x
                             + cell.border.left.width
                             + cell.padding.left
                             + ((cell_inner_w - line_width) / 2.0).max(0.0)
-                            + first_pad
                     }
                     _ => cell_x + cell.border.left.width + cell.padding.left,
                 };
                 let mut x = text_x;
                 for (run_index, run) in merged.iter().enumerate() {
+                    if let Some(advance) = run.atomic_inline_advance() {
+                        x += advance;
+                        continue;
+                    }
                     if run.text.is_empty() {
                         continue;
                     }

@@ -6,6 +6,7 @@
 //! from accidentally inheriting the composition rule at paint time.
 
 use crate::layout::engine::{TextLine, TextRun};
+use crate::layout::text::is_collapsible_space;
 use crate::style::computed::TextCombineUpright;
 
 /// Expand upright vertical lines into one line per typographic unit.
@@ -29,7 +30,7 @@ pub(crate) fn upright_lines(lines: &[TextLine]) -> Vec<TextLine> {
             }
             match run.metadata.text_combine_upright {
                 TextCombineUpright::All => {
-                    if run.text.chars().any(|ch| !ch.is_whitespace()) {
+                    if run.text.chars().any(|ch| !is_collapsible_space(ch)) {
                         push_upright_line(&mut out, line, run, run.text.clone(), true);
                     }
                 }
@@ -37,7 +38,7 @@ pub(crate) fn upright_lines(lines: &[TextLine]) -> Vec<TextLine> {
                     push_digit_lines(&mut out, line, run, limit);
                 }
                 TextCombineUpright::None => {
-                    for ch in run.text.chars().filter(|ch| !ch.is_whitespace()) {
+                    for ch in run.text.chars().filter(|ch| !is_collapsible_space(*ch)) {
                         push_upright_line(&mut out, line, run, ch.to_string(), false);
                     }
                 }
@@ -51,7 +52,7 @@ fn push_digit_lines(out: &mut Vec<TextLine>, line: &TextLine, run: &TextRun, lim
     let mut chars = run.text.chars().peekable();
     while let Some(ch) = chars.next() {
         if !ch.is_ascii_digit() {
-            if !ch.is_whitespace() {
+            if !is_collapsible_space(ch) {
                 push_upright_line(out, line, run, ch.to_string(), false);
             }
             continue;
