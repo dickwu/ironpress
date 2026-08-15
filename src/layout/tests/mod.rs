@@ -1,5 +1,6 @@
 mod atomic_inline;
 mod filter_cells;
+mod flex_intrinsic;
 mod generated_content;
 mod grid_red_team;
 mod inline_selectors;

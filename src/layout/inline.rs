@@ -1754,8 +1754,8 @@ mod cutoff_tests {
         let item = &node.content.cells[0];
 
         assert!(
-            item.width < 60.0,
-            "the auto-sized mixed text/image item uses its max-content width, not the provisional equal share: {}",
+            (50.0..60.0).contains(&item.width),
+            "the mixed row includes both text advances and the 25.5pt image: {}",
             item.width,
         );
         assert!(

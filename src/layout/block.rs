@@ -437,7 +437,7 @@ pub(crate) fn layout_block_element(
         // stretch-fit term to the available content width less margins. This path
         // is only taken when `width` is `None` and there is no `%` width, so it
         // never perturbs the normal length/percentage/auto behaviour.
-        block_w = crate::layout::helpers::resolve_intrinsic_keyword_width(
+        block_w = crate::layout::intrinsic_width::resolve_intrinsic_keyword_width(
             el,
             style,
             keyword,
@@ -463,28 +463,32 @@ pub(crate) fn layout_block_element(
     if let Some(pct) = style.percentage_sizing.max_width {
         block_w = block_w.min(pct / 100.0 * percent_width_basis);
     } else if let Some(keyword) = authored_max_width_keyword {
-        block_w = block_w.min(crate::layout::helpers::resolve_intrinsic_keyword_width(
-            el,
-            style,
-            keyword,
-            available_width,
-            env.rules,
-            env.fonts,
-        ));
+        block_w = block_w.min(
+            crate::layout::intrinsic_width::resolve_intrinsic_keyword_width(
+                el,
+                style,
+                keyword,
+                available_width,
+                env.rules,
+                env.fonts,
+            ),
+        );
     } else if let Some(mw) = style.max_width {
         block_w = block_w.min(mw);
     }
     if let Some(pct) = style.percentage_sizing.min_width {
         block_w = block_w.max(pct / 100.0 * percent_width_basis);
     } else if let Some(keyword) = authored_min_width_keyword {
-        block_w = block_w.max(crate::layout::helpers::resolve_intrinsic_keyword_width(
-            el,
-            style,
-            keyword,
-            available_width,
-            env.rules,
-            env.fonts,
-        ));
+        block_w = block_w.max(
+            crate::layout::intrinsic_width::resolve_intrinsic_keyword_width(
+                el,
+                style,
+                keyword,
+                available_width,
+                env.rules,
+                env.fonts,
+            ),
+        );
     } else if let Some(mw) = style.min_width {
         block_w = block_w.max(mw);
     }
