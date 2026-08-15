@@ -80,10 +80,7 @@ pub(super) fn render_text_shadow_blur(
     );
     let img_name = format!("Im{img_obj_id}");
     content.push_str(&format!(
-        "q\n{w} 0 0 {h} {ix} {iy} cm\n/{name} Do\nQ\n",
-        w = w_pt,
-        h = h_pt,
-        name = img_name,
+        "q\n{w_pt} 0 0 {h_pt} {ix} {iy} cm\n/{img_name} Do\nQ\n"
     ));
     page_images.push(ImageRef {
         name: img_name,

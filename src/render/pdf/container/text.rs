@@ -827,34 +827,32 @@ pub(super) fn render_text_child(
                     ctx.text.pdf_writer,
                     ctx.text.page_images,
                 )
+            } else if decoration.is_some() {
+                render_run_glyphs_without_shadows(
+                    content,
+                    run,
+                    lx,
+                    run_y,
+                    crate::layout::text::line_primary_font_size(&merged),
+                    ctx.text.custom_fonts,
+                    ctx.text.prepared_custom_fonts,
+                    0.0,
+                    ctx.text.pdf_writer,
+                    ctx.text.page_images,
+                )
             } else {
-                if decoration.is_some() {
-                    render_run_glyphs_without_shadows(
-                        content,
-                        run,
-                        lx,
-                        run_y,
-                        crate::layout::text::line_primary_font_size(&merged),
-                        ctx.text.custom_fonts,
-                        ctx.text.prepared_custom_fonts,
-                        0.0,
-                        ctx.text.pdf_writer,
-                        ctx.text.page_images,
-                    )
-                } else {
-                    render_run_glyphs(
-                        content,
-                        run,
-                        lx,
-                        run_y,
-                        crate::layout::text::line_primary_font_size(&merged),
-                        ctx.text.custom_fonts,
-                        ctx.text.prepared_custom_fonts,
-                        0.0,
-                        ctx.text.pdf_writer,
-                        ctx.text.page_images,
-                    )
-                }
+                render_run_glyphs(
+                    content,
+                    run,
+                    lx,
+                    run_y,
+                    crate::layout::text::line_primary_font_size(&merged),
+                    ctx.text.custom_fonts,
+                    ctx.text.prepared_custom_fonts,
+                    0.0,
+                    ctx.text.pdf_writer,
+                    ctx.text.page_images,
+                )
             };
             if let Some(decoration) = &decoration {
                 decoration.paint_above_text(content);

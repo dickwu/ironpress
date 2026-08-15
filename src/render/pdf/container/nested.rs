@@ -546,10 +546,7 @@ pub(super) fn render_nested_container(
                 let (or, og, ob) = nk_outline_color
                     .unwrap_or(crate::types::Color::BLACK)
                     .to_f32_rgb();
-                content.push_str(&format!(
-                    "{or} {og} {ob} RG\n{ow} w\n",
-                    ow = nk_outline_width
-                ));
+                content.push_str(&format!("{or} {og} {ob} RG\n{nk_outline_width} w\n"));
                 content.push_str(
                     &nk_paint_geometry
                         .border_box

@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.5.2] — 2026-08-15
+
+### Changed
+
+- HTML parsing now uses `html5ever` and `markup5ever_rcdom` 0.39.
+- The declared MSRV is now Rust 1.88, matching the stable language features
+  already required by Ironpress. CI now verifies it directly.
+
+### Security
+
+- Tokio's supported version range now excludes releases affected by
+  RUSTSEC-2023-0001.
+
+### Compatibility
+
+- WebAssembly keeps `getrandom` 0.3 until `lightningcss` moves off that major,
+  preserving its required `wasm_js` feature wiring.
+
 ## [1.5.1] — 2026-08-15
 
 ### Fixed
