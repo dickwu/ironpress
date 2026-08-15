@@ -42,7 +42,7 @@ impl CachedResource {
 }
 
 #[cfg(feature = "remote")]
-/// Bound each document so remote resources cannot create unbounded sockets or buffers.
+/// Limit simultaneous connections and response reads for one document.
 const MAX_CONCURRENT_REMOTE_FETCHES: usize = 8;
 
 impl ResourceLoader {
