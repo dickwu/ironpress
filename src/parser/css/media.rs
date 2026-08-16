@@ -341,40 +341,38 @@ fn record_layer_names(names: &str, layer_order: &mut Vec<String>) {
 /// untouched so a `/*` inside a quoted value is not mistaken for a comment.
 pub(crate) fn strip_css_comments(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
-    let bytes = css.as_bytes();
-    let mut i = 0;
-    let mut quote: u8 = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if quote != 0 {
-            out.push(c as char);
-            if c == quote {
-                quote = 0;
+    let mut chars = css.chars().peekable();
+    let mut quote = None;
+
+    while let Some(ch) = chars.next() {
+        if let Some(delimiter) = quote {
+            out.push(ch);
+            if ch == delimiter {
+                quote = None;
             }
-            i += 1;
             continue;
         }
-        if c == b'"' || c == b'\'' {
-            quote = c;
-            out.push(c as char);
-            i += 1;
+
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            out.push(ch);
             continue;
         }
-        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            // Skip to the closing */ (or end of input for an unterminated comment).
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+
+        if ch == '/' && chars.next_if_eq(&'*').is_some() {
+            let mut previous = None;
+            for comment_char in chars.by_ref() {
+                if previous == Some('*') && comment_char == '/' {
+                    break;
+                }
+                previous = Some(comment_char);
             }
-            i = (i + 2).min(bytes.len());
             continue;
         }
-        // Copy this byte, preserving any multi-byte UTF-8 sequence verbatim.
-        let ch_len = utf8_len(c);
-        let end = (i + ch_len).min(bytes.len());
-        out.push_str(&css[i..end]);
-        i = end;
+
+        out.push(ch);
     }
+
     out
 }
 
@@ -388,7 +386,7 @@ fn lower_flow_root_display(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
     let bytes = css.as_bytes();
     let mut i = 0;
-    let mut quote: u8 = 0;
+    let mut quote = None;
     let mut declaration_start = false;
     let mut block_depth = 0usize;
     let mut rule_start = 0usize;
@@ -396,25 +394,28 @@ fn lower_flow_root_display(css: &str) -> String {
     let mut current_rule_needs_clearfix = false;
 
     while i < bytes.len() {
-        let c = bytes[i];
-        if quote != 0 {
-            out.push(c as char);
-            if c == quote {
-                quote = 0;
+        let Some(ch) = css.get(i..).and_then(|rest| rest.chars().next()) else {
+            break;
+        };
+
+        if let Some(delimiter) = quote {
+            out.push(ch);
+            if ch == delimiter {
+                quote = None;
             }
-            i += 1;
+            i += ch.len_utf8();
             continue;
         }
 
-        if c == b'"' || c == b'\'' {
-            quote = c;
-            out.push(c as char);
-            i += 1;
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
 
-        match c {
-            b'{' => {
+        match ch {
+            '{' => {
                 if block_depth == 0 {
                     current_clearfix_selectors =
                         flow_root_clearfix_selectors(css[rule_start..i].trim());
@@ -426,7 +427,7 @@ fn lower_flow_root_display(css: &str) -> String {
                 i += 1;
                 continue;
             }
-            b'}' => {
+            '}' => {
                 let append_clearfix = block_depth == 1
                     && current_rule_needs_clearfix
                     && current_clearfix_selectors.is_some();
@@ -448,7 +449,7 @@ fn lower_flow_root_display(css: &str) -> String {
                 i += 1;
                 continue;
             }
-            b';' => {
+            ';' => {
                 declaration_start = block_depth > 0;
                 out.push(';');
                 if block_depth == 0 {
@@ -460,9 +461,9 @@ fn lower_flow_root_display(css: &str) -> String {
             _ => {}
         }
 
-        if block_depth > 0 && declaration_start && c.is_ascii_whitespace() {
-            out.push(c as char);
-            i += 1;
+        if block_depth > 0 && declaration_start && ch.is_ascii_whitespace() {
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
 
@@ -483,10 +484,8 @@ fn lower_flow_root_display(css: &str) -> String {
         }
 
         declaration_start = false;
-        let ch_len = utf8_len(c);
-        let end = (i + ch_len).min(bytes.len());
-        out.push_str(&css[i..end]);
-        i = end;
+        out.push(ch);
+        i += ch.len_utf8();
     }
 
     out
@@ -619,20 +618,6 @@ fn strip_important(value: &str) -> (&str, bool) {
 
 fn is_css_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
-}
-
-fn utf8_len(first: u8) -> usize {
-    if first & 0x80 == 0 {
-        1
-    } else if first & 0xE0 == 0xC0 {
-        2
-    } else if first & 0xF0 == 0xE0 {
-        3
-    } else if first & 0xF8 == 0xF0 {
-        4
-    } else {
-        1
-    }
 }
 
 /// Extract content inside braces, handling nested brace pairs.
@@ -776,6 +761,15 @@ mod tests {
             "string mangled: {out}"
         );
         assert!(!out.contains("/* real */"), "real comment kept: {out}");
+    }
+
+    #[test]
+    fn preprocessing_preserves_unicode_in_css_strings() {
+        // CSS Syntax parses Unicode code points, so preprocessing must not
+        // reinterpret their UTF-8 representation.
+        let css = r#".label::before { content: "A · B"; }"#;
+
+        assert_eq!(preprocess_media_queries(css), css);
     }
 
     #[test]
