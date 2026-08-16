@@ -1081,6 +1081,21 @@
     ]
   },
   {
+    "id": "paged-margin-box-font-family-fallback",
+    "category": "paged-media",
+    "feature": "page-margin-box",
+    "subfeature": "font-family-fallback",
+    "description": "A page-margin box skips an unavailable first family and uses the next available face in its font stack.",
+    "file": "cases/paged-media/paged-margin-box-font-family-fallback.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
     "id": "paged-page-counter-increment-two",
     "category": "paged-media",
     "feature": "page-counter",
