@@ -97,7 +97,7 @@ fn length_may_resolve_nonnegative(value: CssValue) -> bool {
         | CssValue::Vh(value)
         | CssValue::Vmin(value)
         | CssValue::Vmax(value) => value.is_finite() && value >= 0.0,
-        CssValue::Math(_) | CssValue::Var(_, _) => true,
+        CssValue::Math(_) | CssValue::PendingMath(_) | CssValue::Var(_, _) => true,
         CssValue::Keyword(value) => !value.trim_start().starts_with('-'),
         CssValue::Number(value) => value.is_finite() && value >= 0.0,
         CssValue::Color(_) | CssValue::BackgroundLayers(_) => false,

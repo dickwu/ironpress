@@ -120,6 +120,22 @@
     ]
   },
   {
+    "id": "units-calc-var-substitution",
+    "category": "units-values",
+    "feature": "calc",
+    "subfeature": "var-substitution",
+    "description": "Custom-property tokens inside calc() resolve at computed-value time before typed length math sets an absolute box's width, height, and left inset.",
+    "file": "cases/units-values/units-calc-var-substitution.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-color-swatch",
+      "probe-border-box"
+    ]
+  },
+  {
     "id": "units-var-fallback",
     "category": "units-values",
     "feature": "custom-properties",

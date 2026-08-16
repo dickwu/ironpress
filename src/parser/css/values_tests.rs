@@ -172,6 +172,34 @@ fn parse_property_value_recognizes_typed_math() {
 }
 
 #[test]
+fn math_with_a_variable_is_parsed_as_pending_substitution() {
+    for source in [
+        "calc(var(--width) * 2)",
+        "CALC(VAR(--width) + 10px)",
+        "clamp(10px, var(--width), 100px)",
+    ] {
+        assert!(
+            matches!(
+                parse_property_value("width", source),
+                Some(CssValue::PendingMath(_))
+            ),
+            "pending math was dropped: {source}"
+        );
+    }
+    assert!(parse_property_value("width", "calc(var(width) * 2)").is_none());
+}
+
+#[test]
+fn pending_math_rejects_excessive_nesting() {
+    let mut expression = "var(--width)".to_string();
+    for _ in 0..129 {
+        expression = format!("({expression})");
+    }
+
+    assert!(parse_property_value("width", &format!("calc({expression})")).is_none());
+}
+
+#[test]
 fn typed_math_parser_handles_precedence_parentheses_and_nested_functions() {
     let cases = [
         ("calc(10pt + 5pt * 3)", 25.0),

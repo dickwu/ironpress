@@ -376,6 +376,29 @@ fn resolve_var_resolves_to_calc_value() {
 }
 
 #[test]
+fn excessively_deep_variable_aliases_are_rejected() {
+    let mut properties = HashMap::new();
+    for index in 0..129 {
+        properties.insert(format!("--v{index}"), format!("var(--v{})", index + 1));
+    }
+    properties.insert("--v129".to_string(), "10pt".to_string());
+
+    assert_eq!(
+        resolve_vars_in_value("calc(var(--v0) * 2)", &properties),
+        None
+    );
+
+    let mut fallback = "10pt".to_string();
+    for _ in 0..129 {
+        fallback = format!("({fallback})");
+    }
+    assert_eq!(
+        resolve_vars_in_value(&format!("var(--missing, {fallback})"), &HashMap::new()),
+        None
+    );
+}
+
+#[test]
 fn try_resolve_to_length_uses_pdf_defaults() {
     let val = CssValue::Percentage(50.0);
     // parent_width_hint=200 => 50% of 200 = 100

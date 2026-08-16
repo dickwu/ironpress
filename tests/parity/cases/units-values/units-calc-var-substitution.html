@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>calc variable substitution</title>
+  <style>
+    @page { size: 240px 80px; margin: 0; }
+    * { margin: 0; box-sizing: border-box; }
+    html, body { background: #ffffff; }
+    :root {
+      --unit: 24px;
+      --width: 48px;
+    }
+    .frame {
+      position: relative;
+      width: 240px;
+      height: 80px;
+      background: #d9e2ec;
+    }
+    .box {
+      position: absolute;
+      left: calc(var(--unit) * 2);
+      top: 16px;
+      width: calc(var(--width) * 2);
+      height: calc(var(--unit) + 8px);
+      background: #2d6cdf;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame"><div class="box"></div></div>
+</body>
+</html>
