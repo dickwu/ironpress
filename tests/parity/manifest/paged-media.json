@@ -1021,6 +1021,21 @@
     ]
   },
   {
+    "id": "paged-margin-box-css-string-escape",
+    "category": "paged-media",
+    "feature": "page-margin-box",
+    "subfeature": "css-string-escape",
+    "description": "A hexadecimal CSS escape in page-margin content is decoded into its Unicode code point; catches raw string slicing that bypasses CSS tokenization.",
+    "file": "cases/paged-media/paged-margin-box-css-string-escape.html",
+    "oracle": "chrome",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline"
+    ]
+  },
+  {
     "id": "paged-corner-margin-box-position",
     "category": "paged-media",
     "feature": "page-margin-box",
