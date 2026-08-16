@@ -15834,6 +15834,20 @@
       "reference_file": "references/paged-media/paged-margin-box-after-synthetic-weight.html",
       "reference_html_sha256": "ba60e8c8e7b9fd8bd937031784b1b0808f2f6ecfe8bbd4d1cb12d992ca3f39c5"
     },
+    "paged-margin-box-css-string-escape": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-margin-box-css-string-escape.html",
+      "html_sha256": "d89b4694e11653b755d641cb07d226fcbef032edeb57a7e5fb7a03be712e7cd2",
+      "manifest_sha256": "d83e162c578490515c1b824c9c7e81d98843437301b47e3ab498c79fbda5eba3",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-margin-box-css-string-escape.pdf",
+        "sha256": "b86c11866fdc6f177649851903028502a90143ada3a12ae3d537ebbe2e2a10e5"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/paged-media/paged-margin-box-css-string-escape.html",
+      "reference_html_sha256": "d89b4694e11653b755d641cb07d226fcbef032edeb57a7e5fb7a03be712e7cd2"
+    },
     "paged-margin-box-page-context-text": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-margin-box-page-context-text.html",
