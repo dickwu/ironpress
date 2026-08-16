@@ -589,7 +589,7 @@ impl PdfWriter {
         out.write_all(xref_header.as_bytes())?;
         out.write_all(b"0000000000 65535 f \n")?;
         for offset in &offsets {
-            let entry = format!("{:010} 00000 n \n", offset);
+            let entry = format!("{offset:010} 00000 n \n");
             out.write_all(entry.as_bytes())?;
         }
 

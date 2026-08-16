@@ -26,8 +26,7 @@ pub(crate) fn sanitize_html_with_resources(
     // Check input size
     if html.len() > MAX_INPUT_SIZE {
         return Err(IronpressError::SecurityError(format!(
-            "Input exceeds maximum size of {} bytes",
-            MAX_INPUT_SIZE
+            "Input exceeds maximum size of {MAX_INPUT_SIZE} bytes"
         )));
     }
 

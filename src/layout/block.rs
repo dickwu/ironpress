@@ -1391,7 +1391,7 @@ pub(crate) fn layout_block_element(
                             child_ancestors,
                         );
                     }
-                    DomNode::Element(child_el) if inline_children.is_inline_text(child_el_idx) => {
+                    DomNode::Element(_) if inline_children.is_inline_text(child_el_idx) => {
                         InlineRunCollector::new(
                             env.rules,
                             env.fonts,

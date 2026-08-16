@@ -325,10 +325,7 @@ pub(super) fn paint_container_decoration(
             let (or, og, ob) = c_outline_color
                 .unwrap_or(crate::types::Color::BLACK)
                 .to_f32_rgb();
-            content.push_str(&format!(
-                "{or} {og} {ob} RG\n{ow} w\n",
-                ow = c_outline_width
-            ));
+            content.push_str(&format!("{or} {og} {ob} RG\n{c_outline_width} w\n"));
             content.push_str(
                 &RoundedRect::new(
                     PdfRect::new(ol_x, ol_y, ol_w, ol_h),

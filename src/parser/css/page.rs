@@ -10,12 +10,11 @@ use cssparser::{Parser, ParserInput};
 /// Parse a CSS stylesheet and extract `@page` rules.
 pub fn parse_page_rules(css: &str) -> Vec<PageRule> {
     let preprocessed = preprocess_media_queries(css);
-    let rules = extract_page_rules(&preprocessed);
     // `@footnote` is a page-context rule. In particular, do not silently
     // accept a stylesheet-level `@footnote`: doing so turns an invalid source
     // into a document-wide footnote style and makes reference engines that
     // reject it appear wrong.
-    rules
+    extract_page_rules(&preprocessed)
 }
 
 /// Parse a CSS stylesheet and extract `@font-face` rules.

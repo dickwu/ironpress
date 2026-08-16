@@ -133,7 +133,7 @@ pub(super) fn render_math_glyphs(
 
                 // Check if character needs Symbol font
                 if let Some(sym_byte) = unicode_to_symbol(*ch) {
-                    let encoded = format!("\\{:03o}", sym_byte);
+                    let encoded = format!("\\{sym_byte:03o}");
                     content.push_str("BT\n");
                     content.push_str(&format!("/Symbol {font_size} Tf\n"));
                     content.push_str(&format!("{px} {py} Td\n"));

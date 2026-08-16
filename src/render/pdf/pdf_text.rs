@@ -93,7 +93,7 @@ pub(crate) fn encode_pdf_text(text: &str) -> String {
             0x20..=0x7E => result.push(b as char),
             _ => {
                 // Octal escape: \NNN (3-digit, zero-padded)
-                result.push_str(&format!("\\{:03o}", b));
+                result.push_str(&format!("\\{b:03o}"));
             }
         }
     }
