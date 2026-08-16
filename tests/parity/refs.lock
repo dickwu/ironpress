@@ -6034,6 +6034,20 @@
       "reference_file": "references/generated-content/generated-content-target-text.html",
       "reference_html_sha256": "1c757588ee82d0036228950f80cc74ed0d04a0509465a23af9c5f9a6a3ab4778"
     },
+    "generated-content-unicode-string": {
+      "category": "generated-content",
+      "file": "cases/generated-content/generated-content-unicode-string.html",
+      "html_sha256": "e1a863c369cf700e008fd02cbe3a4123fa0e986da19197fc8e257cc02669df0e",
+      "manifest_sha256": "7de02b4f9a286c63bea03be6fbab635c0d9a61599f6ec177072b30e4a0fbfbe1",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/generated-content/generated-content-unicode-string.pdf",
+        "sha256": "3c367bbbb75293180a4f0db75d37f3dcd646113d0583fd5716cb85f00ee3cd67"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/generated-content/generated-content-unicode-string.html",
+      "reference_html_sha256": "e1a863c369cf700e008fd02cbe3a4123fa0e986da19197fc8e257cc02669df0e"
+    },
     "grid-absolute-grid-child-does-not-consume-an-auto-placement-cell": {
       "category": "grid",
       "file": "cases/grid/grid-absolute-grid-child-does-not-consume-an-auto-placement-cell.html",
