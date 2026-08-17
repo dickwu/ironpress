@@ -310,6 +310,30 @@ fn smoke_header_footer() {
 }
 
 #[test]
+fn body_page_name_selects_named_page_margin_boxes() {
+    let html = r#"
+        <style>
+            @page {
+                size: 150mm 70mm;
+                margin: 14mm;
+                @bottom-center { content: "DEFAULT page rule"; }
+            }
+            @page named {
+                @bottom-center { content: "NAMED page rule"; }
+            }
+            html, body { margin: 0; }
+            body { page: named; }
+        </style>
+        <p>Document body</p>
+    "#;
+
+    let pdf = smoke_html_to_pdf(html);
+
+    assert!(pdf_has_text(&pdf, "NAMED page rule"));
+    assert!(!pdf_has_text(&pdf, "DEFAULT page rule"));
+}
+
+#[test]
 fn smoke_custom_page_size() {
     let pdf = ironpress::HtmlConverter::new()
         .compress(false)

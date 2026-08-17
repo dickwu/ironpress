@@ -91,6 +91,15 @@ pub(crate) struct PageBreak {
     pub(crate) page_name: Option<String>,
 }
 
+impl PageBreak {
+    pub(crate) fn named(page_name: String) -> Self {
+        Self {
+            page_name: Some(page_name),
+            ..Default::default()
+        }
+    }
+}
+
 impl LayoutElement for PageBreak {
     fn clone_box(&self) -> LayoutNode {
         Box::new(self.clone())

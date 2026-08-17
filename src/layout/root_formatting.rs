@@ -89,6 +89,13 @@ impl DocumentRootStyles {
 
         Self { html, body }
     }
+
+    pub(crate) fn start_page_name(&self) -> Option<&str> {
+        self.body
+            .page_name
+            .as_deref()
+            .or(self.html.page_name.as_deref())
+    }
 }
 
 /// One synthetic body box used only to establish its authored inner formatting
@@ -183,5 +190,34 @@ mod tests {
         assert_eq!(root.style.padding, EdgeSizes::ZERO);
         assert_eq!(root.style.width, Some(240.0));
         assert_eq!(root.element.tag, HtmlTag::Body);
+    }
+
+    #[test]
+    fn body_page_name_supplies_the_root_start_page_value() {
+        let styles = DocumentRootStyles {
+            html: ComputedStyle {
+                page_name: Some("volume".to_string()),
+                ..Default::default()
+            },
+            body: ComputedStyle {
+                page_name: Some("chapter".to_string()),
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(styles.start_page_name(), Some("chapter"));
+    }
+
+    #[test]
+    fn html_page_name_supplies_the_root_start_page_value() {
+        let styles = DocumentRootStyles {
+            html: ComputedStyle {
+                page_name: Some("volume".to_string()),
+                ..Default::default()
+            },
+            body: ComputedStyle::default(),
+        };
+
+        assert_eq!(styles.start_page_name(), Some("volume"));
     }
 }

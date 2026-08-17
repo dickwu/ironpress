@@ -406,6 +406,19 @@
     ]
   },
   {
+    "id": "paged-root-named-page",
+    "category": "paged-media",
+    "feature": "named-page",
+    "subfeature": "root-start-page-value",
+    "description": "CSS Paged Media 3 section 8.1: page: chapter on body supplies the root start page value, so the first printed page uses the matching named @page margin box instead of the universal one.",
+    "file": "cases/paged-media/paged-root-named-page.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box"
+    ]
+  },
+  {
     "id": "footnote-float",
     "category": "paged-media",
     "feature": "footnote",
