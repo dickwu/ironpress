@@ -1,22 +1,22 @@
 {
   "schema_version": 12,
-  "invocation_id": "9a1c08ad4a129f18c84a5e3ed1f0bd78",
+  "invocation_id": "02bca9a90bd7c96b8c2282e9accbb1dd",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-2974-1786961409848860831-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3044-1786961413373223157-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1648,
+    "pass": 1649,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1668
+    "total": 1669
   },
   "categories": [
     {
@@ -322537,7 +322537,7 @@
       "category": "paged-media",
       "score_pct": 100.0,
       "counts": {
-        "pass": 86,
+        "pass": 87,
         "fail": 0,
         "reference_disputed": 3
       },
@@ -331923,7 +331923,7 @@
           "feature": "named-page",
           "score_pct": 100.0,
           "counts": {
-            "pass": 4,
+            "pass": 5,
             "fail": 0,
             "reference_disputed": 0
           },
@@ -332368,6 +332368,49 @@
                 "confidence": 0.6570344424985406,
                 "different_pixels": 3426,
                 "visual_pass_basis": "CSS-scale observation: sub-CSS shared-outline coverage"
+              }
+            },
+            {
+              "id": "paged-root-named-page",
+              "category": "paged-media",
+              "feature": "named-page",
+              "subfeature": "root-start-page-value",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "CSS Paged Media 3 section 8.1: page: chapter on body supplies the root start page value, so the first printed page uses the matching named @page margin box instead of the universal one.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "dfd0cb5bb71207bf17249baa7a0b306a85e1f87d0570e1f61a01018c2ab8db3d",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 500,
+                    "height": 375,
+                    "rgba_sha256": "55549ed29fb1187e677c59f7f4079185b8bf94f158fecdd9af58ffbd2e2f0267",
+                    "painted_pixels": 187500
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 500,
+                    "height": 375,
+                    "rgba_sha256": "55549ed29fb1187e677c59f7f4079185b8bf94f158fecdd9af58ffbd2e2f0267",
+                    "painted_pixels": 187500
+                  }
+                ]
               }
             }
           ]
@@ -380661,7 +380704,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1631,
+    "implemented": 1632,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -380674,6 +380717,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "8cccc7e91850d3af00f287121a9d7e7b33ad66a7eaeba1e1c946d1a137ea10cd",
+  "refs_lock_sha256": "7ef9e06a058acaabdd356f0d0dc72b23fb27673d7c9c7049afa965056b53870f",
   "baseline_present": true
 }
