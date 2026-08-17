@@ -16170,6 +16170,20 @@
       "reference_file": "cases/paged-media/paged-pages-counter-immutable.html",
       "reference_html_sha256": "f0c5d378770baf94a112606ef123622e9663e369f57de23af9cccd31f8c4e769"
     },
+    "paged-root-named-page": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-root-named-page.html",
+      "html_sha256": "dfd0cb5bb71207bf17249baa7a0b306a85e1f87d0570e1f61a01018c2ab8db3d",
+      "manifest_sha256": "5ff11cc95228303b9cac75536d214c76805895e30379e576db8eb1aa23eccf79",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-root-named-page.pdf",
+        "sha256": "bd6824589fee25faa8b2b4d295b26f1b904ffafff9438de03408d7fe5d2c41bd"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/paged-media/paged-root-named-page.html",
+      "reference_html_sha256": "dfd0cb5bb71207bf17249baa7a0b306a85e1f87d0570e1f61a01018c2ab8db3d"
+    },
     "paged-running-first-margin-box": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-running-first-margin-box.html",
