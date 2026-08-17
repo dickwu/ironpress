@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CSS escape in page margin content</title>
+<style>
+  @page {
+    size: 200px 112px;
+    margin: 48px 0 0;
+    @top-center {
+      content: "A \00B7  B";
+      background: #f4d35e;
+      color: #102a43;
+      font-family: ParitySans;
+      font-size: 24px;
+      line-height: 1;
+    }
+  }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  .page-area { height: 64px; background: #d9e2ec; }
+</style>
+</head>
+<body>
+  <div class="page-area"></div>
+</body>
+</html>

@@ -542,6 +542,26 @@ type ParsedMarginBoxDecls = (
     Option<f32>,
 );
 
+/// Keeps a decoded string paired with its source width so the surrounding
+/// margin-content scanner never reinterprets escaped bytes.
+struct ParsedCssString {
+    value: String,
+    consumed_bytes: usize,
+}
+
+impl ParsedCssString {
+    fn parse(source: &str) -> Option<Self> {
+        let mut input = ParserInput::new(source);
+        let mut parser = Parser::new(&mut input);
+        let value = parser.expect_string_cloned().ok()?.to_string();
+
+        Some(Self {
+            value,
+            consumed_bytes: parser.position().byte_index(),
+        })
+    }
+}
+
 /// Find supported declarations inside a margin-box body and parse them.
 fn extract_margin_box_decls(body: &str) -> Option<ParsedMarginBoxDecls> {
     let mut content = None;
@@ -607,14 +627,11 @@ pub(crate) fn parse_margin_box_content(val: &str) -> Vec<MarginContentToken> {
             continue;
         }
         if c == '"' || c == '\'' {
-            let after = &rest[c.len_utf8()..];
-            if let Some(end) = after.find(c) {
-                tokens.push(MarginContentToken::Literal(after[..end].to_string()));
-                i += c.len_utf8() + end + c.len_utf8();
-            } else {
-                tokens.push(MarginContentToken::Literal(after.to_string()));
+            let Some(string) = ParsedCssString::parse(rest) else {
                 break;
-            }
+            };
+            tokens.push(MarginContentToken::Literal(string.value));
+            i += string.consumed_bytes;
         } else if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case("counter(") {
             if let Some(end) = rest.find(')') {
                 // The optional second arg is the counter style; only `decimal`
@@ -1445,6 +1462,17 @@ mod tests {
                 MarginContentToken::Literal("p.".to_string()),
                 MarginContentToken::PageNumber,
             ]
+        );
+    }
+
+    #[test]
+    fn parse_margin_box_content_decodes_css_string_escapes() {
+        // CSS Syntax 3 requires escaped code points to enter the string token's value.
+        let tokens = parse_margin_box_content(r#""A \00B7  B \2022  \2014""#);
+
+        assert_eq!(
+            tokens,
+            vec![MarginContentToken::Literal("A · B • —".to_string())]
         );
     }
 
