@@ -2035,6 +2035,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         initial_containing_block.height,
         font_metrics,
     );
+    let root_start_page_name = root_styles.start_page_name().map(str::to_owned);
     let html_style = root_styles.html;
     let body_style = root_styles.body;
     let mut parent_style = body_style.clone();
@@ -2047,6 +2048,9 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
 
     // First, flatten DOM into layout elements
     let mut elements = Vec::new();
+    if let Some(page_name) = root_start_page_name {
+        elements.push(PageBreak::named(page_name).boxed());
+    }
 
     // Propagated root backgrounds cover the selected physical page area on
     // every fragment. Pagination later expresses that area relative to the
