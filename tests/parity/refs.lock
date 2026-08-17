@@ -16338,6 +16338,20 @@
       "reference_file": "cases/block-box-model/paragraph-splits-across-pages.html",
       "reference_html_sha256": "6a04eac7f20d5b041ab8e93b6dac807ba32877e7493a15f89236de608a1ff6cc"
     },
+    "positioning-absolute-block-child-offsets": {
+      "category": "positioning",
+      "file": "cases/positioning/positioning-absolute-block-child-offsets.html",
+      "html_sha256": "4da7354a81d0446a630d78aed0fe2180774cb49f9005e46741da8f9c60ff5930",
+      "manifest_sha256": "7c05be4e18ad552eb8581fcd2f1de0b76db48ed0756c5ff732e7b70d85b6fd80",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/positioning/positioning-absolute-block-child-offsets.pdf",
+        "sha256": "23c3a58303e92534219d45c9dec781399f6b7da7571cd3d130e48d78b841b221"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/positioning/positioning-absolute-block-child-offsets.html",
+      "reference_html_sha256": "4da7354a81d0446a630d78aed0fe2180774cb49f9005e46741da8f9c60ff5930"
+    },
     "positioning-absolute-containing-block-relative-ancestor": {
       "category": "positioning",
       "file": "cases/positioning/positioning-absolute-containing-block-relative-ancestor.html",

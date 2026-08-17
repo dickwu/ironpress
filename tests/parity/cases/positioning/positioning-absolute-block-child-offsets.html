@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: 240px 112px; margin: 0; }
+    * { margin: 0; box-sizing: border-box; }
+    html, body { background: #e2e8f0; }
+    .frame { position: relative; width: 240px; height: 112px; }
+    .guide {
+      position: absolute;
+      left: 32px;
+      top: 32px;
+      width: 144px;
+      height: 48px;
+      background: #dc2626;
+    }
+    .panel { position: absolute; left: 40px; top: 40px; width: 128px; }
+    .bar { width: 128px; height: 32px; background: #2563eb; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="guide"></div>
+    <div class="panel"><div class="bar"></div></div>
+  </div>
+</body>
+</html>

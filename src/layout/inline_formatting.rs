@@ -597,6 +597,12 @@ impl InlineFormattingChildren {
             .any(|child| child.role == InlineFormattingRole::OutOfFlow)
     }
 
+    pub(crate) fn has_outside(&self) -> bool {
+        self.0
+            .iter()
+            .any(|child| child.role == InlineFormattingRole::Outside)
+    }
+
     pub(crate) fn requires_independent_layout(&self, element_index: usize) -> bool {
         self.0.get(element_index).is_some_and(|child| {
             matches!(

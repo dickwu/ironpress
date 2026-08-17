@@ -56,6 +56,20 @@
     ]
   },
   {
+    "id": "positioning-absolute-block-child-offsets",
+    "category": "positioning",
+    "feature": "position",
+    "subfeature": "absolute-normal-flow-child",
+    "description": "An absolute non-visual parent keeps its top and left offsets when its only content is a normal-flow block child.",
+    "file": "cases/positioning/positioning-absolute-block-child-offsets.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "depends_on": [
+      "probe-fill-box",
+      "probe-block-flow"
+    ]
+  },
+  {
     "id": "positioning-position-absolute-stretch-inset",
     "category": "positioning",
     "feature": "inset",
