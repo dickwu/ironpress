@@ -1,12 +1,23 @@
 # Changelog
 
-## [1.5.2] — 2026-08-15
+## [1.5.2] — 2026-08-17
 
 ### Changed
 
 - HTML parsing now uses `html5ever` and `markup5ever_rcdom` 0.39.
 - The declared MSRV is now Rust 1.88, matching the stable language features
   already required by Ironpress. CI now verifies it directly.
+
+### Fixed
+
+- CSS strings preserve non-ASCII text, and CSS escapes are decoded in
+  `@page` margin content (#203, #204).
+- Page margin boxes fall back past unavailable font families (#205).
+- `calc()` resolves custom properties instead of dropping declarations that
+  contain `var()` (#206).
+- Named pages are selected from the document root (#207).
+- Absolutely positioned boxes retain `top` and `left` offsets when they
+  contain block-level children (#208).
 
 ### Security
 
@@ -17,6 +28,15 @@
 
 - WebAssembly keeps `getrandom` 0.3 until `lightningcss` moves off that major,
   preserving its required `wasm_js` feature wiring.
+
+### CI
+
+- Crates.io publishing checks the remote registry before deciding that a
+  version already exists.
+
+### Documentation
+
+- The README now links to the canonical Chromium parity report.
 
 ## [1.5.1] — 2026-08-15
 
