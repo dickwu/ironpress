@@ -12,6 +12,76 @@ mod parser;
 mod tests;
 
 use ast::MathExpression;
+use cssparser::{Parser, ParserInput, Token};
+
+type ParseResult<'i, T> = Result<T, cssparser::ParseError<'i, ()>>;
+// CSS requires at least 32 levels; the shared larger ceiling bounds untrusted recursion.
+const MAX_CALC_COMPLEXITY: usize = 128;
+
+fn is_math_function(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "calc"
+            | "min"
+            | "max"
+            | "clamp"
+            | "round"
+            | "rem"
+            | "mod"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "pow"
+            | "sqrt"
+            | "hypot"
+            | "log"
+            | "exp"
+            | "abs"
+            | "sign"
+    )
+}
+
+fn contains_pending_variable<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    nesting: usize,
+) -> ParseResult<'i, bool> {
+    if nesting > MAX_CALC_COMPLEXITY {
+        return Err(input.new_custom_error(()));
+    }
+    let mut found = false;
+    while !input.is_exhausted() {
+        let token = input.next()?.clone();
+        match token {
+            Token::Function(name) if name.eq_ignore_ascii_case("var") => {
+                input.parse_nested_block(|arguments| {
+                    let name = arguments.expect_ident_cloned()?;
+                    if !name.starts_with("--") || name.as_ref() == "--" {
+                        return Err(arguments.new_custom_error(()));
+                    }
+                    if !arguments.is_exhausted() {
+                        arguments.expect_comma()?;
+                        contains_pending_variable(arguments, nesting + 1)?;
+                    }
+                    Ok(())
+                })?;
+                found = true;
+            }
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => {
+                found |= input
+                    .parse_nested_block(|nested| contains_pending_variable(nested, nesting + 1))?;
+            }
+            _ => {}
+        }
+    }
+    Ok(found)
+}
 
 /// An affine `<length-percentage>` over its eventual percentage basis.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -171,6 +241,39 @@ impl MathUnitContext {
 pub struct CssMathExpression {
     source: String,
     expression: MathExpression,
+}
+
+/// A math expression whose grammar becomes knowable after `var()` substitution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingMathExpression {
+    source: String,
+}
+
+impl PendingMathExpression {
+    pub fn parse(input: &str) -> Option<Self> {
+        let source = input.trim();
+        let mut parser_input = ParserInput::new(source);
+        let mut parser = Parser::new(&mut parser_input);
+        let contains_variable = parser
+            .parse_entirely(|input| {
+                let Token::Function(name) = input.next()?.clone() else {
+                    return Err(input.new_custom_error(()));
+                };
+                if !is_math_function(&name) {
+                    return Err(input.new_custom_error(()));
+                }
+                input.parse_nested_block(|nested| contains_pending_variable(nested, 1))
+            })
+            .ok()?;
+
+        contains_variable.then(|| Self {
+            source: source.to_string(),
+        })
+    }
+
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
 }
 
 impl CssMathExpression {

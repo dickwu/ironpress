@@ -22806,6 +22806,20 @@
       "reference_file": "references/units-values/units-calc-typed-arithmetic-red-team.html",
       "reference_html_sha256": "4affd397d8744a2697c9b7e8ae2a6f7785105c7eaee53194100c7e7fa7100045"
     },
+    "units-calc-var-substitution": {
+      "category": "units-values",
+      "file": "cases/units-values/units-calc-var-substitution.html",
+      "html_sha256": "d3f5926d9d25e7c711c077cd9e59e17565805ed462eb30d0d45e808eb0a7a424",
+      "manifest_sha256": "7ebe4c808ffe3b5f7be4cf560d6379f5455ec04571bf31c160fbc470b2d967de",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/units-values/units-calc-var-substitution.pdf",
+        "sha256": "25088ca3702cecfe77d1fec79f8104ca1ccbc0cf2a20497f44a9b5ec4bc7a9e5"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/units-values/units-calc-var-substitution.html",
+      "reference_html_sha256": "d3f5926d9d25e7c711c077cd9e59e17565805ed462eb30d0d45e808eb0a7a424"
+    },
     "units-cap-height": {
       "category": "units-values",
       "file": "cases/units-values/units-cap-height.html",

@@ -3,7 +3,7 @@ use crate::parser::dom::ElementNode;
 use crate::types::{Color, EdgeSizes};
 use std::collections::HashMap;
 
-use super::math::CssMathExpression;
+use super::math::{CssMathExpression, PendingMathExpression};
 
 /// Context for evaluating CSS media queries against the target page.
 #[derive(Debug, Clone, Copy)]
@@ -125,6 +125,8 @@ pub enum CssValue {
     Vmax(f32),
     /// Grammar-checked CSS math with a `<length-percentage>` result type.
     Math(CssMathExpression),
+    /// CSS math waiting for `var()` substitution before grammar checking.
+    PendingMath(PendingMathExpression),
     /// A var() reference: (variable_name, optional_fallback).
     Var(String, Option<String>),
     /// Ordered, typed sources from a comma-separated `background-image` value.

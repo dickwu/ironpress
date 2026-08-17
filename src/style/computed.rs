@@ -24,6 +24,7 @@ mod filter;
 mod gradient_geometry;
 mod text_decoration;
 mod transforms;
+mod variables;
 pub(crate) use filter::NormalizedFilterRegion;
 pub use filter::{DropShadow, FilterEffects, FilterOperation};
 pub use gradient_geometry::{
@@ -33,6 +34,7 @@ pub use text_decoration::{
     TextDecoration, TextDecorationLines, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorations,
 };
+use variables::ComputedDeclarations;
 
 /// CSS display property.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -5569,6 +5571,14 @@ fn resolve_font_size_value(
         CssValue::Math(expression) => {
             expression.resolve(parent.math_unit_context(font_metrics), parent.font_size)?
         }
+        CssValue::PendingMath(expression) => {
+            let resolved = crate::style::resolve::resolve_vars_in_value(
+                expression.source(),
+                custom_properties,
+            )?;
+            let value = parse_property_value("font-size", &resolved)?;
+            return resolve_font_size_value(&value, custom_properties, parent, font_metrics);
+        }
         CssValue::Var(name, fallback) => {
             let raw = crate::style::resolve::resolve_var_to_string(
                 name,
@@ -5778,6 +5788,9 @@ fn apply_style_map_with_percentage_basis(
                 .insert(property.clone(), raw.clone());
         }
     }
+
+    let computed = ComputedDeclarations::substitute_math(map, &style.custom_properties);
+    let map = computed.as_style_map();
 
     // `parent_width_known` tells us whether the `parent_width` we feed into
     // the length-resolution context is a real, layout-driven parent width
@@ -14971,6 +14984,67 @@ mod tests {
             "got {:?}",
             style.width
         );
+    }
+
+    #[test]
+    fn calc_substitutes_custom_properties_before_math_parsing() {
+        // CSS Variables 1 performs token substitution before computed-value grammar checks.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("--w: 20mm; width: calc(var(--w) * 2); left: calc(var(--w) + 10mm)"),
+            &parent,
+        );
+        let millimetre = 72.0 / 25.4;
+
+        assert!(
+            style
+                .width
+                .is_some_and(|width| (width - 40.0 * millimetre).abs() < 0.001)
+        );
+        assert!(
+            style
+                .left
+                .is_some_and(|left| (left - 30.0 * millimetre).abs() < 0.001)
+        );
+    }
+
+    #[test]
+    fn calc_variable_substitution_preserves_token_boundaries() {
+        // CSS Variables 1 substitutes tokens; it cannot turn `20` plus `px` into `20px`.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("--n: 20; width: calc(var(--n)px)"),
+            &parent,
+        );
+
+        assert_eq!(style.width, None);
+    }
+
+    #[test]
+    fn cyclic_variable_inside_calc_is_invalid_at_computed_value_time() {
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("--a: calc(var(--b) + 1pt); --b: var(--a); width: calc(var(--a) * 2)"),
+            &parent,
+        );
+
+        assert_eq!(style.width, None);
+    }
+
+    #[test]
+    fn invalid_calc_variable_does_not_reveal_an_earlier_cascade_candidate() {
+        // CSS Variables 1 makes the winning declaration unset at computed-value time.
+        let parent = ComputedStyle::default();
+        let style = compute_style(
+            HtmlTag::Div,
+            Some("width: 40pt; width: calc(var(--missing) * 2)"),
+            &parent,
+        );
+
+        assert_eq!(style.width, None);
     }
 
     #[test]

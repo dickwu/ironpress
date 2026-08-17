@@ -17,7 +17,7 @@ mod values_tests;
 pub(crate) use imports::resolve_imports_with_resources;
 pub(crate) use imports::{extract_svg_data_uri, extract_url_path};
 pub use inline::parse_inline_style;
-pub(crate) use math::{CssMathExpression, LengthPercent, MathUnitContext};
+pub(crate) use math::{CssMathExpression, LengthPercent, MathUnitContext, PendingMathExpression};
 pub(crate) use media::{preprocess_media_queries, preprocess_media_queries_with_context};
 pub use model::{
     AncestorInfo, BackgroundLayerSource, CssRule, CssValue, FontFaceRule, FontStretch, ImportRule,

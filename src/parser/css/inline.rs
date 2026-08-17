@@ -832,7 +832,13 @@ fn is_background_size_continuation(
 fn is_background_position_length(token: &str) -> bool {
     matches!(
         parse_length(token),
-        Some(CssValue::Length(_) | CssValue::Percentage(_) | CssValue::Math(_))
+        Some(
+            CssValue::Length(_)
+                | CssValue::Percentage(_)
+                | CssValue::Math(_)
+                | CssValue::PendingMath(_)
+                | CssValue::Var(_, _),
+        )
     )
 }
 

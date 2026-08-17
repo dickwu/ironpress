@@ -1,5 +1,6 @@
 use cssparser::{Parser, ParserInput, Token};
 
+use super::MAX_CALC_COMPLEXITY;
 use super::ast::{
     AbsoluteLengthUnit, Angle, AngleUnit, BinaryExpression, BinaryOperation, ClampExpression, Flex,
     FontLengthUnit, Frequency, FrequencyUnit, Length, LengthUnit, LogExpression, MathExpression,
@@ -8,11 +9,6 @@ use super::ast::{
 };
 
 type ParseResult<'i, T> = Result<T, cssparser::ParseError<'i, ()>>;
-
-// CSS requires support for at least 32 terms, arguments, and nesting levels.
-// A finite ceiling also prevents adversarial authored CSS from overflowing the
-// Rust call stack. The larger implementation limit is intentionally uniform.
-const MAX_CALC_COMPLEXITY: usize = 128;
 
 #[derive(Default)]
 struct ParseLimits {

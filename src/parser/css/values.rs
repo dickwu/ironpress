@@ -1,7 +1,7 @@
 use crate::types::Color;
 use cssparser_color::{Color as ParsedColor, hsl_to_rgb, hwb_to_rgb, parse_color_keyword};
 
-use super::{CssMathExpression, CssValue, SpecifiedColor};
+use super::{CssMathExpression, CssValue, PendingMathExpression, SpecifiedColor};
 
 pub(crate) fn is_css_wide_keyword(value: &str) -> bool {
     matches!(
@@ -19,6 +19,10 @@ pub(crate) fn parse_length(val: &str) -> Option<CssValue> {
 
     if let Some(math_value) = parse_math_expression(val) {
         return Some(math_value);
+    }
+
+    if let Some(pending) = PendingMathExpression::parse(val) {
+        return Some(CssValue::PendingMath(pending));
     }
 
     if let Some(number) = val.strip_suffix("px") {
@@ -316,7 +320,7 @@ fn line_width_token_is_valid(value: &str) -> bool {
         ) => value.is_finite() && value >= 0.0,
         Some(CssValue::Number(value)) => value.is_finite() && value == 0.0,
         // Math and deferred substitutions are checked at computed-value time.
-        Some(CssValue::Math(_) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Math(_) | CssValue::PendingMath(_) | CssValue::Var(_, _)) => true,
         Some(CssValue::Keyword(value)) => value
             .strip_suffix("cap")
             .or_else(|| value.strip_suffix("lh"))
@@ -443,7 +447,7 @@ fn radius_component_is_valid(value: &str) -> bool {
             | CssValue::Vmax(value),
         ) => value.is_finite() && value >= 0.0,
         Some(CssValue::Number(value)) => value.is_finite() && value == 0.0,
-        Some(CssValue::Math(_) | CssValue::Var(_, _)) => true,
+        Some(CssValue::Math(_) | CssValue::PendingMath(_) | CssValue::Var(_, _)) => true,
         Some(CssValue::Keyword(value)) => value
             .strip_suffix("cap")
             .or_else(|| value.strip_suffix("lh"))
