@@ -1747,14 +1747,30 @@ impl Default for PageMarginTextDefaults {
 impl PageMarginTextDefaults {
     fn from_computed_style(style: &ComputedStyle, fonts: &HashMap<String, TtfFont>) -> Self {
         Self {
-            // Page-margin runs keep the CSS-specified family at the PDF
-            // boundary. This preserves the initial Times face when no custom
-            // family is authored, while registered page-context families still
-            // select their matching embedded face during PDF preparation.
-            font_family: style.font_family.clone(),
+            font_family: Self::resolve_font_family(style, fonts),
             font_size: used_font_size(style, fonts),
             line_height_factor: text_run_line_height_factor(style, fonts),
         }
+    }
+
+    /// Keeps the built-in page default stable while resolving an authored
+    /// custom stack past an unavailable first family.
+    fn resolve_font_family(style: &ComputedStyle, fonts: &HashMap<String, TtfFont>) -> FontFamily {
+        let FontFamily::Custom(name) = &style.font_family else {
+            return style.font_family.clone();
+        };
+        if crate::system_fonts::find_font_with_stretch(
+            fonts,
+            name,
+            style.font_weight.is_bold(),
+            style.font_style.is_slanted(),
+            style.font_stretch,
+        )
+        .is_some()
+        {
+            return style.font_family.clone();
+        }
+        resolve_style_font_family(style, fonts)
     }
 }
 
@@ -13248,6 +13264,26 @@ line 3</pre>
         assert_eq!(first_page.line_height_factor, 1.5);
         assert_eq!(first.font_size, 18.0);
         assert_eq!(first.line_height_factor, 2.0);
+    }
+
+    #[test]
+    fn page_margin_text_context_skips_an_unavailable_font_family() {
+        // CSS Fonts 4 requires the first available family in the prioritized list.
+        let page_rules = parse_page_rules(
+            "@page { @top-center { content: 'X'; font-family: NoSuchFont, serif; } }",
+        );
+        let context = compute_page_margin_text_context(&[], &page_rules, PageSize::A4);
+        let defaults = context.resolve(
+            PageSelectorContext {
+                page_number: 1,
+                is_blank: false,
+                page_name: None,
+            },
+            &page_rules[0].margin_boxes[0].text_style,
+            &HashMap::new(),
+        );
+
+        assert_eq!(defaults.font_family, FontFamily::TimesRoman);
     }
 }
 

@@ -15848,6 +15848,20 @@
       "reference_file": "cases/paged-media/paged-margin-box-css-string-escape.html",
       "reference_html_sha256": "d89b4694e11653b755d641cb07d226fcbef032edeb57a7e5fb7a03be712e7cd2"
     },
+    "paged-margin-box-font-family-fallback": {
+      "category": "paged-media",
+      "file": "cases/paged-media/paged-margin-box-font-family-fallback.html",
+      "html_sha256": "2c7313a9dfde6618cd6557e2ed0f1837351428d37f2e21f3f1040e525f48fc2b",
+      "manifest_sha256": "f98029f65959712128adc30ab5c3f3204fb1f1a4017269205f3445642072ec66",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/paged-media/paged-margin-box-font-family-fallback.pdf",
+        "sha256": "cce9fda15fc5aa19fe171c747a7180031b6ced4986790d5889be822a90db03e3"
+      },
+      "provenance": "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b",
+      "reference_file": "cases/paged-media/paged-margin-box-font-family-fallback.html",
+      "reference_html_sha256": "2c7313a9dfde6618cd6557e2ed0f1837351428d37f2e21f3f1040e525f48fc2b"
+    },
     "paged-margin-box-page-context-text": {
       "category": "paged-media",
       "file": "cases/paged-media/paged-margin-box-page-context-text.html",
