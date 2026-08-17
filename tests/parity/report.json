@@ -1,22 +1,22 @@
 {
   "schema_version": 12,
-  "invocation_id": "c848067269a6b6429ebc450850b2fcfb",
+  "invocation_id": "3b6aab8c295d1501b5db6862ed93091d",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-616-1786714231116426795-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3048-1786885462991394742-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1644,
+    "pass": 1645,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1664
+    "total": 1665
   },
   "categories": [
     {
@@ -105908,7 +105908,7 @@
       "category": "generated-content",
       "score_pct": 100.0,
       "counts": {
-        "pass": 35,
+        "pass": 36,
         "fail": 0,
         "reference_disputed": 2
       },
@@ -106369,6 +106369,62 @@
                     "height": 500,
                     "rgba_sha256": "4a4bd733373e6d030c4e226cfde769a3e6ca22fa396d509e518194437ba48c3f",
                     "painted_pixels": 215050
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "feature": "content string",
+          "score_pct": 100.0,
+          "counts": {
+            "pass": 1,
+            "fail": 0,
+            "reference_disputed": 0
+          },
+          "fixtures": [
+            {
+              "id": "generated-content-unicode-string",
+              "category": "generated-content",
+              "feature": "content string",
+              "subfeature": "literal-unicode-code-point",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "A generated-content string preserves a literal Unicode middle dot. Catches CSS preprocessing that copies UTF-8 bytes as separate characters before tokenization.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-text-baseline",
+                "probe-fill-box",
+                "probe-border-box"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "e1a863c369cf700e008fd02cbe3a4123fa0e986da19197fc8e257cc02669df0e",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1250,
+                    "height": 350,
+                    "rgba_sha256": "5be791aa833e39e28080ef302d76b0a3d1e7dfcb3130c5a6c47e75cfc896a042",
+                    "painted_pixels": 199100
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1250,
+                    "height": 350,
+                    "rgba_sha256": "5be791aa833e39e28080ef302d76b0a3d1e7dfcb3130c5a6c47e75cfc896a042",
+                    "painted_pixels": 199100
                   }
                 ]
               }
@@ -378522,7 +378578,7 @@
   ],
   "corpus_issues": [],
   "coverage": {
-    "features_with_fixture": 515,
+    "features_with_fixture": 516,
     "covered": [
       "backgrounds-borders/background-attachment",
       "backgrounds-borders/background-blend-mode",
@@ -378762,6 +378818,7 @@
       "generated-content/::first-line letter-spacing",
       "generated-content/::first-line line-height",
       "generated-content/::first-line text-transform",
+      "generated-content/content string",
       "generated-content/content-attr",
       "generated-content/content-counter",
       "generated-content/content-counters",
@@ -379040,7 +379097,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1627,
+    "implemented": 1628,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -379053,6 +379110,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "d9d56b7f9cef821ade76a07f8a263af2881da97c8dbc7dec5316ff1273ebb182",
+  "refs_lock_sha256": "340b05a6b1d175095f84adf58a60bca7f7530698272f82634632e3d47e782992",
   "baseline_present": true
 }

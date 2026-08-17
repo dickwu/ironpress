@@ -617,5 +617,21 @@
       "probe-border-box",
       "probe-color-swatch"
     ]
+  },
+  {
+    "id": "generated-content-unicode-string",
+    "category": "generated-content",
+    "feature": "content string",
+    "subfeature": "literal-unicode-code-point",
+    "description": "A generated-content string preserves a literal Unicode middle dot. Catches CSS preprocessing that copies UTF-8 bytes as separate characters before tokenization.",
+    "file": "cases/generated-content/generated-content-unicode-string.html",
+    "kind": "feature",
+    "expected_support": "implemented",
+    "oracle": "chrome",
+    "depends_on": [
+      "probe-text-baseline",
+      "probe-fill-box",
+      "probe-border-box"
+    ]
   }
 ]
