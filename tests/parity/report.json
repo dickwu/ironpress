@@ -1,22 +1,22 @@
 {
   "schema_version": 12,
-  "invocation_id": "a1d2402af89003ca8ccdb69311f9e684",
+  "invocation_id": "9a1c08ad4a129f18c84a5e3ed1f0bd78",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3040-1786946975622733311-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-2974-1786961409848860831-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1647,
+    "pass": 1648,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1667
+    "total": 1668
   },
   "categories": [
     {
@@ -378094,7 +378094,7 @@
       "category": "units-values",
       "score_pct": 100.0,
       "counts": {
-        "pass": 42,
+        "pass": 43,
         "fail": 0,
         "reference_disputed": 0
       },
@@ -378159,7 +378159,7 @@
           "feature": "calc",
           "score_pct": 100.0,
           "counts": {
-            "pass": 8,
+            "pass": 9,
             "fail": 0,
             "reference_disputed": 0
           },
@@ -378516,6 +378516,51 @@
                     "height": 1900,
                     "rgba_sha256": "a9d4e6955cb2f1aa30555b3ddddfbf85f73ba884112cfd0803865a94218e9297",
                     "painted_pixels": 1930149
+                  }
+                ]
+              }
+            },
+            {
+              "id": "units-calc-var-substitution",
+              "category": "units-values",
+              "feature": "calc",
+              "subfeature": "var-substitution",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "Custom-property tokens inside calc() resolve at computed-value time before typed length math sets an absolute box's width, height, and left inset.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-color-swatch",
+                "probe-border-box"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "d3f5926d9d25e7c711c077cd9e59e17565805ed462eb30d0d45e808eb0a7a424",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 750,
+                    "height": 250,
+                    "rgba_sha256": "e30f7f6605b0923d96e3c279f79922209fe586d714fc0fa9a91412b28e4710b4",
+                    "painted_pixels": 187500
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 750,
+                    "height": 250,
+                    "rgba_sha256": "e30f7f6605b0923d96e3c279f79922209fe586d714fc0fa9a91412b28e4710b4",
+                    "painted_pixels": 187500
                   }
                 ]
               }
@@ -380616,7 +380661,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1630,
+    "implemented": 1631,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -380629,6 +380674,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "bf4ceca41002475578ae168392a51c2df676a1ebbd300a2ca80cde7f9e021076",
+  "refs_lock_sha256": "8cccc7e91850d3af00f287121a9d7e7b33ad66a7eaeba1e1c946d1a137ea10cd",
   "baseline_present": true
 }
