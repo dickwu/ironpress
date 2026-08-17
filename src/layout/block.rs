@@ -811,11 +811,11 @@ pub(crate) fn layout_block_element(
         child_ancestors,
         env.font_metrics(),
     );
-    let requires_principal_box = early_has_visual || positioned_container;
+    let requires_principal_box = early_has_visual || style.position.is_positioned();
     let has_block_kids_for_wrapper = nesting_depth < 40
         && (has_inflow_block_pseudo
-            || requires_principal_box
-                && (has_out_of_flow_children || inline_children.has_outside()));
+            || early_has_visual && has_out_of_flow_children
+            || requires_principal_box && inline_children.has_outside());
     let block_pseudo_via_wrapper = has_inflow_block_pseudo && has_block_kids_for_wrapper;
     if let Some(ps) = before_style {
         if pseudo_is_block_like(ps) && !before_is_abs && !block_pseudo_via_wrapper {
@@ -1779,7 +1779,7 @@ pub(crate) fn layout_block_element(
     // its position cannot be transferred to a normal-flow child.
     let has_abs_children = has_out_of_flow_children;
     let needs_wrapper = has_visual
-        || positioned_container
+        || style.position.is_positioned()
         || style.aspect_ratio.is_some()
         || style.height.is_some()
         || !layout_padding.is_zero()
