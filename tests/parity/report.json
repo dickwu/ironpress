@@ -1,22 +1,22 @@
 {
   "schema_version": 12,
-  "invocation_id": "482a546546c779c2ecc6942f15484c1c",
+  "invocation_id": "a1d2402af89003ca8ccdb69311f9e684",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3112-1786945768423379331-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3040-1786946975622733311-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1646,
+    "pass": 1647,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1666
+    "total": 1667
   },
   "categories": [
     {
@@ -322537,7 +322537,7 @@
       "category": "paged-media",
       "score_pct": 100.0,
       "counts": {
-        "pass": 85,
+        "pass": 86,
         "fail": 0,
         "reference_disputed": 3
       },
@@ -335021,7 +335021,7 @@
           "feature": "page-margin-box",
           "score_pct": 100.0,
           "counts": {
-            "pass": 10,
+            "pass": 11,
             "fail": 0,
             "reference_disputed": 0
           },
@@ -338106,6 +338106,1307 @@
                 ],
                 "confidence": 1.0,
                 "different_pixels": 894,
+                "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
+              }
+            },
+            {
+              "id": "paged-margin-box-font-family-fallback",
+              "category": "paged-media",
+              "feature": "page-margin-box",
+              "subfeature": "font-family-fallback",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.6243809523809524,
+              "semantic_diff_pct": 0.3158095238095238,
+              "description": "A page-margin box skips an unavailable first family and uses the next available face in its font stack.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "2c7313a9dfde6618cd6557e2ed0f1837351428d37f2e21f3f1040e525f48fc2b",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 750,
+                    "height": 350,
+                    "rgba_sha256": "36a0e257c1e3f5c9f75393cb63f5db7473eeb8e0479dd82bec237f53b70dabc2",
+                    "painted_pixels": 262500
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 750,
+                    "height": 350,
+                    "rgba_sha256": "8b663a7b1b2ac0471f9dc47fec4828fca018731a2675e5ba25b25d023ca80c79",
+                    "painted_pixels": 262500
+                  }
+                ]
+              },
+              "diagnosis": {
+                "primary_class": "AntialiasCoverage",
+                "secondary": [],
+                "headline": "visually accepted coverage phase; raw antialiasing coverage residue on a shared outline",
+                "magnitude": {
+                  "missing_area_pct": 0.0,
+                  "extra_area_pct": 0.0,
+                  "modal_drgba": [
+                    -1,
+                    -1,
+                    0,
+                    0
+                  ],
+                  "delta_e": 0.8563759089148815,
+                  "recovered_alpha": null,
+                  "colorspace": null
+                },
+                "region_count": 258,
+                "region_classes": [
+                  {
+                    "class": "ColorErr",
+                    "region_count": 258,
+                    "total_pixels": 1639,
+                    "total_area_pct": 0.6243809523809511,
+                    "union_bbox_css": [
+                      39.36,
+                      15.36,
+                      201.28,
+                      34.88
+                    ],
+                    "largest_region_pixels": 40,
+                    "largest_region_area_pct": 0.015238095238095238,
+                    "max_delta_e": 0.0
+                  }
+                ],
+                "region_examples": [
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      52.8,
+                      16.96,
+                      52.8,
+                      29.44
+                    ],
+                    "area_pct": 0.015238095238095238,
+                    "modal_drgba": [
+                      -3,
+                      -3,
+                      -1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      132.16,
+                      21.44,
+                      132.16,
+                      32.0
+                    ],
+                    "area_pct": 0.012952380952380953,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      90.56,
+                      21.12,
+                      92.48,
+                      28.48
+                    ],
+                    "area_pct": 0.01219047619047619,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      78.08,
+                      21.44,
+                      80.0,
+                      29.44
+                    ],
+                    "area_pct": 0.01219047619047619,
+                    "modal_drgba": [
+                      4,
+                      3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      64.32,
+                      21.12,
+                      65.28,
+                      29.44
+                    ],
+                    "area_pct": 0.011428571428571429,
+                    "modal_drgba": [
+                      4,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      83.84,
+                      21.12,
+                      84.48,
+                      29.44
+                    ],
+                    "area_pct": 0.011047619047619047,
+                    "modal_drgba": [
+                      4,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      156.16,
+                      26.24,
+                      162.88,
+                      27.52
+                    ],
+                    "area_pct": 0.011047619047619047,
+                    "modal_drgba": [
+                      -4,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      68.48,
+                      20.16,
+                      73.28,
+                      21.44
+                    ],
+                    "area_pct": 0.009904761904761904,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      112.96,
+                      20.16,
+                      117.44,
+                      21.76
+                    ],
+                    "area_pct": 0.009904761904761904,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      43.2,
+                      22.08,
+                      50.88,
+                      22.08
+                    ],
+                    "area_pct": 0.009523809523809525,
+                    "modal_drgba": [
+                      3,
+                      3,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      72.0,
+                      22.4,
+                      72.32,
+                      29.44
+                    ],
+                    "area_pct": 0.009142857142857144,
+                    "modal_drgba": [
+                      4,
+                      3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      116.48,
+                      22.4,
+                      116.8,
+                      29.44
+                    ],
+                    "area_pct": 0.009142857142857144,
+                    "modal_drgba": [
+                      4,
+                      3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      90.56,
+                      15.36,
+                      90.88,
+                      21.76
+                    ],
+                    "area_pct": 0.008380952380952381,
+                    "modal_drgba": [
+                      4,
+                      3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      187.84,
+                      20.8,
+                      189.12,
+                      26.24
+                    ],
+                    "area_pct": 0.008380952380952381,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      107.84,
+                      21.44,
+                      108.16,
+                      27.84
+                    ],
+                    "area_pct": 0.008380952380952381,
+                    "modal_drgba": [
+                      -2,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      101.44,
+                      21.44,
+                      101.44,
+                      27.84
+                    ],
+                    "area_pct": 0.008,
+                    "modal_drgba": [
+                      3,
+                      3,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      56.96,
+                      29.12,
+                      61.76,
+                      30.72
+                    ],
+                    "area_pct": 0.008,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      156.8,
+                      24.64,
+                      161.92,
+                      25.28
+                    ],
+                    "area_pct": 0.007619047619047619,
+                    "modal_drgba": [
+                      -4,
+                      -3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      135.68,
+                      22.08,
+                      136.32,
+                      27.2
+                    ],
+                    "area_pct": 0.007238095238095238,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      -1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      102.72,
+                      30.08,
+                      107.2,
+                      30.72
+                    ],
+                    "area_pct": 0.007238095238095238,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      138.24,
+                      30.4,
+                      143.04,
+                      30.72
+                    ],
+                    "area_pct": 0.006857142857142857,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      97.92,
+                      23.36,
+                      98.24,
+                      28.16
+                    ],
+                    "area_pct": 0.0064761904761904765,
+                    "modal_drgba": [
+                      4,
+                      3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      122.88,
+                      23.36,
+                      123.2,
+                      28.16
+                    ],
+                    "area_pct": 0.0064761904761904765,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      95.68,
+                      22.4,
+                      96.32,
+                      26.56
+                    ],
+                    "area_pct": 0.006095238095238095,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      184.96,
+                      26.56,
+                      185.92,
+                      30.4
+                    ],
+                    "area_pct": 0.006095238095238095,
+                    "modal_drgba": [
+                      -2,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      130.56,
+                      20.16,
+                      134.08,
+                      21.12
+                    ],
+                    "area_pct": 0.005714285714285714,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      125.12,
+                      21.12,
+                      126.72,
+                      24.0
+                    ],
+                    "area_pct": 0.005714285714285714,
+                    "modal_drgba": [
+                      -1,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      195.84,
+                      26.88,
+                      196.8,
+                      30.4
+                    ],
+                    "area_pct": 0.005714285714285714,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      136.0,
+                      27.52,
+                      137.92,
+                      30.08
+                    ],
+                    "area_pct": 0.005714285714285714,
+                    "modal_drgba": [
+                      -2,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      123.84,
+                      32.0,
+                      124.8,
+                      34.56
+                    ],
+                    "area_pct": 0.005714285714285714,
+                    "modal_drgba": [
+                      3,
+                      3,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      142.08,
+                      21.44,
+                      143.36,
+                      24.32
+                    ],
+                    "area_pct": 0.005333333333333333,
+                    "modal_drgba": [
+                      -2,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      56.96,
+                      24.32,
+                      59.52,
+                      25.92
+                    ],
+                    "area_pct": 0.005333333333333333,
+                    "modal_drgba": [
+                      -2,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      125.76,
+                      33.6,
+                      129.28,
+                      33.92
+                    ],
+                    "area_pct": 0.005333333333333333,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      138.88,
+                      20.8,
+                      141.76,
+                      21.44
+                    ],
+                    "area_pct": 0.004952380952380952,
+                    "modal_drgba": [
+                      -4,
+                      -3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      196.16,
+                      23.04,
+                      196.8,
+                      26.24
+                    ],
+                    "area_pct": 0.004952380952380952,
+                    "modal_drgba": [
+                      -3,
+                      -3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      59.84,
+                      24.0,
+                      63.36,
+                      24.0
+                    ],
+                    "area_pct": 0.004571428571428572,
+                    "modal_drgba": [
+                      -4,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      58.56,
+                      25.92,
+                      58.88,
+                      28.8
+                    ],
+                    "area_pct": 0.004571428571428572,
+                    "modal_drgba": [
+                      2,
+                      1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      153.92,
+                      26.88,
+                      154.88,
+                      29.44
+                    ],
+                    "area_pct": 0.004571428571428572,
+                    "modal_drgba": [
+                      -2,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      59.52,
+                      29.44,
+                      62.4,
+                      29.76
+                    ],
+                    "area_pct": 0.004571428571428572,
+                    "modal_drgba": [
+                      -4,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      100.16,
+                      20.16,
+                      103.36,
+                      20.16
+                    ],
+                    "area_pct": 0.004190476190476191,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      106.56,
+                      20.16,
+                      109.76,
+                      20.16
+                    ],
+                    "area_pct": 0.004190476190476191,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      57.28,
+                      20.8,
+                      58.24,
+                      22.72
+                    ],
+                    "area_pct": 0.004190476190476191,
+                    "modal_drgba": [
+                      -2,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      58.88,
+                      20.8,
+                      61.44,
+                      21.44
+                    ],
+                    "area_pct": 0.004190476190476191,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      103.36,
+                      27.2,
+                      104.32,
+                      29.44
+                    ],
+                    "area_pct": 0.004190476190476191,
+                    "modal_drgba": [
+                      1,
+                      1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      158.4,
+                      16.0,
+                      159.04,
+                      18.24
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      161.92,
+                      18.56,
+                      162.56,
+                      20.8
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      2,
+                      2,
+                      1,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      170.56,
+                      18.88,
+                      171.2,
+                      21.12
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      186.88,
+                      25.92,
+                      187.52,
+                      27.52
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      2,
+                      1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      137.92,
+                      27.2,
+                      138.88,
+                      29.12
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      1,
+                      1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      187.52,
+                      28.16,
+                      188.16,
+                      30.4
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      92.48,
+                      30.72,
+                      95.36,
+                      30.72
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      125.76,
+                      30.72,
+                      128.64,
+                      30.72
+                    ],
+                    "area_pct": 0.0038095238095238095,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      56.64,
+                      26.24,
+                      56.64,
+                      28.8
+                    ],
+                    "area_pct": 0.0034285714285714284,
+                    "modal_drgba": [
+                      -3,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      195.2,
+                      26.24,
+                      195.84,
+                      27.52
+                    ],
+                    "area_pct": 0.0034285714285714284,
+                    "modal_drgba": [
+                      0,
+                      1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      155.2,
+                      27.52,
+                      155.84,
+                      29.44
+                    ],
+                    "area_pct": 0.0034285714285714284,
+                    "modal_drgba": [
+                      2,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      128.96,
+                      29.12,
+                      130.24,
+                      30.4
+                    ],
+                    "area_pct": 0.0034285714285714284,
+                    "modal_drgba": [
+                      -1,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      192.32,
+                      16.0,
+                      192.64,
+                      17.92
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      -2,
+                      -2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      184.32,
+                      16.96,
+                      184.64,
+                      18.88
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      182.72,
+                      18.56,
+                      183.04,
+                      20.48
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      2,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      197.76,
+                      18.56,
+                      198.08,
+                      20.48
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      -3,
+                      -3,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      184.96,
+                      19.2,
+                      185.28,
+                      21.12
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      3,
+                      2,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      193.28,
+                      19.52,
+                      193.6,
+                      21.44
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      -1,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      79.36,
+                      19.84,
+                      80.96,
+                      20.48
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      -1,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  },
+                  {
+                    "class": "AntialiasCoverage",
+                    "bbox_css": [
+                      198.4,
+                      20.16,
+                      198.72,
+                      22.08
+                    ],
+                    "area_pct": 0.0030476190476190477,
+                    "modal_drgba": [
+                      -1,
+                      -1,
+                      0,
+                      0
+                    ],
+                    "delta_e": 0.0,
+                    "recovered_alpha": null,
+                    "headline": "antialiasing coverage residue on a shared outline"
+                  }
+                ],
+                "confidence": 1.0,
+                "different_pixels": 1639,
                 "visual_pass_basis": "CSS-scale observation: sub-CSS shared-colour coverage"
               }
             },
@@ -379315,7 +380616,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1629,
+    "implemented": 1630,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -379328,6 +380629,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "5e488efd8e6ae6797d1424ea245ef61994c59781e5969a0e33e2c4e4961cf228",
+  "refs_lock_sha256": "bf4ceca41002475578ae168392a51c2df676a1ebbd300a2ca80cde7f9e021076",
   "baseline_present": true
 }
