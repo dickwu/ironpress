@@ -5,7 +5,7 @@ use crate::layout::elements::{
 };
 use crate::layout::flow_metrics::BlockMargins;
 use crate::parser::css::{AncestorInfo, CssRule, PseudoElement, SelectorContext};
-use crate::parser::dom::{DomNode, ElementNode, HtmlTag};
+use crate::parser::dom::{DomNode, ElementNode};
 use crate::parser::ttf::TtfFont;
 use crate::style::computed::{
     BoxSizing, ComputedStyle, Display, Float, FontFamily, Overflow, Position, TextAlign,
@@ -23,12 +23,12 @@ use super::helpers::{
     BackgroundFields, LayoutOverflowKeyword, PseudoBoxContext, aspect_ratio_height,
     authored_intrinsic_width_keyword, authored_keyword_property, authored_line_clamp,
     authored_overflow_axes, authored_overflow_clip_margin, authored_pseudo_keyword_property,
-    authored_scrollbar_gutter, build_pseudo_block, collects_as_inline_text,
-    establishes_bfc_with_overflow, has_background_paint, heading_level, measure_lines_width,
-    pseudo_is_block_like, push_block_pseudo, recurses_as_layout_child,
-    resolve_abs_containing_block, resolve_absolute_descendants_containing_block,
-    resolve_content_box_height, resolve_inset, resolve_padding_box_height,
-    resolve_relative_offsets, selector_attributes_with_has, selector_context_from_ancestors,
+    authored_scrollbar_gutter, build_pseudo_block, establishes_bfc_with_overflow,
+    has_background_paint, heading_level, measure_lines_width, pseudo_is_block_like,
+    push_block_pseudo, recurses_as_layout_child, resolve_abs_containing_block,
+    resolve_absolute_descendants_containing_block, resolve_content_box_height, resolve_inset,
+    resolve_padding_box_height, resolve_relative_offsets, selector_attributes_with_has,
+    selector_context_from_ancestors,
 };
 use super::inline::{
     layout_inline_block_group_with_spacing, layout_inline_mixed_sequence_with_env,
@@ -811,15 +811,11 @@ pub(crate) fn layout_block_element(
         child_ancestors,
         env.font_metrics(),
     );
+    let requires_principal_box = early_has_visual || positioned_container;
     let has_block_kids_for_wrapper = nesting_depth < 40
         && (has_inflow_block_pseudo
-            || early_has_visual
-                && (has_out_of_flow_children
-                    || el.children.iter().any(|c| {
-                        matches!(c, DomNode::Element(e)
-                        if (e.tag.is_block() || e.tag == HtmlTag::Svg)
-                            && !collects_as_inline_text(e.tag))
-                    })));
+            || requires_principal_box
+                && (has_out_of_flow_children || inline_children.has_outside()));
     let block_pseudo_via_wrapper = has_inflow_block_pseudo && has_block_kids_for_wrapper;
     if let Some(ps) = before_style {
         if pseudo_is_block_like(ps) && !before_is_abs && !block_pseudo_via_wrapper {
@@ -1017,9 +1013,6 @@ pub(crate) fn layout_block_element(
             || style.isolation.isolates()
             || style.filter.establishes_stacking_context
             || has_blended_block_child;
-        // Check early if this positioned container has absolute children.
-        // When true, skip the has_block_children fast path so we use the
-        // Container/wrapper path instead, preserving the containing block.
         let early_has_abs_children = has_out_of_flow_children;
         let has_abs_pseudo_early = positioned_container && (before_is_abs || after_is_abs);
         // A non-visual block whose padding offsets its children cannot use the
@@ -1030,7 +1023,8 @@ pub(crate) fn layout_block_element(
         // positioned, or block child of e.g. `<div style="padding:20px">` renders
         // at the parent's border-box origin (padding silently dropped).
         let has_padding_offset = !layout_padding.is_zero();
-        let has_block_children = !parent_has_visual
+        let has_block_children = !has_block_kids_for_wrapper
+            && !parent_has_visual
             && !has_padding_offset
             && !early_has_abs_children
             && !has_abs_pseudo_early
@@ -1781,10 +1775,11 @@ pub(crate) fn layout_block_element(
         || style.isolation.isolates()
         || style.filter.establishes_stacking_context
         || has_blended_block_child;
-    // A positioned, transformed, or filtered container needs the Container
-    // element to establish a containing block for absolute children.
+    // A positioned element keeps its principal box even without decoration;
+    // its position cannot be transferred to a normal-flow child.
     let has_abs_children = has_out_of_flow_children;
     let needs_wrapper = has_visual
+        || positioned_container
         || style.aspect_ratio.is_some()
         || style.height.is_some()
         || !layout_padding.is_zero()

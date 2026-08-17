@@ -5,6 +5,7 @@ mod generated_content;
 mod grid_red_team;
 mod inline_selectors;
 mod paged_breaks;
+mod positioning;
 mod root_formatting_context;
 mod stacking;
 mod support;
