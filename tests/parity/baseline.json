@@ -5,17 +5,17 @@
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-3044-1786961413373223157-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-2915-1786963061854864233-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1649,
+    "pass": 1650,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1669
+    "total": 1670
   },
   "categories": [
     {
@@ -346924,7 +346924,7 @@
       "category": "positioning",
       "score_pct": 100.0,
       "counts": {
-        "pass": 22,
+        "pass": 23,
         "fail": 0,
         "reference_disputed": 0
       },
@@ -347516,11 +347516,55 @@
           "feature": "position",
           "score_pct": 100.0,
           "counts": {
-            "pass": 7,
+            "pass": 8,
             "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
+            {
+              "id": "positioning-absolute-block-child-offsets",
+              "category": "positioning",
+              "feature": "position",
+              "subfeature": "absolute-normal-flow-child",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "An absolute non-visual parent keeps its top and left offsets when its only content is a normal-flow block child.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-block-flow"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "4da7354a81d0446a630d78aed0fe2180774cb49f9005e46741da8f9c60ff5930",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 750,
+                    "height": 350,
+                    "rgba_sha256": "3f76031c99ea2ed35d0b79133d35140dd5b30c5660e8da8d7e1124bde6293040",
+                    "painted_pixels": 262500
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 750,
+                    "height": 350,
+                    "rgba_sha256": "3f76031c99ea2ed35d0b79133d35140dd5b30c5660e8da8d7e1124bde6293040",
+                    "painted_pixels": 262500
+                  }
+                ]
+              }
+            },
             {
               "id": "positioning-fixed-repeats-pages",
               "category": "positioning",
@@ -380703,7 +380747,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1632,
+    "implemented": 1633,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -380716,6 +380760,6 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "7ef9e06a058acaabdd356f0d0dc72b23fb27673d7c9c7049afa965056b53870f",
+  "refs_lock_sha256": "fca6cb47e8c62ecd48028213c54879ce966fe8118f16fa4c51d9452962f42eb8",
   "baseline_present": true
 }
