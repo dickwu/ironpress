@@ -279,7 +279,7 @@ impl PageMarginLineBox {
         for run in runs {
             let line_height = run.font_size * run.line_height_factor.max(0.0);
             let strut = crate::layout::text::LineStrut::from_exact_font(
-                &run.font_family,
+                run.css_font_family(),
                 run.font_size,
                 run.bold,
                 run.font_style.is_slanted(),
@@ -367,7 +367,7 @@ mod page_margin_text_tests {
         let line_box = PageMarginLineBox::from_runs(std::slice::from_ref(&run), &HashMap::new());
         let line_height = run.font_size * run.line_height_factor;
         let metrics = crate::fonts::exact_font_line_metrics(
-            &run.font_family,
+            run.css_font_family(),
             run.font_size,
             run.bold,
             run.font_style.is_slanted(),

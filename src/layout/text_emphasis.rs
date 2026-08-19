@@ -1,9 +1,8 @@
 //! Resolved CSS `text-emphasis` state and ruby-annotation geometry.
 //!
-//! Emphasis marks use a selected font face twice: once to establish their
-//! annotation geometry in inline layout and again while painting. Resolving
-//! that data once on the final (fallback-split) text run keeps both consumers
-//! in agreement and avoids repeatedly allocating font-lookup keys.
+//! Emphasis geometry follows the computed CSS family even when a missing glyph
+//! is painted by a fallback face. Resolving that geometry once on each final
+//! text run keeps layout and paint in agreement without changing the inline box.
 
 use crate::{
     layout::engine::TextRun,
@@ -115,7 +114,7 @@ struct EmphasisFaceMetrics {
 
 impl EmphasisFaceMetrics {
     fn resolve(run: &TextRun, fonts: &HashMap<String, TtfFont>) -> Self {
-        if let FontFamily::Custom(name) = &run.font_family
+        if let FontFamily::Custom(name) = run.css_font_family()
             && let Some((_, font)) =
                 crate::system_fonts::find_font(fonts, name, run.bold, run.font_style.is_slanted())
         {
@@ -137,10 +136,10 @@ impl EmphasisFaceMetrics {
             };
         }
 
-        let ascent_ratio = crate::fonts::ascender_ratio(&run.font_family);
-        let descent_ratio = crate::fonts::descender_ratio(&run.font_family);
+        let ascent_ratio = crate::fonts::ascender_ratio(run.css_font_family());
+        let descent_ratio = crate::fonts::descender_ratio(run.css_font_family());
         let normal_ratio = crate::fonts::normal_line_height_factor(
-            &run.font_family,
+            run.css_font_family(),
             run.bold,
             run.font_style.is_slanted(),
             fonts,
@@ -245,6 +244,36 @@ mod tests {
         assert_eq!(
             TextEmphasisMetrics::from_run(&run).line_box_end_extension,
             8.25
+        );
+    }
+
+    #[test]
+    fn fallback_glyph_face_keeps_the_authored_emphasis_geometry() {
+        let mut fonts = parity_sans_fonts();
+        let japanese = crate::parser::ttf::parse_ttf(
+            include_bytes!("../../tests/fonts/IronpressCjkVertical.ttf").to_vec(),
+        )
+        .expect("valid Japanese fixture font");
+        fonts.insert("japanese".to_string(), japanese);
+        let mut authored = TextRun {
+            text: "重要".to_owned(),
+            font_family: FontFamily::Custom("ParitySans".to_string()),
+            font_size: 21.0,
+            line_height_basis: 21.0,
+            line_height_factor: 1.5,
+            ..Default::default()
+        };
+        authored.metadata.emphasis.mark = true;
+        let mut fallback = authored
+            .clone()
+            .with_glyph_fallback(FontFamily::Custom("japanese".to_string()));
+
+        resolve_text_emphasis_metrics(std::slice::from_mut(&mut authored), &fonts);
+        resolve_text_emphasis_metrics(std::slice::from_mut(&mut fallback), &fonts);
+
+        assert_eq!(
+            TextEmphasisMetrics::from_run(&fallback),
+            TextEmphasisMetrics::from_run(&authored)
         );
     }
 }

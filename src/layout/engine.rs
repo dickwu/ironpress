@@ -823,6 +823,7 @@ impl InlineBoundaryAdvance {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TextRunMetadata {
+    pub(crate) font_locale: crate::font_pack::FontLocale,
     /// CSS `text-emphasis` state, kept together because its mark, colour,
     /// position, and resolved ruby geometry must travel as one unit.
     pub emphasis: crate::layout::text_emphasis::TextEmphasis,
@@ -871,6 +872,13 @@ impl Default for TextShaping {
     }
 }
 
+/// Glyph substitution paired with the CSS family that owns inline metrics.
+#[derive(Debug, Clone)]
+pub(crate) struct GlyphFontFallback {
+    /// Computed CSS family whose metrics continue to define the inline box.
+    css_family: FontFamily,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextRun {
     pub text: String,
@@ -880,7 +888,10 @@ pub struct TextRun {
     pub color: crate::types::Color,
     pub decorations: Vec<crate::style::computed::TextDecoration>,
     pub link_url: Option<String>,
+    /// Face that shapes and paints this run after character fallback.
     pub font_family: FontFamily,
+    /// Original CSS family retained when glyphs come from a fallback face.
+    pub(crate) glyph_fallback: Option<GlyphFontFallback>,
     /// Explicit algorithmic font treatment; never encoded in geometry.
     pub font_synthesis: FontSynthesisState,
     /// Background color for inline spans (e.g. badge/highlight).
@@ -945,6 +956,7 @@ impl Default for TextRun {
             decorations: Vec::new(),
             link_url: None,
             font_family: FontFamily::default(),
+            glyph_fallback: None,
             font_synthesis: FontSynthesisState::default(),
             background_color: None,
             padding: EdgeSizes::ZERO,
@@ -962,6 +974,28 @@ impl Default for TextRun {
 }
 
 impl TextRun {
+    /// Substitute the glyph face without changing the CSS inline-box metrics.
+    pub(crate) fn with_glyph_fallback(mut self, glyph_family: FontFamily) -> Self {
+        let css_family = self
+            .glyph_fallback
+            .take()
+            .map_or_else(|| self.font_family.clone(), |fallback| fallback.css_family);
+        if glyph_family == css_family {
+            self.font_family = css_family;
+        } else {
+            self.font_family = glyph_family;
+            self.glyph_fallback = Some(GlyphFontFallback { css_family });
+        }
+        self
+    }
+
+    /// Family whose computed metrics define line boxes and text decorations.
+    pub(crate) fn css_font_family(&self) -> &FontFamily {
+        self.glyph_fallback
+            .as_ref()
+            .map_or(&self.font_family, |fallback| &fallback.css_family)
+    }
+
     /// Add the finite inline advance retained at this run's trailing edge.
     ///
     /// CSS tracking and pair positioning can both cross a paint-run boundary.
@@ -1993,6 +2027,7 @@ pub fn layout_with_rules_and_fonts(
         DocumentGeometry::new(page_size, margin),
         rules,
         custom_fonts,
+        crate::font_pack::FontLocale::Unspecified,
         &page_background,
         super::paginate::PaginationContext::new(
             super::page_context::PageGeometryContext::uniform(page_size, margin),
@@ -2012,6 +2047,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     geometry: DocumentGeometry,
     rules: &[CssRule],
     custom_fonts: &HashMap<String, TtfFont>,
+    font_locale: crate::font_pack::FontLocale,
     page_background: &super::page_context::PageBackgroundContext,
     pagination_context: super::paginate::PaginationContext,
     raster_quality: crate::style::raster_quality::RasterQuality,
@@ -2039,6 +2075,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     let html_style = root_styles.html;
     let body_style = root_styles.body;
     let mut parent_style = body_style.clone();
+    parent_style.font_locale = font_locale;
     // The conversion boundary has already projected horizontal body padding
     // into `content_margin`. Direct body children must therefore resolve
     // percentages against that content width itself, not subtract the authored

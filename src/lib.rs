@@ -82,6 +82,8 @@ pub(crate) mod bidi;
 pub mod cli;
 /// Error types for conversion failures.
 pub mod error;
+/// Optional fallback-font packs.
+pub mod font_pack;
 pub(crate) mod fonts;
 pub(crate) mod layout;
 pub(crate) mod parser;
@@ -95,6 +97,7 @@ pub mod types;
 pub(crate) mod util;
 
 pub use error::IronpressError;
+pub use font_pack::{FontPack, FontPackError, FontPackKind, UnknownFontPackKind};
 pub use security::resources::{InvalidRemoteHost, NetworkPolicy, RemoteHost};
 pub use style::raster_quality::{CoverageCompression, JpegCompression, RasterQuality};
 pub use types::{CornerRadii, CornerRadius, EdgeSizes, Margin, PageSize};
@@ -230,6 +233,7 @@ pub struct HtmlConverter {
     margin: Margin,
     sanitize: bool,
     custom_fonts: std::collections::HashMap<String, Vec<u8>>,
+    font_catalog: font_pack::FontCatalog,
     resources: ResourcePaths,
     /// Optional header text rendered at the top of each page.
     header: Option<String>,
@@ -262,6 +266,7 @@ impl HtmlConverter {
             margin: Margin::default(),
             sanitize: true,
             custom_fonts: std::collections::HashMap::new(),
+            font_catalog: font_pack::FontCatalog::default(),
             resources: ResourcePaths::default(),
             header: None,
             footer: None,
@@ -388,6 +393,22 @@ impl HtmlConverter {
         self.custom_fonts
             .insert(name.to_ascii_lowercase(), ttf_data);
         self
+    }
+
+    /// Install or replace one parsed optional fallback-font pack.
+    ///
+    /// CJK packs follow inherited HTML `lang` values so the same Unicode code
+    /// point can use Japanese, Korean, Simplified Chinese, or Traditional
+    /// Chinese glyph forms. Pack loading is always explicit and never performs
+    /// network access.
+    pub fn add_font_pack(mut self, pack: FontPack) -> Self {
+        self.install_font_pack(pack);
+        self
+    }
+
+    /// Install a pack on a reusable converter without rebuilding its policy.
+    fn install_font_pack(&mut self, pack: FontPack) {
+        self.font_catalog.install(pack);
     }
 
     /// Set the base directory for resolving local document resources.
@@ -734,6 +755,7 @@ impl HtmlConverter {
                 .with_initial_containing_block(initial_containing_block),
             &rules,
             &parsed_fonts,
+            result.font_locale,
             &page_background,
             layout::paginate::PaginationContext::new(page_geometry, footnote_area, 0.0),
             self.raster_quality,
@@ -826,6 +848,7 @@ impl HtmlConverter {
                 fonts.insert(name.clone(), font);
             }
         }
+        self.font_catalog.install_into(&mut fonts);
         fonts
     }
 }
@@ -1060,6 +1083,61 @@ impl HtmlConverter {
 #[cfg(feature = "wasm")]
 pub mod wasm {
     use wasm_bindgen::prelude::*;
+
+    /// Reusable browser-side converter with explicitly installed font packs.
+    #[wasm_bindgen(js_name = HtmlConverter)]
+    pub struct WasmHtmlConverter {
+        converter: crate::HtmlConverter,
+    }
+
+    #[wasm_bindgen(js_class = "HtmlConverter")]
+    impl WasmHtmlConverter {
+        /// Create a converter with core fonts and no optional font packs.
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> Self {
+            Self {
+                converter: crate::HtmlConverter::new(),
+            }
+        }
+
+        /// Parse and install one downloaded font-pack artifact.
+        #[wasm_bindgen(js_name = addFontPack)]
+        pub fn add_font_pack(&mut self, kind: &str, bytes: &[u8]) -> Result<(), JsError> {
+            let kind = kind
+                .parse::<crate::FontPackKind>()
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            let pack = crate::FontPack::parse(kind, bytes.to_vec())
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            self.converter.install_font_pack(pack);
+            Ok(())
+        }
+
+        /// Convert HTML with the packs already installed on this converter.
+        #[wasm_bindgen(js_name = htmlToPdf)]
+        pub fn html_to_pdf(&self, html: &str) -> Result<js_sys::Uint8Array, JsError> {
+            let bytes = self
+                .converter
+                .convert(html)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            Ok(js_sys::Uint8Array::from(bytes.as_slice()))
+        }
+
+        /// Convert Markdown with the packs already installed on this converter.
+        #[wasm_bindgen(js_name = markdownToPdf)]
+        pub fn markdown_to_pdf(&self, markdown: &str) -> Result<js_sys::Uint8Array, JsError> {
+            let bytes = self
+                .converter
+                .convert_markdown(markdown)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            Ok(js_sys::Uint8Array::from(bytes.as_slice()))
+        }
+    }
+
+    impl Default for WasmHtmlConverter {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
 
     /// Convert HTML to PDF bytes.
     ///

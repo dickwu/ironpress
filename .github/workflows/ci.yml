@@ -86,6 +86,7 @@ jobs:
           key: wasm-pack-${{ runner.os }}-v1
       - run: command -v wasm-pack || cargo install wasm-pack
       - run: wasm-pack build --target web --features wasm --no-default-features
+      - run: node scripts/test-wasm-font-packs.mjs
 
   fuzz:
     runs-on: ubuntu-latest

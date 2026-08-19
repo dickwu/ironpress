@@ -467,51 +467,18 @@ pub(crate) fn load_unicode_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
     });
     if let Some(font) = cached {
         fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font.clone());
-    } else {
-        // In WASM builds there are no system fonts available via fontdb —
-        // fall back to a bundled Noto Sans CJK subset so Chinese/Japanese
-        // kanji + kana at least render. Not bundled in native builds to keep
-        // the CLI binary small (users have access to real system CJK fonts).
-        #[cfg(feature = "wasm")]
-        load_bundled_cjk_font(fonts);
-    }
-}
-
-/// Bundled Noto Sans CJK subset (~1.4 MB TTF) — covers CJK Unified Ideographs
-/// U+4E00-5FFF (most common ~4k Chinese characters / Japanese kanji),
-/// Hiragana, Katakana, CJK Symbols/Punctuation, and Halfwidth/Fullwidth
-/// Forms. Korean Hangul is **not** included to stay within WASM bundle
-/// size budget; users needing Hangul should register a custom font via
-/// `HtmlConverter::add_font`.
-///
-/// Stored as glyf-based TTF (not CFF-based OTF) so ironpress's built-in
-/// TTF parser can decode it.
-#[cfg(feature = "wasm")]
-fn load_bundled_cjk_font(fonts: &mut HashMap<String, TtfFont>) {
-    static CJK_SUBSET_DATA: &[u8] = include_bytes!("../assets/NotoSansCJK-Subset.ttf");
-    if let Ok(font) = crate::parser::ttf::parse_ttf(CJK_SUBSET_DATA.to_vec()) {
-        fonts.insert(UNICODE_FALLBACK_KEY.to_string(), font);
     }
 }
 
 /// Load an emoji font for emoji character rendering.
-/// Prefers the bundled Noto Emoji (monochrome, vector outlines, 295KB)
-/// which works everywhere. Falls back to system fonts only if the
-/// bundled font fails to parse.
+///
+/// Native builds may use an installed outline font. WASM callers install the
+/// optional `emoji` pack because browsers do not expose host font files.
 pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
     if fonts.contains_key(EMOJI_FALLBACK_KEY) {
         return;
     }
 
-    // Always use the bundled Noto Emoji first — it has vector outlines
-    // that our TTF parser can read. System emoji fonts (Apple Color Emoji,
-    // Noto Color Emoji) use bitmap tables (CBDT/CBLC) which we can't parse.
-    load_bundled_emoji_font(fonts);
-    if fonts.contains_key(EMOJI_FALLBACK_KEY) {
-        return;
-    }
-
-    // Fallback: try system fonts (may be bitmap-only)
     let db = system_fontdb();
     for family in EMOJI_FALLBACK_FAMILIES {
         let query = SystemFontQuery::new(family, FontVariant::new(false, false));
@@ -520,21 +487,6 @@ pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
             fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font);
             return;
         }
-    }
-}
-
-/// Load the bundled Noto Emoji font (monochrome, vector outlines).
-/// This ensures emoji rendering works on all platforms without requiring
-/// a system emoji font to be installed.
-fn load_bundled_emoji_font(fonts: &mut HashMap<String, TtfFont>) {
-    static NOTO_EMOJI_DATA: &[u8] = include_bytes!("../assets/NotoEmoji-Regular.ttf");
-    // Parse the 295KB bundled emoji font once, not on every conversion.
-    static EMOJI_FONT_CACHE: OnceLock<Option<TtfFont>> = OnceLock::new();
-
-    let cached = EMOJI_FONT_CACHE
-        .get_or_init(|| crate::parser::ttf::parse_ttf(NOTO_EMOJI_DATA.to_vec()).ok());
-    if let Some(font) = cached {
-        fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font.clone());
     }
 }
 

@@ -128,7 +128,14 @@ pub(crate) fn measure_text_width_with_shaping(
         return None;
     }
 
-    shape_with_fallback_font(text, font_size, shaping, fonts).map(|(shaped, _, _)| shaped.width)
+    shape_with_fallback_font(
+        text,
+        font_size,
+        shaping,
+        crate::font_pack::FontLocale::Unspecified,
+        fonts,
+    )
+    .map(|(shaped, _, _)| shaped.width)
 }
 
 pub(crate) fn custom_font_line_height(
@@ -218,19 +225,14 @@ fn resolve_upright_vertical_font<'a>(
         }
     }
 
-    [
-        crate::system_fonts::ARABIC_FALLBACK_KEY,
-        crate::system_fonts::MULTILINGUAL_FALLBACK_KEY,
-        crate::system_fonts::EMOJI_FALLBACK_KEY,
-        crate::system_fonts::UNICODE_FALLBACK_KEY,
-    ]
-    .into_iter()
-    .find_map(|key| {
-        fonts
-            .get_key_value(key)
-            .filter(|(_, font)| font_covers_text(font, &run.text))
-            .map(|(key, font)| (key.as_str(), font))
-    })
+    crate::font_pack::fallback_keys(run.metadata.font_locale)
+        .into_iter()
+        .find_map(|key| {
+            fonts
+                .get_key_value(key)
+                .filter(|(_, font)| font_covers_text(font, &run.text))
+                .map(|(key, font)| (key.as_str(), font))
+        })
 }
 
 fn font_covers_text(font: &TtfFont, text: &str) -> bool {
@@ -239,6 +241,51 @@ fn font_covers_text(font: &TtfFont, text: &str) -> bool {
             .get(&(ch as u32))
             .is_some_and(|glyph_id| *glyph_id != 0)
     })
+}
+
+/// Faces authored for one resolved CSS family and style.
+///
+/// Preparing this once keeps grapheme-level fallback from repeatedly scanning
+/// the registry. A family may contain several `@font-face` rules partitioned by
+/// `unicode-range`; every such face retains priority over optional packs.
+pub(crate) struct AuthoredFontFaces<'a> {
+    /// Custom faces, or `None` when coverage follows PDF WinAnsi encoding.
+    custom: Option<Vec<&'a TtfFont>>,
+}
+
+impl<'a> AuthoredFontFaces<'a> {
+    /// Resolve all authored faces that may serve the requested family variant.
+    pub(crate) fn resolve(
+        font_family: &FontFamily,
+        bold: bool,
+        italic: bool,
+        fonts: &'a HashMap<String, TtfFont>,
+    ) -> Self {
+        let FontFamily::Custom(name) = font_family else {
+            return Self { custom: None };
+        };
+
+        let mut custom = Vec::new();
+        if let Some((_, primary)) = resolve_custom_font(font_family, bold, italic, fonts) {
+            custom.push(primary);
+        }
+        custom.extend(
+            font_face_range_fonts(fonts, name, bold, italic)
+                .into_iter()
+                .map(|(_, font)| font),
+        );
+        Self {
+            custom: Some(custom),
+        }
+    }
+
+    /// Return whether one authored face covers the complete text unit.
+    pub(crate) fn covers(&self, text: &str) -> bool {
+        self.custom.as_ref().map_or_else(
+            || crate::render::pdf::is_winansi_encodable(text),
+            |fonts| fonts.iter().any(|font| font_covers_text(font, text)),
+        )
+    }
 }
 
 /// Shape arbitrary text with an explicit `TtfFont` face.
@@ -387,7 +434,13 @@ pub(crate) fn shape_with_unicode_fallback<'a>(
     } else if crate::render::pdf::is_winansi_encodable(&run.text) {
         return None;
     }
-    shape_with_fallback_font(&run.text, run.font_size, run.shaping, fonts)
+    shape_with_fallback_font(
+        &run.text,
+        run.font_size,
+        run.shaping,
+        run.metadata.font_locale,
+        fonts,
+    )
 }
 
 /// Shape text through the registered fallback chain, accepting only a face that
@@ -398,14 +451,10 @@ fn shape_with_fallback_font<'a>(
     text: &str,
     font_size: f32,
     shaping: TextShaping,
+    locale: crate::font_pack::FontLocale,
     fonts: &'a HashMap<String, TtfFont>,
 ) -> Option<(ShapedRun, &'a str, &'a TtfFont)> {
-    let fallback_keys = [
-        crate::system_fonts::ARABIC_FALLBACK_KEY,
-        crate::system_fonts::MULTILINGUAL_FALLBACK_KEY,
-        crate::system_fonts::EMOJI_FALLBACK_KEY,
-        crate::system_fonts::UNICODE_FALLBACK_KEY,
-    ];
+    let fallback_keys = crate::font_pack::fallback_keys(locale);
     for fallback_key in fallback_keys {
         if let Some((key, font)) = fonts.get_key_value(fallback_key)
             && let Some(shaped) = shape_text_with_font(text, font_size, font, shaping)

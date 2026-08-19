@@ -78,7 +78,7 @@ pub(super) fn inline_background_y_and_height(
     custom_fonts: &HashMap<String, TtfFont>,
 ) -> (f32, f32) {
     let line_height = crate::fonts::font_line_metrics(
-        &run.font_family,
+        run.css_font_family(),
         run.font_size,
         run.bold,
         run.font_style.is_slanted(),
@@ -86,7 +86,7 @@ pub(super) fn inline_background_y_and_height(
     )
     .normal_line_height();
     let strut = crate::layout::text::LineStrut::from_font(
-        &run.font_family,
+        run.css_font_family(),
         run.font_size,
         run.bold,
         run.font_style.is_slanted(),
@@ -125,7 +125,7 @@ pub(crate) fn emphasis_mark_run(run: &TextRun) -> TextRun {
         bold: run.bold,
         font_style: run.font_style,
         color: run.color,
-        font_family: run.font_family.clone(),
+        font_family: run.css_font_family().clone(),
         font_synthesis: run.font_synthesis,
         shaping: run.shaping,
         ..Default::default()

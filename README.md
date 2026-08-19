@@ -37,7 +37,7 @@ or WebAssembly.
 
 - **Simple deployment:** one library or binary, with no browser runtime to install or manage.
 - **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
-- **Production typography:** custom font embedding and subsetting, Unicode/CJK fallback, SVG, and LaTeX-style math.
+- **Production typography:** font subsetting, core Unicode coverage, optional regional CJK/emoji packs, SVG, and math.
 - **Multiple runtimes:** the same Rust core ships to Rust, Python, Ruby, and WebAssembly.
 - **Defensive defaults:** HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
 
@@ -123,7 +123,7 @@ does not change page geometry. The CLI exposes the same controls through
 |------|-----------|---------|
 | **HTML** | 50+ elements: headings, tables, lists, forms, media, `<img>`, inline `<svg>` | [Layout Engine](../../wiki/Layout-Engine) |
 | **CSS** | Flexbox, grid, multi-column, `calc()`, variables, `@media`, `@page`, `@font-face` | [CSS Support](../../wiki/CSS-Support) |
-| **Fonts** | Base-14 PDF fonts, custom TTF embedding with subsetting, system font discovery, Unicode/CJK fallback | [Font System](../../wiki/Font-System) |
+| **Fonts** | Core Unicode fonts, custom TTF subsetting, system discovery, optional CJK/emoji packs | [Font System](../../wiki/Font-System) |
 | **Math** | LaTeX via `$...$` / `$$...$$`: fractions, roots, matrices, Greek, operators | [Math Engine](../../wiki/Math-Engine) |
 | **SVG** | Vector rendering: path, shapes, gradients, transforms, clip paths, `viewBox` | [Layout Engine](../../wiki/Layout-Engine) |
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
@@ -140,7 +140,31 @@ let pdf = HtmlConverter::new()
     .unwrap();
 ```
 
-Fonts are shaped with [rustybuzz](https://crates.io/crates/rustybuzz), subset to used glyphs only, and embedded as CIDFontType2. Characters outside WinAnsi (CJK, Arabic, emoji) are rendered via automatic Unicode font fallback. See [Font System](../../wiki/Font-System).
+Fonts are shaped with [rustybuzz](https://crates.io/crates/rustybuzz), subset to used
+glyphs only, and embedded as CIDFontType2. Core includes Latin, Arabic, Hebrew,
+and common Unicode coverage. Native builds may also discover system fonts.
+
+Full regional CJK and monochrome emoji coverage is distributed as five optional
+packs: `cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`. The renderer never
+downloads them. Load only the packs your application needs:
+
+```rust
+use ironpress::{FontPack, FontPackKind, HtmlConverter};
+
+let japanese = FontPack::parse(
+    FontPackKind::CjkJapanese,
+    std::fs::read("ironpress-font-cjk-jp.ttf").unwrap(),
+)
+.unwrap();
+let pdf = HtmlConverter::new()
+    .add_font_pack(japanese)
+    .convert("<p lang='ja'>日本語</p>")
+    .unwrap();
+```
+
+Use `lang` on the document or a nested element to select the correct regional
+CJK glyph forms. See [Font System](../../wiki/Font-System) and
+[font-packs/README.md](font-packs/README.md).
 
 ## Math
 

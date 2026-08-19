@@ -3278,6 +3278,7 @@ pub struct ComputedStyle {
     pub font_size_adjust: FontSizeAdjust,
     pub font_family: FontFamily,
     pub font_stack: FontStack,
+    pub(crate) font_locale: crate::font_pack::FontLocale,
     pub color: Color,
     pub background_color: Option<Color>,
     pub margin: EdgeSizes,
@@ -3709,6 +3710,7 @@ impl Default for ComputedStyle {
             font_size_adjust: FontSizeAdjust::default(),
             font_family: FontFamily::TimesRoman,
             font_stack: FontStack::default(),
+            font_locale: crate::font_pack::FontLocale::Unspecified,
             color: Color::BLACK,
             background_color: None,
             margin: EdgeSizes::default(),
@@ -4142,6 +4144,13 @@ fn compute_style_with_context_and_percentage_basis_impl(
     font_metrics: FontMetrics<'_>,
 ) -> ComputedStyle {
     let mut style = parent.clone();
+    style.font_locale = crate::font_pack::FontLocale::from_html_lang(
+        attributes
+            .get("lang")
+            .or_else(|| attributes.get("xml:lang"))
+            .map(String::as_str),
+        parent.font_locale,
+    );
     style.text_decorations = TextDecorations::for_descendant(
         &parent.text_decorations,
         parent.color,
