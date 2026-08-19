@@ -3,9 +3,10 @@
 
 <img width="188" alt="4" src="https://github.com/user-attachments/assets/e8b569e6-e74c-4c0f-9e84-05cf37fae3ae" />
 
-# Ironpress
+# IronPress
 
-Pure rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies.
+Fast, in-process HTML/CSS/Markdown to PDF rendering in pure Rust. No browser,
+subprocess, or system dependencies.
 
 
 [![Crates.io](https://img.shields.io/crates/v/ironpress.svg)](https://crates.io/crates/ironpress)
@@ -20,13 +21,42 @@ Pure rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Downloads](https://img.shields.io/crates/d/ironpress.svg)](https://crates.io/crates/ironpress)
 [![WASM](https://img.shields.io/badge/wasm-ready-blueviolet.svg)](../../wiki/WASM-Playground)
-[![Playground](https://img.shields.io/badge/try_it-playground-blueviolet.svg)](https://gastongouron.github.io/ironpress/)
+[![Playground](https://img.shields.io/badge/try_it-playground-blueviolet.svg)](https://gastongouron.github.io/ironpress/playground/)
 [![Parity report](https://img.shields.io/badge/parity-report-ff69b4.svg)](https://gastongouron.github.io/ironpress/parity/reports/)
 
-**[Try it in your browser](https://gastongouron.github.io/ironpress/)** | **[HTML parity report](https://gastongouron.github.io/ironpress/parity/reports/)** | **[Wiki](../../wiki)**
+**[Website](https://gastongouron.github.io/ironpress/)** | **[Playground](https://gastongouron.github.io/ironpress/playground/)** | **[HTML-to-PDF guide](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/)** | **[Parity report](https://gastongouron.github.io/ironpress/parity/reports/)** | **[Wiki](../../wiki)**
 
 </div>
 
+IronPress turns HTML, CSS, or Markdown into PDF bytes inside your application.
+Its rendering engine handles document layout, font shaping, SVG, math, and PDF
+serialization without launching Chrome. Use it from Rust, the CLI, Python, Ruby,
+or WebAssembly.
+
+## Why IronPress?
+
+- **Simple deployment** — one library or binary, with no browser runtime to install or manage.
+- **Document-focused layout** — flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
+- **Production typography** — custom font embedding and subsetting, Unicode/CJK fallback, SVG, and LaTeX-style math.
+- **Multiple runtimes** — the same Rust core ships to Rust, Python, Ruby, and WebAssembly.
+- **Defensive defaults** — HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
+
+## Quick start
+
+```rust
+use ironpress::html_to_pdf;
+
+let pdf = html_to_pdf("<h1>Hello</h1><p>World</p>").unwrap();
+std::fs::write("output.pdf", pdf).unwrap();
+```
+
+```rust
+let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
+```
+
+See the practical guide to [HTML-to-PDF rendering in Rust without Headless
+Chrome](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/), or
+paste a document into the [browser playground](https://gastongouron.github.io/ironpress/playground/).
 
 ## Performance
 
@@ -49,19 +79,6 @@ page-throughput claim. Reproduce the measurements with:
 
 ```bash
 cargo bench --bench conversion
-```
-
-## Quick start
-
-```rust
-use ironpress::html_to_pdf;
-
-let pdf = html_to_pdf("<h1>Hello</h1><p>World</p>").unwrap();
-std::fs::write("output.pdf", pdf).unwrap();
-```
-
-```rust
-let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
 ```
 
 ## CLI
