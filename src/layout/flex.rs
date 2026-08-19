@@ -2345,7 +2345,14 @@ pub(crate) fn layout_flex_container(
         // width and inflate by padding/border, capped at the container — this
         // overrides the explicit `width` that `has_explicit_width` reflects.
         // When no explicit width/flex-basis and flex-grow is 0, measure the
-        // natural (intrinsic) content width so the item shrinks to fit.
+        // natural (intrinsic) content width so the item shrinks to fit. A
+        // stretched column item is the exception: its used cross size is the
+        // container width, so wrapping must use that width from the outset.
+        let stretches_column_cross_axis = !style.flex_direction.is_row()
+            && !has_explicit_width
+            && (item_align_self == AlignSelf::Stretch
+                || (item_align_self == AlignSelf::Auto
+                    && style.align_items == AlignItems::Stretch));
         let mut intrinsic_text_wrap_width = None;
         let child_w = if let Some(content_basis) = content_basis.filter(|_| !runs.is_empty()) {
             let natural_text_w = if content_basis == IntrinsicWidthKeyword::MinContent {
@@ -2358,7 +2365,11 @@ pub(crate) fn layout_flex_container(
             let intrinsic = FlexIntrinsicWidth::from_content(&child_style, natural_text_w);
             intrinsic_text_wrap_width = Some(intrinsic.text_wrap.min(width_for_percentages));
             intrinsic.paint.min(width_for_percentages)
-        } else if !has_explicit_width && child_style.flex_grow == 0.0 && !runs.is_empty() {
+        } else if !stretches_column_cross_axis
+            && !has_explicit_width
+            && child_style.flex_grow == 0.0
+            && !runs.is_empty()
+        {
             let natural_text_w = measure_runs_width(&runs, env.fonts);
             let pad_h = child_style.padding.horizontal();
             let border_h = child_style.border.horizontal_width();
