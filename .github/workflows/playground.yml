@@ -1,4 +1,4 @@
-name: Deploy Playground
+name: Deploy Website
 
 on:
   workflow_dispatch:
@@ -6,11 +6,13 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'site/**'
       - 'playground/**'
       - 'tests/parity/**'
       - 'tests/parity_support/**'
       - 'tests/feature_parity.rs'
       - 'scripts/parity*.sh'
+      - 'scripts/check-site.mjs'
       - 'Cargo.toml'
       - '.github/workflows/playground.yml'
 
@@ -32,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Validate static site
+        run: node scripts/check-site.mjs
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -51,10 +56,7 @@ jobs:
           scripts/parity-install-runtime.sh
 
       - name: Build playground
-        run: |
-          wasm-pack build --target web --features wasm --no-default-features
-          cp pkg/ironpress.js playground/
-          cp pkg/ironpress_bg.wasm playground/
+        run: wasm-pack build --target web --features wasm --no-default-features
 
       - name: Build feature parity report
         env:
@@ -62,16 +64,20 @@ jobs:
           PARITY_PDFTOPPM: /usr/bin/pdftoppm
         run: scripts/parity.sh
 
-      - name: Stage feature parity report
+      - name: Stage website
         run: |
-          mkdir -p playground/parity
-          cp -R tests/parity/reports playground/parity/
-          cp -R tests/parity/refs playground/parity/
-          cp -R tests/parity/out playground/parity/
+          mkdir -p site-build/playground site-build/parity
+          cp -R site/. site-build/
+          cp playground/index.html site-build/playground/
+          cp pkg/ironpress.js pkg/ironpress_bg.wasm site-build/playground/
+          cp playground/parity/index.html site-build/parity/
+          cp -R tests/parity/reports site-build/parity/
+          cp -R tests/parity/refs site-build/parity/
+          cp -R tests/parity/out site-build/parity/
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: playground
+          path: site-build
       - id: deployment
         uses: actions/deploy-pages@v4
