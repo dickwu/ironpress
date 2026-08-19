@@ -129,7 +129,7 @@
   </main>
 
   <script type="module">
-    import init, { htmlToPdf, markdownToPdf } from './ironpress.js';
+    import init, { HtmlConverter } from './ironpress.js';
 
     const input = document.getElementById('input');
     const preview = document.getElementById('preview');
@@ -142,6 +142,15 @@
     const examplesSelect = document.getElementById('examples');
 
     let lastBlob = null;
+    let selectedPacks = [];
+
+    const PACK_ARTIFACTS = {
+      'cjk-jp': 'ironpress-font-cjk-jp.ttf',
+      'cjk-kr': 'ironpress-font-cjk-kr.ttf',
+      'cjk-sc': 'ironpress-font-cjk-sc.ttf',
+      'cjk-tc': 'ironpress-font-cjk-tc.ttf',
+      emoji: 'ironpress-font-emoji.ttf',
+    };
 
     const EXAMPLES = {
 simple: `<h1>Hello, ironpress!</h1>
@@ -360,10 +369,14 @@ unicode: `<html>
 
   <h2>CJK Characters</h2>
   <div class="sample large">
-    <p>Chinese: \u4F60\u597D\u4E16\u754C (Hello World)</p>
-    <p>Japanese: \u3053\u3093\u306B\u3061\u306F</p>
-    <p>Korean: \uC548\uB155\uD558\uC138\uC694</p>
+    <p lang="zh-Hans">Simplified Chinese: \u4F60\u597D\u4E16\u754C</p>
+    <p lang="zh-Hant">Traditional Chinese: \u4F60\u597D\u4E16\u754C</p>
+    <p lang="ja">Japanese: \u3053\u3093\u306B\u3061\u306F</p>
+    <p lang="ko">Korean: \uC548\uB155\uD558\uC138\uC694</p>
   </div>
+
+  <h2>Emoji</h2>
+  <div class="sample large">\u{1F600} \u{1F680} \u{1F30D} \u{2764}\u{FE0F}</div>
 
   <h2>Arabic & Hebrew</h2>
   <div class="sample" style="font-size: 18px;">
@@ -409,6 +422,24 @@ unicode: `<html>
 
     // Init WASM
     await init();
+    const converter = new HtmlConverter();
+    const loadedPacks = new Set();
+
+    async function loadFontPacks(packs) {
+      const missing = packs.filter((pack) => !loadedPacks.has(pack));
+      if (missing.length === 0) return;
+      status.textContent = `Loading ${missing.join(', ')}...`;
+      const downloads = await Promise.all(missing.map(async (pack) => {
+        const response = await fetch(`./font-packs/${PACK_ARTIFACTS[pack]}`);
+        if (!response.ok) throw new Error(`Could not load ${pack} (${response.status})`);
+        return [pack, new Uint8Array(await response.arrayBuffer())];
+      }));
+      for (const [pack, bytes] of downloads) {
+        converter.addFontPack(pack, bytes);
+        loadedPacks.add(pack);
+      }
+    }
+
     status.textContent = 'Ready';
     convertBtn.disabled = false;
     input.value = EXAMPLES.simple;
@@ -419,12 +450,15 @@ unicode: `<html>
       if (key && EXAMPLES[key]) {
         input.value = EXAMPLES[key];
         modeSelect.value = (key === 'markdown' || key === 'math') ? 'markdown' : 'html';
+        selectedPacks = key === 'unicode'
+          ? ['cjk-jp', 'cjk-kr', 'cjk-sc', 'cjk-tc', 'emoji']
+          : [];
         examplesSelect.value = '';
       }
     });
 
     // Convert
-    convertBtn.addEventListener('click', () => {
+    convertBtn.addEventListener('click', async () => {
       const text = input.value.trim();
       if (!text) return;
 
@@ -432,31 +466,32 @@ unicode: `<html>
       convertBtn.disabled = true;
       status.textContent = 'Converting...';
 
-      setTimeout(() => {
-        try {
-          const start = performance.now();
-          const pdfBytes = modeSelect.value === 'markdown'
-            ? markdownToPdf(text)
-            : htmlToPdf(text);
-          const elapsed = (performance.now() - start).toFixed(1);
+      try {
+        await new Promise(requestAnimationFrame);
+        await loadFontPacks(selectedPacks);
+        status.textContent = 'Converting...';
+        const start = performance.now();
+        const pdfBytes = modeSelect.value === 'markdown'
+          ? converter.markdownToPdf(text)
+          : converter.htmlToPdf(text);
+        const elapsed = (performance.now() - start).toFixed(1);
 
-          lastBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-          const url = URL.createObjectURL(lastBlob);
+        lastBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(lastBlob);
 
-          preview.src = url;
-          preview.style.display = 'block';
-          placeholder.style.display = 'none';
-          downloadBtn.style.display = '';
+        preview.src = url;
+        preview.style.display = 'block';
+        placeholder.style.display = 'none';
+        downloadBtn.style.display = '';
 
-          status.textContent = `${(pdfBytes.length / 1024).toFixed(1)} KB in ${elapsed} ms`;
-        } catch (e) {
-          status.textContent = `Error: ${e.message}`;
-          console.error(e);
-        } finally {
-          loading.classList.remove('active');
-          convertBtn.disabled = false;
-        }
-      }, 10);
+        status.textContent = `${(pdfBytes.length / 1024).toFixed(1)} KB in ${elapsed} ms`;
+      } catch (e) {
+        status.textContent = `Error: ${e.message}`;
+        console.error(e);
+      } finally {
+        loading.classList.remove('active');
+        convertBtn.disabled = false;
+      }
     });
 
     // Download

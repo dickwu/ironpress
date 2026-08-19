@@ -1,4 +1,6 @@
 /target
+/dist/
+/playground/font-packs/
 Cargo.lock
 .claude/
 .DS_Store

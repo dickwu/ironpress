@@ -10,6 +10,8 @@ use crate::error::IronpressError;
 pub struct ParseResult {
     pub nodes: Vec<DomNode>,
     pub stylesheets: Vec<String>,
+    /// Language inherited by body content after structural elements are removed.
+    pub(crate) font_locale: crate::font_pack::FontLocale,
 }
 
 /// Parse an HTML string into an internal DOM tree.
@@ -27,8 +29,51 @@ pub fn parse_html_with_styles(html: &str) -> Result<ParseResult, IronpressError>
         .map_err(|e| IronpressError::ParseError(e.to_string()))?;
 
     let mut stylesheets = Vec::new();
+    let font_locale =
+        document_font_locale(&dom.document, crate::font_pack::FontLocale::Unspecified)
+            .unwrap_or_default();
     let nodes = convert_handle(&dom.document, &mut stylesheets);
-    Ok(ParseResult { nodes, stylesheets })
+    Ok(ParseResult {
+        nodes,
+        stylesheets,
+        font_locale,
+    })
+}
+
+/// Retain `html`/`body` language context before those structural nodes unwrap.
+fn document_font_locale(
+    handle: &Handle,
+    inherited: crate::font_pack::FontLocale,
+) -> Option<crate::font_pack::FontLocale> {
+    match &handle.data {
+        NodeData::Document => handle
+            .children
+            .borrow()
+            .iter()
+            .find_map(|child| document_font_locale(child, inherited)),
+        NodeData::Element { name, attrs, .. } => {
+            let tag = HtmlTag::from_tag_name(name.local.as_ref());
+            if !matches!(tag, HtmlTag::Html | HtmlTag::Body) {
+                return None;
+            }
+            let attributes = attrs.borrow();
+            let language = attributes
+                .iter()
+                .find(|attribute| attribute.name.local.as_ref() == "lang")
+                .map(|attribute| attribute.value.as_ref());
+            let locale = crate::font_pack::FontLocale::from_html_lang(language, inherited);
+            if tag == HtmlTag::Body {
+                return Some(locale);
+            }
+            handle
+                .children
+                .borrow()
+                .iter()
+                .find_map(|child| document_font_locale(child, locale))
+                .or(Some(locale))
+        }
+        _ => None,
+    }
 }
 
 fn convert_handle(handle: &Handle, stylesheets: &mut Vec<String>) -> Vec<DomNode> {
@@ -179,6 +224,18 @@ mod tests {
     fn unwrap_html_body() {
         let nodes = parse_html("<html><body><h1>Test</h1><p>Text</p></body></html>").unwrap();
         assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn document_language_survives_unwrapped_html_and_body_elements() {
+        let japanese =
+            parse_html_with_styles("<html lang='ja'><body><p>第</p></body></html>").unwrap();
+        let korean =
+            parse_html_with_styles("<html lang='ja'><body lang='ko'><p>한</p></body></html>")
+                .unwrap();
+
+        assert_eq!(japanese.font_locale, crate::font_pack::FontLocale::Japanese);
+        assert_eq!(korean.font_locale, crate::font_pack::FontLocale::Korean);
     }
 
     #[test]

@@ -13,6 +13,9 @@ on:
       - 'tests/feature_parity.rs'
       - 'scripts/parity*.sh'
       - 'scripts/check-site.mjs'
+      - 'scripts/build-font-packs.sh'
+      - 'scripts/test-wasm-font-packs.mjs'
+      - 'font-packs/**'
       - 'Cargo.toml'
       - '.github/workflows/playground.yml'
 
@@ -41,6 +44,10 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.1'
+
       - uses: actions/cache@v6
         with:
           path: |
@@ -58,6 +65,12 @@ jobs:
       - name: Build playground
         run: wasm-pack build --target web --features wasm --no-default-features
 
+      - name: Build optional font packs
+        run: scripts/build-font-packs.sh dist/font-packs
+
+      - name: Validate published font packs through WASM
+        run: node scripts/test-wasm-font-packs.mjs dist/font-packs
+
       - name: Build feature parity report
         env:
           FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
@@ -70,6 +83,7 @@ jobs:
           cp -R site/. site-build/
           cp playground/index.html site-build/playground/
           cp pkg/ironpress.js pkg/ironpress_bg.wasm site-build/playground/
+          cp -R dist/font-packs site-build/playground/
           cp playground/parity/index.html site-build/parity/
           cp -R tests/parity/reports site-build/parity/
           cp -R tests/parity/refs site-build/parity/

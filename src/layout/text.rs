@@ -411,6 +411,7 @@ fn styled_text_run(
 
 pub(crate) fn text_run_metadata(style: &ComputedStyle) -> crate::layout::engine::TextRunMetadata {
     crate::layout::engine::TextRunMetadata {
+        font_locale: style.font_locale,
         emphasis: crate::layout::text_emphasis::TextEmphasis {
             mark: style.text_emphasis_mark,
             color: style.text_emphasis_color,
@@ -3123,88 +3124,63 @@ fn push_styled_run(
 // push_text_run_with_fallback
 // ---------------------------------------------------------------------------
 
-/// Push a text run, splitting it into standard-font and fallback-font segments
-/// when the run uses a standard PDF font and contains characters outside
-/// WinAnsiEncoding.
+/// Split a text run where grapheme clusters resolve to different font families.
 ///
-/// Characters that cannot be encoded in WinAnsi (CJK, Arabic, emoji, etc.) are
-/// placed into separate runs that reference the `__unicode_fallback` custom font,
-/// which is rendered through the CIDFontType2/Identity-H pipeline.
+/// Authored faces retain priority. Missing clusters use the registered fallback
+/// chain for the inherited language, keeping layout measurement and PDF paint on
+/// the same face.
 pub(crate) fn push_text_run_with_fallback(
     run: TextRun,
     runs: &mut Vec<TextRun>,
     fonts: &HashMap<String, TtfFont>,
 ) {
-    let is_standard_font = matches!(
-        run.font_family,
-        FontFamily::Helvetica | FontFamily::TimesRoman | FontFamily::Courier
+    if run.text.is_empty() {
+        runs.push(run);
+        return;
+    }
+
+    let fallback_fonts = crate::font_pack::FontFallbacks::new(run.metadata.font_locale, fonts);
+    if fallback_fonts.is_empty() {
+        runs.push(run);
+        return;
+    }
+
+    let authored_faces = crate::text::AuthoredFontFaces::resolve(
+        &run.font_family,
+        run.bold,
+        run.font_style.is_slanted(),
+        fonts,
     );
-
-    // If using a custom font or there's no fallback loaded, push as-is.
-    if !is_standard_font || !fonts.contains_key(crate::system_fonts::UNICODE_FALLBACK_KEY) {
-        runs.push(run);
-        return;
-    }
-
-    // If everything is WinAnsi-encodable, no splitting needed.
-    if crate::render::pdf::is_winansi_encodable(&run.text) {
-        runs.push(run);
-        return;
-    }
-
-    // Split text into contiguous segments by font category:
-    // - WinAnsi: standard PDF font (Helvetica, etc.)
-    // - Emoji: emoji fallback font (Apple Color Emoji, Noto Color Emoji)
-    // - Unicode: unicode fallback font (Noto Sans CJK, etc.)
-    let unicode_family = FontFamily::Custom(crate::system_fonts::UNICODE_FALLBACK_KEY.to_string());
-    let has_emoji_font = fonts.contains_key(crate::system_fonts::EMOJI_FALLBACK_KEY);
-    let emoji_family = FontFamily::Custom(crate::system_fonts::EMOJI_FALLBACK_KEY.to_string());
-
-    #[derive(PartialEq, Clone, Copy)]
-    enum CharCategory {
-        WinAnsi,
-        Emoji,
-        Unicode,
-    }
-
-    let categorize = |ch: char| -> CharCategory {
-        if crate::render::pdf::is_winansi_char(ch) {
-            CharCategory::WinAnsi
-        } else if has_emoji_font && crate::fonts::is_emoji_char(ch as u32) {
-            CharCategory::Emoji
-        } else {
-            CharCategory::Unicode
+    let family_for = |cluster: &str| -> FontFamily {
+        if authored_faces.covers(cluster) {
+            return run.font_family.clone();
         }
-    };
-
-    let family_for = |cat: CharCategory| -> FontFamily {
-        match cat {
-            CharCategory::WinAnsi => run.font_family.clone(),
-            CharCategory::Emoji => emoji_family.clone(),
-            CharCategory::Unicode => unicode_family.clone(),
-        }
+        fallback_fonts
+            .resolve_cluster(cluster)
+            .map(|key| FontFamily::Custom(key.to_string()))
+            .unwrap_or_else(|| run.font_family.clone())
     };
 
     let mut current = String::new();
-    let mut current_cat = CharCategory::WinAnsi;
+    let mut current_family = run.font_family.clone();
 
-    for ch in run.text.chars() {
-        let cat = categorize(ch);
-        if cat != current_cat && !current.is_empty() {
+    for cluster in unicode_segmentation::UnicodeSegmentation::graphemes(run.text.as_str(), true) {
+        let family = family_for(cluster);
+        if family != current_family && !current.is_empty() {
             runs.push(TextRun {
                 text: std::mem::take(&mut current),
-                font_family: family_for(current_cat),
+                font_family: current_family,
                 ..run.clone()
             });
         }
-        current_cat = cat;
-        current.push(ch);
+        current_family = family;
+        current.push_str(cluster);
     }
 
     if !current.is_empty() {
         runs.push(TextRun {
             text: current,
-            font_family: family_for(current_cat),
+            font_family: current_family,
             ..run
         });
     }
@@ -4312,6 +4288,96 @@ mod indent_tests {
         .expect("ParitySans test font");
         let font = crate::parser::ttf::parse_ttf(bytes).expect("valid ParitySans TTF");
         HashMap::from([("paritysans".to_string(), font)])
+    }
+
+    fn parity_font(path: &str) -> TtfFont {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/parity/fonts")
+                .join(path),
+        )
+        .expect("parity test font");
+        crate::parser::ttf::parse_ttf(bytes).expect("valid parity TTF")
+    }
+
+    #[test]
+    fn fallback_splitting_resolves_mixed_text_by_grapheme_cluster() {
+        let japanese = crate::parser::ttf::parse_ttf(
+            include_bytes!("../../tests/fonts/IronpressCjkVertical.ttf").to_vec(),
+        )
+        .expect("valid Japanese fixture font");
+        let emoji = crate::parser::ttf::parse_ttf(
+            include_bytes!("../../tests/fonts/NotoEmoji-TestSubset.ttf").to_vec(),
+        )
+        .expect("valid emoji fixture font");
+        let fonts = HashMap::from([
+            (
+                crate::font_pack::CJK_JAPANESE_FALLBACK_KEY.to_string(),
+                japanese,
+            ),
+            (crate::system_fonts::EMOJI_FALLBACK_KEY.to_string(), emoji),
+        ]);
+        let mut run = plain_run("Hello 第 😀");
+        run.metadata.font_locale = crate::font_pack::FontLocale::Japanese;
+        let mut runs = Vec::new();
+
+        push_text_run_with_fallback(run, &mut runs, &fonts);
+
+        assert_eq!(runs.len(), 4);
+        assert_eq!(runs[0].text, "Hello ");
+        assert_eq!(runs[1].font_family.name(), "__cjk_japanese_fallback");
+        assert_eq!(runs[2].text, " ");
+        assert_eq!(runs[3].font_family.name(), "__emoji_fallback");
+    }
+
+    #[test]
+    fn font_face_unicode_range_precedes_optional_fallback_packs() {
+        let mut range_a = parity_font("ParitySerif.ttf");
+        range_a
+            .cmap
+            .retain(|codepoint, _| *codepoint == u32::from('A'));
+        let mut range_b = parity_font("ParitySans.ttf");
+        range_b
+            .cmap
+            .retain(|codepoint, _| *codepoint == u32::from('B'));
+        let fonts = HashMap::from([
+            ("rangepick".to_string(), range_a),
+            ("rangepick__fontface_1".to_string(), range_b),
+            (
+                crate::system_fonts::UNICODE_FALLBACK_KEY.to_string(),
+                parity_font("ParitySans.ttf"),
+            ),
+        ]);
+        let mut run = plain_run("B");
+        run.font_family = FontFamily::Custom("RangePick".to_string());
+        let mut runs = Vec::new();
+
+        push_text_run_with_fallback(run, &mut runs, &fonts);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].font_family.name(), "RangePick");
+    }
+
+    #[test]
+    fn fallback_splitting_preserves_empty_runs_that_carry_line_geometry() {
+        let fonts = HashMap::from([(
+            crate::system_fonts::UNICODE_FALLBACK_KEY.to_string(),
+            parity_font("ParitySans.ttf"),
+        )]);
+        let mut run = plain_run("");
+        run.inline_box = Some(Box::new(InlineBox {
+            width: 12.0,
+            ..InlineBox::default()
+        }));
+        let mut runs = Vec::new();
+
+        push_text_run_with_fallback(run, &mut runs, &fonts);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].inline_box.as_ref().map(|box_| box_.width),
+            Some(12.0)
+        );
     }
 
     #[test]

@@ -823,6 +823,7 @@ impl InlineBoundaryAdvance {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TextRunMetadata {
+    pub(crate) font_locale: crate::font_pack::FontLocale,
     /// CSS `text-emphasis` state, kept together because its mark, colour,
     /// position, and resolved ruby geometry must travel as one unit.
     pub emphasis: crate::layout::text_emphasis::TextEmphasis,
@@ -1993,6 +1994,7 @@ pub fn layout_with_rules_and_fonts(
         DocumentGeometry::new(page_size, margin),
         rules,
         custom_fonts,
+        crate::font_pack::FontLocale::Unspecified,
         &page_background,
         super::paginate::PaginationContext::new(
             super::page_context::PageGeometryContext::uniform(page_size, margin),
@@ -2012,6 +2014,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     geometry: DocumentGeometry,
     rules: &[CssRule],
     custom_fonts: &HashMap<String, TtfFont>,
+    font_locale: crate::font_pack::FontLocale,
     page_background: &super::page_context::PageBackgroundContext,
     pagination_context: super::paginate::PaginationContext,
     raster_quality: crate::style::raster_quality::RasterQuality,
@@ -2039,6 +2042,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     let html_style = root_styles.html;
     let body_style = root_styles.body;
     let mut parent_style = body_style.clone();
+    parent_style.font_locale = font_locale;
     // The conversion boundary has already projected horizontal body padding
     // into `content_margin`. Direct body children must therefore resolve
     // percentages against that content width itself, not subtract the authored

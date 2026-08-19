@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Rust and WebAssembly converters can install explicit fallback font packs.
+- GitHub releases publish reproducible Japanese, Korean, Simplified Chinese,
+  Traditional Chinese, and monochrome emoji font artifacts.
+- CJK fallback follows inherited HTML `lang` values, including nested language
+  changes, so regional glyph forms are selected intentionally.
+
+### Changed
+
+- Browser/WASM builds no longer embed the incomplete CJK subset or the full
+  emoji face. Applications that need this coverage must load the matching pack.
+- Native builds may still use compatible system fonts when no pack is installed.
+
 ## [1.5.2] — 2026-08-17
 
 ### Changed
