@@ -3,7 +3,7 @@
 
 <img width="188" alt="4" src="https://github.com/user-attachments/assets/e8b569e6-e74c-4c0f-9e84-05cf37fae3ae" />
 
-# IronPress
+# ironpress
 
 Fast, in-process HTML/CSS/Markdown to PDF rendering in pure Rust. No browser,
 subprocess, or system dependencies.
@@ -28,12 +28,12 @@ subprocess, or system dependencies.
 
 </div>
 
-IronPress turns HTML, CSS, or Markdown into PDF bytes inside your application.
+ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
 serialization without launching Chrome. Use it from Rust, the CLI, Python, Ruby,
 or WebAssembly.
 
-## Why IronPress?
+## Why ironpress?
 
 - **Simple deployment:** one library or binary, with no browser runtime to install or manage.
 - **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.

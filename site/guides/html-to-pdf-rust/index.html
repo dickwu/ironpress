@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>HTML to PDF in Rust Without Chrome | IronPress</title>
+    <title>HTML to PDF in Rust Without Chrome | ironpress</title>
     <meta
       name="description"
       content="Learn how to convert HTML and CSS to PDF in Rust without Headless Chrome, when an in-process renderer fits, and the tradeoffs to consider."
@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" href="../../assets/ironpress-logo.png">
     <meta name="theme-color" content="#f3efe4">
     <meta property="og:type" content="article">
-    <meta property="og:site_name" content="IronPress">
+    <meta property="og:site_name" content="ironpress">
     <meta property="og:title" content="HTML to PDF in Rust Without Headless Chrome">
     <meta
       property="og:description"
@@ -29,7 +29,7 @@
       property="og:image"
       content="https://gastongouron.github.io/ironpress/assets/ironpress-logo.png"
     >
-    <meta property="og:image:alt" content="IronPress logo">
+    <meta property="og:image:alt" content="ironpress logo">
     <meta name="twitter:card" content="summary">
     <link rel="stylesheet" href="../../assets/styles.css">
     <link rel="stylesheet" href="../../assets/guide.css">
@@ -46,7 +46,7 @@
         },
         "publisher": {
           "@type": "Organization",
-          "name": "IronPress",
+          "name": "ironpress",
           "url": "https://gastongouron.github.io/ironpress/"
         },
         "mainEntityOfPage": "https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/",
@@ -59,14 +59,14 @@
 
     <header class="site-header">
       <div class="shell header-inner">
-        <a class="brand" href="../../" aria-label="IronPress home">
+        <a class="brand" href="../../" aria-label="ironpress home">
           <img
             src="../../assets/ironpress-logo.png"
-            alt="IronPress"
+            alt="ironpress"
             width="44"
             height="44"
           >
-          <span>IronPress</span>
+          <span>ironpress</span>
         </a>
         <nav aria-label="Primary navigation">
           <a href="../../#features">Features</a>
@@ -119,8 +119,8 @@
               document, ask it to print, and collect the resulting bytes.
             </p>
             <p>
-              That works—and remains the right choice for genuinely browser-like
-              pages—but it also makes a browser part of your production
+              That works and remains the right choice for genuinely browser-like
+              pages, but it also makes a browser part of your production
               architecture. Images need the correct executable and shared
               libraries. Workers need process lifecycle management. Cold starts,
               browser upgrades, timeouts, and untrusted network requests become
@@ -134,7 +134,7 @@
               </p>
             </div>
             <p>
-              <a href="https://github.com/gastongouron/ironpress">IronPress</a>
+              <a href="https://github.com/gastongouron/ironpress">ironpress</a>
               explores the second option. It is a Rust library that parses HTML
               and CSS, computes a paged layout, shapes text, and writes PDF bytes
               in the same process as your application. There is no browser
@@ -144,7 +144,7 @@
             <h2 id="architecture">What “in process” actually means</h2>
             <p>
               Removing the browser does not remove the work. It replaces a broad
-              browser engine with a purpose-built document pipeline. IronPress
+              browser engine with a purpose-built document pipeline. ironpress
               owns five stages:
             </p>
             <ol>
@@ -229,12 +229,12 @@ h2 {
             <p>
               Treat print templates as their own interface. Use physical units
               deliberately, make page breaks part of the design, embed the fonts
-              you need, and test representative long content—not only the tidy
+              you need, and test representative long content, not only the tidy
               one-page example.
             </p>
             <h3>Fonts, SVG, and math</h3>
             <p>
-              IronPress embeds custom TTF fonts with subsetting and uses Unicode
+              ironpress embeds custom TTF fonts with subsetting and uses Unicode
               fallback for scripts outside the base PDF fonts. Inline SVG stays
               vector where supported, and LaTeX-style expressions can be used for
               technical documents. Those features avoid the “everything became
@@ -245,7 +245,7 @@ h2 {
             <p>
               PDF benchmarks are easy to misread. Parsing a fragment is not the
               same as producing final bytes, and pages per second is not the same
-              as documents per second. IronPress benchmarks the complete
+              as documents per second. ironpress benchmarks the complete
               in-process call and reports representative medians.
             </p>
             <table>
@@ -275,7 +275,7 @@ h2 {
               quietly inherit all the access of its host process.
             </p>
             <p>
-              IronPress sanitizes HTML by default. Local files require an
+              ironpress sanitizes HTML by default. Local files require an
               explicit base path or resource root. Remote fetching is a feature
               you opt into, with controls for hosts, address classes, redirects,
               and response size. Production services should still apply network,
@@ -289,7 +289,7 @@ h2 {
               </p>
             </div>
 
-            <h2 id="decision">When to use IronPress—and when not to</h2>
+            <h2 id="decision">When to use ironpress and when not to</h2>
             <p>
               The renderer should match the source document. The following
               decision table is a more useful starting point than treating every
@@ -301,7 +301,7 @@ h2 {
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>IronPress</strong></td>
+                  <td><strong>ironpress</strong></td>
                   <td>Known HTML/CSS templates, embedded conversion, serverless, offline, WASM</td>
                   <td>No JavaScript or exact browser-print parity</td>
                 </tr>
@@ -325,7 +325,7 @@ h2 {
             <p>
               Choose a browser when the source depends on JavaScript, browser
               layout quirks, canvas, or an exact screenshot of a web application.
-              Choose IronPress when you control a print-oriented template and
+              Choose ironpress when you control a print-oriented template and
               want conversion to behave like the rest of your Rust code: a
               library call with explicit inputs, outputs, and policies.
             </p>
@@ -333,7 +333,7 @@ h2 {
             <section class="article-cta" aria-labelledby="article-cta-title">
               <h2 id="article-cta-title">Try your own document</h2>
               <p>
-                The playground runs IronPress through WebAssembly, entirely in
+                The playground runs ironpress through WebAssembly, entirely in
                 your browser. Paste HTML or Markdown and inspect the PDF output.
               </p>
               <a class="button button-primary" href="../../playground/">
@@ -347,14 +347,14 @@ h2 {
 
     <footer class="site-footer">
       <div class="shell footer-inner">
-        <a class="brand" href="../../" aria-label="IronPress home">
+        <a class="brand" href="../../" aria-label="ironpress home">
           <img
             src="../../assets/ironpress-logo.png"
-            alt="IronPress"
+            alt="ironpress"
             width="36"
             height="36"
           >
-          <span>IronPress</span>
+          <span>ironpress</span>
         </a>
         <p>Pure-Rust document rendering. Open source under MIT.</p>
         <nav aria-label="Footer navigation">
