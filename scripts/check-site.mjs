@@ -180,6 +180,18 @@ if (
   report("site/robots.txt", "must advertise the absolute sitemap URL");
 }
 
+const googleVerification = await load("site/google631b721eb1433979.html");
+if (
+  googleVerification !== null &&
+  googleVerification.trim() !==
+    "google-site-verification: google631b721eb1433979.html"
+) {
+  report(
+    "site/google631b721eb1433979.html",
+    "must contain the exact Google Search Console verification token",
+  );
+}
+
 await load("site/assets/styles.css");
 await load("site/assets/guide.css");
 await requireFile("site/assets/ironpress-logo.png");
