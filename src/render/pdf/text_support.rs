@@ -125,7 +125,7 @@ pub(crate) fn emphasis_mark_run(run: &TextRun) -> TextRun {
         bold: run.bold,
         font_style: run.font_style,
         color: run.color,
-        font_family: run.font_family.clone(),
+        font_family: run.css_font_family().clone(),
         font_synthesis: run.font_synthesis,
         shaping: run.shaping,
         ..Default::default()

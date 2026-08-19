@@ -321,6 +321,17 @@ fn pdf_text_uses_typed_synthetic_weight_stroke() {
 }
 
 #[test]
+fn emphasis_mark_uses_the_css_family_after_glyph_fallback() {
+    let run = TextRun {
+        font_family: FontFamily::Helvetica,
+        ..test_text_run("重要")
+    }
+    .with_glyph_fallback(FontFamily::Custom("japanese".to_string()));
+
+    assert_eq!(emphasis_mark_run(&run).font_family, FontFamily::Helvetica);
+}
+
+#[test]
 fn explicit_run_metadata_drives_decoration_and_drop_cap_state() {
     let mut run = test_text_run("Decorated");
     run.border_radii = CornerRadii::circular(6.0);
