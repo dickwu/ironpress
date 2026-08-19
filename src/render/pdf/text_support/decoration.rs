@@ -302,7 +302,7 @@ impl<'a> HorizontalRunDecorations<'a> {
             }
             if decoration.lines.overline && phase.paints_below_text() {
                 let (ascender_ratio, _) = crate::fonts::font_metrics_ratios(
-                    &self.run.font_family,
+                    self.run.css_font_family(),
                     self.run.bold,
                     self.run.font_style.is_slanted(),
                     self.custom_fonts,

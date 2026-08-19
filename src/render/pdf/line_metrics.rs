@@ -141,7 +141,7 @@ pub(super) fn line_shifted_text_extents(
             continue;
         }
         let (asc_r, desc_r) = crate::fonts::font_metrics_ratios(
-            &run.font_family,
+            run.css_font_family(),
             run.bold,
             run.font_style.is_slanted(),
             custom_fonts,
@@ -172,7 +172,7 @@ pub(super) fn line_authored_text_extents(
         .filter(|r| !is_drop_cap_run(r))
         .fold((0.0f32, 0.0f32), |(above, below), run| {
             let (asc_r, desc_r) = crate::fonts::font_metrics_ratios(
-                &run.font_family,
+                run.css_font_family(),
                 run.bold,
                 run.font_style.is_slanted(),
                 custom_fonts,
@@ -231,7 +231,7 @@ fn line_box_metrics_with_resolved_baseline(
         .filter(|r| !is_drop_cap_run(r))
         .fold((0.0f32, 0.0f32), |(max_ascender, max_descender), run| {
             let (ascender_ratio, descender_ratio) = crate::fonts::font_metrics_ratios(
-                &run.font_family,
+                run.css_font_family(),
                 run.bold,
                 run.font_style.is_slanted(),
                 custom_fonts,
@@ -397,7 +397,7 @@ pub(super) fn upright_vertical_line_metrics(
                     crate::text::upright_vertical_font_metrics(run, custom_fonts).map_or_else(
                         || {
                             crate::fonts::font_metrics_ratios(
-                                &run.font_family,
+                                run.css_font_family(),
                                 run.bold,
                                 run.font_style.is_slanted(),
                                 custom_fonts,
@@ -407,7 +407,7 @@ pub(super) fn upright_vertical_line_metrics(
                     )
                 } else {
                     crate::fonts::font_metrics_ratios(
-                        &run.font_family,
+                        run.css_font_family(),
                         run.bold,
                         run.font_style.is_slanted(),
                         custom_fonts,
@@ -463,7 +463,7 @@ pub(super) fn line_text_content_extents(
         .filter(|r| !is_drop_cap_run(r))
         .fold((0.0f32, 0.0f32), |(max_ascent, max_descent), run| {
             let (ascender_ratio, descender_ratio) = crate::fonts::font_metrics_ratios(
-                &run.font_family,
+                run.css_font_family(),
                 run.bold,
                 run.font_style.is_slanted(),
                 custom_fonts,

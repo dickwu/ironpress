@@ -582,7 +582,7 @@ fn line_primary_x_height_ratio(runs: &[TextRun], fonts: &HashMap<String, TtfFont
         })
         .or_else(|| runs.iter().find(|run| run.inline_box.is_none()));
     if let Some(run) = primary
-        && let FontFamily::Custom(name) = &run.font_family
+        && let FontFamily::Custom(name) = run.css_font_family()
         && let Some((_, font)) =
             crate::system_fonts::find_font(fonts, name, run.bold, run.font_style.is_slanted())
     {
@@ -1126,7 +1126,7 @@ fn resolve_line_box_metrics(
             fallback_line_height_factor.max(0.0)
         };
         let extents = line_extents(
-            &run.font_family,
+            run.css_font_family(),
             run.line_height_font_size(),
             run.bold,
             run.font_style.is_slanted(),
@@ -2692,7 +2692,7 @@ pub(crate) fn wrap_text_runs(
                     // the proportional form misplaces the baseline, so a baseline-
                     // aligned box's overhang is measured against the wrong edge.
                     let (asc_ratio, desc_ratio) = crate::fonts::font_metrics_ratios(
-                        &template.font_family,
+                        template.css_font_family(),
                         template.bold,
                         template.font_style.is_slanted(),
                         fonts,
@@ -2711,7 +2711,7 @@ pub(crate) fn wrap_text_runs(
                     // box must reserve that, combined with the surrounding text's
                     // own half-leading extents. (Mirrors render `line_box_metrics`.)
                     let (asc_ratio, desc_ratio) = crate::fonts::font_metrics_ratios(
-                        &template.font_family,
+                        template.css_font_family(),
                         template.bold,
                         template.font_style.is_slanted(),
                         fonts,
@@ -2722,7 +2722,7 @@ pub(crate) fn wrap_text_runs(
                     let text_above = asc_ratio * template.font_size + half_leading;
                     let text_below = desc_ratio * template.font_size + half_leading;
                     let xh_ratio = if let crate::style::computed::FontFamily::Custom(name) =
-                        &template.font_family
+                        template.css_font_family()
                     {
                         crate::system_fonts::find_font(
                             fonts,
@@ -3167,22 +3167,26 @@ pub(crate) fn push_text_run_with_fallback(
     for cluster in unicode_segmentation::UnicodeSegmentation::graphemes(run.text.as_str(), true) {
         let family = family_for(cluster);
         if family != current_family && !current.is_empty() {
-            runs.push(TextRun {
-                text: std::mem::take(&mut current),
-                font_family: current_family,
-                ..run.clone()
-            });
+            runs.push(
+                TextRun {
+                    text: std::mem::take(&mut current),
+                    ..run.clone()
+                }
+                .with_glyph_fallback(current_family),
+            );
         }
         current_family = family;
         current.push_str(cluster);
     }
 
     if !current.is_empty() {
-        runs.push(TextRun {
-            text: current,
-            font_family: current_family,
-            ..run
-        });
+        runs.push(
+            TextRun {
+                text: current,
+                ..run
+            }
+            .with_glyph_fallback(current_family),
+        );
     }
 }
 
@@ -4326,8 +4330,51 @@ mod indent_tests {
         assert_eq!(runs.len(), 4);
         assert_eq!(runs[0].text, "Hello ");
         assert_eq!(runs[1].font_family.name(), "__cjk_japanese_fallback");
+        assert_eq!(runs[1].css_font_family().name(), "Helvetica");
         assert_eq!(runs[2].text, " ");
         assert_eq!(runs[3].font_family.name(), "__emoji_fallback");
+    }
+
+    #[test]
+    fn fallback_glyph_face_does_not_change_the_css_line_box() {
+        let japanese = crate::parser::ttf::parse_ttf(
+            include_bytes!("../../tests/fonts/IronpressCjkVertical.ttf").to_vec(),
+        )
+        .expect("valid Japanese fixture font");
+        let fonts = HashMap::from([
+            ("paritysans".to_string(), parity_font("ParitySans.ttf")),
+            (
+                crate::font_pack::CJK_JAPANESE_FALLBACK_KEY.to_string(),
+                japanese,
+            ),
+        ]);
+        let mut run = plain_run("第");
+        run.font_family = FontFamily::Custom("ParitySans".to_string());
+        run.line_height_basis = run.font_size;
+        run.line_height_factor = 1.5;
+        run.metadata.font_locale = crate::font_pack::FontLocale::Japanese;
+        let parent = LineStrut::from_font(
+            &run.font_family,
+            run.font_size,
+            run.bold,
+            run.font_style.is_slanted(),
+            run.font_size * run.line_height_factor,
+            &fonts,
+        );
+        let expected = resolve_line_box_metrics(
+            std::slice::from_ref(&run),
+            Some(parent),
+            run.line_height_factor,
+            &fonts,
+        );
+        let mut fallback_runs = Vec::new();
+
+        push_text_run_with_fallback(run, &mut fallback_runs, &fonts);
+
+        assert_eq!(
+            resolve_line_box_metrics(&fallback_runs, Some(parent), 1.5, &fonts),
+            expected
+        );
     }
 
     #[test]

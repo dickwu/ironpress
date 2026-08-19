@@ -872,6 +872,13 @@ impl Default for TextShaping {
     }
 }
 
+/// Glyph substitution paired with the CSS family that owns inline metrics.
+#[derive(Debug, Clone)]
+pub(crate) struct GlyphFontFallback {
+    /// Computed CSS family whose metrics continue to define the inline box.
+    css_family: FontFamily,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextRun {
     pub text: String,
@@ -881,7 +888,10 @@ pub struct TextRun {
     pub color: crate::types::Color,
     pub decorations: Vec<crate::style::computed::TextDecoration>,
     pub link_url: Option<String>,
+    /// Face that shapes and paints this run after character fallback.
     pub font_family: FontFamily,
+    /// Original CSS family retained when glyphs come from a fallback face.
+    pub(crate) glyph_fallback: Option<GlyphFontFallback>,
     /// Explicit algorithmic font treatment; never encoded in geometry.
     pub font_synthesis: FontSynthesisState,
     /// Background color for inline spans (e.g. badge/highlight).
@@ -946,6 +956,7 @@ impl Default for TextRun {
             decorations: Vec::new(),
             link_url: None,
             font_family: FontFamily::default(),
+            glyph_fallback: None,
             font_synthesis: FontSynthesisState::default(),
             background_color: None,
             padding: EdgeSizes::ZERO,
@@ -963,6 +974,28 @@ impl Default for TextRun {
 }
 
 impl TextRun {
+    /// Substitute the glyph face without changing the CSS inline-box metrics.
+    pub(crate) fn with_glyph_fallback(mut self, glyph_family: FontFamily) -> Self {
+        let css_family = self
+            .glyph_fallback
+            .take()
+            .map_or_else(|| self.font_family.clone(), |fallback| fallback.css_family);
+        if glyph_family == css_family {
+            self.font_family = css_family;
+        } else {
+            self.font_family = glyph_family;
+            self.glyph_fallback = Some(GlyphFontFallback { css_family });
+        }
+        self
+    }
+
+    /// Family whose computed metrics define line boxes and text decorations.
+    pub(crate) fn css_font_family(&self) -> &FontFamily {
+        self.glyph_fallback
+            .as_ref()
+            .map_or(&self.font_family, |fallback| &fallback.css_family)
+    }
+
     /// Add the finite inline advance retained at this run's trailing edge.
     ///
     /// CSS tracking and pair positioning can both cross a paint-run boundary.

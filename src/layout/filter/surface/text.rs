@@ -236,7 +236,7 @@ impl SourcePainter<'_> {
             }
             if decoration.lines.overline && phase.paints_below_text() {
                 let (ascender_ratio, _) = crate::fonts::font_metrics_ratios(
-                    &run.font_family,
+                    run.css_font_family(),
                     run.bold,
                     run.font_style.is_slanted(),
                     self.fonts,
@@ -345,7 +345,7 @@ pub(super) fn line_baseline_ascent(line: &TextLine, fonts: &HashMap<String, TtfF
             .filter(|run| run.inline_box.is_none())
             .fold((0.0_f32, 0.0_f32), |(ascent, descent), run| {
                 let metrics = crate::fonts::font_metrics_ratios(
-                    &run.font_family,
+                    run.css_font_family(),
                     run.bold,
                     run.font_style.is_slanted(),
                     fonts,

@@ -49,6 +49,7 @@ pub(crate) fn text_runs_share_shaping_buffer(previous: &TextRun, next: &TextRun)
         && previous.decorations == next.decorations
         && previous.link_url == next.link_url
         && previous.font_family == next.font_family
+        && previous.css_font_family() == next.css_font_family()
         && previous.font_synthesis == next.font_synthesis
         && previous.background_color == next.background_color
         && (continues_inline_decoration || previous.padding == next.padding)
@@ -100,7 +101,7 @@ fn shadows_match(previous: &[BoxShadow], next: &[BoxShadow]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::computed::TextCombineUpright;
+    use crate::style::computed::{FontFamily, TextCombineUpright};
 
     fn split_word() -> Vec<TextRun> {
         "verification"
@@ -118,6 +119,25 @@ mod tests {
 
         assert_eq!(coalesced.len(), 1);
         assert_eq!(coalesced[0].text, "verification");
+    }
+
+    #[test]
+    fn fallback_runs_keep_distinct_css_metric_families() {
+        let fallback = FontFamily::Custom("fallback".to_string());
+        let first = TextRun {
+            text: "A".to_string(),
+            font_family: FontFamily::Helvetica,
+            ..Default::default()
+        }
+        .with_glyph_fallback(fallback.clone());
+        let second = TextRun {
+            text: "B".to_string(),
+            font_family: FontFamily::TimesRoman,
+            ..Default::default()
+        }
+        .with_glyph_fallback(fallback);
+
+        assert_eq!(coalesce_text_runs(&[first, second]).len(), 2);
     }
 
     #[test]
