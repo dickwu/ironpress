@@ -9803,6 +9803,26 @@ mod tests {
     }
 
     #[test]
+    fn flex_column_text_uses_the_stretched_cross_size_for_wrapping() {
+        let html = r#"<div style="display:flex;flex-direction:column;font-size:11px">
+            <span style="font-weight:700">Hammer Drill SDS - A34</span>
+        </div>"#;
+        let pages = layout(
+            &parse_html(html).unwrap(),
+            PageSize::new(PageSize::A4.height, PageSize::A4.width),
+            Margin::uniform(0.0),
+        );
+        let text = find_page_text_block_containing(&pages[0].elements, "Hammer Drill SDS -")
+            .expect("flex-column product name");
+
+        assert_eq!(
+            text.lines.len(),
+            1,
+            "a stretched column flex item must wrap against the container width"
+        );
+    }
+
+    #[test]
     fn flex_column_with_background() {
         let html = r#"<div style="display: flex; flex-direction: column; background-color: #eee">
             <p>Child A</p>
