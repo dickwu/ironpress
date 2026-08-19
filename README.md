@@ -35,11 +35,11 @@ or WebAssembly.
 
 ## Why IronPress?
 
-- **Simple deployment** — one library or binary, with no browser runtime to install or manage.
-- **Document-focused layout** — flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
-- **Production typography** — custom font embedding and subsetting, Unicode/CJK fallback, SVG, and LaTeX-style math.
-- **Multiple runtimes** — the same Rust core ships to Rust, Python, Ruby, and WebAssembly.
-- **Defensive defaults** — HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
+- **Simple deployment:** one library or binary, with no browser runtime to install or manage.
+- **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
+- **Production typography:** custom font embedding and subsetting, Unicode/CJK fallback, SVG, and LaTeX-style math.
+- **Multiple runtimes:** the same Rust core ships to Rust, Python, Ruby, and WebAssembly.
+- **Defensive defaults:** HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
 
 ## Quick start
 
