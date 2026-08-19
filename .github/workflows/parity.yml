@@ -23,11 +23,40 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Keep the required check present: workflows skipped by a top-level path
+      # filter remain pending on GitHub. Website-only changes instead complete
+      # this job without running the expensive renderer parity suite.
+      - name: Detect parity-relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          changed_paths="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          run_parity=false
+          while IFS= read -r changed_path; do
+            [[ -z "$changed_path" ]] && continue
+            case "$changed_path" in
+              site/*|playground/*|scripts/check-site.mjs|.github/workflows/playground.yml) ;;
+              *) run_parity=true; break ;;
+            esac
+          done <<< "$changed_paths"
+          echo "run=$run_parity" >> "$GITHUB_OUTPUT"
+
+      - name: Skip parity for website-only changes
+        if: steps.changes.outputs.run != 'true'
+        run: echo "No renderer or parity inputs changed."
 
       - name: Install Rust
+        if: steps.changes.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
+        if: steps.changes.outputs.run == 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -37,23 +66,26 @@ jobs:
           key: parity-cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
 
       - name: Install pinned Poppler and deterministic fonts
+        if: steps.changes.outputs.run == 'true'
         run: scripts/parity-install-runtime.sh
 
       - name: Verify generated interaction product
+        if: steps.changes.outputs.run == 'true'
         run: python3 scripts/generate-interaction-cartesian.py --check
 
       - name: Run parity test (committed PDF oracles)
+        if: steps.changes.outputs.run == 'true'
         env:
           FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
           PARITY_PDFTOPPM: /usr/bin/pdftoppm
         run: scripts/parity.sh
 
       - name: Refs-freshness gate (refs.lock vs. current fixtures)
-        if: always()
+        if: always() && steps.changes.outputs.run == 'true'
         run: scripts/parity-gen-refs.sh --check
 
       - name: Upload current parity evidence
-        if: always()
+        if: always() && steps.changes.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: parity-current-report
