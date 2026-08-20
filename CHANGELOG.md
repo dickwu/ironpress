@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## [1.5.3] — 2026-08-20
 
 ### Added
 
 - Rust and WebAssembly converters can install explicit fallback font packs.
+- Python, Ruby, and WebAssembly expose the same portable converter controls for
+  page geometry, quality, sanitization, headers, footers, and fonts.
 - GitHub releases publish reproducible Japanese, Korean, Simplified Chinese,
   Traditional Chinese, and monochrome emoji font artifacts.
 - CJK fallback follows inherited HTML `lang` values, including nested language
@@ -15,6 +17,26 @@
 - Browser/WASM builds no longer embed the incomplete CJK subset or the full
   emoji face. Applications that need this coverage must load the matching pack.
 - Native builds may still use compatible system fonts when no pack is installed.
+- Python uses one CPython 3.8+ ABI3 wheel per platform instead of binding wheels
+  to the build interpreter.
+
+### Fixed
+
+- Ruby releases build installable native extensions instead of relabeling the
+  same source gem as platform-specific artifacts.
+
+### CI
+
+- Python and Ruby packages are installed and exercised before publication.
+- Parity runtime downloads are pinned, checksum-verified, cached, and bounded by
+  explicit network, installation, step, and job timeouts.
+- `wasm-pack` is pinned and the generated npm version is checked against the
+  Rust crate version.
+
+### Documentation
+
+- The repository and public site document the shared binding contract and the
+  capabilities that remain native-only or Rust-only.
 
 ## [1.5.2] — 2026-08-17
 

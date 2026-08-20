@@ -1,35 +1,58 @@
-# Ironpress
+# Ironpress for Ruby
 
-Pure Rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies.
+Generate PDF bytes from HTML or Markdown without launching a browser.
 
 ## Installation
 
 ```ruby
-gem install ironpress
-```
-
-Or in your Gemfile:
-
-```ruby
 gem "ironpress"
 ```
+
+Ironpress supports Ruby 3.0 and later. Releases include a source gem and native
+gems for Linux, macOS, and Windows.
 
 ## Usage
 
 ```ruby
 require "ironpress"
 
-# HTML to PDF
-pdf = Ironpress.html_to_pdf("<h1>Hello World</h1><p>Generated with Ironpress.</p>")
-File.binwrite("output.pdf", pdf)
-
-# Markdown to PDF
-pdf = Ironpress.markdown_to_pdf("# Hello\n\nGenerated from **Markdown**.")
+pdf = Ironpress.html_to_pdf("<h1>Hello</h1>")
 File.binwrite("output.pdf", pdf)
 ```
 
-## Performance
+Configuration methods return the converter, so policies can be composed in an
+idiomatic chain:
 
-- **10-100x faster** than browser-based solutions (Puppeteer, wkhtmltopdf)
-- **~5MB** native extension, no runtime dependencies
-- Instant startup, no browser process
+```ruby
+converter = Ironpress::HtmlConverter.new
+  .page_size("Letter")
+  .margin_sides(36, 54, 36, 54)
+  .header("Quarterly report")
+  .footer("Page {page} of {pages}")
+  .sanitize(true)
+
+pdf = converter.convert("<h1>Results</h1>")
+```
+
+The converter supports page geometry, PDF and image quality, sanitization,
+headers and footers, custom TTF fonts, and optional CJK or emoji packs. Native
+Ruby also supports constrained local resources through `base_path` and
+`resource_root`, plus direct file output.
+
+See the [binding capability matrix](../README.md) for the contract shared with
+Rust, Python, and WebAssembly.
+
+## Font packs
+
+Ironpress never downloads fallback fonts while rendering. Download the artifact
+your application needs, verify it as part of deployment, then install its bytes:
+
+```ruby
+converter = Ironpress::HtmlConverter.new.add_font_pack(
+  "cjk-jp",
+  File.binread("ironpress-font-cjk-jp.ttf")
+)
+pdf = converter.convert("<p lang='ja'>日本語</p>")
+```
+
+Valid pack names are `cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`.
