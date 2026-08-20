@@ -127,6 +127,7 @@ jobs:
           ')"
           for attempt in {1..40}; do
             if curl --fail --silent --connect-timeout 5 --max-time 15 \
+              --user-agent "ironpress-release/${version} (https://github.com/gastongouron/ironpress)" \
               "https://crates.io/api/v1/crates/ironpress/${version}" >/dev/null; then
               break
             fi
