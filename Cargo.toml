@@ -1,6 +1,6 @@
 [package]
 name = "ironpress"
-version = "1.5.2"
+version = "1.5.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Pure Rust HTML/CSS/Markdown to PDF converter with layout engine, LaTeX math, tables, images, custom fonts, and streaming output. No browser, no system dependencies."
@@ -15,11 +15,19 @@ exclude = [
     ".claude/",
     "target/",
     "docs/",
+    "bindings/",
     "font-packs/",
     "dist/",
     "tests/parity/",
     "scripts/",
 ]
+
+[workspace]
+resolver = "3"
+members = ["bindings/python", "bindings/ruby/ext/ironpress"]
+
+[patch.crates-io]
+ironpress = { path = "." }
 
 [lib]
 crate-type = ["cdylib", "rlib"]

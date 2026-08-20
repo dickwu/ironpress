@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ironpress"
-version = "1.5.2"
+version = "1.5.3"
 description = "Pure Rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies."
 readme = "README.md"
 license = "MIT"
@@ -26,3 +26,4 @@ Repository = "https://github.com/gastongouron/ironpress"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+module-name = "ironpress"

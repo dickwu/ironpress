@@ -43,75 +43,15 @@ fn markdown_to_pdf(markdown: &str) -> PyResult<Vec<u8>> {
 ///     >>> pdf = converter.convert("<h1>Hello</h1>")
 #[pyclass]
 struct HtmlConverter {
-    page_size: ironpress_core::types::PageSize,
-    margin: ironpress_core::types::Margin,
-    compress: Option<bool>,
-    jpeg_quality: Option<u8>,
-    auto_resize_images: Option<bool>,
-    source_image_dpi: Option<f32>,
-    filter_dpi: Option<f32>,
-    mask_dpi: Option<f32>,
-    background_dpi: Option<f32>,
-    occlusion_cull: Option<bool>,
-    sanitize: Option<bool>,
-    custom_fonts: Vec<(String, Vec<u8>)>,
-    base_path: Option<String>,
-    resource_root: Option<String>,
-    header: Option<String>,
-    footer: Option<String>,
+    converter: ironpress_core::HtmlConverter,
 }
 
 impl HtmlConverter {
-    /// Build the Rust `HtmlConverter` from stored fields.
-    fn build_converter(&self) -> ironpress_core::HtmlConverter {
-        let mut converter = ironpress_core::HtmlConverter::new()
-            .page_size(self.page_size)
-            .margin(self.margin);
-
-        if let Some(compress) = self.compress {
-            converter = converter.compress(compress);
-        }
-        if let Some(quality) = self.jpeg_quality {
-            converter = converter.jpeg_quality(quality);
-        }
-        if let Some(enabled) = self.auto_resize_images {
-            converter = converter.auto_resize_images(enabled);
-        }
-        if let Some(dpi) = self.source_image_dpi {
-            converter = converter.image_dpi(dpi);
-        }
-        if let Some(dpi) = self.filter_dpi {
-            converter = converter.filter_dpi(dpi);
-        }
-        if let Some(dpi) = self.mask_dpi {
-            converter = converter.mask_dpi(dpi);
-        }
-        if let Some(dpi) = self.background_dpi {
-            converter = converter.background_raster_dpi(dpi);
-        }
-        if let Some(enabled) = self.occlusion_cull {
-            converter = converter.occlusion_cull(enabled);
-        }
-        if let Some(enabled) = self.sanitize {
-            converter = converter.sanitize(enabled);
-        }
-        for (name, data) in &self.custom_fonts {
-            converter = converter.add_font(name, data.clone());
-        }
-        if let Some(ref path) = self.base_path {
-            converter = converter.base_path(std::path::Path::new(path));
-        }
-        if let Some(ref root) = self.resource_root {
-            converter = converter.resource_root(std::path::Path::new(root));
-        }
-        if let Some(ref text) = self.header {
-            converter = converter.header(text.clone());
-        }
-        if let Some(ref text) = self.footer {
-            converter = converter.footer(text.clone());
-        }
-
-        converter
+    fn update(
+        &mut self,
+        configure: impl FnOnce(ironpress_core::HtmlConverter) -> ironpress_core::HtmlConverter,
+    ) {
+        self.converter = configure(std::mem::take(&mut self.converter));
     }
 }
 
@@ -119,23 +59,8 @@ impl HtmlConverter {
 impl HtmlConverter {
     #[new]
     fn new() -> Self {
-        HtmlConverter {
-            page_size: ironpress_core::types::PageSize::A4,
-            margin: ironpress_core::types::Margin::default(),
-            compress: None,
-            jpeg_quality: None,
-            auto_resize_images: None,
-            source_image_dpi: None,
-            filter_dpi: None,
-            mask_dpi: None,
-            background_dpi: None,
-            occlusion_cull: None,
-            sanitize: None,
-            custom_fonts: Vec::new(),
-            base_path: None,
-            resource_root: None,
-            header: None,
-            footer: None,
+        Self {
+            converter: ironpress_core::HtmlConverter::new(),
         }
     }
 
@@ -144,7 +69,7 @@ impl HtmlConverter {
     /// Args:
     ///     points: Margin size applied to all four sides.
     fn margin(&mut self, points: f32) {
-        self.margin = ironpress_core::types::Margin::uniform(points);
+        self.update(|converter| converter.margin(ironpress_core::types::Margin::uniform(points)));
     }
 
     /// Set individual page margins in points (72 points = 1 inch).
@@ -155,7 +80,9 @@ impl HtmlConverter {
     ///     bottom: Bottom margin in points.
     ///     left: Left margin in points.
     fn margin_sides(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
-        self.margin = ironpress_core::types::Margin::new(top, right, bottom, left);
+        self.update(|converter| {
+            converter.margin(ironpress_core::types::Margin::new(top, right, bottom, left))
+        });
     }
 
     /// Set page size by name or custom dimensions.
@@ -169,12 +96,13 @@ impl HtmlConverter {
     /// Raises:
     ///     ValueError: If the name is not recognized.
     fn page_size(&mut self, name: &str) -> PyResult<()> {
-        self.page_size = match name.to_lowercase().as_str() {
+        let size = match name.to_ascii_lowercase().as_str() {
             "a4" => ironpress_core::types::PageSize::A4,
             "letter" => ironpress_core::types::PageSize::LETTER,
             "legal" => ironpress_core::types::PageSize::LEGAL,
             _ => return Err(PyValueError::new_err(format!("Unknown page size: {name}"))),
         };
+        self.update(|converter| converter.page_size(size));
         Ok(())
     }
 
@@ -184,7 +112,9 @@ impl HtmlConverter {
     ///     width: Page width in points.
     ///     height: Page height in points.
     fn page_size_custom(&mut self, width: f32, height: f32) {
-        self.page_size = ironpress_core::types::PageSize::new(width, height);
+        self.update(|converter| {
+            converter.page_size(ironpress_core::types::PageSize::new(width, height))
+        });
     }
 
     /// Enable or disable FlateDecode compression of page content streams.
@@ -195,7 +125,7 @@ impl HtmlConverter {
     /// Args:
     ///     enabled: Whether to compress content streams.
     fn compress(&mut self, enabled: bool) {
-        self.compress = Some(enabled);
+        self.update(|converter| converter.compress(enabled));
     }
 
     /// Set JPEG quality for optimized image embedding (0-100).
@@ -206,7 +136,7 @@ impl HtmlConverter {
     /// Args:
     ///     quality: JPEG quality level (0-100, clamped).
     fn jpeg_quality(&mut self, quality: u8) {
-        self.jpeg_quality = Some(quality);
+        self.update(|converter| converter.jpeg_quality(quality));
     }
 
     /// Enable or disable automatic downscaling of oversized source images.
@@ -217,7 +147,7 @@ impl HtmlConverter {
     /// Args:
     ///     enabled: Whether to auto-resize images.
     fn auto_resize_images(&mut self, enabled: bool) {
-        self.auto_resize_images = Some(enabled);
+        self.update(|converter| converter.auto_resize_images(enabled));
     }
 
     /// Set the target source-image resolution in DPI (minimum 72, default 300).
@@ -228,7 +158,7 @@ impl HtmlConverter {
     /// Args:
     ///     dpi: Target resolution in dots per inch.
     fn image_dpi(&mut self, dpi: f32) {
-        self.source_image_dpi = Some(dpi);
+        self.update(|converter| converter.image_dpi(dpi));
     }
 
     /// Set the rasterization DPI for render-time blur/filter bitmaps.
@@ -239,7 +169,7 @@ impl HtmlConverter {
     /// Args:
     ///     dpi: Target resolution in dots per inch.
     fn filter_dpi(&mut self, dpi: f32) {
-        self.filter_dpi = Some(dpi);
+        self.update(|converter| converter.filter_dpi(dpi));
     }
 
     /// Set the rasterization DPI for CSS mask-image coverage bitmaps.
@@ -251,7 +181,7 @@ impl HtmlConverter {
     /// Args:
     ///     dpi: Target resolution in dots per inch.
     fn mask_dpi(&mut self, dpi: f32) {
-        self.mask_dpi = Some(dpi);
+        self.update(|converter| converter.mask_dpi(dpi));
     }
 
     /// Set the target resolution for flattened background bitmaps.
@@ -263,7 +193,7 @@ impl HtmlConverter {
     /// Args:
     ///     dpi: Target resolution in dots per inch.
     fn background_raster_dpi(&mut self, dpi: f32) {
-        self.background_dpi = Some(dpi);
+        self.update(|converter| converter.background_raster_dpi(dpi));
     }
 
     /// Enable or disable occlusion culling of raster images.
@@ -275,7 +205,7 @@ impl HtmlConverter {
     /// Args:
     ///     enabled: Whether to enable occlusion culling.
     fn occlusion_cull(&mut self, enabled: bool) {
-        self.occlusion_cull = Some(enabled);
+        self.update(|converter| converter.occlusion_cull(enabled));
     }
 
     /// Enable or disable HTML sanitization (enabled by default).
@@ -286,7 +216,7 @@ impl HtmlConverter {
     /// Args:
     ///     enabled: Whether to sanitize input HTML.
     fn sanitize(&mut self, enabled: bool) {
-        self.sanitize = Some(enabled);
+        self.update(|converter| converter.sanitize(enabled));
     }
 
     /// Register a custom TrueType font.
@@ -304,7 +234,25 @@ impl HtmlConverter {
     ///     ...     converter.add_font("MyFont", f.read())
     ///     >>> pdf = converter.convert('<p style="font-family: MyFont">Hello</p>')
     fn add_font(&mut self, name: &str, ttf_data: Vec<u8>) {
-        self.custom_fonts.push((name.to_string(), ttf_data));
+        self.update(|converter| converter.add_font(name, ttf_data));
+    }
+
+    /// Parse and install one separately downloaded fallback-font pack.
+    ///
+    /// Args:
+    ///     kind: One of cjk-jp, cjk-kr, cjk-sc, cjk-tc, or emoji.
+    ///     ttf_data: Raw bytes from the matching Ironpress font-pack artifact.
+    ///
+    /// Raises:
+    ///     ValueError: If the kind or font data is invalid.
+    fn add_font_pack(&mut self, kind: &str, ttf_data: Vec<u8>) -> PyResult<()> {
+        let kind = kind
+            .parse::<ironpress_core::FontPackKind>()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let pack = ironpress_core::FontPack::parse(kind, ttf_data)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.update(|converter| converter.add_font_pack(pack));
+        Ok(())
     }
 
     /// Set the base directory for resolving relative paths.
@@ -321,7 +269,7 @@ impl HtmlConverter {
     ///     >>> converter.base_path("/path/to/project")
     ///     >>> pdf = converter.convert('<style>@import "styles.css";</style><p>Hi</p>')
     fn base_path(&mut self, path: &str) {
-        self.base_path = Some(path.to_string());
+        self.update(|converter| converter.base_path(std::path::Path::new(path)));
     }
 
     /// Set the directory boundary authorized for document-local resources.
@@ -334,7 +282,7 @@ impl HtmlConverter {
     /// Args:
     ///     path: Absolute path to the authorized resource root.
     fn resource_root(&mut self, path: &str) {
-        self.resource_root = Some(path.to_string());
+        self.update(|converter| converter.resource_root(std::path::Path::new(path)));
     }
 
     /// Set a header text rendered at the top of each page.
@@ -344,7 +292,7 @@ impl HtmlConverter {
     /// Args:
     ///     text: Header text string.
     fn header(&mut self, text: &str) {
-        self.header = Some(text.to_string());
+        self.update(|converter| converter.header(text));
     }
 
     /// Set a footer text rendered at the bottom of each page.
@@ -359,7 +307,7 @@ impl HtmlConverter {
     ///     >>> converter = HtmlConverter()
     ///     >>> converter.footer("Page {page} of {pages}")
     fn footer(&mut self, text: &str) {
-        self.footer = Some(text.to_string());
+        self.update(|converter| converter.footer(text));
     }
 
     /// Convert HTML to PDF bytes.
@@ -373,7 +321,7 @@ impl HtmlConverter {
     /// Raises:
     ///     ValueError: If conversion fails.
     fn convert(&self, html: &str) -> PyResult<Vec<u8>> {
-        self.build_converter()
+        self.converter
             .convert(html)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
@@ -389,7 +337,7 @@ impl HtmlConverter {
     /// Raises:
     ///     ValueError: If conversion fails.
     fn convert_markdown(&self, markdown: &str) -> PyResult<Vec<u8>> {
-        self.build_converter()
+        self.converter
             .convert_markdown(markdown)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
@@ -404,7 +352,7 @@ impl HtmlConverter {
     ///     ValueError: If conversion or file writing fails.
     fn convert_to_file(&self, html: &str, path: &str) -> PyResult<()> {
         let pdf = self
-            .build_converter()
+            .converter
             .convert(html)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         std::fs::write(path, pdf).map_err(|e| PyValueError::new_err(e.to_string()))
@@ -420,15 +368,16 @@ impl HtmlConverter {
     ///     ValueError: If conversion or file writing fails.
     fn convert_markdown_to_file(&self, markdown: &str, path: &str) -> PyResult<()> {
         let pdf = self
-            .build_converter()
+            .converter
             .convert_markdown(markdown)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         std::fs::write(path, pdf).map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }
 
-#[pymodule]
+#[pymodule(name = "ironpress")]
 fn ironpress(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(html_to_pdf, m)?)?;
     m.add_function(wrap_pyfunction!(markdown_to_pdf, m)?)?;
     m.add_class::<HtmlConverter>()?;
