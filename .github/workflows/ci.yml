@@ -21,8 +21,17 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  WASM_PACK_VERSION: 0.15.0
 
 jobs:
+  release-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify package versions
+        run: scripts/check-release-versions.sh
+
   site:
     runs-on: ubuntu-latest
     steps:
@@ -75,6 +84,7 @@ jobs:
 
   wasm:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -83,10 +93,50 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-v1
-      - run: command -v wasm-pack || cargo install wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+      - name: Install the pinned wasm-pack release
+        run: |
+          wasm-pack --version 2>/dev/null \
+            | grep -qx "wasm-pack ${WASM_PACK_VERSION}" \
+            || cargo install wasm-pack \
+              --version "${WASM_PACK_VERSION}" --locked --force
       - run: wasm-pack build --target web --features wasm --no-default-features
       - run: node scripts/test-wasm-font-packs.mjs
+
+  python-bindings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+          manylinux: auto
+          working-directory: bindings/python
+      - name: Install the built wheel
+        run: python -m pip install bindings/python/dist/ironpress-*-cp38-abi3-*.whl
+      - name: Test the installed package
+        run: python -m unittest discover -s bindings/python/tests -v
+
+  ruby-bindings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: bindings/ruby
+      - name: Compile and test the native extension
+        working-directory: bindings/ruby
+        run: bundle exec rake
 
   fuzz:
     runs-on: ubuntu-latest
@@ -106,7 +156,7 @@ jobs:
 
   publish-npm:
     runs-on: ubuntu-latest
-    needs: [test, msrv, clippy, fmt, wasm]
+    needs: [release-metadata, test, msrv, clippy, fmt, wasm, python-bindings, ruby-bindings]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
@@ -122,8 +172,13 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-v1
-      - run: command -v wasm-pack || cargo install wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+      - name: Install the pinned wasm-pack release
+        run: |
+          wasm-pack --version 2>/dev/null \
+            | grep -qx "wasm-pack ${WASM_PACK_VERSION}" \
+            || cargo install wasm-pack \
+              --version "${WASM_PACK_VERSION}" --locked --force
       - run: wasm-pack build --target web --features wasm --no-default-features
       - name: Publish npm package
         working-directory: pkg
@@ -140,7 +195,7 @@ jobs:
 
   publish-crate:
     runs-on: ubuntu-latest
-    needs: [test, msrv, clippy, fmt]
+    needs: [release-metadata, test, msrv, clippy, fmt, python-bindings, ruby-bindings]
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' &&

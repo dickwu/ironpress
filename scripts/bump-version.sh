@@ -6,10 +6,9 @@
 #   Cargo.toml                          (ironpress crate)
 #   bindings/python/pyproject.toml      (PyPI wheel)
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
-#   bindings/ruby/ironpress.gemspec     (RubyGems)
-#   bindings/ruby/Cargo.toml            (ironpress-ruby internal crate)
+#   bindings/ruby/lib/ironpress/version.rb
+#   bindings/ruby/ext/ironpress/Cargo.toml
 #
-# Run `cargo check` afterwards to refresh Cargo.lock.
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -41,10 +40,14 @@ bump_pyproject() {
     perl -i -pe 'BEGIN{$n=0} if (!$n && /^version\s*=\s*"[^"]+"/) { s/"[^"]+"/"'"$NEW"'"/; $n=1 }' "$file"
 }
 
-bump_gemspec() {
+update_ruby_version() {
     local file="$1"
-    # spec.version = "..."
-    perl -i -pe 's/(spec\.version\s*=\s*)"[^"]+"/$1"'"$NEW"'"/' "$file"
+    perl -i -pe 's/(VERSION\s*=\s*)"[^"]+"/$1"'"$NEW"'"/' "$file"
+}
+
+update_core_requirement() {
+    local file="$1"
+    perl -i -pe 'if (/^ironpress-core\s*=/) { s/version\s*=\s*"=[^"]+"/version = "='"$NEW"'"/ }' "$file"
 }
 
 echo "Bumping to $NEW"
@@ -52,8 +55,11 @@ echo "Bumping to $NEW"
 bump_toml_version  "Cargo.toml"                        && echo "  Cargo.toml"
 bump_pyproject     "bindings/python/pyproject.toml"    && echo "  bindings/python/pyproject.toml"
 bump_toml_version  "bindings/python/Cargo.toml"        && echo "  bindings/python/Cargo.toml"
-bump_gemspec       "bindings/ruby/ironpress.gemspec"   && echo "  bindings/ruby/ironpress.gemspec"
-bump_toml_version  "bindings/ruby/Cargo.toml"          && echo "  bindings/ruby/Cargo.toml"
+update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core requirement"
+bump_toml_version  "bindings/ruby/ext/ironpress/Cargo.toml" && echo "  bindings/ruby/ext/ironpress/Cargo.toml"
+update_core_requirement "bindings/ruby/ext/ironpress/Cargo.toml" && echo "  Ruby core requirement"
+update_ruby_version "bindings/ruby/lib/ironpress/version.rb" && echo "  bindings/ruby/lib/ironpress/version.rb"
 
 echo ""
-echo "Done. Run 'cargo check' to refresh Cargo.lock, then review the diff."
+scripts/check-release-versions.sh "$NEW"
+echo "Done. Review the diff before committing."

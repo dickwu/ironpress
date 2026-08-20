@@ -20,6 +20,7 @@ env:
 jobs:
   parity-gate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -65,8 +66,16 @@ jobs:
             target
           key: parity-cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
 
+      - name: Cache parity runtime downloads
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ironpress/parity-runtime
+          key: parity-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/parity-install-runtime.sh') }}
+
       - name: Install pinned Poppler and deterministic fonts
         if: steps.changes.outputs.run == 'true'
+        timeout-minutes: 15
         run: scripts/parity-install-runtime.sh
 
       - name: Verify generated interaction product

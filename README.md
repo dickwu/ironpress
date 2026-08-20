@@ -178,13 +178,21 @@ Full LaTeX support: fractions, roots, matrices, Greek letters, operators, delimi
 
 ## Python / Ruby
 
+Python and Ruby expose the same reusable converter controls as WebAssembly:
+page geometry, quality settings, sanitization, headers and footers, custom
+fonts, and optional CJK or emoji packs. See the complete
+[binding capability matrix](bindings/README.md).
+
 ```bash
 pip install ironpress
 ```
 
 ```python
 import ironpress
-pdf = ironpress.html_to_pdf("<h1>Hello</h1>")
+converter = ironpress.HtmlConverter()
+converter.page_size("Letter")
+converter.footer("Page {page} of {pages}")
+pdf = converter.convert("<h1>Hello</h1>")
 ```
 
 ```bash
@@ -193,7 +201,10 @@ gem install ironpress
 
 ```ruby
 require "ironpress"
-pdf = Ironpress.html_to_pdf("<h1>Hello</h1>")
+converter = Ironpress::HtmlConverter.new
+  .page_size("Letter")
+  .footer("Page {page} of {pages}")
+pdf = converter.convert("<h1>Hello</h1>")
 ```
 
 ## WASM
@@ -203,11 +214,15 @@ npm install ironpress
 ```
 
 ```javascript
-import init, { htmlToPdf, markdownToPdf } from 'ironpress';
+import init, { HtmlConverter } from 'ironpress';
 await init();
 
-const pdf = htmlToPdf('<h1>Hello</h1>');
+const converter = new HtmlConverter();
+converter.pageSize('Letter');
+converter.footer('Page {page} of {pages}');
+const pdf = converter.htmlToPdf('<h1>Hello</h1>');
 const blob = new Blob([pdf], { type: 'application/pdf' });
+converter.free();
 ```
 
 See [WASM & Playground](../../wiki/WASM-Playground).

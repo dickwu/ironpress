@@ -6,6 +6,70 @@ import init, { HtmlConverter } from '../pkg/ironpress.js';
 const wasm = await readFile(new URL('../pkg/ironpress_bg.wasm', import.meta.url));
 await init({ module_or_path: wasm });
 
+const cargoManifest = await readFile(new URL('../Cargo.toml', import.meta.url), 'utf8');
+const packageManifest = JSON.parse(
+  await readFile(new URL('../pkg/package.json', import.meta.url), 'utf8'),
+);
+const crateVersion = cargoManifest.match(
+  /^version\s*=\s*"([^"]+)"/m,
+)?.[1];
+if (packageManifest.version !== crateVersion) {
+  throw new Error(
+    `npm version ${packageManifest.version} does not match crate version ${crateVersion}`,
+  );
+}
+
+const portableMethods = [
+  'pageSize',
+  'pageSizeCustom',
+  'margin',
+  'marginSides',
+  'compress',
+  'jpegQuality',
+  'autoResizeImages',
+  'imageDpi',
+  'filterDpi',
+  'maskDpi',
+  'backgroundRasterDpi',
+  'occlusionCull',
+  'sanitize',
+  'addFont',
+  'addFontPack',
+  'header',
+  'footer',
+  'htmlToPdf',
+  'markdownToPdf',
+];
+
+const configured = new HtmlConverter();
+for (const method of portableMethods) {
+  if (typeof configured[method] !== 'function') {
+    throw new Error(`HtmlConverter.${method} is missing from the portable binding contract`);
+  }
+}
+configured.pageSizeCustom(320, 480);
+configured.marginSides(12, 13, 14, 15);
+configured.compress(false);
+configured.jpegQuality(82);
+configured.autoResizeImages(false);
+configured.imageDpi(144);
+configured.filterDpi(96);
+configured.maskDpi(144);
+configured.backgroundRasterDpi(120);
+configured.occlusionCull(true);
+configured.sanitize(true);
+configured.header('Contract header');
+configured.footer('Page {page} of {pages}');
+
+const configuredPdf = Buffer.from(configured.htmlToPdf('<h1>WASM binding</h1>'));
+if (!configuredPdf.subarray(0, 4).equals(Buffer.from('%PDF'))) {
+  throw new Error('configured WASM conversion did not produce a PDF');
+}
+if (!configuredPdf.includes(Buffer.from('/MediaBox [0 0 320 480]'))) {
+  throw new Error('pageSizeCustom did not reach the WASM conversion');
+}
+configured.free();
+
 const artifactDirectory = process.argv[2];
 const cases = artifactDirectory
   ? [

@@ -1,2 +1,6 @@
+# frozen_string_literal: true
+
 require "mkmf"
-create_makefile("ironpress/ironpress")
+require "rb_sys/mkmf"
+
+create_rust_makefile("ironpress/ironpress_ruby")

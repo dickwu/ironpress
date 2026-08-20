@@ -1075,115 +1075,11 @@ impl HtmlConverter {
     }
 }
 
-// --- WebAssembly bindings ---
-
 /// WASM bindings for browser-side PDF generation.
 ///
 /// Enable with `cargo build --features wasm --target wasm32-unknown-unknown`.
 #[cfg(feature = "wasm")]
-pub mod wasm {
-    use wasm_bindgen::prelude::*;
-
-    /// Reusable browser-side converter with explicitly installed font packs.
-    #[wasm_bindgen(js_name = HtmlConverter)]
-    pub struct WasmHtmlConverter {
-        converter: crate::HtmlConverter,
-    }
-
-    #[wasm_bindgen(js_class = "HtmlConverter")]
-    impl WasmHtmlConverter {
-        /// Create a converter with core fonts and no optional font packs.
-        #[wasm_bindgen(constructor)]
-        pub fn new() -> Self {
-            Self {
-                converter: crate::HtmlConverter::new(),
-            }
-        }
-
-        /// Parse and install one downloaded font-pack artifact.
-        #[wasm_bindgen(js_name = addFontPack)]
-        pub fn add_font_pack(&mut self, kind: &str, bytes: &[u8]) -> Result<(), JsError> {
-            let kind = kind
-                .parse::<crate::FontPackKind>()
-                .map_err(|error| JsError::new(&error.to_string()))?;
-            let pack = crate::FontPack::parse(kind, bytes.to_vec())
-                .map_err(|error| JsError::new(&error.to_string()))?;
-            self.converter.install_font_pack(pack);
-            Ok(())
-        }
-
-        /// Convert HTML with the packs already installed on this converter.
-        #[wasm_bindgen(js_name = htmlToPdf)]
-        pub fn html_to_pdf(&self, html: &str) -> Result<js_sys::Uint8Array, JsError> {
-            let bytes = self
-                .converter
-                .convert(html)
-                .map_err(|error| JsError::new(&error.to_string()))?;
-            Ok(js_sys::Uint8Array::from(bytes.as_slice()))
-        }
-
-        /// Convert Markdown with the packs already installed on this converter.
-        #[wasm_bindgen(js_name = markdownToPdf)]
-        pub fn markdown_to_pdf(&self, markdown: &str) -> Result<js_sys::Uint8Array, JsError> {
-            let bytes = self
-                .converter
-                .convert_markdown(markdown)
-                .map_err(|error| JsError::new(&error.to_string()))?;
-            Ok(js_sys::Uint8Array::from(bytes.as_slice()))
-        }
-    }
-
-    impl Default for WasmHtmlConverter {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    /// Convert HTML to PDF bytes.
-    ///
-    /// Returns a `Uint8Array` containing the PDF document.
-    #[wasm_bindgen(js_name = "htmlToPdf")]
-    pub fn html_to_pdf(html: &str) -> Result<js_sys::Uint8Array, JsError> {
-        let bytes = crate::html_to_pdf(html).map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
-    }
-
-    /// Convert Markdown to PDF bytes.
-    ///
-    /// Returns a `Uint8Array` containing the PDF document.
-    #[wasm_bindgen(js_name = "markdownToPdf")]
-    pub fn markdown_to_pdf(md: &str) -> Result<js_sys::Uint8Array, JsError> {
-        let bytes = crate::markdown_to_pdf(md).map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
-    }
-
-    /// Convert HTML to PDF with custom page size and margins.
-    ///
-    /// `page_width` and `page_height` are in points (1 inch = 72 points).
-    /// `margin_top`, `margin_right`, `margin_bottom`, `margin_left` are in points.
-    #[wasm_bindgen(js_name = "htmlToPdfCustom")]
-    pub fn html_to_pdf_custom(
-        html: &str,
-        page_width: f32,
-        page_height: f32,
-        margin_top: f32,
-        margin_right: f32,
-        margin_bottom: f32,
-        margin_left: f32,
-    ) -> Result<js_sys::Uint8Array, JsError> {
-        let bytes = crate::HtmlConverter::new()
-            .page_size(crate::PageSize::new(page_width, page_height))
-            .margin(crate::Margin {
-                top: margin_top,
-                right: margin_right,
-                bottom: margin_bottom,
-                left: margin_left,
-            })
-            .convert(html)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
-    }
-}
+pub mod wasm;
 
 #[cfg(test)]
 mod tests {

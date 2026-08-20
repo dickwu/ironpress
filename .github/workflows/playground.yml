@@ -24,6 +24,9 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  WASM_PACK_VERSION: 0.15.0
+
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -31,6 +34,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -55,11 +59,21 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: playground-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+          key: playground-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}-${{ hashFiles('Cargo.toml') }}
+
+      - name: Cache parity runtime downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ironpress/parity-runtime
+          key: parity-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/parity-install-runtime.sh') }}
 
       - name: Install build tools
+        timeout-minutes: 15
         run: |
-          command -v wasm-pack || cargo install wasm-pack
+          wasm-pack --version 2>/dev/null \
+            | grep -qx "wasm-pack ${WASM_PACK_VERSION}" \
+            || cargo install wasm-pack \
+              --version "${WASM_PACK_VERSION}" --locked --force
           scripts/parity-install-runtime.sh
 
       - name: Build playground

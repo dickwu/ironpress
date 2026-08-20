@@ -1,6 +1,6 @@
-# ironpress
+# Ironpress for Python
 
-Pure Rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies.
+Generate PDF bytes from HTML or Markdown without launching a browser.
 
 ## Installation
 
@@ -8,45 +8,55 @@ Pure Rust HTML/CSS/Markdown to PDF converter. No browser, no system dependencies
 pip install ironpress
 ```
 
-## Quick Start
+Ironpress publishes ABI3 wheels for CPython 3.8 and later on Linux, macOS, and
+Windows.
+
+## Usage
 
 ```python
 import ironpress
 
-# Simple conversion
-pdf = ironpress.html_to_pdf("<h1>Hello World</h1><p>Generated with ironpress.</p>")
-with open("output.pdf", "wb") as f:
-    f.write(pdf)
-
-# Markdown
-pdf = ironpress.markdown_to_pdf("# Hello\n\nGenerated from **Markdown**.")
-
-# Advanced options
-converter = ironpress.HtmlConverter()
-converter.page_size("Letter")
-converter.landscape(True)
-converter.margin(36.0)  # 0.5 inch margins
-pdf = converter.convert("<h1>Landscape PDF</h1>")
+pdf = ironpress.html_to_pdf("<h1>Hello</h1>")
+with open("output.pdf", "wb") as output:
+    output.write(pdf)
 ```
 
-## API
+Use a converter when several options must compose or multiple documents share
+the same policy:
 
-### `html_to_pdf(html: str) -> bytes`
-Convert an HTML string to PDF bytes.
+```python
+converter = ironpress.HtmlConverter()
+converter.page_size("Letter")
+converter.margin_sides(36, 54, 36, 54)
+converter.header("Quarterly report")
+converter.footer("Page {page} of {pages}")
+converter.sanitize(True)
 
-### `markdown_to_pdf(markdown: str) -> bytes`
-Convert a Markdown string to PDF bytes.
+pdf = converter.convert("<h1>Results</h1>")
+```
 
-### `HtmlConverter`
-Configurable converter with options:
-- `page_size(name)` — `"A4"`, `"Letter"`, or `"Legal"`
-- `landscape(enabled)` — landscape orientation
-- `margin(points)` — uniform margin in points (72 points = 1 inch)
-- `convert(html)` → PDF bytes
-- `convert_markdown(markdown)` → PDF bytes
+The converter supports page geometry, PDF and image quality, sanitization,
+headers and footers, custom TTF fonts, and optional CJK or emoji packs. Native
+Python also supports constrained local resources through `base_path()` and
+`resource_root()`, plus direct file output.
 
-## Performance
+See the [binding capability matrix](../README.md) for the contract shared with
+Rust, Ruby, and WebAssembly.
 
-- **10-100x faster** than browser-based solutions (Puppeteer, Playwright)
-- **~5MB** binary, no runtime dependencies
-- Instant startup, no browser process
+## Font packs
+
+Ironpress never downloads fallback fonts while rendering. Download the artifact
+your application needs, verify it as part of deployment, then install its bytes:
+
+```python
+from pathlib import Path
+
+converter = ironpress.HtmlConverter()
+converter.add_font_pack(
+    "cjk-jp",
+    Path("ironpress-font-cjk-jp.ttf").read_bytes(),
+)
+pdf = converter.convert("<p lang='ja'>日本語</p>")
+```
+
+Valid pack names are `cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`.

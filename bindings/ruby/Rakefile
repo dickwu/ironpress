@@ -1,0 +1,18 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rake/extensiontask"
+require "bundler/gem_tasks"
+
+Rake::ExtensionTask.new("ironpress_ruby") do |extension|
+  extension.ext_dir = "ext/ironpress"
+  extension.lib_dir = "lib/ironpress"
+  extension.source_pattern = "*.{rb,rs,toml,lock}"
+end
+
+Rake::TestTask.new do |task|
+  task.libs << "lib"
+  task.pattern = "test/**/*_test.rb"
+end
+
+task default: %i[compile test]
