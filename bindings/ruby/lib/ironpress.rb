@@ -1,7 +1,18 @@
 # frozen_string_literal: true
 
+require "rbconfig"
 require_relative "ironpress/version"
-require_relative "ironpress/ironpress_ruby"
+
+ruby_api_version = RUBY_VERSION.split(".").first(2).join(".")
+versioned_extension = File.join(__dir__, "ironpress", ruby_api_version, "ironpress_ruby")
+source_extension = File.join(__dir__, "ironpress", "ironpress_ruby")
+extension_suffix = RbConfig::CONFIG.fetch("DLEXT")
+extension = if File.file?("#{versioned_extension}.#{extension_suffix}")
+              versioned_extension
+            else
+              source_extension
+            end
+require extension
 
 module Ironpress
   # Mutable Ruby facade over immutable native converter values.
