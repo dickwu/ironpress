@@ -1,13 +1,23 @@
 # frozen_string_literal: true
 
 require "rake/testtask"
-require "rake/extensiontask"
 require "bundler/gem_tasks"
+require "rb_sys/extensiontask"
 
-Rake::ExtensionTask.new("ironpress_ruby") do |extension|
+GEMSPEC = Gem::Specification.load("ironpress.gemspec")
+
+RbSys::ExtensionTask.new("ironpress-ruby", GEMSPEC) do |extension|
   extension.ext_dir = "ext/ironpress"
   extension.lib_dir = "lib/ironpress"
   extension.source_pattern = "*.{rb,rs,toml,lock}"
+  extension.cross_compile = true
+  extension.cross_platform = [
+    "x86_64-linux",
+    "aarch64-linux",
+    "x86_64-darwin",
+    "arm64-darwin",
+    "x64-mingw-ucrt"
+  ]
 end
 
 Rake::TestTask.new do |task|

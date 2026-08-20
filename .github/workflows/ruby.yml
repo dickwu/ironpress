@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - "bindings/ruby/**"
+      - ".github/workflows/ruby.yml"
   workflow_dispatch:
     inputs:
       publish:
