@@ -4,7 +4,14 @@ import initialize from './ironpress.js';
 
 export * from './ironpress.js';
 
-export default async function init() {
+let initialization;
+
+export default function init() {
+  initialization ??= initializeNode();
+  return initialization;
+}
+
+async function initializeNode() {
   try {
     const wasm = await readFile(new URL('./ironpress_bg.wasm', import.meta.url));
     return await initialize({ module_or_path: wasm });

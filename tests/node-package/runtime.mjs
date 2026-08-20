@@ -7,7 +7,10 @@ if (typeof browserInit !== 'function') {
   throw new Error('the browser package entry point no longer exports its initializer');
 }
 
-await init();
+const [firstRuntime, secondRuntime] = await Promise.all([init(), init()]);
+if (firstRuntime !== secondRuntime || (await init()) !== firstRuntime) {
+  throw new Error('Node initialization is not idempotent');
+}
 
 const converter = new HtmlConverter();
 converter.pageSizeCustom(320, 480);
