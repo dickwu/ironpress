@@ -14,7 +14,10 @@ on:
       - 'scripts/parity*.sh'
       - 'scripts/check-site.mjs'
       - 'scripts/build-font-packs.sh'
+      - 'scripts/build-wasm-package.sh'
+      - 'scripts/prepare-wasm-package.mjs'
       - 'scripts/test-wasm-font-packs.mjs'
+      - 'bindings/wasm/**'
       - 'font-packs/**'
       - 'Cargo.toml'
       - '.github/workflows/playground.yml'
@@ -77,7 +80,7 @@ jobs:
           scripts/parity-install-runtime.sh
 
       - name: Build playground
-        run: wasm-pack build --target web --features wasm --no-default-features
+        run: scripts/build-wasm-package.sh
 
       - name: Build optional font packs
         run: scripts/build-font-packs.sh dist/font-packs

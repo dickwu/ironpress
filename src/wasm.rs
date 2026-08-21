@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{FontPack, FontPackKind, HtmlConverter, Margin, PageSize};
 
-/// Reusable browser-side converter.
+/// Reusable WebAssembly converter for browser and Node.js hosts.
 #[wasm_bindgen(js_name = HtmlConverter)]
 pub struct WasmHtmlConverter {
     converter: HtmlConverter,

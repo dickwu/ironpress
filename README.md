@@ -31,7 +31,7 @@ subprocess, or system dependencies.
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
 serialization without launching Chrome. Use it from Rust, the CLI, Python, Ruby,
-or WebAssembly.
+Node.js, or browser WebAssembly.
 
 ## Why ironpress?
 
@@ -128,7 +128,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **SVG** | Vector rendering: path, shapes, gradients, transforms, clip paths, `viewBox` | [Layout Engine](../../wiki/Layout-Engine) |
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
-| **WASM** | `npm install ironpress` - runs 100% client-side in the browser | [WASM & Playground](../../wiki/WASM-Playground) |
+| **WASM** | `npm install ironpress` - runs in browsers and Node.js | [WASM & Playground](../../wiki/WASM-Playground) |
 | **Testing** | 3,200+ unit tests, property-based tests, 6 fuzz targets, 1,664-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
 
 ## Custom fonts
@@ -213,6 +213,8 @@ pdf = converter.convert("<h1>Hello</h1>")
 npm install ironpress
 ```
 
+Browser entry point:
+
 ```javascript
 import init, { HtmlConverter } from 'ironpress';
 await init();
@@ -224,6 +226,25 @@ const pdf = converter.htmlToPdf('<h1>Hello</h1>');
 const blob = new Blob([pdf], { type: 'application/pdf' });
 converter.free();
 ```
+
+Node.js entry point:
+
+```javascript
+import init, { HtmlConverter } from 'ironpress/node';
+
+await init();
+
+const converter = new HtmlConverter();
+converter.pageSize('Letter');
+const pdf = converter.htmlToPdf('<h1>Hello from Node.js</h1>');
+converter.free();
+```
+
+`ironpress/node` locates and loads the WebAssembly binary shipped in the npm
+package. Applications do not need to resolve or read it themselves. This entry
+point uses the portable WebAssembly contract: document resources, custom fonts,
+and optional font packs remain caller-provided bytes. Local paths, direct file
+output, streaming, and remote fetching are not available.
 
 See [WASM & Playground](../../wiki/WASM-Playground).
 

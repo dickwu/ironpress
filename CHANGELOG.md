@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The existing npm package now exposes `ironpress/node`, an ESM entry point that
+  loads its packaged WebAssembly binary without consumer-side file handling.
+
+### CI
+
+- The packed npm artifact is installed, type-checked, and rendered through every
+  supported Node.js LTS line before that exact artifact can be published.
+
 ## [1.5.3] — 2026-08-20
 
 ### Added
