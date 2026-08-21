@@ -19,6 +19,35 @@ const pages = [
       "https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/",
   },
   {
+    path: "site/get-started/index.html",
+    canonical: "https://gastongouron.github.io/ironpress/get-started/",
+    structuredDataTypes: ["CollectionPage", "ItemList"],
+    requiredSections: ["choose-runtime", "capabilities"],
+  },
+  ...[
+    ["rust", ["cargo add ironpress", "use ironpress::html_to_pdf;"]],
+    ["cli", ["cargo install ironpress", "ironpress invoice.html invoice.pdf"]],
+    ["python", ["python -m pip install ironpress", "ironpress.html_to_pdf"]],
+    ["ruby", ["gem install ironpress", "Ironpress.html_to_pdf"]],
+    ["browser", ["npm install ironpress", 'from "ironpress";', "await init();", "converter.free();"]],
+    ["node", ['from "ironpress/node";', "await init();", "converter.free();"]],
+  ].map(([runtime, requiredText]) => ({
+      path: `site/get-started/${runtime}/index.html`,
+      canonical: `https://gastongouron.github.io/ironpress/get-started/${runtime}/`,
+      structuredDataTypes: ["TechArticle"],
+      requiredText,
+      requiredSections: [
+        "install",
+        "first-pdf",
+        "markdown",
+        "configure",
+        "resources",
+        "limits",
+        "next",
+      ],
+    }),
+  ),
+  {
     path: "playground/index.html",
     canonical: "https://gastongouron.github.io/ironpress/playground/",
   },
@@ -58,6 +87,9 @@ for (const page of pages) {
   const documentMarkup = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  const proseMarkup = documentMarkup
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, "")
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
 
   if (!/^<!doctype html>/i.test(html.trimStart())) {
     report(page.path, "must start with an HTML5 doctype");
@@ -108,6 +140,12 @@ for (const page of pages) {
   if (matches(documentMarkup, /<main\b/gi).length !== 1) {
     report(page.path, "must contain exactly one main landmark");
   }
+  if (/IronPress|Ironpress/.test(proseMarkup)) {
+    report(page.path, 'must use the lowercase "ironpress" brand in prose');
+  }
+  if (proseMarkup.includes("—")) {
+    report(page.path, "must not use em dashes in prose");
+  }
   for (const image of matches(documentMarkup, /<img\b[^>]*>/gi)) {
     if (!/\balt=["'][^"']+["']/i.test(image[0])) {
       report(page.path, "every image must have non-empty alt text");
@@ -128,6 +166,11 @@ for (const page of pages) {
       report(page.path, `must expose ${type} JSON-LD structured data`);
     }
   }
+  for (const text of page.requiredText ?? []) {
+    if (!html.includes(text)) {
+      report(page.path, `must include the tested consumer contract: ${text}`);
+    }
+  }
 
   const structuredData = matches(
     html,
@@ -146,6 +189,11 @@ for (const page of pages) {
     const id = idAttribute[1];
     if (seenIds.has(id)) report(page.path, `contains duplicate id="${id}"`);
     seenIds.add(id);
+  }
+  for (const id of page.requiredSections ?? []) {
+    if (!seenIds.has(id)) {
+      report(page.path, `must contain the standard #${id} section`);
+    }
   }
 }
 
@@ -194,6 +242,7 @@ if (
 
 await load("site/assets/styles.css");
 await load("site/assets/guide.css");
+await load("site/assets/get-started.css");
 await requireFile("site/assets/ironpress-logo.png");
 
 const readme = await load("README.md");

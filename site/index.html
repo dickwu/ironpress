@@ -48,7 +48,7 @@
             "name": "ironpress",
             "codeRepository": "https://github.com/gastongouron/ironpress",
             "programmingLanguage": "Rust",
-            "runtimePlatform": ["Rust", "Python", "Ruby", "WebAssembly"],
+            "runtimePlatform": ["Rust", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
             "license": "https://opensource.org/license/mit",
             "description": "An in-process HTML, CSS, and Markdown to PDF engine written in Rust."
           }
@@ -72,7 +72,7 @@
         </a>
         <nav aria-label="Primary navigation">
           <a href="#features">Features</a>
-          <a href="./guides/html-to-pdf-rust/">Guide</a>
+          <a href="./get-started/">Get started</a>
           <a href="./playground/">Playground</a>
           <a
             class="nav-github"
@@ -93,13 +93,13 @@
               a subprocess, or system dependencies.
             </p>
             <div class="button-row">
-              <a class="button button-primary" href="./playground/">
-                Try the playground <span aria-hidden="true">→</span>
+              <a class="button button-primary" href="./get-started/">
+                Get started <span aria-hidden="true">→</span>
               </a>
               <a
                 class="button button-secondary"
-                href="https://github.com/gastongouron/ironpress"
-              >View on GitHub</a>
+                href="./playground/"
+              >Try the playground</a>
             </div>
             <p class="install-line">
               <span aria-hidden="true">$</span>
@@ -148,7 +148,7 @@
           <p><strong>0.93 ms</strong><span>simple HTML median</span></p>
           <p><strong>3,200+</strong><span>tests</span></p>
           <p><strong>1,664</strong><span>parity fixtures</span></p>
-          <p><strong>4</strong><span>language targets</span></p>
+          <p><strong>6</strong><span>runtime paths</span></p>
         </div>
       </section>
 
@@ -198,11 +198,11 @@
               <span class="feature-number">04</span>
               <h3>Multiple runtimes</h3>
               <p>
-                Use the same core from Rust, Python, Ruby, or WebAssembly. The
-                browser playground runs completely client-side.
+                Use the same core from Rust, the CLI, Python, Ruby, browser
+                WebAssembly, or Node.js.
               </p>
               <ul class="runtime-list" aria-label="Supported runtimes">
-                <li>Rust</li><li>Python</li><li>Ruby</li><li>WASM</li>
+                <li>Rust</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
               </ul>
             </article>
             <article class="feature-card">
@@ -221,13 +221,13 @@
         <div class="shell">
           <div class="section-heading section-heading-light">
             <div>
-              <p class="eyebrow"><span></span> One core, four entry points</p>
+              <p class="eyebrow"><span></span> One core, six paths</p>
               <h2>Start in the language<br>you already ship.</h2>
             </div>
             <p>
               The rendering engine is Rust. Every runtime shares the same
               portable converter controls for pages, quality, fonts, and safety.
-              <a href="https://github.com/gastongouron/ironpress/blob/main/bindings/README.md">Compare bindings.</a>
+              <a href="./get-started/">Choose your runtime.</a>
             </p>
           </div>
           <div class="code-grid">
@@ -238,6 +238,12 @@
 <b>let</b> pdf = html_to_pdf(
     <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
 )?;</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>CLI</span><a href="./get-started/cli/">guide →</a></p>
+              <pre><code>ironpress invoice.html \
+  invoice.pdf \
+  --page-size a4</code></pre>
             </article>
             <article class="code-card">
               <p><span>Python</span><a href="https://pypi.org/project/ironpress/">PyPI ↗</a></p>
@@ -256,12 +262,22 @@ pdf = Ironpress.html_to_pdf(
 )</code></pre>
             </article>
             <article class="code-card">
-              <p><span>WebAssembly</span><a href="https://www.npmjs.com/package/ironpress">npm ↗</a></p>
-              <pre><code><b>import</b> { htmlToPdf } <b>from</b> <em>"ironpress"</em>;
+              <p><span>Browser</span><a href="./get-started/browser/">guide →</a></p>
+              <pre><code><b>import</b> init, { htmlToPdf } <b>from</b> <em>"ironpress"</em>;
+
+<b>await</b> init();
 
 <b>const</b> pdf = htmlToPdf(
   <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
 );</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>Node.js</span><a href="./get-started/node/">guide →</a></p>
+              <pre><code><b>import</b> init, { htmlToPdf }
+  <b>from</b> <em>"ironpress/node"</em>;
+
+<b>await</b> init();
+<b>const</b> pdf = htmlToPdf(html);</code></pre>
             </article>
           </div>
         </div>
@@ -300,10 +316,10 @@ pdf = Ironpress.html_to_pdf(
             <h2>Give your HTML<br>the press treatment.</h2>
           </div>
           <div>
-            <p>Load the WebAssembly build and generate a PDF locally in your browser.</p>
+            <p>Install the package for your runtime and generate a PDF in your own process.</p>
             <div class="button-row">
-              <a class="button button-primary" href="./playground/">Open playground <span aria-hidden="true">→</span></a>
-              <a class="button button-secondary" href="https://docs.rs/ironpress">Read the API docs</a>
+              <a class="button button-primary" href="./get-started/">Choose your runtime <span aria-hidden="true">→</span></a>
+              <a class="button button-secondary" href="./playground/">Open playground</a>
             </div>
           </div>
         </div>
