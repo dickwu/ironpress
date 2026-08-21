@@ -1,58 +1,86 @@
-# Ironpress for Ruby
+# ironpress for Ruby
 
-Generate PDF bytes from HTML or Markdown without launching a browser.
+Generate PDF output from HTML or Markdown with a native Rust renderer. No
+browser process or system PDF dependency is required.
 
-## Installation
+[Read the complete Ruby getting-started guide](https://gastongouron.github.io/ironpress/get-started/ruby/).
 
-```ruby
-gem "ironpress"
+## Requirements
+
+- Ruby 3.0 or later
+- Linux, macOS, or Windows
+
+Releases include supported native gems plus a source gem.
+
+## Install
+
+```bash
+bundle add ironpress
 ```
 
-Ironpress supports Ruby 3.0 and later. Releases include a source gem and native
-gems for Linux, macOS, and Windows.
+Or install the gem globally:
 
-## Usage
+```bash
+gem install ironpress
+```
+
+## Create your first PDF
 
 ```ruby
 require "ironpress"
 
-pdf = Ironpress.html_to_pdf("<h1>Hello</h1>")
+pdf = Ironpress.html_to_pdf("<h1>Hello from Ruby</h1>")
 File.binwrite("output.pdf", pdf)
 ```
 
-Configuration methods return the converter, so policies can be composed in an
-idiomatic chain:
+The result is a binary Ruby `String`. Write it with `File.binwrite`, return it
+from a web response, or store it in your application.
+
+## Render Markdown
+
+```ruby
+pdf = Ironpress.markdown_to_pdf("# Release notes\n\nEverything shipped.")
+```
+
+## Configure and reuse a converter
 
 ```ruby
 converter = Ironpress::HtmlConverter.new
   .page_size("Letter")
-  .margin_sides(36, 54, 36, 54)
+  .margin_sides(36, 48, 36, 48)
   .header("Quarterly report")
   .footer("Page {page} of {pages}")
-  .sanitize(true)
 
 pdf = converter.convert("<h1>Results</h1>")
+markdown_pdf = converter.convert_markdown("# Results")
 ```
 
-The converter supports page geometry, PDF and image quality, sanitization,
-headers and footers, custom TTF fonts, and optional CJK or emoji packs. Native
-Ruby also supports constrained local resources through `base_path` and
-`resource_root`, plus direct file output.
+Configuration methods return the converter, so policies compose in an idiomatic
+chain. Use `convert_to_file` or `convert_markdown_to_file` for direct output.
 
-See the [binding capability matrix](../README.md) for the contract shared with
-Rust, Python, and WebAssembly.
+## Local resources and fonts
 
-## Font packs
-
-Ironpress never downloads fallback fonts while rendering. Download the artifact
-your application needs, verify it as part of deployment, then install its bytes:
+Local URLs are denied until a canonical boundary is configured:
 
 ```ruby
-converter = Ironpress::HtmlConverter.new.add_font_pack(
-  "cjk-jp",
-  File.binread("ironpress-font-cjk-jp.ttf")
-)
-pdf = converter.convert("<p lang='ja'>日本語</p>")
+converter = Ironpress::HtmlConverter.new
+  .base_path("templates")
+  .resource_root(".")
+  .add_font("Inter", File.binread("assets/Inter.ttf"))
 ```
 
-Valid pack names are `cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`.
+Optional fallback packs enter through `add_font_pack`. Valid names are
+`cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`. Rendering never downloads
+a font pack.
+
+## Limits and errors
+
+- Invalid named settings raise `ArgumentError`.
+- Conversion failures raise `RuntimeError`.
+- HTML sanitization is enabled by default.
+- The binding has no async or streaming conversion API.
+- Remote HTTP document resources are not available.
+- JavaScript and browser DOM execution are not supported.
+
+See the [binding capability matrix](../README.md) for the contract shared with
+Rust, Python, browser WebAssembly, and Node.js.
