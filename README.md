@@ -24,7 +24,7 @@ subprocess, or system dependencies.
 [![Playground](https://img.shields.io/badge/try_it-playground-blueviolet.svg)](https://gastongouron.github.io/ironpress/playground/)
 [![Parity report](https://img.shields.io/badge/parity-report-ff69b4.svg)](https://gastongouron.github.io/ironpress/parity/reports/)
 
-**[Website](https://gastongouron.github.io/ironpress/)** | **[Playground](https://gastongouron.github.io/ironpress/playground/)** | **[HTML-to-PDF guide](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/)** | **[Parity report](https://gastongouron.github.io/ironpress/parity/reports/)** | **[Wiki](../../wiki)**
+**[Website](https://gastongouron.github.io/ironpress/)** | **[Get Started](https://gastongouron.github.io/ironpress/get-started/)** | **[Playground](https://gastongouron.github.io/ironpress/playground/)** | **[HTML-to-PDF guide](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/)** | **[Parity report](https://gastongouron.github.io/ironpress/parity/reports/)** | **[Wiki](../../wiki)**
 
 </div>
 
@@ -54,9 +54,13 @@ std::fs::write("output.pdf", pdf).unwrap();
 let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
 ```
 
-See the practical guide to [HTML-to-PDF rendering in Rust without Headless
+Choose a complete [getting-started
+guide](https://gastongouron.github.io/ironpress/get-started/) for Rust, the CLI,
+Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
+[HTML-to-PDF rendering without Headless
 Chrome](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/), or
-paste a document into the [browser playground](https://gastongouron.github.io/ironpress/playground/).
+paste a document into the [browser
+playground](https://gastongouron.github.io/ironpress/playground/).
 
 ## Performance
 

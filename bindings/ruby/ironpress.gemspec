@@ -12,6 +12,8 @@ Gem::Specification.new do |spec|
     dependencies. Native Rust extension for maximum performance.
   DESCRIPTION
   spec.homepage = "https://github.com/gastongouron/ironpress"
+  spec.metadata["documentation_uri"] = "https://gastongouron.github.io/ironpress/get-started/ruby/"
+  spec.metadata["source_code_uri"] = "https://github.com/gastongouron/ironpress"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0"
 

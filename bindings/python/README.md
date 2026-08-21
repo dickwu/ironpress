@@ -1,62 +1,82 @@
-# Ironpress for Python
+# ironpress for Python
 
-Generate PDF bytes from HTML or Markdown without launching a browser.
+Generate PDF bytes from HTML or Markdown with a native Rust renderer. No
+browser process or system PDF dependency is required.
 
-## Installation
+[Read the complete Python getting-started guide](https://gastongouron.github.io/ironpress/get-started/python/).
+
+## Requirements
+
+- CPython 3.8 or later
+- Linux, macOS, or Windows
+
+Published ABI3 wheels do not require a Rust toolchain.
+
+## Install
 
 ```bash
-pip install ironpress
+python -m pip install ironpress
 ```
 
-Ironpress publishes ABI3 wheels for CPython 3.8 and later on Linux, macOS, and
-Windows.
-
-## Usage
+## Create your first PDF
 
 ```python
+from pathlib import Path
 import ironpress
 
-pdf = ironpress.html_to_pdf("<h1>Hello</h1>")
-with open("output.pdf", "wb") as output:
-    output.write(pdf)
+pdf = ironpress.html_to_pdf("<h1>Hello from Python</h1>")
+Path("output.pdf").write_bytes(pdf)
 ```
 
-Use a converter when several options must compose or multiple documents share
-the same policy:
+The result is a Python `bytes` value. Write it to a file, return it from a web
+response, or store it in your application.
+
+## Render Markdown
+
+```python
+pdf = ironpress.markdown_to_pdf("# Release notes\n\nEverything shipped.")
+```
+
+## Configure and reuse a converter
 
 ```python
 converter = ironpress.HtmlConverter()
 converter.page_size("Letter")
-converter.margin_sides(36, 54, 36, 54)
+converter.margin_sides(36, 48, 36, 48)
 converter.header("Quarterly report")
 converter.footer("Page {page} of {pages}")
-converter.sanitize(True)
 
 pdf = converter.convert("<h1>Results</h1>")
+markdown_pdf = converter.convert_markdown("# Results")
 ```
 
-The converter supports page geometry, PDF and image quality, sanitization,
-headers and footers, custom TTF fonts, and optional CJK or emoji packs. Native
-Python also supports constrained local resources through `base_path()` and
-`resource_root()`, plus direct file output.
+Python configuration methods mutate the converter. Use `convert_to_file` or
+`convert_markdown_to_file` when direct output is more convenient than bytes.
 
-See the [binding capability matrix](../README.md) for the contract shared with
-Rust, Ruby, and WebAssembly.
+## Local resources and fonts
 
-## Font packs
-
-Ironpress never downloads fallback fonts while rendering. Download the artifact
-your application needs, verify it as part of deployment, then install its bytes:
+Local URLs are denied until a canonical boundary is configured:
 
 ```python
 from pathlib import Path
 
 converter = ironpress.HtmlConverter()
-converter.add_font_pack(
-    "cjk-jp",
-    Path("ironpress-font-cjk-jp.ttf").read_bytes(),
-)
-pdf = converter.convert("<p lang='ja'>日本語</p>")
+converter.base_path("templates")
+converter.resource_root(".")
+converter.add_font("Inter", Path("assets/Inter.ttf").read_bytes())
 ```
 
-Valid pack names are `cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`.
+Optional fallback packs enter through `add_font_pack`. Valid names are
+`cjk-jp`, `cjk-kr`, `cjk-sc`, `cjk-tc`, and `emoji`. Rendering never downloads
+a font pack.
+
+## Limits and errors
+
+- Invalid configuration and conversion failures raise `ValueError`.
+- HTML sanitization is enabled by default.
+- The binding has no async or streaming conversion API.
+- Remote HTTP document resources are not available.
+- JavaScript and browser DOM execution are not supported.
+
+See the [binding capability matrix](../README.md) for the contract shared with
+Rust, Ruby, browser WebAssembly, and Node.js.

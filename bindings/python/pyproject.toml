@@ -22,6 +22,7 @@ keywords = ["pdf", "html", "css", "markdown", "converter"]
 
 [project.urls]
 Homepage = "https://github.com/gastongouron/ironpress"
+Documentation = "https://gastongouron.github.io/ironpress/get-started/python/"
 Repository = "https://github.com/gastongouron/ironpress"
 
 [tool.maturin]

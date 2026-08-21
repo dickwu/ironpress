@@ -41,8 +41,11 @@ the Python and Ruby artifacts before a release can publish them. The generated
 npm tarball is installed, type-checked, and rendered through Node.js 22 and 24;
 the browser entry remains a separate required check.
 
-See the runtime guides for language-specific examples:
+Start with the guide for your runtime:
 
-- [Python](python/README.md)
-- [Ruby](ruby/README.md)
-- [WebAssembly and playground](https://github.com/gastongouron/ironpress/wiki/WASM-Playground)
+- [Rust](https://gastongouron.github.io/ironpress/get-started/rust/)
+- [CLI](https://gastongouron.github.io/ironpress/get-started/cli/)
+- [Python](https://gastongouron.github.io/ironpress/get-started/python/)
+- [Ruby](https://gastongouron.github.io/ironpress/get-started/ruby/)
+- [Browser JavaScript](https://gastongouron.github.io/ironpress/get-started/browser/)
+- [Node.js](https://gastongouron.github.io/ironpress/get-started/node/)
