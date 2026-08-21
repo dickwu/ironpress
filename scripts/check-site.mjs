@@ -253,11 +253,29 @@ if (readme !== null) {
   }
   for (const url of [
     "https://gastongouron.github.io/ironpress/",
+    "https://gastongouron.github.io/ironpress/get-started/",
     "https://gastongouron.github.io/ironpress/playground/",
     "https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/",
   ]) {
     if (!readme.includes(url)) {
       report("README.md", `must link to ${url}`);
+    }
+  }
+}
+
+const bindingsReadme = await load("bindings/README.md");
+if (bindingsReadme !== null) {
+  for (const runtime of [
+    "rust",
+    "cli",
+    "python",
+    "ruby",
+    "browser",
+    "node",
+  ]) {
+    const url = `https://gastongouron.github.io/ironpress/get-started/${runtime}/`;
+    if (!bindingsReadme.includes(url)) {
+      report("bindings/README.md", `must link to ${url}`);
     }
   }
 }
