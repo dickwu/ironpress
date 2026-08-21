@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    ironpress (1.5.3)
+    ironpress (1.5.4)
       rb_sys (~> 0.9)
 
 GEM

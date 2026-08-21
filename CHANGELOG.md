@@ -2,10 +2,17 @@
 
 ## Unreleased
 
+## [1.5.4] — 2026-08-22
+
 ### Added
 
 - The existing npm package now exposes `ironpress/node`, an ESM entry point that
   loads its packaged WebAssembly binary without consumer-side file handling.
+
+### Fixed
+
+- Ruby native gems load their extension from the directory for the active Ruby
+  API version on every supported platform.
 
 ### CI
 
@@ -13,6 +20,19 @@
   supported Node.js LTS line before that exact artifact can be published.
 - Static site checks parse HTML through a standards-compliant tree instead of
   filtering source markup with regular expressions.
+- Ruby native-gem builds use the crate-aware extension task and a writable Ruby
+  environment.
+- Crates.io availability checks identify the release workflow instead of timing
+  out on an anonymous request.
+- Font-pack assets target the current repository explicitly when attached to a
+  GitHub release.
+
+### Documentation
+
+- A canonical Get Started hub now covers Rust, the CLI, Python, Ruby, browser
+  JavaScript, and Node.js with the same task-oriented structure.
+- The website, root README, binding matrix, and package READMEs route users to
+  the guide for their runtime.
 
 ## [1.5.3] — 2026-08-20
 
