@@ -8,6 +8,7 @@
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
 #   bindings/ruby/lib/ironpress/version.rb
 #   bindings/ruby/ext/ironpress/Cargo.toml
+#   bindings/ruby/Gemfile.lock
 #
 set -euo pipefail
 
@@ -45,6 +46,11 @@ update_ruby_version() {
     perl -i -pe 's/(VERSION\s*=\s*)"[^"]+"/$1"'"$NEW"'"/' "$file"
 }
 
+update_ruby_lock_version() {
+    local file="$1"
+    perl -i -pe 's/^(\s*ironpress \()[^)]*(\))$/${1}'"$NEW"'${2}/' "$file"
+}
+
 update_core_requirement() {
     local file="$1"
     perl -i -pe 'if (/^ironpress-core\s*=/) { s/version\s*=\s*"=[^"]+"/version = "='"$NEW"'"/ }' "$file"
@@ -59,6 +65,7 @@ update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core re
 bump_toml_version  "bindings/ruby/ext/ironpress/Cargo.toml" && echo "  bindings/ruby/ext/ironpress/Cargo.toml"
 update_core_requirement "bindings/ruby/ext/ironpress/Cargo.toml" && echo "  Ruby core requirement"
 update_ruby_version "bindings/ruby/lib/ironpress/version.rb" && echo "  bindings/ruby/lib/ironpress/version.rb"
+update_ruby_lock_version "bindings/ruby/Gemfile.lock" && echo "  bindings/ruby/Gemfile.lock"
 
 echo ""
 scripts/check-release-versions.sh "$NEW"

@@ -16,6 +16,11 @@ ruby_runtime_version() {
     head -n 1
 }
 
+ruby_lock_version() {
+  sed -n 's/^[[:space:]]*ironpress (\([^)]*\))$/\1/p' "$1" |
+    head -n 1
+}
+
 core_requirement() {
   sed -n 's/^ironpress-core.*version[[:space:]]*=[[:space:]]*"=\([^"]*\)".*/\1/p' "$1"
 }
@@ -46,6 +51,7 @@ check_version "Python core requirement" "$(core_requirement bindings/python/Carg
 check_version "Ruby crate" "$(package_version bindings/ruby/ext/ironpress/Cargo.toml)"
 check_version "Ruby core requirement" "$(core_requirement bindings/ruby/ext/ironpress/Cargo.toml)"
 check_version "Ruby runtime" "$(ruby_runtime_version bindings/ruby/lib/ironpress/version.rb)"
+check_version "Ruby lockfile" "$(ruby_lock_version bindings/ruby/Gemfile.lock)"
 
 if ((MISMATCHES > 0)); then
   exit 1
