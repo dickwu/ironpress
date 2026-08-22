@@ -30,7 +30,16 @@ public sealed partial class HtmlConverter
     }
 
     /// <summary>Use one finite physical margin on every page side.</summary>
-    public HtmlConverter SetMargin(float points) => SetMargins(PageMargins.Uniform(points));
+    public HtmlConverter SetMargin(float points)
+    {
+        var margin = PageMargins.Uniform(points);
+        EnsureOpen();
+        var status = NativeMethods.ironpress_converter_set_margin(
+            converter,
+            margin.Top,
+            out var error);
+        return Complete(status, error);
+    }
 
     /// <summary>Use validated physical page margins in CSS clockwise order.</summary>
     public HtmlConverter SetMargins(PageMargins margins)

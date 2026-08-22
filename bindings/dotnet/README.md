@@ -7,7 +7,7 @@ consumers do not need Rust, Chrome, or a subprocess.
 ## Install
 
 ```bash
-dotnet add package Ironpress --version 1.5.4
+dotnet add package Ironpress
 ```
 
 The initial package targets .NET 8 or newer and includes native assets for:

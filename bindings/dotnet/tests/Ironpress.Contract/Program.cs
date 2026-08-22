@@ -102,6 +102,7 @@ internal static class Program
         Equal(IronpressErrorKind.Font, fontError.Kind, "Font error category changed.");
 
         Throws<ArgumentOutOfRangeException>(() => PageDimensions.FromPoints(0, 100));
+        Throws<ArgumentOutOfRangeException>(() => converter.SetMargin(float.NaN));
         Throws<ArgumentException>(() => converter.SetHeader("\ud800"));
     }
 
