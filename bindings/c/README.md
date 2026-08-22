@@ -89,5 +89,7 @@ bindings/c/generate-header.sh
 ```
 
 CI rejects a header that does not match the Rust declarations. It links the C
-lifecycle test against both library forms and runs the shared-library path under
-Valgrind on Linux.
+lifecycle test against both library forms. Linux runs the debug library under
+Valgrind and exercises the optimized release library separately. Keeping memory
+diagnostics on the unoptimized build avoids compiler-generated padding noise
+without weakening the release ABI test.

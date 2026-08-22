@@ -61,8 +61,11 @@ jobs:
         run: dnf install -y valgrind
       - name: Compile and test the C consumer under Valgrind
         env:
-          IRONPRESS_PROFILE: release
           IRONPRESS_VALGRIND: '1'
+        run: bindings/c/tests/run.sh
+      - name: Compile and test the release library from C
+        env:
+          IRONPRESS_PROFILE: release
         run: bindings/c/tests/run.sh
       - name: Package the Linux x86_64 libraries
         run: bindings/c/package-unix.sh linux-x86_64

@@ -23,6 +23,7 @@ cargo "${build_arguments[@]}"
 compile_static_smoke() {
     "${CC:-cc}" \
         -std=c11 \
+        -g \
         -Wall \
         -Wextra \
         -Werror \
@@ -41,6 +42,7 @@ fi
 
 "${CC:-cc}" \
     -std=c11 \
+    -g \
     -Wall \
     -Wextra \
     -Werror \
@@ -72,6 +74,7 @@ case "${host}" in
             command -v valgrind >/dev/null
             LD_LIBRARY_PATH="${library_dir}" valgrind \
                 --leak-check=full \
+                --track-origins=yes \
                 --show-leak-kinds=definite \
                 --errors-for-leak-kinds=definite \
                 --error-exitcode=1 \
