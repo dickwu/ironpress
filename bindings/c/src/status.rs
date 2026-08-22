@@ -33,6 +33,7 @@ pub const IRONPRESS_STATUS_SECURITY: IronpressStatus = 16;
 pub const IRONPRESS_STATUS_INTERNAL: IronpressStatus = 255;
 
 /// One categorized failure ready to cross the C boundary.
+#[derive(Debug)]
 pub(crate) struct Failure {
     status: IronpressStatus,
     message: String,

@@ -236,3 +236,42 @@ pub unsafe extern "C" fn ironpress_error_free(error: *mut *mut IronpressError) -
     // SAFETY: The caller accepts the ownership contract above.
     unsafe { free_owned(error) }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ptr;
+
+    use super::*;
+
+    #[test]
+    fn boundary_turns_a_panic_into_an_owned_internal_error() {
+        let mut error = ptr::null_mut();
+
+        // SAFETY: The test provides one initialized writable error slot.
+        let status = unsafe {
+            boundary(&mut error, || -> Result<(), Failure> {
+                panic!("foreign boundary regression")
+            })
+        };
+
+        assert_eq!(status, IRONPRESS_STATUS_INTERNAL);
+        assert!(!error.is_null());
+        assert_eq!(ironpress_error_status(error), IRONPRESS_STATUS_INTERNAL);
+        assert!(ironpress_error_message_len(error) > 0);
+        // SAFETY: `error` is the unique owner returned by `boundary`.
+        assert_eq!(
+            unsafe { ironpress_error_free(&mut error) },
+            IRONPRESS_STATUS_OK
+        );
+        assert!(error.is_null());
+    }
+
+    #[test]
+    fn opaque_owners_can_move_between_threads_while_idle() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<IronpressConverter>();
+        assert_send::<IronpressBuffer>();
+        assert_send::<IronpressError>();
+    }
+}
