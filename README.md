@@ -13,6 +13,7 @@ subprocess, or system dependencies.
 [![PyPI](https://img.shields.io/pypi/v/ironpress.svg)](https://pypi.org/project/ironpress/)
 [![Gem](https://img.shields.io/gem/v/ironpress.svg)](https://rubygems.org/gems/ironpress)
 [![npm](https://img.shields.io/npm/v/ironpress.svg)](https://www.npmjs.com/package/ironpress)
+[![NuGet](https://img.shields.io/nuget/v/Ironpress.svg)](https://www.nuget.org/packages/Ironpress)
 [![docs.rs](https://docs.rs/ironpress/badge.svg)](https://docs.rs/ironpress)
 [![CI](https://github.com/gastongouron/ironpress/actions/workflows/ci.yml/badge.svg)](https://github.com/gastongouron/ironpress/actions)
 [![codecov](https://codecov.io/gh/gastongouron/ironpress/branch/main/graph/badge.svg?token=w36XIAwRxG)](https://codecov.io/gh/gastongouron/ironpress)
@@ -30,8 +31,8 @@ subprocess, or system dependencies.
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
-serialization without launching Chrome. Use it from Rust, C, the CLI, Python,
-Ruby, Node.js, or browser WebAssembly.
+serialization without launching Chrome. Use it from Rust, C, .NET, the CLI,
+Python, Ruby, Node.js, or browser WebAssembly.
 
 ## Why ironpress?
 
@@ -133,6 +134,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
 | **C ABI** | Stable native API with versioned Linux, macOS, and Windows libraries | [C binding](bindings/c/README.md) |
+| **.NET** | Managed `HtmlConverter`, typed failures, and RID-native assets | [.NET binding](bindings/dotnet/README.md) |
 | **WASM** | `npm install ironpress` - runs in browsers and Node.js | [WASM & Playground](../../wiki/WASM-Playground) |
 | **Testing** | 3,200+ unit tests, property-based tests, 6 fuzz targets, 1,664-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
 
@@ -191,6 +193,19 @@ Python and Ruby expose the same reusable converter controls as WebAssembly:
 page geometry, quality settings, sanitization, headers and footers, custom
 fonts, and optional CJK or emoji packs. See the complete
 [binding capability matrix](bindings/README.md).
+
+```bash
+dotnet add package Ironpress
+```
+
+```csharp
+using Ironpress;
+
+using var converter = new HtmlConverter()
+    .SetPageSize(PageSize.Letter)
+    .SetFooter("Page {page} of {pages}");
+byte[] pdf = converter.ConvertHtml("<h1>Hello</h1>");
+```
 
 ```bash
 pip install ironpress
