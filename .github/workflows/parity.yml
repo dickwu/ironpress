@@ -42,7 +42,9 @@ jobs:
           while IFS= read -r changed_path; do
             [[ -z "$changed_path" ]] && continue
             case "$changed_path" in
-              site/*|playground/*|scripts/check-site.mjs|.github/workflows/playground.yml) ;;
+              site/*|playground/*) ;;
+              scripts/check-site.mjs|scripts/site-document*.mjs|scripts/package*.json) ;;
+              .github/workflows/playground.yml) ;;
               *) run_parity=true; break ;;
             esac
           done <<< "$changed_paths"

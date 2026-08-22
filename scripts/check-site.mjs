@@ -4,6 +4,8 @@ import { access, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { HtmlDocument } from "./site-document.mjs";
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const errors = [];
 
@@ -64,6 +66,21 @@ function matches(content, pattern) {
   return [...content.matchAll(pattern)];
 }
 
+function containsJsonLdType(value, type) {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsJsonLdType(item, type));
+  }
+  if (value === null || typeof value !== "object") return false;
+
+  const declaredTypes = Array.isArray(value["@type"])
+    ? value["@type"]
+    : [value["@type"]];
+  return (
+    declaredTypes.includes(type) ||
+    Object.values(value).some((item) => containsJsonLdType(item, type))
+  );
+}
+
 async function load(path) {
   try {
     return await readFile(resolve(repositoryRoot, path), "utf8");
@@ -84,27 +101,27 @@ async function requireFile(path) {
 for (const page of pages) {
   const html = await load(page.path);
   if (html === null) continue;
-  const documentMarkup = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
-  const proseMarkup = documentMarkup
-    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, "")
-    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
+  const document = HtmlDocument.parse(html);
+  const proseText = document.proseText();
 
   if (!/^<!doctype html>/i.test(html.trimStart())) {
     report(page.path, "must start with an HTML5 doctype");
   }
-  if (!/<html\b[^>]*\blang=["']en["']/i.test(html)) {
+  if (document.rootLanguage()?.toLowerCase() !== "en") {
     report(page.path, 'must declare <html lang="en">');
   }
-  if (!/<meta\b[^>]*charset=["']?utf-8/i.test(html)) {
+  if (
+    !document
+      .elements("meta")
+      .some((element) => element.attribute("charset")?.toLowerCase() === "utf-8")
+  ) {
     report(page.path, "must declare UTF-8");
   }
-  if (!/<meta\b[^>]*name=["']viewport["'][^>]*>/i.test(html)) {
+  if (document.metaContent("viewport") === undefined) {
     report(page.path, "must include a viewport meta tag");
   }
 
-  const title = html.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim();
+  const title = document.elements("title")[0]?.text().trim();
   if (!title) {
     report(page.path, "must include a non-empty title");
   } else if (titles.has(title)) {
@@ -113,9 +130,7 @@ for (const page of pages) {
     titles.set(title, page.path);
   }
 
-  const description = html.match(
-    /<meta\b[^>]*name=["']description["'][^>]*content=["']([^"']+)["'][^>]*>/i,
-  )?.[1]?.trim();
+  const description = document.metaContent("description")?.trim();
   if (!description || description.length < 70 || description.length > 170) {
     report(page.path, "meta description must contain 70 to 170 characters");
   } else if (descriptions.has(description)) {
@@ -127,66 +142,59 @@ for (const page of pages) {
     descriptions.set(description, page.path);
   }
 
-  const canonical = html.match(
-    /<link\b[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["'][^>]*>/i,
-  )?.[1];
+  const canonical = document.linkHref("canonical");
   if (canonical !== page.canonical) {
     report(page.path, `canonical URL must be ${page.canonical}`);
   }
 
-  if (matches(documentMarkup, /<h1\b/gi).length !== 1) {
+  if (document.elements("h1").length !== 1) {
     report(page.path, "must contain exactly one h1");
   }
-  if (matches(documentMarkup, /<main\b/gi).length !== 1) {
+  if (document.elements("main").length !== 1) {
     report(page.path, "must contain exactly one main landmark");
   }
-  if (/IronPress|Ironpress/.test(proseMarkup)) {
+  if (/IronPress|Ironpress/.test(proseText)) {
     report(page.path, 'must use the lowercase "ironpress" brand in prose');
   }
-  if (proseMarkup.includes("—")) {
+  if (proseText.includes("—")) {
     report(page.path, "must not use em dashes in prose");
   }
-  for (const image of matches(documentMarkup, /<img\b[^>]*>/gi)) {
-    if (!/\balt=["'][^"']+["']/i.test(image[0])) {
+  for (const image of document.elements("img")) {
+    if (!image.attribute("alt")?.trim()) {
       report(page.path, "every image must have non-empty alt text");
     }
   }
-  for (const link of matches(
-    documentMarkup,
-    /<a\b[^>]*target=["']_blank["'][^>]*>/gi,
-  )) {
-    if (!/\brel=["'][^"']*noopener[^"']*["']/i.test(link[0])) {
+  for (const link of document.elements("a")) {
+    if (
+      link.attribute("target")?.toLowerCase() === "_blank" &&
+      !link.attributeTokens("rel").includes("noopener")
+    ) {
       report(page.path, 'target="_blank" links must use rel="noopener"');
     }
   }
 
-  for (const type of page.structuredDataTypes ?? []) {
-    const encodedType = new RegExp(`"@type"\\s*:\\s*"${type}"`);
-    if (!encodedType.test(html)) {
-      report(page.path, `must expose ${type} JSON-LD structured data`);
-    }
-  }
   for (const text of page.requiredText ?? []) {
     if (!html.includes(text)) {
       report(page.path, `must include the tested consumer contract: ${text}`);
     }
   }
 
-  const structuredData = matches(
-    html,
-    /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
-  );
-  for (const script of structuredData) {
+  const structuredData = [];
+  for (const source of document.jsonLdText()) {
     try {
-      JSON.parse(script[1]);
+      structuredData.push(JSON.parse(source));
     } catch (error) {
       report(page.path, `contains invalid JSON-LD (${error.message})`);
     }
   }
+  for (const type of page.structuredDataTypes ?? []) {
+    if (!structuredData.some((value) => containsJsonLdType(value, type))) {
+      report(page.path, `must expose ${type} JSON-LD structured data`);
+    }
+  }
 
   const seenIds = new Set();
-  for (const idAttribute of matches(documentMarkup, /\bid=["']([^"']+)["']/gi)) {
-    const id = idAttribute[1];
+  for (const id of document.ids()) {
     if (seenIds.has(id)) report(page.path, `contains duplicate id="${id}"`);
     seenIds.add(id);
   }
@@ -199,13 +207,22 @@ for (const page of pages) {
 
 const playground = await load("playground/index.html");
 if (playground !== null) {
+  const document = HtmlDocument.parse(playground);
   for (const id of ["mode", "examples", "input", "preview"]) {
-    const label = new RegExp(`<label\\b[^>]*for=["']${id}["']`, "i");
-    const labelledControl = new RegExp(
-      `<(?:select|textarea|iframe)\\b[^>]*id=["']${id}["'][^>]*aria-label(?:ledby)?=["'][^"']+["']`,
-      "i",
+    const hasLabel = document
+      .elements("label")
+      .some((label) => label.attribute("for") === id);
+    const control = document
+      .elements()
+      .find(
+        (element) =>
+          ["iframe", "select", "textarea"].includes(element.tagName()) &&
+          element.attribute("id") === id,
+      );
+    const hasAccessibleAttribute = ["aria-label", "aria-labelledby"].some(
+      (name) => control?.attribute(name)?.trim(),
     );
-    if (!label.test(playground) && !labelledControl.test(playground)) {
+    if (!hasLabel && !hasAccessibleAttribute) {
       report("playground/index.html", `#${id} needs an accessible name`);
     }
   }

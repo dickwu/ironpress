@@ -39,8 +39,15 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - name: Install site tooling
+        working-directory: scripts
+        run: npm ci --ignore-scripts
+      - name: Test site tooling
+        working-directory: scripts
+        run: npm test
       - name: Validate static site
-        run: node scripts/check-site.mjs
+        working-directory: scripts
+        run: npm run check
 
   test:
     runs-on: ubuntu-latest

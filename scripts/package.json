@@ -1,0 +1,13 @@
+{
+  "name": "ironpress-site-tooling",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.12.1",
+  "scripts": {
+    "check": "node check-site.mjs",
+    "test": "node --test site-document.test.mjs"
+  },
+  "devDependencies": {
+    "parse5": "8.0.1"
+  }
+}
