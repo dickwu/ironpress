@@ -48,7 +48,7 @@
             "name": "ironpress",
             "codeRepository": "https://github.com/gastongouron/ironpress",
             "programmingLanguage": "Rust",
-            "runtimePlatform": ["Rust", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
+            "runtimePlatform": ["Rust", "C", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
             "license": "https://opensource.org/license/mit",
             "description": "An in-process HTML, CSS, and Markdown to PDF engine written in Rust."
           }
@@ -198,11 +198,11 @@
               <span class="feature-number">04</span>
               <h3>Multiple runtimes</h3>
               <p>
-                Use the same core from Rust, the CLI, Python, Ruby, browser
+                Use the same core from Rust, C, the CLI, Python, Ruby, browser
                 WebAssembly, or Node.js.
               </p>
               <ul class="runtime-list" aria-label="Supported runtimes">
-                <li>Rust</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
+                <li>Rust</li><li>C</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
               </ul>
             </article>
             <article class="feature-card">
@@ -244,6 +244,15 @@
               <pre><code>ironpress invoice.html \
   invoice.pdf \
   --page-size a4</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>C</span><a href="./get-started/c/">guide →</a></p>
+              <pre><code><b>#include</b> <em>"ironpress.h"</em>
+
+IronpressStatus status =
+  ironpress_html_to_pdf(
+    html, &amp;pdf, &amp;error
+  );</code></pre>
             </article>
             <article class="code-card">
               <p><span>Python</span><a href="https://pypi.org/project/ironpress/">PyPI ↗</a></p>
