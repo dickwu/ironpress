@@ -72,3 +72,9 @@ impl From<IronpressError> for Failure {
         Self::new(status, error.to_string())
     }
 }
+
+impl From<ironpress_core::FontPackError> for Failure {
+    fn from(error: ironpress_core::FontPackError) -> Self {
+        Self::new(IRONPRESS_STATUS_FONT, error.to_string())
+    }
+}

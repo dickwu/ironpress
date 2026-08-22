@@ -11,6 +11,24 @@
 // ABI generation implemented by this library.
 #define IRONPRESS_ABI_VERSION 1
 
+// False value accepted by ABI boolean parameters.
+#define IRONPRESS_FALSE 0
+
+// Japanese CJK fallback pack.
+#define IRONPRESS_FONT_PACK_CJK_JAPANESE 1
+
+// Korean CJK and Hangul fallback pack.
+#define IRONPRESS_FONT_PACK_CJK_KOREAN 2
+
+// Simplified Chinese CJK fallback pack.
+#define IRONPRESS_FONT_PACK_CJK_SIMPLIFIED_CHINESE 3
+
+// Traditional Chinese CJK fallback pack.
+#define IRONPRESS_FONT_PACK_CJK_TRADITIONAL_CHINESE 4
+
+// Monochrome outline emoji fallback pack.
+#define IRONPRESS_FONT_PACK_EMOJI 5
+
 // Named ISO A4 page size.
 #define IRONPRESS_PAGE_SIZE_A4 1
 
@@ -19,6 +37,9 @@
 
 // Named US Letter page size.
 #define IRONPRESS_PAGE_SIZE_LETTER 2
+
+// True value accepted by ABI boolean parameters.
+#define IRONPRESS_TRUE 1
 
 // Opaque owner of PDF bytes allocated by Ironpress.
 typedef struct IronpressBuffer IronpressBuffer;
@@ -102,12 +123,32 @@ IronpressStatus ironpress_buffer_free(IronpressBuffer **buffer);
 // Return the PDF byte length, or zero for an invalid handle.
 size_t ironpress_buffer_len(const IronpressBuffer *buffer);
 
+// Add or replace one custom TrueType font family.
+//
+// # Safety
+//
+// Handles, input bytes, and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_add_font(IronpressConverter *converter,
+                                             IronpressBytes family,
+                                             IronpressBytes font_data,
+                                             IronpressError **out_error);
+
+// Parse and install one optional CJK or emoji fallback pack.
+//
+// # Safety
+//
+// Handles, input bytes, and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_add_font_pack(IronpressConverter *converter,
+                                                  uint32_t kind,
+                                                  IronpressBytes font_data,
+                                                  IronpressError **out_error);
+
 // Convert UTF-8 HTML through a configured converter.
 //
 // # Safety
 //
 // Handles, input bytes, and output pointers must follow `ABI.md`.
-IronpressStatus ironpress_converter_convert_html(IronpressConverter *converter,
+IronpressStatus ironpress_converter_convert_html(const IronpressConverter *converter,
                                                  IronpressBytes html,
                                                  IronpressBuffer **out_pdf,
                                                  IronpressError **out_error);
@@ -117,7 +158,7 @@ IronpressStatus ironpress_converter_convert_html(IronpressConverter *converter,
 // # Safety
 //
 // Handles, input bytes, and output pointers must follow `ABI.md`.
-IronpressStatus ironpress_converter_convert_markdown(IronpressConverter *converter,
+IronpressStatus ironpress_converter_convert_markdown(const IronpressConverter *converter,
                                                      IronpressBytes markdown,
                                                      IronpressBuffer **out_pdf,
                                                      IronpressError **out_error);
@@ -137,6 +178,42 @@ IronpressStatus ironpress_converter_free(IronpressConverter **converter);
 IronpressStatus ironpress_converter_new(IronpressConverter **out_converter,
                                         IronpressError **out_error);
 
+// Enable or disable automatic source-image downscaling.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_auto_resize_images(IronpressConverter *converter,
+                                                           uint8_t enabled,
+                                                           IronpressError **out_error);
+
+// Set flattened-background rasterization resolution in dots per inch.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_background_raster_dpi(IronpressConverter *converter,
+                                                              float dpi,
+                                                              IronpressError **out_error);
+
+// Enable or disable FlateDecode compression.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_compress(IronpressConverter *converter,
+                                                 uint8_t enabled,
+                                                 IronpressError **out_error);
+
+// Set CSS filter rasterization resolution in dots per inch.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_filter_dpi(IronpressConverter *converter,
+                                                   float dpi,
+                                                   IronpressError **out_error);
+
 // Configure the plain-text page footer.
 //
 // # Safety
@@ -155,6 +232,24 @@ IronpressStatus ironpress_converter_set_header(IronpressConverter *converter,
                                                IronpressBytes header,
                                                IronpressError **out_error);
 
+// Set target source-image resolution in dots per inch.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_image_dpi(IronpressConverter *converter,
+                                                  float dpi,
+                                                  IronpressError **out_error);
+
+// Set JPEG quality. Values above 100 are clamped by the renderer.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_jpeg_quality(IronpressConverter *converter,
+                                                     uint8_t quality,
+                                                     IronpressError **out_error);
+
 // Configure physical page margins in top, right, bottom, left order.
 //
 // # Safety
@@ -166,6 +261,24 @@ IronpressStatus ironpress_converter_set_margins(IronpressConverter *converter,
                                                 float bottom,
                                                 float left,
                                                 IronpressError **out_error);
+
+// Set CSS mask rasterization resolution in dots per inch.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_mask_dpi(IronpressConverter *converter,
+                                                 float dpi,
+                                                 IronpressError **out_error);
+
+// Enable or disable conservative raster occlusion culling.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_occlusion_cull(IronpressConverter *converter,
+                                                       uint8_t enabled,
+                                                       IronpressError **out_error);
 
 // Configure one named page size.
 //
@@ -186,6 +299,15 @@ IronpressStatus ironpress_converter_set_page_size_custom(IronpressConverter *con
                                                          float height,
                                                          IronpressError **out_error);
 
+// Enable or disable HTML sanitization.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_sanitize(IronpressConverter *converter,
+                                                 uint8_t enabled,
+                                                 IronpressError **out_error);
+
 // Release an error and clear its owning handle.
 //
 // # Safety
@@ -201,6 +323,24 @@ size_t ironpress_error_message_len(const IronpressError *error);
 
 // Return the status stored in an error handle.
 IronpressStatus ironpress_error_status(const IronpressError *error);
+
+// Convert UTF-8 HTML with a default one-shot converter.
+//
+// # Safety
+//
+// Input bytes and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_html_to_pdf(IronpressBytes html,
+                                      IronpressBuffer **out_pdf,
+                                      IronpressError **out_error);
+
+// Convert UTF-8 Markdown with a default one-shot converter.
+//
+// # Safety
+//
+// Input bytes and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_markdown_to_pdf(IronpressBytes markdown,
+                                          IronpressBuffer **out_pdf,
+                                          IronpressError **out_error);
 
 // Return the null-terminated Ironpress package version.
 const char *ironpress_version(void);

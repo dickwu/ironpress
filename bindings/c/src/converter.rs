@@ -243,7 +243,7 @@ pub unsafe extern "C" fn ironpress_converter_set_footer(
 /// Handles, input bytes, and output pointers must follow `ABI.md`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ironpress_converter_convert_html(
-    converter: *mut IronpressConverter,
+    converter: *const IronpressConverter,
     html: IronpressBytes,
     out_pdf: *mut *mut IronpressBuffer,
     out_error: *mut *mut IronpressError,
@@ -252,7 +252,7 @@ pub unsafe extern "C" fn ironpress_converter_convert_html(
     unsafe {
         boundary(out_error, || {
             let output = OutputSlot::required(out_pdf, "PDF")?;
-            let converter = IronpressConverter::parse_mut(converter)?;
+            let converter = IronpressConverter::parse_ref(converter)?;
             let html = html.parse_text("HTML")?;
             output.write(IronpressBuffer::new(converter.converter.convert(html)?));
             Ok(())
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn ironpress_converter_convert_html(
 /// Handles, input bytes, and output pointers must follow `ABI.md`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ironpress_converter_convert_markdown(
-    converter: *mut IronpressConverter,
+    converter: *const IronpressConverter,
     markdown: IronpressBytes,
     out_pdf: *mut *mut IronpressBuffer,
     out_error: *mut *mut IronpressError,
@@ -276,7 +276,7 @@ pub unsafe extern "C" fn ironpress_converter_convert_markdown(
     unsafe {
         boundary(out_error, || {
             let output = OutputSlot::required(out_pdf, "PDF")?;
-            let converter = IronpressConverter::parse_mut(converter)?;
+            let converter = IronpressConverter::parse_ref(converter)?;
             let markdown = markdown.parse_text("Markdown")?;
             output.write(IronpressBuffer::new(
                 converter.converter.convert_markdown(markdown)?,

@@ -13,6 +13,23 @@ pub struct IronpressConverter {
 }
 
 impl IronpressConverter {
+    /// Borrow a live converter handle for one read-only foreign call.
+    ///
+    /// # Safety
+    ///
+    /// A non-null pointer must come from `ironpress_converter_new`, remain
+    /// alive for the borrow, and not be mutated concurrently.
+    pub(crate) unsafe fn parse_ref<'a>(raw: *const Self) -> Result<&'a Self, Failure> {
+        if raw.is_null() {
+            return Err(Failure::new(
+                IRONPRESS_STATUS_INVALID_HANDLE,
+                "converter handle is null",
+            ));
+        }
+        // SAFETY: The foreign-call contract above requires a live shared handle.
+        Ok(unsafe { &*raw })
+    }
+
     /// Borrow a live converter handle for one foreign call.
     ///
     /// # Safety
