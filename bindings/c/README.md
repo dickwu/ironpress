@@ -11,8 +11,8 @@ platform:
 
 | Archive suffix | Platform |
 |---|---|
-| `linux-x86_64` | Linux x86_64, glibc |
-| `linux-aarch64` | Linux ARM64, glibc |
+| `linux-x86_64` | Linux x86_64, glibc 2.28+ |
+| `linux-aarch64` | Linux ARM64, glibc 2.28+ |
 | `macos-x86_64` | macOS Intel |
 | `macos-aarch64` | macOS Apple Silicon |
 | `windows-x86_64` | Windows x86_64, MSVC |
