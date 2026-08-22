@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <PackageId>Ironpress</PackageId>
+    <Title>Ironpress for .NET</Title>
+    <Version>1.5.4</Version>
+    <Authors>Paul Gaston Gouron and Ironpress contributors</Authors>
+    <Description>In-process HTML, CSS, and Markdown to PDF rendering for .NET.</Description>
+    <PackageTags>pdf;html;css;markdown;converter</PackageTags>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/gastongouron/ironpress</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/gastongouron/ironpress</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <NativeAssetsRoot Condition="'$(NativeAssetsRoot)' == ''">$(MSBuildThisFileDirectory)../../native</NativeAssetsRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../../../LICENSE" Pack="true" PackagePath="/" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="$(NativeAssetsRoot)/linux-x64/libironpress_ffi.so"
+          Pack="true" PackagePath="runtimes/linux-x64/native/" />
+    <None Include="$(NativeAssetsRoot)/linux-arm64/libironpress_ffi.so"
+          Pack="true" PackagePath="runtimes/linux-arm64/native/" />
+    <None Include="$(NativeAssetsRoot)/osx-x64/libironpress_ffi.dylib"
+          Pack="true" PackagePath="runtimes/osx-x64/native/" />
+    <None Include="$(NativeAssetsRoot)/osx-arm64/libironpress_ffi.dylib"
+          Pack="true" PackagePath="runtimes/osx-arm64/native/" />
+    <None Include="$(NativeAssetsRoot)/win-x64/ironpress_ffi.dll"
+          Pack="true" PackagePath="runtimes/win-x64/native/" />
+  </ItemGroup>
+
+  <Target Name="ValidateNativeAssets" BeforeTargets="Pack">
+    <ItemGroup>
+      <RequiredNativeAsset Include="$(NativeAssetsRoot)/linux-x64/libironpress_ffi.so" />
+      <RequiredNativeAsset Include="$(NativeAssetsRoot)/linux-arm64/libironpress_ffi.so" />
+      <RequiredNativeAsset Include="$(NativeAssetsRoot)/osx-x64/libironpress_ffi.dylib" />
+      <RequiredNativeAsset Include="$(NativeAssetsRoot)/osx-arm64/libironpress_ffi.dylib" />
+      <RequiredNativeAsset Include="$(NativeAssetsRoot)/win-x64/ironpress_ffi.dll" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(RequiredNativeAsset.Identity)')"
+           Text="Required native asset is missing: %(RequiredNativeAsset.Identity)" />
+  </Target>
+</Project>

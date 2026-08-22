@@ -5,6 +5,7 @@
 # Updates:
 #   Cargo.toml                          (ironpress crate)
 #   bindings/c/Cargo.toml               (ironpress-ffi internal crate)
+#   bindings/dotnet/src/Ironpress/Ironpress.csproj
 #   bindings/python/pyproject.toml      (PyPI wheel)
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
 #   bindings/ruby/lib/ironpress/version.rb
@@ -57,11 +58,17 @@ update_core_requirement() {
     perl -i -pe 'if (/^ironpress-core\s*=/) { s/version\s*=\s*"=[^"]+"/version = "='"$NEW"'"/ }' "$file"
 }
 
+update_dotnet_version() {
+    local file="$1"
+    perl -i -pe 's#(<Version>)[^<]+(</Version>)#$1'"$NEW"'$2#' "$file"
+}
+
 echo "Bumping to $NEW"
 
 bump_toml_version  "Cargo.toml"                        && echo "  Cargo.toml"
 bump_toml_version  "bindings/c/Cargo.toml"             && echo "  bindings/c/Cargo.toml"
 update_core_requirement "bindings/c/Cargo.toml"        && echo "  C core requirement"
+update_dotnet_version "bindings/dotnet/src/Ironpress/Ironpress.csproj" && echo "  .NET package"
 bump_pyproject     "bindings/python/pyproject.toml"    && echo "  bindings/python/pyproject.toml"
 bump_toml_version  "bindings/python/Cargo.toml"        && echo "  bindings/python/Cargo.toml"
 update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core requirement"

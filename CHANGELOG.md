@@ -6,6 +6,13 @@
 
 - A versioned C ABI exposes the portable converter contract through opaque
   handles and ships native libraries for Linux, macOS, and Windows.
+- A .NET 8+ `HtmlConverter` package uses the stable C ABI through `SafeHandle`
+  ownership and ships native assets for five initial runtime identifiers.
+
+### CI
+
+- NuGet artifacts are installed and rendered on Linux, macOS, and Windows
+  before OIDC trusted publishing can run.
 
 ## [1.5.4] — 2026-08-22
 

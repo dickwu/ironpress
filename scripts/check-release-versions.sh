@@ -25,6 +25,11 @@ core_requirement() {
   sed -n 's/^ironpress-core.*version[[:space:]]*=[[:space:]]*"=\([^"]*\)".*/\1/p' "$1"
 }
 
+dotnet_version() {
+  sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' "$1" |
+    head -n 1
+}
+
 if [[ -n "${1:-}" ]]; then
   EXPECTED_VERSION="$1"
 elif [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
@@ -47,6 +52,7 @@ check_version() {
 check_version "Rust crate" "$(package_version Cargo.toml)"
 check_version "C crate" "$(package_version bindings/c/Cargo.toml)"
 check_version "C core requirement" "$(core_requirement bindings/c/Cargo.toml)"
+check_version ".NET package" "$(dotnet_version bindings/dotnet/src/Ironpress/Ironpress.csproj)"
 check_version "Python crate" "$(package_version bindings/python/Cargo.toml)"
 check_version "Python distribution" "$(package_version bindings/python/pyproject.toml)"
 check_version "Python core requirement" "$(core_requirement bindings/python/Cargo.toml)"

@@ -48,7 +48,7 @@
             "name": "ironpress",
             "codeRepository": "https://github.com/gastongouron/ironpress",
             "programmingLanguage": "Rust",
-            "runtimePlatform": ["Rust", "C", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
+            "runtimePlatform": ["Rust", "C", ".NET", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
             "license": "https://opensource.org/license/mit",
             "description": "An in-process HTML, CSS, and Markdown to PDF engine written in Rust."
           }
@@ -148,7 +148,7 @@
           <p><strong>0.93 ms</strong><span>simple HTML median</span></p>
           <p><strong>3,200+</strong><span>tests</span></p>
           <p><strong>1,664</strong><span>parity fixtures</span></p>
-          <p><strong>6</strong><span>runtime paths</span></p>
+          <p><strong>8</strong><span>runtime paths</span></p>
         </div>
       </section>
 
@@ -198,11 +198,11 @@
               <span class="feature-number">04</span>
               <h3>Multiple runtimes</h3>
               <p>
-                Use the same core from Rust, C, the CLI, Python, Ruby, browser
-                WebAssembly, or Node.js.
+                Use the same core from Rust, C, .NET, the CLI, Python, Ruby,
+                browser WebAssembly, or Node.js.
               </p>
               <ul class="runtime-list" aria-label="Supported runtimes">
-                <li>Rust</li><li>C</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
+                <li>Rust</li><li>C</li><li>.NET</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
               </ul>
             </article>
             <article class="feature-card">
@@ -261,6 +261,17 @@ IronpressStatus status =
 pdf = ironpress.html_to_pdf(
     <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
 )</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>.NET</span><a href="./get-started/dotnet/">guide →</a></p>
+              <pre><code><b>using</b> Ironpress;
+
+<b>using var</b> converter =
+  <b>new</b> HtmlConverter();
+
+<b>byte</b>[] pdf = converter.ConvertHtml(
+  <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
+);</code></pre>
             </article>
             <article class="code-card">
               <p><span>Ruby</span><a href="https://rubygems.org/gems/ironpress">RubyGems ↗</a></p>

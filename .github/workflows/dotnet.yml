@@ -1,0 +1,253 @@
+name: .NET
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_publisher:
+        description: Verify the NuGet trusted-publishing policy without publishing
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+      - 'bindings/c/**'
+      - 'bindings/dotnet/**'
+      - 'tests/fonts/IronpressCjkVertical.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
+      - 'scripts/bump-version.sh'
+      - 'scripts/check-release-versions.sh'
+      - '.github/workflows/dotnet.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+      - 'bindings/c/**'
+      - 'bindings/dotnet/**'
+      - 'tests/fonts/IronpressCjkVertical.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
+      - 'scripts/bump-version.sh'
+      - 'scripts/check-release-versions.sh'
+      - '.github/workflows/dotnet.yml'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DOTNET_VERSION: '8.0.x'
+  RUST_VERSION: '1.88.0'
+
+jobs:
+  native-linux:
+    name: Native library - ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.07-2@sha256:443eabd378e140996780a772e12c1a1ef10551da933fe76d74a1bab61f68a7b7
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64:2026.05.07-2@sha256:a435288af93def166dc59b5d052fa20ce59d76c6f38e8ad105767262d36843f0
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Build the native library
+        run: cargo build --release -p ironpress-ffi
+      - name: Verify the glibc compatibility floor
+        run: bindings/c/verify-glibc-floor.sh target/release/libironpress_ffi.so 2.28
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-dotnet-${{ matrix.rid }}
+          path: target/release/libironpress_ffi.so
+          if-no-files-found: error
+          retention-days: 1
+
+  native-desktop:
+    name: Native library - ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-x64
+            runner: macos-15-intel
+            library: target/release/libironpress_ffi.dylib
+          - rid: osx-arm64
+            runner: macos-15
+            library: target/release/libironpress_ffi.dylib
+          - rid: win-x64
+            runner: windows-2022
+            library: target/release/ironpress_ffi.dll
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Build the native library
+        run: cargo build --release -p ironpress-ffi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-dotnet-${{ matrix.rid }}
+          path: ${{ matrix.library }}
+          if-no-files-found: error
+          retention-days: 1
+
+  pack:
+    name: Pack NuGet artifact
+    needs: [native-linux, native-desktop]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-dotnet-linux-x64
+          path: bindings/dotnet/native/linux-x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-dotnet-linux-arm64
+          path: bindings/dotnet/native/linux-arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-dotnet-osx-x64
+          path: bindings/dotnet/native/osx-x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-dotnet-osx-arm64
+          path: bindings/dotnet/native/osx-arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-dotnet-win-x64
+          path: bindings/dotnet/native/win-x64
+      - name: Read the package version
+        id: version
+        shell: bash
+        run: |
+          value="$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' \
+            bindings/dotnet/src/Ironpress/Ironpress.csproj | head -n 1)"
+          echo "value=${value}" >> "${GITHUB_OUTPUT}"
+      - name: Verify release metadata
+        run: scripts/check-release-versions.sh
+      - name: Pack the managed and native assets
+        run: >-
+          dotnet pack bindings/dotnet/src/Ironpress/Ironpress.csproj
+          --configuration Release
+          --output bindings/dotnet/artifacts
+      - name: Verify the NuGet layout
+        run: >-
+          bindings/dotnet/verify-package.sh
+          bindings/dotnet/artifacts/Ironpress.${{ steps.version.outputs.value }}.nupkg
+          ${{ steps.version.outputs.value }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-nuget-${{ steps.version.outputs.value }}
+          path: bindings/dotnet/artifacts/*.*nupkg
+          if-no-files-found: error
+          retention-days: 1
+
+  consumer:
+    name: Packed consumer - ${{ matrix.rid }}
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-x64
+            runner: macos-15-intel
+          - rid: osx-arm64
+            runner: macos-15
+          - rid: win-x64
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-nuget-${{ needs.pack.outputs.version }}
+          path: bindings/dotnet/artifacts
+      - name: Install and exercise the packed package
+        env:
+          IRONPRESS_EXPECTED_VERSION: ${{ needs.pack.outputs.version }}
+        run: >-
+          dotnet run
+          --project bindings/dotnet/tests/Ironpress.Contract/Ironpress.Contract.csproj
+          --configuration Release
+          --property:UsePackedIronpress=true
+          --property:IronpressVersion=${{ needs.pack.outputs.version }}
+          "--property:IronpressPackageSource=${{ github.workspace }}/bindings/dotnet/artifacts"
+          --
+          tests/parity/fonts/ParitySans.ttf
+          tests/fonts/IronpressCjkVertical.ttf
+
+  verify-publisher:
+    name: Verify NuGet trusted publisher
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_publisher
+    needs: consumer
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Exchange the GitHub identity for a temporary NuGet key
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+  publish:
+    name: Publish NuGet package
+    if: github.event_name == 'release'
+    needs: [pack, consumer]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironpress-nuget-${{ needs.pack.outputs.version }}
+          path: artifacts
+      - name: Exchange the GitHub identity for a temporary NuGet key
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish the tested package and symbols
+        run: >-
+          dotnet nuget push artifacts/Ironpress.*.nupkg
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

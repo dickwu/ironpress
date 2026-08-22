@@ -30,6 +30,7 @@ const pages = [
     ["rust", ["cargo add ironpress", "use ironpress::html_to_pdf;"]],
     ["cli", ["cargo install ironpress", "ironpress invoice.html invoice.pdf"]],
     ["c", ['#include "ironpress.h"', "ironpress_html_to_pdf", "ironpress_buffer_free"]],
+    ["dotnet", ["dotnet add package Ironpress", "new HtmlConverter", "using var"]],
     ["python", ["python -m pip install ironpress", "ironpress.html_to_pdf"]],
     ["ruby", ["gem install ironpress", "Ironpress.html_to_pdf"]],
     ["browser", ["npm install ironpress", 'from "ironpress";', "await init();", "converter.free();"]],
@@ -286,6 +287,7 @@ if (bindingsReadme !== null) {
   for (const runtime of [
     "rust",
     "cli",
+    "dotnet",
     "python",
     "ruby",
     "browser",

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <UsePackedIronpress Condition="'$(UsePackedIronpress)' == ''">false</UsePackedIronpress>
+    <RestoreSources Condition="'$(UsePackedIronpress)' == 'true'">$(IronpressPackageSource)</RestoreSources>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UsePackedIronpress)' != 'true'">
+    <ProjectReference Include="../../src/Ironpress/Ironpress.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UsePackedIronpress)' == 'true'">
+    <PackageReference Include="Ironpress" Version="$(IronpressVersion)" />
+  </ItemGroup>
+
+  <Target Name="CopyDevelopmentNativeLibrary"
+          AfterTargets="Build"
+          Condition="'$(IronpressNativeLibrary)' != ''">
+    <Copy SourceFiles="$(IronpressNativeLibrary)" DestinationFolder="$(OutDir)" />
+  </Target>
+</Project>
