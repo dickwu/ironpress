@@ -11,6 +11,8 @@
 
 - The packed npm artifact is installed, type-checked, and rendered through every
   supported Node.js LTS line before that exact artifact can be published.
+- Static site checks parse HTML through a standards-compliant tree instead of
+  filtering source markup with regular expressions.
 
 ## [1.5.3] — 2026-08-20
 
