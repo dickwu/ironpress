@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <UsePackedIronpress Condition="'$(UsePackedIronpress)' == ''">false</UsePackedIronpress>
+    <RestoreSources Condition="'$(UsePackedIronpress)' == 'true'">$(IronpressPackageSource)</RestoreSources>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UsePackedIronpress)' != 'true'">
