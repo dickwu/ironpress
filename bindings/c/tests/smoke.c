@@ -20,11 +20,28 @@ static IronpressBytes text(const char *value) {
     return bytes;
 }
 
-int main(void) {
+static IronpressBytes read_file(const char *path) {
+    FILE *file = fopen(path, "rb");
+    require(file != NULL, "font fixture could not be opened");
+    require(fseek(file, 0, SEEK_END) == 0, "font fixture size could not be read");
+    long size = ftell(file);
+    require(size > 0, "font fixture is empty");
+    require(fseek(file, 0, SEEK_SET) == 0, "font fixture could not be rewound");
+    uint8_t *data = malloc((size_t)size);
+    require(data != NULL, "font fixture allocation failed");
+    require(fread(data, 1, (size_t)size, file) == (size_t)size,
+            "font fixture could not be read");
+    require(fclose(file) == 0, "font fixture could not be closed");
+    IronpressBytes bytes = {.data = data, .len = (size_t)size};
+    return bytes;
+}
+
+int main(int argc, char **argv) {
     IronpressConverter *converter = NULL;
     IronpressBuffer *pdf = NULL;
     IronpressError *error = NULL;
 
+    require(argc == 3, "expected custom-font and font-pack fixture paths");
     require(ironpress_abi_version() == IRONPRESS_ABI_VERSION,
             "ABI version query disagrees with the header");
     require(strlen(ironpress_version()) > 0, "package version is empty");
@@ -36,6 +53,9 @@ int main(void) {
     require(ironpress_converter_set_page_size(
                 converter, IRONPRESS_PAGE_SIZE_LETTER, &error) == IRONPRESS_STATUS_OK,
             "named page size failed");
+    require(ironpress_converter_set_page_size_custom(converter, 420.0f, 595.0f,
+                                                     &error) == IRONPRESS_STATUS_OK,
+            "custom page size failed");
     require(ironpress_converter_set_margins(converter, 36.0f, 36.0f, 36.0f,
                                             36.0f, &error) == IRONPRESS_STATUS_OK,
             "page margins failed");
@@ -46,15 +66,63 @@ int main(void) {
                 converter, text("Page {page} / {pages}"), &error) ==
                 IRONPRESS_STATUS_OK,
             "footer configuration failed");
+    require(ironpress_converter_set_compress(converter, IRONPRESS_TRUE, &error) ==
+                IRONPRESS_STATUS_OK,
+            "compression configuration failed");
+    require(ironpress_converter_set_jpeg_quality(converter, 82, &error) ==
+                IRONPRESS_STATUS_OK,
+            "JPEG quality configuration failed");
+    require(ironpress_converter_set_auto_resize_images(
+                converter, IRONPRESS_TRUE, &error) == IRONPRESS_STATUS_OK,
+            "image resize configuration failed");
+    require(ironpress_converter_set_image_dpi(converter, 240.0f, &error) ==
+                IRONPRESS_STATUS_OK,
+            "image DPI configuration failed");
+    require(ironpress_converter_set_filter_dpi(converter, 192.0f, &error) ==
+                IRONPRESS_STATUS_OK,
+            "filter DPI configuration failed");
+    require(ironpress_converter_set_mask_dpi(converter, 240.0f, &error) ==
+                IRONPRESS_STATUS_OK,
+            "mask DPI configuration failed");
+    require(ironpress_converter_set_background_raster_dpi(
+                converter, 160.0f, &error) == IRONPRESS_STATUS_OK,
+            "background DPI configuration failed");
+    require(ironpress_converter_set_occlusion_cull(
+                converter, IRONPRESS_FALSE, &error) == IRONPRESS_STATUS_OK,
+            "occlusion configuration failed");
+    require(ironpress_converter_set_sanitize(converter, IRONPRESS_TRUE, &error) ==
+                IRONPRESS_STATUS_OK,
+            "sanitization configuration failed");
+
+    IronpressBytes custom_font = read_file(argv[1]);
+    require(ironpress_converter_add_font(converter, text("ParitySans"), custom_font,
+                                        &error) == IRONPRESS_STATUS_OK,
+            "custom font configuration failed");
+    free((void *)custom_font.data);
+
+    IronpressBytes font_pack = read_file(argv[2]);
+    require(ironpress_converter_add_font_pack(
+                converter, IRONPRESS_FONT_PACK_EMOJI, font_pack, &error) ==
+                IRONPRESS_STATUS_OK,
+            "font-pack configuration failed");
+    free((void *)font_pack.data);
 
     require(ironpress_converter_convert_html(
-                converter, text("<h1>Hello from C</h1>"), &pdf, &error) ==
+                converter,
+                text("<p style=\"font-family:ParitySans\">Hello from C 😀</p>"),
+                &pdf, &error) ==
                 IRONPRESS_STATUS_OK,
             "HTML conversion failed");
     require(pdf != NULL && error == NULL, "conversion ownership is invalid");
     require(ironpress_buffer_len(pdf) > 4, "PDF output is too short");
     require(memcmp(ironpress_buffer_data(pdf), "%PDF", 4) == 0,
             "conversion did not return a PDF");
+    require(ironpress_converter_convert_markdown(converter, text("# Already owned"),
+                                                 &pdf, &error) ==
+                IRONPRESS_STATUS_OUTPUT_NOT_EMPTY,
+            "non-empty PDF output slot was accepted");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "output-slot error release failed");
 
     require(ironpress_buffer_free(&pdf) == IRONPRESS_STATUS_OK,
             "PDF release failed");
@@ -81,12 +149,46 @@ int main(void) {
             "invalid page-size discriminant returned the wrong status");
     require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
             "enum error release failed");
+    require(ironpress_converter_set_sanitize(converter, 2, &error) ==
+                IRONPRESS_STATUS_INVALID_ENUM,
+            "invalid boolean returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "boolean error release failed");
+
+    IronpressBytes missing = {.data = NULL, .len = 1};
+    require(ironpress_converter_convert_markdown(converter, missing, &pdf, &error) ==
+                IRONPRESS_STATUS_INVALID_ARGUMENT,
+            "null input range returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "input-range error release failed");
+
+    require(ironpress_converter_convert_markdown(converter, text("# Markdown"), &pdf,
+                                                 &error) == IRONPRESS_STATUS_OK,
+            "Markdown conversion failed");
+    require(ironpress_buffer_free(&pdf) == IRONPRESS_STATUS_OK,
+            "Markdown PDF release failed");
 
     require(ironpress_converter_free(&converter) == IRONPRESS_STATUS_OK,
             "converter release failed");
     require(converter == NULL, "converter release did not clear the handle");
     require(ironpress_converter_free(&converter) == IRONPRESS_STATUS_OK,
             "repeated converter release was not safe");
+    require(ironpress_converter_convert_html(converter, text("<p>closed</p>"), &pdf,
+                                             &error) == IRONPRESS_STATUS_INVALID_HANDLE,
+            "null converter returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "handle error release failed");
+
+    require(ironpress_html_to_pdf(text("<p>one shot</p>"), &pdf, &error) ==
+                IRONPRESS_STATUS_OK,
+            "one-shot HTML conversion failed");
+    require(ironpress_buffer_free(&pdf) == IRONPRESS_STATUS_OK,
+            "one-shot HTML release failed");
+    require(ironpress_markdown_to_pdf(text("# one shot"), &pdf, &error) ==
+                IRONPRESS_STATUS_OK,
+            "one-shot Markdown conversion failed");
+    require(ironpress_buffer_free(&pdf) == IRONPRESS_STATUS_OK,
+            "one-shot Markdown release failed");
 
     return EXIT_SUCCESS;
 }
