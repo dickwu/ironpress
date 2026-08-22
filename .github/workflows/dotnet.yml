@@ -16,6 +16,7 @@ on:
       - 'bindings/c/**'
       - 'bindings/dotnet/**'
       - 'tests/fonts/IronpressCjkVertical.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
       - 'scripts/bump-version.sh'
       - 'scripts/check-release-versions.sh'
       - '.github/workflows/dotnet.yml'
@@ -27,6 +28,7 @@ on:
       - 'bindings/c/**'
       - 'bindings/dotnet/**'
       - 'tests/fonts/IronpressCjkVertical.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
       - 'scripts/bump-version.sh'
       - 'scripts/check-release-versions.sh'
       - '.github/workflows/dotnet.yml'
@@ -203,6 +205,7 @@ jobs:
           --property:IronpressVersion=${{ needs.pack.outputs.version }}
           "--property:IronpressPackageSource=${{ github.workspace }}/bindings/dotnet/artifacts"
           --
+          tests/parity/fonts/ParitySans.ttf
           tests/fonts/IronpressCjkVertical.ttf
 
   verify-publisher:

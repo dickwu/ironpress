@@ -3,7 +3,7 @@ using Ironpress;
 
 internal static class Program
 {
-    private static readonly (string Name, Action<string> Run)[] Tests =
+    private static readonly (string Name, Action<TestContext> Run)[] Tests =
     [
         ("native contract identifies the package and ABI", NativeContractMatchesPackage),
         ("portable options compose into one conversion", PortableOptionsCompose),
@@ -16,17 +16,18 @@ internal static class Program
 
     private static int Main(string[] arguments)
     {
-        if (arguments.Length != 1)
+        if (arguments.Length != 2)
         {
-            Console.Error.WriteLine("Expected the font-pack fixture path.");
+            Console.Error.WriteLine("Expected the custom-font and font-pack fixture paths.");
             return 2;
         }
 
+        var context = new TestContext(arguments[0], arguments[1]);
         foreach (var test in Tests)
         {
             try
             {
-                test.Run(arguments[0]);
+                test.Run(context);
                 Console.WriteLine($"PASS: {test.Name}");
             }
             catch (Exception error)
@@ -39,7 +40,7 @@ internal static class Program
         return 0;
     }
 
-    private static void NativeContractMatchesPackage(string _)
+    private static void NativeContractMatchesPackage(TestContext _)
     {
         Equal(1u, IronpressInfo.AbiVersion, "Unexpected native ABI generation.");
 
@@ -50,7 +51,7 @@ internal static class Program
         }
     }
 
-    private static void PortableOptionsCompose(string _)
+    private static void PortableOptionsCompose(TestContext context)
     {
         using var converter = new HtmlConverter()
             .SetPageSize(PageSize.Letter)
@@ -66,35 +67,45 @@ internal static class Program
             .SetOcclusionCulling(true)
             .SetSanitization(true)
             .SetHeader("Contract header")
-            .SetFooter("Page {page} of {pages}");
+            .SetFooter("Page {page} of {pages}")
+            .AddFont("ParitySans", File.ReadAllBytes(context.CustomFontPath))
+            .AddFontPack(
+                FontPackKind.CjkJapanese,
+                File.ReadAllBytes(context.FontPackPath));
 
-        var pdf = converter.ConvertHtml("<h1>.NET binding</h1>");
+        var pdf = converter.ConvertHtml(
+            "<h1 style='font-family:ParitySans'>.NET binding</h1><p lang='ja'>第</p>");
         StartsWithPdf(pdf);
         Contains(pdf, "/MediaBox [0 0 320 480]", "Custom page size was not applied.");
 
         StartsWithPdf(converter.ConvertMarkdown("# Markdown binding"));
     }
 
-    private static void FontPacksCrossManagedBoundary(string fixturePath)
+    private static void FontPacksCrossManagedBoundary(TestContext context)
     {
         using var converter = new HtmlConverter()
-            .AddFontPack(FontPackKind.CjkJapanese, File.ReadAllBytes(fixturePath));
+            .AddFontPack(FontPackKind.CjkJapanese, File.ReadAllBytes(context.FontPackPath));
 
         var pdf = converter.ConvertHtml("<p lang='ja'>第</p>");
         Contains(pdf, "DroidSansFallback", "The supplied fallback font was not embedded.");
     }
 
-    private static void NativeFailuresRetainCategory(string _)
+    private static void NativeFailuresRetainCategory(TestContext _)
     {
         using var converter = new HtmlConverter();
 
         var error = Throws<IronpressException>(() => converter.SetPageSize((PageSize)999));
         Equal(IronpressErrorKind.InvalidEnum, error.Kind, "Native error category changed.");
 
+        var fontError = Throws<IronpressException>(() =>
+            converter.AddFontPack(FontPackKind.Emoji, "not a font"u8));
+        Equal(IronpressErrorKind.Font, fontError.Kind, "Font error category changed.");
+
         Throws<ArgumentOutOfRangeException>(() => PageDimensions.FromPoints(0, 100));
+        Throws<ArgumentException>(() => converter.SetHeader("\ud800"));
     }
 
-    private static void DisposedConvertersRejectWork(string _)
+    private static void DisposedConvertersRejectWork(TestContext _)
     {
         var converter = new HtmlConverter();
         converter.Dispose();
@@ -102,7 +113,7 @@ internal static class Program
         Throws<ObjectDisposedException>(() => converter.ConvertHtml("<p>too late</p>"));
     }
 
-    private static void EquivalentConvertersMatch(string _)
+    private static void EquivalentConvertersMatch(TestContext _)
     {
         using var first = new HtmlConverter().SetCompression(false).SetMargin(24);
         using var second = new HtmlConverter().SetCompression(false).SetMargin(24);
@@ -111,7 +122,7 @@ internal static class Program
         SequenceEqual(first.ConvertHtml(source), second.ConvertHtml(source));
     }
 
-    private static void RepeatedOwnershipCyclesRemainValid(string _)
+    private static void RepeatedOwnershipCyclesRemainValid(TestContext _)
     {
         for (var iteration = 0; iteration < 25; iteration++)
         {
@@ -167,4 +178,6 @@ internal static class Program
             throw new InvalidOperationException("Equivalent configurations produced different PDFs.");
         }
     }
+
+    private sealed record TestContext(string CustomFontPath, string FontPackPath);
 }
