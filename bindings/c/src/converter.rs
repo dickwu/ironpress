@@ -60,6 +60,11 @@ impl PageDimensions {
 struct PageMargins(Margin);
 
 impl PageMargins {
+    /// Parse one finite uniform value into all physical page sides.
+    fn uniform(points: f32) -> Result<Self, Failure> {
+        Self::parse(points, points, points, points)
+    }
+
     /// Parse four finite values in CSS clockwise order.
     fn parse(top: f32, right: f32, bottom: f32, left: f32) -> Result<Self, Failure> {
         if [top, right, bottom, left]
@@ -162,6 +167,28 @@ pub unsafe extern "C" fn ironpress_converter_set_page_size_custom(
             let converter = IronpressConverter::parse_mut(converter)?;
             let page_size = PageDimensions::parse(width, height)?.0;
             converter.update(|current| current.page_size(page_size));
+            Ok(())
+        })
+    }
+}
+
+/// Configure one uniform physical page margin in points.
+///
+/// # Safety
+///
+/// Handles and output pointers must follow `ABI.md`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ironpress_converter_set_margin(
+    converter: *mut IronpressConverter,
+    points: f32,
+    out_error: *mut *mut IronpressError,
+) -> IronpressStatus {
+    // SAFETY: Raw handles and output slots are validated before use.
+    unsafe {
+        boundary(out_error, || {
+            let converter = IronpressConverter::parse_mut(converter)?;
+            let margin = PageMargins::uniform(points)?.0;
+            converter.update(|current| current.margin(margin));
             Ok(())
         })
     }

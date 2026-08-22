@@ -110,17 +110,26 @@ extern "C" {
 // Return the stable C ABI generation.
 uint32_t ironpress_abi_version(void);
 
-// Return a borrowed pointer to the first PDF byte, or null for an invalid handle.
+// Return a borrowed pointer to the first PDF byte, or null for a null handle.
+//
+// # Safety
+//
+// A non-null `buffer` must identify a live buffer owned by the caller.
 const uint8_t *ironpress_buffer_data(const IronpressBuffer *buffer);
 
 // Release a PDF buffer and clear its owning handle.
 //
 // # Safety
 //
-// `buffer` must satisfy the ownership contract in [`free_owned`].
+// `buffer` must be null or identify a writable owning slot. A non-null value
+// in that slot must be the unique buffer owner returned by Ironpress.
 IronpressStatus ironpress_buffer_free(IronpressBuffer **buffer);
 
-// Return the PDF byte length, or zero for an invalid handle.
+// Return the PDF byte length, or zero for a null handle.
+//
+// # Safety
+//
+// A non-null `buffer` must identify a live buffer owned by the caller.
 size_t ironpress_buffer_len(const IronpressBuffer *buffer);
 
 // Add or replace one custom TrueType font family.
@@ -250,6 +259,15 @@ IronpressStatus ironpress_converter_set_jpeg_quality(IronpressConverter *convert
                                                      uint8_t quality,
                                                      IronpressError **out_error);
 
+// Configure one uniform physical page margin in points.
+//
+// # Safety
+//
+// Handles and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_margin(IronpressConverter *converter,
+                                               float points,
+                                               IronpressError **out_error);
+
 // Configure physical page margins in top, right, bottom, left order.
 //
 // # Safety
@@ -312,16 +330,29 @@ IronpressStatus ironpress_converter_set_sanitize(IronpressConverter *converter,
 //
 // # Safety
 //
-// `error` must satisfy the ownership contract in [`free_owned`].
+// `error` must be null or identify a writable owning slot. A non-null value in
+// that slot must be the unique error owner returned by Ironpress.
 IronpressStatus ironpress_error_free(IronpressError **error);
 
 // Return a borrowed pointer to the first error-message byte.
+//
+// # Safety
+//
+// A non-null `error` must identify a live error owned by the caller.
 const uint8_t *ironpress_error_message_data(const IronpressError *error);
 
-// Return the UTF-8 error-message length, or zero for an invalid handle.
+// Return the UTF-8 error-message length, or zero for a null handle.
+//
+// # Safety
+//
+// A non-null `error` must identify a live error owned by the caller.
 size_t ironpress_error_message_len(const IronpressError *error);
 
 // Return the status stored in an error handle.
+//
+// # Safety
+//
+// A non-null `error` must identify a live error owned by the caller.
 IronpressStatus ironpress_error_status(const IronpressError *error);
 
 // Convert UTF-8 HTML with a default one-shot converter.

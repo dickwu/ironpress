@@ -178,16 +178,24 @@ pub(crate) unsafe fn free_owned<T>(raw: *mut *mut T) -> IronpressStatus {
     }
 }
 
-/// Return a borrowed pointer to the first PDF byte, or null for an invalid handle.
+/// Return a borrowed pointer to the first PDF byte, or null for a null handle.
+///
+/// # Safety
+///
+/// A non-null `buffer` must identify a live buffer owned by the caller.
 #[unsafe(no_mangle)]
-pub extern "C" fn ironpress_buffer_data(buffer: *const IronpressBuffer) -> *const u8 {
+pub unsafe extern "C" fn ironpress_buffer_data(buffer: *const IronpressBuffer) -> *const u8 {
     // SAFETY: `as_ref` only borrows a caller-provided handle when it is non-null.
     unsafe { buffer.as_ref() }.map_or(ptr::null(), |buffer| buffer.bytes.as_ptr())
 }
 
-/// Return the PDF byte length, or zero for an invalid handle.
+/// Return the PDF byte length, or zero for a null handle.
+///
+/// # Safety
+///
+/// A non-null `buffer` must identify a live buffer owned by the caller.
 #[unsafe(no_mangle)]
-pub extern "C" fn ironpress_buffer_len(buffer: *const IronpressBuffer) -> usize {
+pub unsafe extern "C" fn ironpress_buffer_len(buffer: *const IronpressBuffer) -> usize {
     // SAFETY: `as_ref` only borrows a caller-provided handle when it is non-null.
     unsafe { buffer.as_ref() }.map_or(0, |buffer| buffer.bytes.len())
 }
@@ -196,7 +204,8 @@ pub extern "C" fn ironpress_buffer_len(buffer: *const IronpressBuffer) -> usize 
 ///
 /// # Safety
 ///
-/// `buffer` must satisfy the ownership contract in [`free_owned`].
+/// `buffer` must be null or identify a writable owning slot. A non-null value
+/// in that slot must be the unique buffer owner returned by Ironpress.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ironpress_buffer_free(
     buffer: *mut *mut IronpressBuffer,
@@ -206,22 +215,34 @@ pub unsafe extern "C" fn ironpress_buffer_free(
 }
 
 /// Return the status stored in an error handle.
+///
+/// # Safety
+///
+/// A non-null `error` must identify a live error owned by the caller.
 #[unsafe(no_mangle)]
-pub extern "C" fn ironpress_error_status(error: *const IronpressError) -> IronpressStatus {
+pub unsafe extern "C" fn ironpress_error_status(error: *const IronpressError) -> IronpressStatus {
     // SAFETY: `as_ref` only borrows a caller-provided handle when it is non-null.
     unsafe { error.as_ref() }.map_or(IRONPRESS_STATUS_INVALID_HANDLE, |error| error.status)
 }
 
 /// Return a borrowed pointer to the first error-message byte.
+///
+/// # Safety
+///
+/// A non-null `error` must identify a live error owned by the caller.
 #[unsafe(no_mangle)]
-pub extern "C" fn ironpress_error_message_data(error: *const IronpressError) -> *const u8 {
+pub unsafe extern "C" fn ironpress_error_message_data(error: *const IronpressError) -> *const u8 {
     // SAFETY: `as_ref` only borrows a caller-provided handle when it is non-null.
     unsafe { error.as_ref() }.map_or(ptr::null(), |error| error.message.as_ptr())
 }
 
-/// Return the UTF-8 error-message length, or zero for an invalid handle.
+/// Return the UTF-8 error-message length, or zero for a null handle.
+///
+/// # Safety
+///
+/// A non-null `error` must identify a live error owned by the caller.
 #[unsafe(no_mangle)]
-pub extern "C" fn ironpress_error_message_len(error: *const IronpressError) -> usize {
+pub unsafe extern "C" fn ironpress_error_message_len(error: *const IronpressError) -> usize {
     // SAFETY: `as_ref` only borrows a caller-provided handle when it is non-null.
     unsafe { error.as_ref() }.map_or(0, |error| error.message.len())
 }
@@ -230,7 +251,8 @@ pub extern "C" fn ironpress_error_message_len(error: *const IronpressError) -> u
 ///
 /// # Safety
 ///
-/// `error` must satisfy the ownership contract in [`free_owned`].
+/// `error` must be null or identify a writable owning slot. A non-null value in
+/// that slot must be the unique error owner returned by Ironpress.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ironpress_error_free(error: *mut *mut IronpressError) -> IronpressStatus {
     // SAFETY: The caller accepts the ownership contract above.
@@ -256,8 +278,13 @@ mod tests {
 
         assert_eq!(status, IRONPRESS_STATUS_INTERNAL);
         assert!(!error.is_null());
-        assert_eq!(ironpress_error_status(error), IRONPRESS_STATUS_INTERNAL);
-        assert!(ironpress_error_message_len(error) > 0);
+        // SAFETY: `error` remains alive until the matching free call below.
+        assert_eq!(
+            unsafe { ironpress_error_status(error) },
+            IRONPRESS_STATUS_INTERNAL
+        );
+        // SAFETY: `error` remains alive until the matching free call below.
+        assert!(unsafe { ironpress_error_message_len(error) } > 0);
         // SAFETY: `error` is the unique owner returned by `boundary`.
         assert_eq!(
             unsafe { ironpress_error_free(&mut error) },

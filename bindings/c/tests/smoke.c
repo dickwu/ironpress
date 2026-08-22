@@ -56,6 +56,9 @@ int main(int argc, char **argv) {
     require(ironpress_converter_set_page_size_custom(converter, 420.0f, 595.0f,
                                                      &error) == IRONPRESS_STATUS_OK,
             "custom page size failed");
+    require(ironpress_converter_set_margin(converter, 24.0f, &error) ==
+                IRONPRESS_STATUS_OK,
+            "uniform page margin failed");
     require(ironpress_converter_set_margins(converter, 36.0f, 36.0f, 36.0f,
                                             36.0f, &error) == IRONPRESS_STATUS_OK,
             "page margins failed");
@@ -139,6 +142,8 @@ int main(int argc, char **argv) {
     require(ironpress_error_status(error) == IRONPRESS_STATUS_INVALID_UTF8,
             "error handle returned the wrong status");
     require(ironpress_error_message_len(error) > 0, "error message is empty");
+    require(ironpress_error_message_data(error) != NULL,
+            "error message has no readable bytes");
     require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
             "error release failed");
     require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
@@ -154,6 +159,18 @@ int main(int argc, char **argv) {
             "invalid boolean returned the wrong status");
     require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
             "boolean error release failed");
+    require(ironpress_converter_add_font_pack(
+                converter, UINT32_MAX, text("not a font"), &error) ==
+                IRONPRESS_STATUS_INVALID_ENUM,
+            "invalid font-pack discriminant returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "font-pack enum error release failed");
+    require(ironpress_converter_add_font_pack(
+                converter, IRONPRESS_FONT_PACK_EMOJI, text("not a font"), &error) ==
+                IRONPRESS_STATUS_FONT,
+            "invalid font-pack bytes returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "font-pack parse error release failed");
 
     IronpressBytes missing = {.data = NULL, .len = 1};
     require(ironpress_converter_convert_markdown(converter, missing, &pdf, &error) ==
@@ -161,6 +178,11 @@ int main(int argc, char **argv) {
             "null input range returned the wrong status");
     require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
             "input-range error release failed");
+    require(ironpress_html_to_pdf(text("<p>missing output</p>"), NULL, &error) ==
+                IRONPRESS_STATUS_INVALID_ARGUMENT,
+            "null PDF output slot returned the wrong status");
+    require(ironpress_error_free(&error) == IRONPRESS_STATUS_OK,
+            "output-slot error release failed");
 
     require(ironpress_converter_convert_markdown(converter, text("# Markdown"), &pdf,
                                                  &error) == IRONPRESS_STATUS_OK,
