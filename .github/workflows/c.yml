@@ -1,0 +1,189 @@
+name: C ABI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+      - 'bindings/c/**'
+      - 'tests/fonts/NotoEmoji-TestSubset.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
+      - 'scripts/bump-version.sh'
+      - 'scripts/check-release-versions.sh'
+      - '.github/workflows/c.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+      - 'bindings/c/**'
+      - 'tests/fonts/NotoEmoji-TestSubset.ttf'
+      - 'tests/parity/fonts/ParitySans.ttf'
+      - 'scripts/bump-version.sh'
+      - 'scripts/check-release-versions.sh'
+      - '.github/workflows/c.yml'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CBINDGEN_VERSION: 0.29.4
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64:2026.05.07-2@sha256:443eabd378e140996780a772e12c1a1ef10551da933fe76d74a1bab61f68a7b7
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cbindgen
+          key: cbindgen-${{ runner.os }}-${{ runner.arch }}-${{ env.CBINDGEN_VERSION }}
+      - name: Install the pinned header generator
+        run: >-
+          cbindgen --version 2>/dev/null
+          | grep -qx "cbindgen ${CBINDGEN_VERSION}"
+          || cargo install cbindgen --version "${CBINDGEN_VERSION}" --locked --force
+      - name: Verify the committed C header
+        run: bindings/c/generate-header.sh --check
+      - name: Test the Rust boundary
+        run: cargo test -p ironpress-ffi
+      - name: Install the memory checker
+        run: dnf install -y valgrind
+      - name: Compile and test the C consumer under Valgrind
+        env:
+          IRONPRESS_VALGRIND: '1'
+        run: bindings/c/tests/run.sh
+      - name: Compile and test the release library from C
+        env:
+          IRONPRESS_PROFILE: release
+        run: bindings/c/tests/run.sh
+      - name: Package the Linux x86_64 libraries
+        run: bindings/c/package-unix.sh linux-x86_64
+      - name: Verify the glibc 2.28 compatibility floor
+        run: bindings/c/verify-glibc-floor.sh target/release/libironpress_ffi.so 2.28
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-c-linux-x86_64
+          path: dist/c/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: quay.io/pypa/manylinux_2_28_aarch64:2026.05.07-2@sha256:a435288af93def166dc59b5d052fa20ce59d76c6f38e8ad105767262d36843f0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - name: Compile and test the release library from C
+        env:
+          IRONPRESS_PROFILE: release
+        run: bindings/c/tests/run.sh
+      - name: Package the Linux aarch64 libraries
+        run: bindings/c/package-unix.sh linux-aarch64
+      - name: Verify the glibc 2.28 compatibility floor
+        run: bindings/c/verify-glibc-floor.sh target/release/libironpress_ffi.so 2.28
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-c-linux-aarch64
+          path: dist/c/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-libraries:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            artifact: macos-x86_64
+          - runner: macos-15
+            artifact: macos-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - name: Compile and test the release library from C
+        env:
+          IRONPRESS_PROFILE: release
+        run: bindings/c/tests/run.sh
+      - name: Package the native libraries
+        run: bindings/c/package-unix.sh ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-c-${{ matrix.artifact }}
+          path: dist/c/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-library:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - name: Build the release library
+        run: cargo build --release -p ironpress-ffi
+      - name: Compile and test the release library from C
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c11 /utf-8 /W4 /WX /I bindings\c\include bindings\c\tests\smoke.c /Fe:target\ironpress-c-smoke.exe /link /LIBPATH:target\release ironpress_ffi.dll.lib
+          set PATH=%CD%\target\release;%PATH%
+          target\ironpress-c-smoke.exe tests\parity\fonts\ParitySans.ttf tests\fonts\NotoEmoji-TestSubset.ttf
+      - name: Package the Windows x86_64 libraries
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path bindings/c/Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          $bundle = "ironpress-c-$version-windows-x86_64"
+          $root = "dist/c/$bundle"
+          New-Item -ItemType Directory -Force "$root/include", "$root/lib" | Out-Null
+          Copy-Item bindings/c/include/ironpress.h "$root/include/"
+          Copy-Item bindings/c/ABI.md, bindings/c/README.md, LICENSE "$root/"
+          Copy-Item target/release/ironpress_ffi.dll, target/release/ironpress_ffi*.lib "$root/lib/"
+          Compress-Archive -Path $root -DestinationPath "dist/c/$bundle.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironpress-c-windows-x86_64
+          path: dist/c/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  release-assets:
+    if: github.event_name == 'release'
+    needs: [contract, linux-aarch64, macos-libraries, windows-library]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ironpress-c-*
+          path: dist
+          merge-multiple: true
+      - name: Write artifact checksums
+        working-directory: dist
+        run: sha256sum ironpress-c-* > SHA256SUMS
+      - name: Attach C libraries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${RELEASE_TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"

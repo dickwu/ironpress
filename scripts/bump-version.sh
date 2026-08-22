@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Bump version across the Rust crate, Python wheel, Ruby gem, and binding sub-crates.
+# Bump version across the Rust crate and every language binding.
 # Usage: ./scripts/bump-version.sh <new-version>
 #
 # Updates:
 #   Cargo.toml                          (ironpress crate)
+#   bindings/c/Cargo.toml               (ironpress-ffi internal crate)
 #   bindings/python/pyproject.toml      (PyPI wheel)
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
 #   bindings/ruby/lib/ironpress/version.rb
@@ -59,6 +60,8 @@ update_core_requirement() {
 echo "Bumping to $NEW"
 
 bump_toml_version  "Cargo.toml"                        && echo "  Cargo.toml"
+bump_toml_version  "bindings/c/Cargo.toml"             && echo "  bindings/c/Cargo.toml"
+update_core_requirement "bindings/c/Cargo.toml"        && echo "  C core requirement"
 bump_pyproject     "bindings/python/pyproject.toml"    && echo "  bindings/python/pyproject.toml"
 bump_toml_version  "bindings/python/Cargo.toml"        && echo "  bindings/python/Cargo.toml"
 update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core requirement"

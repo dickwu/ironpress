@@ -30,15 +30,15 @@ subprocess, or system dependencies.
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
-serialization without launching Chrome. Use it from Rust, the CLI, Python, Ruby,
-Node.js, or browser WebAssembly.
+serialization without launching Chrome. Use it from Rust, C, the CLI, Python,
+Ruby, Node.js, or browser WebAssembly.
 
 ## Why ironpress?
 
 - **Simple deployment:** one library or binary, with no browser runtime to install or manage.
 - **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
 - **Production typography:** font subsetting, core Unicode coverage, optional regional CJK/emoji packs, SVG, and math.
-- **Multiple runtimes:** the same Rust core ships to Rust, Python, Ruby, and WebAssembly.
+- **Multiple runtimes:** the same Rust core ships to Rust, C, Python, Ruby, and WebAssembly.
 - **Defensive defaults:** HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
 
 ## Quick start
@@ -56,7 +56,7 @@ let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
 
 Choose a complete [getting-started
 guide](https://gastongouron.github.io/ironpress/get-started/) for Rust, the CLI,
-Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
+C, Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
 [HTML-to-PDF rendering without Headless
 Chrome](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/), or
 paste a document into the [browser
@@ -132,6 +132,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **SVG** | Vector rendering: path, shapes, gradients, transforms, clip paths, `viewBox` | [Layout Engine](../../wiki/Layout-Engine) |
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
+| **C ABI** | Stable native API with versioned Linux, macOS, and Windows libraries | [C binding](bindings/c/README.md) |
 | **WASM** | `npm install ironpress` - runs in browsers and Node.js | [WASM & Playground](../../wiki/WASM-Playground) |
 | **Testing** | 3,200+ unit tests, property-based tests, 6 fuzz targets, 1,664-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
 
@@ -180,7 +181,11 @@ $$\sum_{k=1}^{n} k = \frac{n(n+1)}{2}$$
 
 Full LaTeX support: fractions, roots, matrices, Greek letters, operators, delimiters, accents. See [Math Engine](../../wiki/Math-Engine).
 
-## Python / Ruby
+## Language bindings
+
+The C ABI ships as versioned static and shared libraries in GitHub Releases. It
+uses opaque handles, explicit allocation ownership, stable status codes, and no
+ambient error state. See the [C binding guide](bindings/c/README.md).
 
 Python and Ruby expose the same reusable converter controls as WebAssembly:
 page geometry, quality settings, sanitization, headers and footers, custom

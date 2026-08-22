@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- A versioned C ABI exposes the portable converter contract through opaque
+  handles and ships native libraries for Linux, macOS, and Windows.
+
 ## [1.5.4] — 2026-08-22
 
 ### Added

@@ -29,6 +29,7 @@ const pages = [
   ...[
     ["rust", ["cargo add ironpress", "use ironpress::html_to_pdf;"]],
     ["cli", ["cargo install ironpress", "ironpress invoice.html invoice.pdf"]],
+    ["c", ['#include "ironpress.h"', "ironpress_html_to_pdf", "ironpress_buffer_free"]],
     ["python", ["python -m pip install ironpress", "ironpress.html_to_pdf"]],
     ["ruby", ["gem install ironpress", "Ironpress.html_to_pdf"]],
     ["browser", ["npm install ironpress", 'from "ironpress";', "await init();", "converter.free();"]],
