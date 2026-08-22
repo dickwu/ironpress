@@ -45,6 +45,8 @@ check_version() {
 }
 
 check_version "Rust crate" "$(package_version Cargo.toml)"
+check_version "C crate" "$(package_version bindings/c/Cargo.toml)"
+check_version "C core requirement" "$(core_requirement bindings/c/Cargo.toml)"
 check_version "Python crate" "$(package_version bindings/python/Cargo.toml)"
 check_version "Python distribution" "$(package_version bindings/python/pyproject.toml)"
 check_version "Python core requirement" "$(core_requirement bindings/python/Cargo.toml)"
