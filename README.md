@@ -24,38 +24,55 @@ subprocess, or system dependencies.
 
 </div>
 
-| Runtime | Documentation | Package |
-|---------|---------------|---------|
-| Rust | [Get started][rust-guide] | [![Crates.io][crates-badge]][crates-package] |
-| C | [Get started][c-guide] | [![GitHub release][release-badge]][releases] |
-| .NET | [Get started][dotnet-guide] | [![NuGet][nuget-badge]][nuget-package] |
-| Java | [Get started][java-guide] | [![Maven Central][maven-badge]][maven-package] |
-| Python | [Get started][python-guide] | [![PyPI][pypi-badge]][pypi-package] |
-| Ruby | [Get started][ruby-guide] | [![Gem][gem-badge]][gem-package] |
-| JavaScript | [Browser][browser-guide] · [Node.js][node-guide] | [![npm][npm-badge]][npm-package] |
-
-[rust-guide]: https://gastongouron.github.io/ironpress/get-started/rust/
-[c-guide]: https://gastongouron.github.io/ironpress/get-started/c/
-[dotnet-guide]: https://gastongouron.github.io/ironpress/get-started/dotnet/
-[java-guide]: https://gastongouron.github.io/ironpress/get-started/java/
-[python-guide]: https://gastongouron.github.io/ironpress/get-started/python/
-[ruby-guide]: https://gastongouron.github.io/ironpress/get-started/ruby/
-[browser-guide]: https://gastongouron.github.io/ironpress/get-started/browser/
-[node-guide]: https://gastongouron.github.io/ironpress/get-started/node/
-[crates-package]: https://crates.io/crates/ironpress
-[crates-badge]: https://img.shields.io/crates/v/ironpress.svg
-[releases]: https://github.com/gastongouron/ironpress/releases/latest
-[release-badge]: https://img.shields.io/github/v/release/gastongouron/ironpress?label=release
-[nuget-package]: https://www.nuget.org/packages/Ironpress
-[nuget-badge]: https://img.shields.io/nuget/v/Ironpress.svg
-[maven-package]: https://central.sonatype.com/artifact/io.github.gastongouron/ironpress
-[maven-badge]: https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg
-[pypi-package]: https://pypi.org/project/ironpress/
-[pypi-badge]: https://img.shields.io/pypi/v/ironpress.svg
-[gem-package]: https://rubygems.org/gems/ironpress
-[gem-badge]: https://img.shields.io/gem/v/ironpress.svg
-[npm-package]: https://www.npmjs.com/package/ironpress
-[npm-badge]: https://img.shields.io/npm/v/ironpress.svg
+<table width="100%">
+  <thead>
+    <tr>
+      <th align="left">Runtime</th>
+      <th align="left">Documentation</th>
+      <th align="left">Package</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Rust</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/rust/">Get started with Rust</a></td>
+      <td><a href="https://crates.io/crates/ironpress"><img alt="Crates.io" src="https://img.shields.io/crates/v/ironpress.svg"></a></td>
+    </tr>
+    <tr>
+      <td>C</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/c/">Get started with C</a></td>
+      <td><a href="https://github.com/gastongouron/ironpress/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gastongouron/ironpress?label=release"></a></td>
+    </tr>
+    <tr>
+      <td>.NET</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/dotnet/">Get started with .NET</a></td>
+      <td><a href="https://www.nuget.org/packages/Ironpress"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ironpress.svg"></a></td>
+    </tr>
+    <tr>
+      <td>Java</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/java/">Get started with Java</a></td>
+      <td><a href="https://central.sonatype.com/artifact/io.github.gastongouron/ironpress"><img alt="Maven Central" src="https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg"></a></td>
+    </tr>
+    <tr>
+      <td>Python</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/python/">Get started with Python</a></td>
+      <td><a href="https://pypi.org/project/ironpress/"><img alt="PyPI" src="https://img.shields.io/pypi/v/ironpress.svg"></a></td>
+    </tr>
+    <tr>
+      <td>Ruby</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/ruby/">Get started with Ruby</a></td>
+      <td><a href="https://rubygems.org/gems/ironpress"><img alt="Gem" src="https://img.shields.io/gem/v/ironpress.svg"></a></td>
+    </tr>
+    <tr>
+      <td>JavaScript</td>
+      <td>
+        <a href="https://gastongouron.github.io/ironpress/get-started/browser/">Get started in the browser</a>
+        · <a href="https://gastongouron.github.io/ironpress/get-started/node/">Get started with Node.js</a>
+      </td>
+      <td><a href="https://www.npmjs.com/package/ironpress"><img alt="npm" src="https://img.shields.io/npm/v/ironpress.svg"></a></td>
+    </tr>
+  </tbody>
+</table>
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
