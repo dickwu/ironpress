@@ -28,8 +28,8 @@ jobs:
           fetch-depth: 0
 
       # Keep the required check present: workflows skipped by a top-level path
-      # filter remain pending on GitHub. Website-only changes instead complete
-      # this job without running the expensive renderer parity suite.
+      # filter remain pending on GitHub. Documentation-only changes instead
+      # complete this job without running the expensive renderer parity suite.
       - name: Detect parity-relevant changes
         id: changes
         env:
@@ -42,6 +42,7 @@ jobs:
           while IFS= read -r changed_path; do
             [[ -z "$changed_path" ]] && continue
             case "$changed_path" in
+              README.md|*/README.md|CHANGELOG.md|CONTRIBUTING.md) ;;
               site/*|playground/*) ;;
               scripts/check-site.mjs|scripts/site-document*.mjs|scripts/package*.json) ;;
               .github/workflows/playground.yml) ;;
@@ -50,7 +51,7 @@ jobs:
           done <<< "$changed_paths"
           echo "run=$run_parity" >> "$GITHUB_OUTPUT"
 
-      - name: Skip parity for website-only changes
+      - name: Skip parity for documentation-only changes
         if: steps.changes.outputs.run != 'true'
         run: echo "No renderer or parity inputs changed."
 
