@@ -17,7 +17,7 @@ body:
       options:
         - label: I searched the existing issues for this problem.
           required: true
-        - label: I reproduced the problem with the latest Ironpress release.
+        - label: I reproduced the problem with the latest Ironpress release or current `main`.
           required: true
 
   - type: input

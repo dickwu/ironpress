@@ -71,8 +71,7 @@ must not update an expectation only to match the implementation.
 - Add the smallest fixture that establishes the behavior.
 - Link the applicable specification or independently verified regression.
 - Run `scripts/parity.sh` when rendered output can change.
-- Keep `tests/parity/reports/index.html`, `tests/parity/REPORT.md`, and
-  `tests/parity/report.json` current.
+- Keep `tests/parity/REPORT.md` and `tests/parity/report.json` current.
 - Generate a new oracle PDF only with the pinned Chromium launcher.
 - Run `scripts/parity-gen-refs.sh --check` after any retained oracle change.
 

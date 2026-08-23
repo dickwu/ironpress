@@ -24,6 +24,8 @@ reproduced regression that establishes the expected behavior.
 
 ## Visual parity
 
+<!-- Check the statements that apply. -->
+
 - [ ] This change does not affect rendered output
 - [ ] Relevant parity fixtures and reports were updated
 - [ ] Any new oracle PDF was generated with the pinned Chromium launcher
