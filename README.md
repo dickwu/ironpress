@@ -9,12 +9,6 @@ Fast, in-process HTML/CSS/Markdown to PDF rendering in pure Rust. No browser,
 subprocess, or system dependencies.
 
 
-[![Crates.io](https://img.shields.io/crates/v/ironpress.svg)](https://crates.io/crates/ironpress)
-[![PyPI](https://img.shields.io/pypi/v/ironpress.svg)](https://pypi.org/project/ironpress/)
-[![Gem](https://img.shields.io/gem/v/ironpress.svg)](https://rubygems.org/gems/ironpress)
-[![npm](https://img.shields.io/npm/v/ironpress.svg)](https://www.npmjs.com/package/ironpress)
-[![NuGet](https://img.shields.io/nuget/v/Ironpress.svg)](https://www.nuget.org/packages/Ironpress)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg)](https://central.sonatype.com/artifact/io.github.gastongouron/ironpress)
 [![docs.rs](https://docs.rs/ironpress/badge.svg)](https://docs.rs/ironpress)
 [![CI](https://github.com/gastongouron/ironpress/actions/workflows/ci.yml/badge.svg)](https://github.com/gastongouron/ironpress/actions)
 [![codecov](https://codecov.io/gh/gastongouron/ironpress/branch/main/graph/badge.svg?token=w36XIAwRxG)](https://codecov.io/gh/gastongouron/ironpress)
@@ -29,6 +23,39 @@ subprocess, or system dependencies.
 **[Website](https://gastongouron.github.io/ironpress/)** | **[Get Started](https://gastongouron.github.io/ironpress/get-started/)** | **[Playground](https://gastongouron.github.io/ironpress/playground/)** | **[HTML-to-PDF guide](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/)** | **[Parity report](https://gastongouron.github.io/ironpress/parity/reports/)** | **[Wiki](../../wiki)**
 
 </div>
+
+| Runtime | Documentation | Package |
+|---------|---------------|---------|
+| Rust | [Get started][rust-guide] | [![Crates.io][crates-badge]][crates-package] |
+| C | [Get started][c-guide] | [![GitHub release][release-badge]][releases] |
+| .NET | [Get started][dotnet-guide] | [![NuGet][nuget-badge]][nuget-package] |
+| Java | [Get started][java-guide] | [![Maven Central][maven-badge]][maven-package] |
+| Python | [Get started][python-guide] | [![PyPI][pypi-badge]][pypi-package] |
+| Ruby | [Get started][ruby-guide] | [![Gem][gem-badge]][gem-package] |
+| JavaScript | [Browser][browser-guide] · [Node.js][node-guide] | [![npm][npm-badge]][npm-package] |
+
+[rust-guide]: https://gastongouron.github.io/ironpress/get-started/rust/
+[c-guide]: https://gastongouron.github.io/ironpress/get-started/c/
+[dotnet-guide]: https://gastongouron.github.io/ironpress/get-started/dotnet/
+[java-guide]: https://gastongouron.github.io/ironpress/get-started/java/
+[python-guide]: https://gastongouron.github.io/ironpress/get-started/python/
+[ruby-guide]: https://gastongouron.github.io/ironpress/get-started/ruby/
+[browser-guide]: https://gastongouron.github.io/ironpress/get-started/browser/
+[node-guide]: https://gastongouron.github.io/ironpress/get-started/node/
+[crates-package]: https://crates.io/crates/ironpress
+[crates-badge]: https://img.shields.io/crates/v/ironpress.svg
+[releases]: https://github.com/gastongouron/ironpress/releases/latest
+[release-badge]: https://img.shields.io/github/v/release/gastongouron/ironpress?label=release
+[nuget-package]: https://www.nuget.org/packages/Ironpress
+[nuget-badge]: https://img.shields.io/nuget/v/Ironpress.svg
+[maven-package]: https://central.sonatype.com/artifact/io.github.gastongouron/ironpress
+[maven-badge]: https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg
+[pypi-package]: https://pypi.org/project/ironpress/
+[pypi-badge]: https://img.shields.io/pypi/v/ironpress.svg
+[gem-package]: https://rubygems.org/gems/ironpress
+[gem-badge]: https://img.shields.io/gem/v/ironpress.svg
+[npm-package]: https://www.npmjs.com/package/ironpress
+[npm-badge]: https://img.shields.io/npm/v/ironpress.svg
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
