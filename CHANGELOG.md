@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.5.4] — 2026-08-23
+
 ### Added
 
 - A versioned C ABI exposes the portable converter contract through opaque
@@ -10,18 +12,6 @@
   ownership and ships native assets for five initial runtime identifiers.
 - A Java 17+ `HtmlConverter` package uses the stable C ABI through JNA,
   `AutoCloseable` ownership, and typed renderer exceptions.
-
-### CI
-
-- NuGet artifacts are installed and rendered on Linux, macOS, and Windows
-  before OIDC trusted publishing can run.
-- Reproducible Maven artifacts are installed from their embedded POM and
-  rendered on all five supported native platforms before publication.
-
-## [1.5.4] — 2026-08-22
-
-### Added
-
 - The existing npm package now exposes `ironpress/node`, an ESM entry point that
   loads its packaged WebAssembly binary without consumer-side file handling.
 
@@ -32,6 +22,10 @@
 
 ### CI
 
+- NuGet artifacts are installed and rendered on Linux, macOS, and Windows
+  before OIDC trusted publishing can run.
+- Reproducible Maven artifacts are installed from their embedded POM and
+  rendered on all five supported native platforms before publication.
 - The packed npm artifact is installed, type-checked, and rendered through every
   supported Node.js LTS line before that exact artifact can be published.
 - Static site checks parse HTML through a standards-compliant tree instead of
