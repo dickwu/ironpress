@@ -14,6 +14,7 @@ subprocess, or system dependencies.
 [![Gem](https://img.shields.io/gem/v/ironpress.svg)](https://rubygems.org/gems/ironpress)
 [![npm](https://img.shields.io/npm/v/ironpress.svg)](https://www.npmjs.com/package/ironpress)
 [![NuGet](https://img.shields.io/nuget/v/Ironpress.svg)](https://www.nuget.org/packages/Ironpress)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg)](https://central.sonatype.com/artifact/io.github.gastongouron/ironpress)
 [![docs.rs](https://docs.rs/ironpress/badge.svg)](https://docs.rs/ironpress)
 [![CI](https://github.com/gastongouron/ironpress/actions/workflows/ci.yml/badge.svg)](https://github.com/gastongouron/ironpress/actions)
 [![codecov](https://codecov.io/gh/gastongouron/ironpress/branch/main/graph/badge.svg?token=w36XIAwRxG)](https://codecov.io/gh/gastongouron/ironpress)
@@ -31,15 +32,15 @@ subprocess, or system dependencies.
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
-serialization without launching Chrome. Use it from Rust, C, .NET, the CLI,
-Python, Ruby, Node.js, or browser WebAssembly.
+serialization without launching Chrome. Use it from Rust, C, .NET, Java, the
+CLI, Python, Ruby, Node.js, or browser WebAssembly.
 
 ## Why ironpress?
 
 - **Simple deployment:** one library or binary, with no browser runtime to install or manage.
 - **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
 - **Production typography:** font subsetting, core Unicode coverage, optional regional CJK/emoji packs, SVG, and math.
-- **Multiple runtimes:** the same Rust core ships to Rust, C, Python, Ruby, and WebAssembly.
+- **Multiple runtimes:** the same Rust core ships to Rust, C, .NET, Java, Python, Ruby, and WebAssembly.
 - **Defensive defaults:** HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
 
 ## Quick start
@@ -57,7 +58,7 @@ let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
 
 Choose a complete [getting-started
 guide](https://gastongouron.github.io/ironpress/get-started/) for Rust, the CLI,
-C, Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
+C, .NET, Java, Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
 [HTML-to-PDF rendering without Headless
 Chrome](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/), or
 paste a document into the [browser
@@ -135,6 +136,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
 | **C ABI** | Stable native API with versioned Linux, macOS, and Windows libraries | [C binding](bindings/c/README.md) |
 | **.NET** | Managed `HtmlConverter`, typed failures, and RID-native assets | [.NET binding](bindings/dotnet/README.md) |
+| **Java** | Java 17 `HtmlConverter`, typed failures, and packaged native assets | [Java binding](bindings/java/README.md) |
 | **WASM** | `npm install ironpress` - runs in browsers and Node.js | [WASM & Playground](../../wiki/WASM-Playground) |
 | **Testing** | 3,200+ unit tests, property-based tests, 6 fuzz targets, 1,664-fixture parity corpus | [Testing Strategy](../../wiki/Testing-Strategy) |
 
@@ -205,6 +207,20 @@ using var converter = new HtmlConverter()
     .SetPageSize(PageSize.Letter)
     .SetFooter("Page {page} of {pages}");
 byte[] pdf = converter.ConvertHtml("<h1>Hello</h1>");
+```
+
+```xml
+<dependency>
+  <groupId>io.github.gastongouron</groupId>
+  <artifactId>ironpress</artifactId>
+  <version>1.5.4</version>
+</dependency>
+```
+
+```java
+try (var converter = new HtmlConverter()) {
+    byte[] pdf = converter.convertHtml("<h1>Hello</h1>");
+}
 ```
 
 ```bash

@@ -36,6 +36,11 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://gastongouron.github.io/ironpress/get-started/java/</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://gastongouron.github.io/ironpress/get-started/python/</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>

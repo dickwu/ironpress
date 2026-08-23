@@ -8,11 +8,15 @@
   handles and ships native libraries for Linux, macOS, and Windows.
 - A .NET 8+ `HtmlConverter` package uses the stable C ABI through `SafeHandle`
   ownership and ships native assets for five initial runtime identifiers.
+- A Java 17+ `HtmlConverter` package uses the stable C ABI through JNA,
+  `AutoCloseable` ownership, and typed renderer exceptions.
 
 ### CI
 
 - NuGet artifacts are installed and rendered on Linux, macOS, and Windows
   before OIDC trusted publishing can run.
+- Reproducible Maven artifacts are installed from their embedded POM and
+  rendered on all five supported native platforms before publication.
 
 ## [1.5.4] — 2026-08-22
 
