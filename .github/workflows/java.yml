@@ -154,13 +154,14 @@ jobs:
           bindings/java/verify-package.sh
           bindings/java/target/ironpress-${{ steps.version.outputs.value }}.jar
           ${{ steps.version.outputs.value }}
-      - name: Verify reproducible Maven artifacts
+      - name: Verify reproducible release artifacts
         shell: bash
         run: |
           mkdir -p "${RUNNER_TEMP}/ironpress-java-reference"
           cp bindings/java/target/ironpress-${{ steps.version.outputs.value }}*.jar \
             "${RUNNER_TEMP}/ironpress-java-reference/"
-          mvn -B -f bindings/java/pom.xml clean package -DskipTests
+          mvn -B -f bindings/java/pom.xml -Prelease clean verify \
+            -DskipTests -Dgpg.skip=true
           for artifact in bindings/java/target/ironpress-${{ steps.version.outputs.value }}*.jar; do
             cmp "$artifact" \
               "${RUNNER_TEMP}/ironpress-java-reference/$(basename "$artifact")"
@@ -236,6 +237,10 @@ jobs:
           server-password: MAVEN_CENTRAL_TOKEN
       - uses: actions/download-artifact@v8
         with:
+          name: ironpress-maven-${{ needs.package.outputs.version }}
+          path: bindings/java/reference
+      - uses: actions/download-artifact@v8
+        with:
           name: ironpress-java-linux-x86-64
           path: bindings/java/native/linux-x86-64
       - uses: actions/download-artifact@v8
@@ -254,6 +259,17 @@ jobs:
         with:
           name: ironpress-java-win32-x86-64
           path: bindings/java/native/win32-x86-64
+      - name: Rebuild the tested Maven bundle
+        shell: bash
+        run: |
+          mvn -B -f bindings/java/pom.xml -Prelease clean verify \
+            -DskipTests -Dgpg.skip=true
+          for artifact in bindings/java/target/ironpress-${{ needs.package.outputs.version }}*.jar; do
+            cmp "$artifact" \
+              "bindings/java/reference/$(basename "$artifact")"
+          done
+          cmp bindings/java/pom.xml \
+            bindings/java/reference/ironpress-${{ needs.package.outputs.version }}.pom
       - name: Sign and publish to Maven Central
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}

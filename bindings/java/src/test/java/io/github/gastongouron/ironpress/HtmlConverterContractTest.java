@@ -72,12 +72,17 @@ final class HtmlConverterContractTest {
       assertThrows(IllegalArgumentException.class, () -> PageDimensions.ofPoints(0, 100));
       assertThrows(IllegalArgumentException.class, () -> converter.setMargin(Float.NaN));
       assertThrows(IllegalArgumentException.class, () -> converter.setHeader("\ud800"));
+
+      var argumentError =
+          assertThrows(IronpressException.class, () -> converter.setImageResolution(Float.NaN));
+      assertEquals(IronpressErrorKind.INVALID_ARGUMENT, argumentError.getKind());
     }
   }
 
   @Test
   void closedConvertersRejectFurtherWork() {
     var converter = new HtmlConverter();
+    converter.close();
     converter.close();
     assertThrows(IllegalStateException.class, () -> converter.convertHtml("<p>too late</p>"));
   }

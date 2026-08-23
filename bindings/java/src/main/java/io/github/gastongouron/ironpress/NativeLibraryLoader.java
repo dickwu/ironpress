@@ -12,25 +12,25 @@ final class NativeLibraryLoader {
   private static final Set<String> SUPPORTED_PREFIXES =
       Set.of("linux-x86-64", "linux-aarch64", "darwin-x86-64", "darwin-aarch64", "win32-x86-64");
 
-  private static final NativeApi API = load();
-  private static final String NATIVE_VERSION = readNativeVersion(API);
-
   private NativeLibraryLoader() {}
 
   static NativeApi api() {
-    return API;
+    return runtime().api();
   }
 
   static String nativeVersion() {
-    return NATIVE_VERSION;
+    return runtime().version();
   }
 
-  private static NativeApi load() {
+  private static LoadedNative runtime() {
     if (!SUPPORTED_PREFIXES.contains(Platform.RESOURCE_PREFIX)) {
       throw new UnsupportedOperationException(
           "Ironpress does not ship a native asset for " + Platform.RESOURCE_PREFIX + ".");
     }
+    return RuntimeHolder.RUNTIME;
+  }
 
+  private static LoadedNative load() {
     var options =
         Map.<String, Object>of(
             Library.OPTION_CLASSLOADER, NativeLibraryLoader.class.getClassLoader());
@@ -54,7 +54,7 @@ final class NativeLibraryLoader {
               + nativeVersion
               + ".");
     }
-    return api;
+    return new LoadedNative(api, nativeVersion);
   }
 
   private static String readNativeVersion(NativeApi api) {
@@ -63,5 +63,13 @@ final class NativeLibraryLoader {
       throw new LinkageError("The Ironpress native library returned no package version.");
     }
     return version.getString(0, StandardCharsets.UTF_8.name());
+  }
+
+  private record LoadedNative(NativeApi api, String version) {}
+
+  private static final class RuntimeHolder {
+    private static final LoadedNative RUNTIME = load();
+
+    private RuntimeHolder() {}
   }
 }
