@@ -15,6 +15,14 @@ if [[ ! -f "$PACKAGE" ]]; then
   exit 1
 fi
 
+PACKAGE="$(cd "$(dirname "$PACKAGE")" && pwd)/$(basename "$PACKAGE")"
+METADATA_DIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "$METADATA_DIR"
+}
+trap cleanup EXIT
+
 REQUIRED_ENTRIES=(
   "META-INF/LICENSE"
   "META-INF/README.md"
@@ -28,7 +36,7 @@ REQUIRED_ENTRIES=(
   "win32-x86-64/ironpress_ffi.dll"
 )
 
-PACKAGE_ENTRIES="$(unzip -Z1 "$PACKAGE")"
+PACKAGE_ENTRIES="$(jar --list --file "$PACKAGE")"
 for entry in "${REQUIRED_ENTRIES[@]}"; do
   if ! grep -Fqx "$entry" <<<"$PACKAGE_ENTRIES"; then
     echo "Maven package is missing $entry" >&2
@@ -42,19 +50,20 @@ if [[ "$NATIVE_COUNT" -ne 5 ]]; then
   exit 1
 fi
 
-if ! unzip -p "$PACKAGE" META-INF/MANIFEST.MF |
-  tr -d '\r' |
+(cd "$METADATA_DIR" && jar --extract --file "$PACKAGE" \
+  META-INF/MANIFEST.MF \
+  META-INF/maven/io.github.gastongouron/ironpress/pom.properties)
+
+if ! tr -d '\r' <"$METADATA_DIR/META-INF/MANIFEST.MF" |
   grep -Fqx "Implementation-Version: $VERSION"; then
   echo "Maven manifest version does not match $VERSION" >&2
   exit 1
 fi
 
-if ! unzip -p "$PACKAGE" \
-  META-INF/maven/io.github.gastongouron/ironpress/pom.properties |
-  grep -Fqx "version=$VERSION"; then
+if ! grep -Fqx "version=$VERSION" \
+  "$METADATA_DIR/META-INF/maven/io.github.gastongouron/ironpress/pom.properties"; then
   echo "Maven metadata version does not match $VERSION" >&2
   exit 1
 fi
 
 echo "Maven package contract passed for Ironpress $VERSION."
-

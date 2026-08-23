@@ -6,6 +6,9 @@
 #   Cargo.toml                          (ironpress crate)
 #   bindings/c/Cargo.toml               (ironpress-ffi internal crate)
 #   bindings/dotnet/src/Ironpress/Ironpress.csproj
+#   bindings/java/pom.xml              (Maven Central artifact)
+#   bindings/java/src/main/.../IronpressInfo.java
+#   bindings/java/README.md
 #   bindings/python/pyproject.toml      (PyPI wheel)
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
 #   bindings/ruby/lib/ironpress/version.rb
@@ -60,7 +63,17 @@ update_core_requirement() {
 
 update_dotnet_version() {
     local file="$1"
-    perl -i -pe 's#(<Version>)[^<]+(</Version>)#$1'"$NEW"'$2#' "$file"
+    perl -i -pe 's#(<Version>)[^<]+(</Version>)#${1}'"$NEW"'${2}#' "$file"
+}
+
+update_maven_version() {
+    local file="$1"
+    perl -i -pe 'BEGIN{$n=0} if (!$n && /^\s*<version>[^<]+<\/version>/) { s#(<version>)[^<]+(</version>)#${1}'"$NEW"'${2}#; $n=1 }' "$file"
+}
+
+update_java_runtime_version() {
+    local file="$1"
+    perl -i -pe 's/(PACKAGE_VERSION\s*=\s*)"[^"]+"/$1"'"$NEW"'"/' "$file"
 }
 
 echo "Bumping to $NEW"
@@ -69,6 +82,9 @@ bump_toml_version  "Cargo.toml"                        && echo "  Cargo.toml"
 bump_toml_version  "bindings/c/Cargo.toml"             && echo "  bindings/c/Cargo.toml"
 update_core_requirement "bindings/c/Cargo.toml"        && echo "  C core requirement"
 update_dotnet_version "bindings/dotnet/src/Ironpress/Ironpress.csproj" && echo "  .NET package"
+update_maven_version "bindings/java/pom.xml"            && echo "  Java package"
+update_java_runtime_version "bindings/java/src/main/java/io/github/gastongouron/ironpress/IronpressInfo.java" && echo "  Java runtime"
+update_maven_version "bindings/java/README.md"          && echo "  Java README"
 bump_pyproject     "bindings/python/pyproject.toml"    && echo "  bindings/python/pyproject.toml"
 bump_toml_version  "bindings/python/Cargo.toml"        && echo "  bindings/python/Cargo.toml"
 update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core requirement"
