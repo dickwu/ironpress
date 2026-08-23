@@ -1,0 +1,97 @@
+name: Bug report
+description: Report a reproducible Ironpress problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Ironpress.
+
+        Do not report security vulnerabilities here. Use [private vulnerability reporting](https://github.com/gastongouron/ironpress/security/advisories/new) instead.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for this problem.
+          required: true
+        - label: I reproduced the problem with the latest Ironpress release.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ironpress version
+      description: Give the exact crate or package version.
+      placeholder: "1.5.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: binding
+    attributes:
+      label: Runtime or binding
+      options:
+        - Rust crate
+        - CLI
+        - C ABI
+        - .NET
+        - Java
+        - Python
+        - Ruby
+        - Browser WebAssembly
+        - Node.js WebAssembly
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Include the operating system, architecture, and runtime version.
+      placeholder: "Ubuntu 24.04, x86-64, Python 3.12"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest input and code that reproduce the problem. You can drag files into this field.
+      placeholder: |
+        HTML, CSS, Markdown, code, or a link to a minimal repository
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Explain the expected output. Link an applicable specification when the behavior is defined by one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Output and evidence
+      description: Attach the generated PDF, reference PDF, screenshot, visual diff, error, or backtrace when relevant.
+
+  - type: checkboxes
+    id: conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow the [Ironpress Code of Conduct](https://github.com/gastongouron/ironpress/blob/main/CODE_OF_CONDUCT.md).
+          required: true
