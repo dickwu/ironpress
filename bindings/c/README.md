@@ -1,8 +1,8 @@
 # Ironpress for C
 
 Ironpress exposes its portable HTML and Markdown conversion contract through a
-stable C ABI. The same native boundary is intended to support the .NET and C++
-bindings without exposing Rust layouts or requiring a Rust toolchain at runtime.
+stable C ABI. The same native boundary supports the .NET, Java, and C++ bindings
+without exposing Rust layouts or requiring a Rust toolchain at runtime.
 
 ## Install
 
@@ -17,9 +17,9 @@ platform:
 | `macos-aarch64` | macOS Apple Silicon |
 | `windows-x86_64` | Windows x86_64, MSVC |
 
-Every archive contains `include/ironpress.h`, a shared library, a static
-library, this guide, the ABI contract, and the license. `SHA256SUMS` in the
-release verifies the archives.
+Every archive contains the C header, the header-only C++17 wrapper, a shared
+library, a static library, both native guides, the ABI contract, and the
+license. `SHA256SUMS` in the release verifies the archives.
 
 ## Convert HTML
 

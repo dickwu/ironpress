@@ -44,6 +44,11 @@ subprocess, or system dependencies.
       <td><a href="https://github.com/gastongouron/ironpress/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gastongouron/ironpress?label=release"></a></td>
     </tr>
     <tr>
+      <td>C++</td>
+      <td><a href="https://gastongouron.github.io/ironpress/get-started/cpp/">Get started with C++</a></td>
+      <td><a href="https://github.com/gastongouron/ironpress/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/gastongouron/ironpress?label=release"></a></td>
+    </tr>
+    <tr>
       <td>.NET</td>
       <td><a href="https://gastongouron.github.io/ironpress/get-started/dotnet/">Get started with .NET</a></td>
       <td><a href="https://www.nuget.org/packages/Ironpress"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ironpress.svg"></a></td>
@@ -76,15 +81,15 @@ subprocess, or system dependencies.
 
 ironpress turns HTML, CSS, or Markdown into PDF bytes inside your application.
 Its rendering engine handles document layout, font shaping, SVG, math, and PDF
-serialization without launching Chrome. Use it from Rust, C, .NET, Java, the
-CLI, Python, Ruby, Node.js, or browser WebAssembly.
+serialization without launching Chrome. Use it from Rust, C, C++, .NET, Java,
+the CLI, Python, Ruby, Node.js, or browser WebAssembly.
 
 ## Why ironpress?
 
 - **Simple deployment:** one library or binary, with no browser runtime to install or manage.
 - **Document-focused layout:** flexbox, grid, tables, multi-column layout, `@page`, headers, and footers.
 - **Production typography:** font subsetting, core Unicode coverage, optional regional CJK/emoji packs, SVG, and math.
-- **Multiple runtimes:** the same Rust core ships to Rust, C, .NET, Java, Python, Ruby, and WebAssembly.
+- **Multiple runtimes:** the same Rust core ships to Rust, C, C++, .NET, Java, Python, Ruby, and WebAssembly.
 - **Defensive defaults:** HTML/SVG sanitization, constrained file access, and opt-in remote fetching policies.
 
 ## Quick start
@@ -102,7 +107,7 @@ let pdf = ironpress::markdown_to_pdf("# Hello\n\nWorld").unwrap();
 
 Choose a complete [getting-started
 guide](https://gastongouron.github.io/ironpress/get-started/) for Rust, the CLI,
-C, .NET, Java, Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
+C, C++, .NET, Java, Python, Ruby, browser JavaScript, or Node.js. For a deeper Rust walkthrough, see
 [HTML-to-PDF rendering without Headless
 Chrome](https://gastongouron.github.io/ironpress/guides/html-to-pdf-rust/), or
 paste a document into the [browser
@@ -179,6 +184,7 @@ does not change page geometry. The CLI exposes the same controls through
 | **Images** | JPEG + PNG, data URIs, local files, remote URLs (`remote` feature) | [Architecture](../../wiki/Architecture) |
 | **PDF** | PDF 1.4, bookmarks, link annotations, headers/footers, gradients, streaming output | [PDF Rendering](../../wiki/PDF-Rendering) |
 | **C ABI** | Stable native API with versioned Linux, macOS, and Windows libraries | [C binding](bindings/c/README.md) |
+| **C++** | Move-only C++17 RAII owners over the stable native ABI | [C++ binding](bindings/cpp/README.md) |
 | **.NET** | Managed `HtmlConverter`, typed failures, and RID-native assets | [.NET binding](bindings/dotnet/README.md) |
 | **Java** | Java 17 `HtmlConverter`, typed failures, and packaged native assets | [Java binding](bindings/java/README.md) |
 | **WASM** | `npm install ironpress` - runs in browsers and Node.js | [WASM & Playground](../../wiki/WASM-Playground) |

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- A header-only C++17 binding provides move-only RAII owners, typed errors, and
+  the complete portable converter contract over the stable C ABI.
+
+### CI
+
+- C++ consumers render through GCC, Clang, and MSVC, then repeat the smoke test
+  from the exact native archive prepared for release.
+
+### Documentation
+
+- The binding matrix, native guides, README, and public site include the C++
+  install, ownership, error, font, and runtime contracts.
+
 ## [1.5.4] — 2026-08-23
 
 ### Added

@@ -198,11 +198,11 @@
               <span class="feature-number">04</span>
               <h3>Multiple runtimes</h3>
               <p>
-                Use the same core from Rust, C, .NET, Java, the CLI, Python, Ruby,
-                browser WebAssembly, or Node.js.
+                Use the same core from Rust, C, C++, .NET, Java, the CLI, Python,
+                Ruby, browser WebAssembly, or Node.js.
               </p>
               <ul class="runtime-list" aria-label="Supported runtimes">
-                <li>Rust</li><li>C</li><li>.NET</li><li>Java</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
+                <li>Rust</li><li>C</li><li>C++</li><li>.NET</li><li>Java</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
               </ul>
             </article>
             <article class="feature-card">
@@ -221,7 +221,7 @@
         <div class="shell">
           <div class="section-heading section-heading-light">
             <div>
-              <p class="eyebrow"><span></span> One core, nine paths</p>
+              <p class="eyebrow"><span></span> One core, ten paths</p>
               <h2>Start in the language<br>you already ship.</h2>
             </div>
             <p>
@@ -253,6 +253,15 @@ IronpressStatus status =
   ironpress_html_to_pdf(
     html, &amp;pdf, &amp;error
   );</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>C++</span><a href="./get-started/cpp/">guide →</a></p>
+              <pre><code><b>#include</b> <em>"ironpress.hpp"</em>
+
+ironpress::Converter converter;
+<b>auto</b> pdf = converter.convert_html(
+  <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
+);</code></pre>
             </article>
             <article class="code-card">
               <p><span>Python</span><a href="https://pypi.org/project/ironpress/">PyPI ↗</a></p>
