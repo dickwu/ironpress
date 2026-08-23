@@ -40,6 +40,11 @@ java_runtime_version() {
     head -n 1
 }
 
+html_maven_version() {
+  sed -n 's/.*&lt;version&gt;\([^&]*\)&lt;\/version&gt;.*/\1/p' "$1" |
+    head -n 1
+}
+
 if [[ -n "${1:-}" ]]; then
   EXPECTED_VERSION="$1"
 elif [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
@@ -66,6 +71,8 @@ check_version ".NET package" "$(dotnet_version bindings/dotnet/src/Ironpress/Iro
 check_version "Java package" "$(maven_version bindings/java/pom.xml)"
 check_version "Java runtime" "$(java_runtime_version bindings/java/src/main/java/io/github/gastongouron/ironpress/IronpressInfo.java)"
 check_version "Java README" "$(maven_version bindings/java/README.md)"
+check_version "Java root README" "$(maven_version README.md)"
+check_version "Java website" "$(html_maven_version site/get-started/java/index.html)"
 check_version "Python crate" "$(package_version bindings/python/Cargo.toml)"
 check_version "Python distribution" "$(package_version bindings/python/pyproject.toml)"
 check_version "Python core requirement" "$(core_requirement bindings/python/Cargo.toml)"

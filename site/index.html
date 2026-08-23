@@ -48,7 +48,7 @@
             "name": "ironpress",
             "codeRepository": "https://github.com/gastongouron/ironpress",
             "programmingLanguage": "Rust",
-            "runtimePlatform": ["Rust", "C", ".NET", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
+            "runtimePlatform": ["Rust", "C", ".NET", "Java", "Command line", "Python", "Ruby", "Web browser", "Node.js"],
             "license": "https://opensource.org/license/mit",
             "description": "An in-process HTML, CSS, and Markdown to PDF engine written in Rust."
           }
@@ -198,11 +198,11 @@
               <span class="feature-number">04</span>
               <h3>Multiple runtimes</h3>
               <p>
-                Use the same core from Rust, C, .NET, the CLI, Python, Ruby,
+                Use the same core from Rust, C, .NET, Java, the CLI, Python, Ruby,
                 browser WebAssembly, or Node.js.
               </p>
               <ul class="runtime-list" aria-label="Supported runtimes">
-                <li>Rust</li><li>C</li><li>.NET</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
+                <li>Rust</li><li>C</li><li>.NET</li><li>Java</li><li>CLI</li><li>Python</li><li>Ruby</li><li>Browser</li><li>Node.js</li>
               </ul>
             </article>
             <article class="feature-card">
@@ -221,7 +221,7 @@
         <div class="shell">
           <div class="section-heading section-heading-light">
             <div>
-              <p class="eyebrow"><span></span> One core, six paths</p>
+              <p class="eyebrow"><span></span> One core, nine paths</p>
               <h2>Start in the language<br>you already ship.</h2>
             </div>
             <p>
@@ -272,6 +272,16 @@ pdf = ironpress.html_to_pdf(
 <b>byte</b>[] pdf = converter.ConvertHtml(
   <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
 );</code></pre>
+            </article>
+            <article class="code-card">
+              <p><span>Java</span><a href="./get-started/java/">guide →</a></p>
+              <pre><code><b>try</b> (<b>var</b> converter =
+  <b>new</b> HtmlConverter()) {
+
+  <b>byte</b>[] pdf = converter.convertHtml(
+    <em>"&lt;h1&gt;Hello&lt;/h1&gt;"</em>
+  );
+}</code></pre>
             </article>
             <article class="code-card">
               <p><span>Ruby</span><a href="https://rubygems.org/gems/ironpress">RubyGems ↗</a></p>

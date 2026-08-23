@@ -9,6 +9,8 @@
 #   bindings/java/pom.xml              (Maven Central artifact)
 #   bindings/java/src/main/.../IronpressInfo.java
 #   bindings/java/README.md
+#   README.md                           (Java installation example)
+#   site/get-started/java/index.html
 #   bindings/python/pyproject.toml      (PyPI wheel)
 #   bindings/python/Cargo.toml          (ironpress-python internal crate)
 #   bindings/ruby/lib/ironpress/version.rb
@@ -76,6 +78,11 @@ update_java_runtime_version() {
     perl -i -pe 's/(PACKAGE_VERSION\s*=\s*)"[^"]+"/$1"'"$NEW"'"/' "$file"
 }
 
+update_maven_html_version() {
+    local file="$1"
+    perl -i -pe 's#(&lt;version&gt;)[^&]+(&lt;/version&gt;)#${1}'"$NEW"'${2}#' "$file"
+}
+
 echo "Bumping to $NEW"
 
 bump_toml_version  "Cargo.toml"                        && echo "  Cargo.toml"
@@ -85,6 +92,8 @@ update_dotnet_version "bindings/dotnet/src/Ironpress/Ironpress.csproj" && echo "
 update_maven_version "bindings/java/pom.xml"            && echo "  Java package"
 update_java_runtime_version "bindings/java/src/main/java/io/github/gastongouron/ironpress/IronpressInfo.java" && echo "  Java runtime"
 update_maven_version "bindings/java/README.md"          && echo "  Java README"
+update_maven_version "README.md"                        && echo "  Java root README"
+update_maven_html_version "site/get-started/java/index.html" && echo "  Java website"
 bump_pyproject     "bindings/python/pyproject.toml"    && echo "  bindings/python/pyproject.toml"
 bump_toml_version  "bindings/python/Cargo.toml"        && echo "  bindings/python/Cargo.toml"
 update_core_requirement "bindings/python/Cargo.toml"   && echo "  Python core requirement"
