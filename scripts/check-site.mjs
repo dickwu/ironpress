@@ -267,9 +267,28 @@ await requireFile("site/assets/ironpress-logo.png");
 
 const readme = await load("README.md");
 if (readme !== null) {
-  const badgeCount = matches(readme, /\[!\[/g).length;
-  if (badgeCount < 14) {
-    report("README.md", `must retain all 14 badges (found ${badgeCount})`);
+  for (const [name, source] of [
+    ["docs.rs", "https://docs.rs/ironpress/badge.svg"],
+    ["CI", "https://github.com/gastongouron/ironpress/actions/workflows/ci.yml/badge.svg"],
+    ["codecov", "https://codecov.io/gh/gastongouron/ironpress/branch/main/graph/badge.svg"],
+    ["deps.rs", "https://deps.rs/repo/github/gastongouron/ironpress/status.svg"],
+    ["MSRV", "https://img.shields.io/badge/MSRV-1.88-blue.svg"],
+    ["license", "https://img.shields.io/badge/license-MIT-blue.svg"],
+    ["downloads", "https://img.shields.io/crates/d/ironpress.svg"],
+    ["WASM", "https://img.shields.io/badge/wasm-ready-blueviolet.svg"],
+    ["playground", "https://img.shields.io/badge/try_it-playground-blueviolet.svg"],
+    ["parity report", "https://img.shields.io/badge/parity-report-ff69b4.svg"],
+    ["Crates.io", "https://img.shields.io/crates/v/ironpress.svg"],
+    ["GitHub release", "https://img.shields.io/github/v/release/gastongouron/ironpress"],
+    ["NuGet", "https://img.shields.io/nuget/v/Ironpress.svg"],
+    ["Maven Central", "https://img.shields.io/maven-central/v/io.github.gastongouron/ironpress.svg"],
+    ["PyPI", "https://img.shields.io/pypi/v/ironpress.svg"],
+    ["RubyGems", "https://img.shields.io/gem/v/ironpress.svg"],
+    ["npm", "https://img.shields.io/npm/v/ironpress.svg"],
+  ]) {
+    if (!readme.includes(source)) {
+      report("README.md", `must retain the ${name} badge`);
+    }
   }
   for (const url of [
     "https://gastongouron.github.io/ironpress/",
