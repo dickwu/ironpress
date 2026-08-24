@@ -237,9 +237,11 @@ Full LaTeX support: fractions, roots, matrices, Greek letters, operators, delimi
 
 ## Language bindings
 
-The C ABI ships as versioned static and shared libraries in GitHub Releases. It
-uses opaque handles, explicit allocation ownership, stable status codes, and no
-ambient error state. See the [C binding guide](bindings/c/README.md).
+The C ABI ships as versioned static and shared libraries in GitHub Releases.
+Relocatable CMake targets serve C and C++ consumers, while Unix archives also
+provide pkg-config metadata. The ABI uses opaque handles, explicit allocation
+ownership, stable status codes, and no ambient error state. See the
+[C binding guide](bindings/c/README.md).
 
 Python and Ruby expose the same reusable converter controls as WebAssembly:
 page geometry, quality settings, sanitization, headers and footers, custom

@@ -19,7 +19,20 @@ platform:
 
 Every archive contains the C header, the header-only C++17 wrapper, a shared
 library, a static library, both native guides, the ABI contract, and the
-license. `SHA256SUMS` in the release verifies the archives.
+license. All archives include relocatable CMake metadata; Unix archives also
+include pkg-config metadata. `SHA256SUMS` in the release verifies the archives.
+
+Use the shared C target by default:
+
+```cmake
+find_package(Ironpress CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE Ironpress::C)
+```
+
+Use `Ironpress::CStatic` for static linkage. Unix C consumers may instead set
+`PKG_CONFIG_PATH` to the archive's `lib/pkgconfig` directory and resolve
+`ironpress` through pkg-config. The separate `ironpress-static` module selects
+the archive and carries the extra system libraries required by static linkage.
 
 ## Convert HTML
 

@@ -31,8 +31,8 @@ network access.
 | Runtime | Package | Supported artifact contract |
 |---|---|---|
 | Rust | [`ironpress`](https://crates.io/crates/ironpress) | Source crate, Rust 1.88+ |
-| C | [GitHub Releases](https://github.com/gastongouron/ironpress/releases) | Header, static library, and shared library for Linux, macOS, and Windows |
-| C++ | [GitHub Releases](https://github.com/gastongouron/ironpress/releases) | C++17 RAII headers with the C static and shared libraries |
+| C | [GitHub Releases](https://github.com/gastongouron/ironpress/releases) | CMake metadata, Unix pkg-config files, header, and native libraries |
+| C++ | [GitHub Releases](https://github.com/gastongouron/ironpress/releases) | CMake targets and C++17 RAII headers with the native libraries |
 | .NET | [`Ironpress`](https://www.nuget.org/packages/Ironpress) | .NET 8+ managed assembly with Linux, macOS, and Windows native assets |
 | Java | [`io.github.gastongouron:ironpress`](https://central.sonatype.com/artifact/io.github.gastongouron/ironpress) | Java 17+ JAR with Linux, macOS, and Windows native assets |
 | Python | [`ironpress`](https://pypi.org/project/ironpress/) | CPython 3.8+ ABI3 wheels for Linux, macOS, and Windows |

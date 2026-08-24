@@ -1,0 +1,128 @@
+@PACKAGE_INIT@
+
+set_and_check(
+    _ironpress_include_dir
+    "@PACKAGE_IRONPRESS_INCLUDE_INSTALL_DIR@"
+)
+set_and_check(
+    _ironpress_library_dir
+    "@PACKAGE_IRONPRESS_LIBRARY_INSTALL_DIR@"
+)
+
+if(WIN32)
+    set(_ironpress_shared_library "${_ironpress_library_dir}/ironpress_ffi.dll")
+    set(_ironpress_import_library "${_ironpress_library_dir}/ironpress_ffi.dll.lib")
+    set(_ironpress_static_library "${_ironpress_library_dir}/ironpress_ffi.lib")
+    set(
+        _ironpress_static_dependencies
+        kernel32
+        ntdll
+        userenv
+        ws2_32
+        dbghelp
+    )
+elseif(APPLE)
+    set(_ironpress_shared_library "${_ironpress_library_dir}/libironpress_ffi.dylib")
+    set(_ironpress_static_library "${_ironpress_library_dir}/libironpress_ffi.a")
+    set(_ironpress_static_dependencies iconv m)
+elseif(UNIX)
+    include(CMakeFindDependencyMacro)
+    find_dependency(Threads)
+    set(_ironpress_shared_library "${_ironpress_library_dir}/libironpress_ffi.so")
+    set(_ironpress_static_library "${_ironpress_library_dir}/libironpress_ffi.a")
+    set(_ironpress_static_dependencies ${CMAKE_DL_LIBS} Threads::Threads m)
+else()
+    set(Ironpress_FOUND FALSE)
+    set(Ironpress_NOT_FOUND_MESSAGE "Ironpress has no native artifact for this platform.")
+    return()
+endif()
+
+foreach(
+    _ironpress_required_path
+    "${_ironpress_include_dir}/ironpress.h"
+    "${_ironpress_include_dir}/ironpress.hpp"
+    "${_ironpress_shared_library}"
+    "${_ironpress_static_library}"
+)
+    if(NOT EXISTS "${_ironpress_required_path}")
+        set(Ironpress_FOUND FALSE)
+        set(
+            Ironpress_NOT_FOUND_MESSAGE
+            "The Ironpress archive is incomplete: ${_ironpress_required_path} is missing."
+        )
+        return()
+    endif()
+endforeach()
+
+if(NOT TARGET Ironpress::CShared)
+    add_library(Ironpress::CShared SHARED IMPORTED)
+    set_target_properties(
+        Ironpress::CShared
+        PROPERTIES
+            IMPORTED_LOCATION "${_ironpress_shared_library}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_ironpress_include_dir}"
+    )
+    if(WIN32)
+        set_property(
+            TARGET Ironpress::CShared
+            PROPERTY IMPORTED_IMPLIB "${_ironpress_import_library}"
+        )
+    endif()
+endif()
+
+if(NOT TARGET Ironpress::CStatic)
+    add_library(Ironpress::CStatic STATIC IMPORTED)
+    set_target_properties(
+        Ironpress::CStatic
+        PROPERTIES
+            IMPORTED_LOCATION "${_ironpress_static_library}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_ironpress_include_dir}"
+            INTERFACE_LINK_LIBRARIES "${_ironpress_static_dependencies}"
+    )
+endif()
+
+if(NOT TARGET Ironpress::C)
+    add_library(Ironpress::C INTERFACE IMPORTED)
+    set_property(
+        TARGET Ironpress::C
+        PROPERTY INTERFACE_LINK_LIBRARIES Ironpress::CShared
+    )
+endif()
+
+if(NOT TARGET Ironpress::CXXShared)
+    add_library(Ironpress::CXXShared INTERFACE IMPORTED)
+    set_target_properties(
+        Ironpress::CXXShared
+        PROPERTIES
+            INTERFACE_COMPILE_FEATURES cxx_std_17
+            INTERFACE_LINK_LIBRARIES Ironpress::CShared
+    )
+endif()
+
+if(NOT TARGET Ironpress::CXXStatic)
+    add_library(Ironpress::CXXStatic INTERFACE IMPORTED)
+    set_target_properties(
+        Ironpress::CXXStatic
+        PROPERTIES
+            INTERFACE_COMPILE_FEATURES cxx_std_17
+            INTERFACE_LINK_LIBRARIES Ironpress::CStatic
+    )
+endif()
+
+if(NOT TARGET Ironpress::CXX)
+    add_library(Ironpress::CXX INTERFACE IMPORTED)
+    set_property(
+        TARGET Ironpress::CXX
+        PROPERTY INTERFACE_LINK_LIBRARIES Ironpress::CXXShared
+    )
+endif()
+
+unset(_ironpress_import_library)
+unset(_ironpress_include_dir)
+unset(_ironpress_library_dir)
+unset(_ironpress_required_path)
+unset(_ironpress_shared_library)
+unset(_ironpress_static_dependencies)
+unset(_ironpress_static_library)
+
+check_required_components(Ironpress)
