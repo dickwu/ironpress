@@ -31,8 +31,8 @@ target_link_libraries(your_target PRIVATE Ironpress::C)
 
 Use `Ironpress::CStatic` for static linkage. Unix C consumers may instead set
 `PKG_CONFIG_PATH` to the archive's `lib/pkgconfig` directory and resolve
-`ironpress` through pkg-config. Its private flags carry the extra system
-libraries required by static linkage.
+`ironpress` through pkg-config. The separate `ironpress-static` module selects
+the archive and carries the extra system libraries required by static linkage.
 
 ## Convert HTML
 

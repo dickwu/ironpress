@@ -82,6 +82,7 @@ fi
 
 export PKG_CONFIG_PATH="${package_dir}/lib/pkgconfig"
 "${pkg_config_command}" --atleast-version="${version}" ironpress
+"${pkg_config_command}" --atleast-version="${version}" ironpress-static
 
 "${CC:-cc}" \
     -std=c11 \
@@ -99,6 +100,6 @@ run_with_shared_library "${work_dir}/pkg-config-shared"
     -Wextra \
     -Werror \
     "${test_dir}/package-consumers/c/main.c" \
-    $("${pkg_config_command}" --cflags --libs --static ironpress) \
+    $("${pkg_config_command}" --cflags --libs ironpress-static) \
     -o "${work_dir}/pkg-config-static"
 "${work_dir}/pkg-config-static"

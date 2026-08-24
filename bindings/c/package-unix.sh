@@ -57,5 +57,10 @@ sed \
     -e "s/@IRONPRESS_PRIVATE_LIBS@/${private_libraries}/g" \
     "${binding_dir}/package/pkgconfig/ironpress.pc.in" \
     > "${pkg_config_dir}/ironpress.pc"
+sed \
+    -e "s/@IRONPRESS_VERSION@/${version}/g" \
+    -e "s/@IRONPRESS_PRIVATE_LIBS@/${private_libraries}/g" \
+    "${binding_dir}/package/pkgconfig/ironpress-static.pc.in" \
+    > "${pkg_config_dir}/ironpress-static.pc"
 
 tar -C "${work_dir}" -czf "${output_dir}/${bundle}.tar.gz" "${bundle}"
