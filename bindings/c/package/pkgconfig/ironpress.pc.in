@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: ironpress
+Description: Ironpress stable C ABI for HTML and Markdown to PDF
+Version: @IRONPRESS_VERSION@
+Libs: -L${libdir} -lironpress_ffi
+Libs.private: @IRONPRESS_PRIVATE_LIBS@
+Cflags: -I${includedir}

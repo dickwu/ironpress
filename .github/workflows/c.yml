@@ -80,6 +80,8 @@ jobs:
         env:
           CXX: g++
         run: bindings/cpp/tests/verify-package.sh linux-x86_64
+      - name: Test packaged CMake and pkg-config consumers
+        run: bindings/c/tests/verify-package-metadata.sh linux-x86_64
       - name: Verify the glibc 2.28 compatibility floor
         run: bindings/c/verify-glibc-floor.sh target/release/libironpress_ffi.so 2.28
       - uses: actions/upload-artifact@v7
@@ -109,6 +111,8 @@ jobs:
         env:
           CXX: g++
         run: bindings/cpp/tests/verify-package.sh linux-aarch64
+      - name: Test packaged CMake and pkg-config consumers
+        run: bindings/c/tests/verify-package-metadata.sh linux-aarch64
       - name: Verify the glibc 2.28 compatibility floor
         run: bindings/c/verify-glibc-floor.sh target/release/libironpress_ffi.so 2.28
       - uses: actions/upload-artifact@v7
@@ -144,6 +148,8 @@ jobs:
         env:
           CXX: clang++
         run: bindings/cpp/tests/verify-package.sh ${{ matrix.artifact }}
+      - name: Test packaged CMake and pkg-config consumers
+        run: bindings/c/tests/verify-package-metadata.sh ${{ matrix.artifact }}
       - uses: actions/upload-artifact@v7
         with:
           name: ironpress-c-${{ matrix.artifact }}
@@ -174,12 +180,14 @@ jobs:
           $version = (Select-String -Path bindings/c/Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
           $bundle = "ironpress-c-$version-windows-x86_64"
           $root = "dist/c/$bundle"
-          New-Item -ItemType Directory -Force "$root/include/ironpress", "$root/lib" | Out-Null
+          New-Item -ItemType Directory -Force "$root/include/ironpress", "$root/lib/cmake/Ironpress" | Out-Null
           Copy-Item bindings/c/include/ironpress.h "$root/include/"
           Copy-Item bindings/cpp/include/ironpress.hpp "$root/include/"
           Copy-Item bindings/cpp/include/ironpress/* "$root/include/ironpress/" -Recurse
           Copy-Item bindings/c/ABI.md, bindings/c/README.md, LICENSE "$root/"
           Copy-Item bindings/cpp/README.md "$root/CPP.md"
+          Copy-Item bindings/c/package/cmake/IronpressConfig.cmake "$root/lib/cmake/Ironpress/"
+          (Get-Content bindings/c/package/cmake/IronpressConfigVersion.cmake.in -Raw).Replace('@IRONPRESS_VERSION@', $version) | Set-Content "$root/lib/cmake/Ironpress/IronpressConfigVersion.cmake"
           Copy-Item target/release/ironpress_ffi.dll, target/release/ironpress_ffi*.lib "$root/lib/"
           Compress-Archive -Path $root -DestinationPath "dist/c/$bundle.zip"
       - name: Test the packaged C++ consumer with MSVC
@@ -196,6 +204,28 @@ jobs:
           cl /nologo /std:c++17 /permissive- /Zc:__cplusplus /EHsc /utf-8 /W4 /WX /I "%ROOT%\include" bindings\cpp\tests\smoke.cpp /Fe:target\ironpress-cpp-package-smoke.exe /link "%ROOT%\lib\ironpress_ffi.dll.lib"
           set "PATH=%ROOT%\lib;%PATH%"
           target\ironpress-cpp-package-smoke.exe tests\parity\fonts\ParitySans.ttf tests\fonts\NotoEmoji-TestSubset.ttf
+      - name: Test packaged CMake consumers with MSVC
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          for /f "tokens=3" %%v in ('findstr /b /c:"version = " bindings\c\Cargo.toml') do set VERSION=%%~v
+          set "BUNDLE=ironpress-c-%VERSION%-windows-x86_64"
+          set "PACKAGE_ROOT=%RUNNER_TEMP%\ironpress-cmake-package"
+          powershell -NoProfile -Command "Expand-Archive -Path 'dist/c/%BUNDLE%.zip' -DestinationPath '%PACKAGE_ROOT%'"
+          set "ROOT=%PACKAGE_ROOT%\%BUNDLE%"
+          set "PATH=%ROOT%\lib;%PATH%"
+          cmake -S bindings\c\tests\package-consumers\c -B target\cmake-c-shared -DIRONPRESS_TEST_VERSION=%VERSION% -DIRONPRESS_TEST_TARGET=Ironpress::C -DCMAKE_PREFIX_PATH="%ROOT%"
+          cmake --build target\cmake-c-shared --config Release
+          target\cmake-c-shared\Release\ironpress_c_package_consumer.exe
+          cmake -S bindings\c\tests\package-consumers\c -B target\cmake-c-static -DIRONPRESS_TEST_VERSION=%VERSION% -DIRONPRESS_TEST_TARGET=Ironpress::CStatic -DCMAKE_PREFIX_PATH="%ROOT%"
+          cmake --build target\cmake-c-static --config Release
+          target\cmake-c-static\Release\ironpress_c_package_consumer.exe
+          cmake -S bindings\c\tests\package-consumers\cpp -B target\cmake-cpp-shared -DIRONPRESS_TEST_VERSION=%VERSION% -DIRONPRESS_TEST_TARGET=Ironpress::CXX -DCMAKE_PREFIX_PATH="%ROOT%"
+          cmake --build target\cmake-cpp-shared --config Release
+          target\cmake-cpp-shared\Release\ironpress_cpp_package_consumer.exe
+          cmake -S bindings\c\tests\package-consumers\cpp -B target\cmake-cpp-static -DIRONPRESS_TEST_VERSION=%VERSION% -DIRONPRESS_TEST_TARGET=Ironpress::CXXStatic -DCMAKE_PREFIX_PATH="%ROOT%"
+          cmake --build target\cmake-cpp-static --config Release
+          target\cmake-cpp-static\Release\ironpress_cpp_package_consumer.exe
       - uses: actions/upload-artifact@v7
         with:
           name: ironpress-c-windows-x86_64
