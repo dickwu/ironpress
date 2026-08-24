@@ -1,9 +1,9 @@
 # Ironpress C ABI
 
-The C binding is the native contract shared by C, C++, and .NET. Java may use
-the same contract through JNA or a thin JNI adapter. The ABI translates values,
-ownership, and failures only; all document behavior remains in the `ironpress`
-crate.
+The C binding is the native contract shared by C, C++, .NET, and Java. C++ uses
+a header-only RAII layer, .NET uses P/Invoke, and Java uses JNA. The ABI
+translates values, ownership, and failures only; all document behavior remains
+in the `ironpress` crate.
 
 ## Compatibility
 

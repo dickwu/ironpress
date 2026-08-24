@@ -17,10 +17,14 @@ readonly bundle_dir="${work_dir}/${bundle}"
 readonly output_dir="${repository_dir}/dist/c"
 trap 'rm -rf "${work_dir}"' EXIT
 
-mkdir -p "${bundle_dir}/include" "${bundle_dir}/lib" "${output_dir}"
+mkdir -p "${bundle_dir}/include/ironpress" "${bundle_dir}/lib" "${output_dir}"
 cp "${binding_dir}/include/ironpress.h" "${bundle_dir}/include/"
+cp "${repository_dir}/bindings/cpp/include/ironpress.hpp" "${bundle_dir}/include/"
+cp -R "${repository_dir}/bindings/cpp/include/ironpress/." \
+    "${bundle_dir}/include/ironpress/"
 cp "${binding_dir}/ABI.md" "${binding_dir}/README.md" "${repository_dir}/LICENSE" \
     "${bundle_dir}/"
+cp "${repository_dir}/bindings/cpp/README.md" "${bundle_dir}/CPP.md"
 cp "${repository_dir}/target/release/libironpress_ffi.a" "${bundle_dir}/lib/"
 
 case "${platform}" in

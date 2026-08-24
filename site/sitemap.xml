@@ -31,6 +31,11 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://gastongouron.github.io/ironpress/get-started/cpp/</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://gastongouron.github.io/ironpress/get-started/dotnet/</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
