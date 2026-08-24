@@ -17,6 +17,7 @@ readonly bundle_dir="${work_dir}/${bundle}"
 readonly cmake_dir="${bundle_dir}/lib/cmake/Ironpress"
 readonly pkg_config_dir="${bundle_dir}/lib/pkgconfig"
 readonly output_dir="${repository_dir}/dist/c"
+readonly cmake_command="${CMAKE:-cmake}"
 trap 'rm -rf "${work_dir}"' EXIT
 
 mkdir -p \
@@ -48,10 +49,12 @@ case "${platform}" in
         ;;
 esac
 
-cp "${binding_dir}/package/cmake/IronpressConfig.cmake" "${cmake_dir}/"
-sed "s/@IRONPRESS_VERSION@/${version}/g" \
-    "${binding_dir}/package/cmake/IronpressConfigVersion.cmake.in" \
-    > "${cmake_dir}/IronpressConfigVersion.cmake"
+"${cmake_command}" \
+    -DIRONPRESS_PACKAGE_SOURCE_DIR="${binding_dir}/package/cmake" \
+    -DIRONPRESS_PACKAGE_OUTPUT_DIR="${cmake_dir}" \
+    -DIRONPRESS_PACKAGE_ROOT="${bundle_dir}" \
+    -DIRONPRESS_VERSION="${version}" \
+    -P "${binding_dir}/package/cmake/generate-package.cmake"
 sed \
     -e "s/@IRONPRESS_VERSION@/${version}/g" \
     -e "s/@IRONPRESS_PRIVATE_LIBS@/${private_libraries}/g" \

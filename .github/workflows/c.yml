@@ -188,8 +188,10 @@ jobs:
           Copy-Item bindings/cpp/include/ironpress/* "$root/include/ironpress/" -Recurse
           Copy-Item bindings/c/ABI.md, bindings/c/README.md, LICENSE "$root/"
           Copy-Item bindings/cpp/README.md "$root/CPP.md"
-          Copy-Item bindings/c/package/cmake/IronpressConfig.cmake "$root/lib/cmake/Ironpress/"
-          (Get-Content bindings/c/package/cmake/IronpressConfigVersion.cmake.in -Raw).Replace('@IRONPRESS_VERSION@', $version) | Set-Content "$root/lib/cmake/Ironpress/IronpressConfigVersion.cmake"
+          $packageRoot = (Resolve-Path $root).Path
+          $cmakeSource = (Resolve-Path bindings/c/package/cmake).Path
+          $cmakeOutput = (Resolve-Path "$root/lib/cmake/Ironpress").Path
+          cmake "-DIRONPRESS_PACKAGE_SOURCE_DIR=$cmakeSource" "-DIRONPRESS_PACKAGE_OUTPUT_DIR=$cmakeOutput" "-DIRONPRESS_PACKAGE_ROOT=$packageRoot" "-DIRONPRESS_VERSION=$version" -P bindings/c/package/cmake/generate-package.cmake
           Copy-Item target/release/ironpress_ffi.dll, target/release/ironpress_ffi*.lib "$root/lib/"
           Compress-Archive -Path $root -DestinationPath "dist/c/$bundle.zip"
       - name: Test the packaged C++ consumer with MSVC
