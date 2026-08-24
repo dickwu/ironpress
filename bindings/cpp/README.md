@@ -6,9 +6,17 @@ Rust renderer remains the only implementation of document behavior.
 
 ## Install
 
-Download the archive for your platform from an Ironpress GitHub release. Add
-its `include` directory to your compiler search path and link either the shared
-or static `ironpress_ffi` library from `lib`.
+Download the archive for your platform from an Ironpress GitHub release and
+point `CMAKE_PREFIX_PATH` at its root. The default target uses the shared native
+library:
+
+```cmake
+find_package(Ironpress CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE Ironpress::CXX)
+```
+
+Use `Ironpress::CXXStatic` for static linkage. Both targets provide the include
+path, require C++17, and carry the native link contract transitively.
 
 The archive contains both `ironpress.hpp` and `ironpress.h`. Keep these headers
 paired with the library from the same archive. The wrapper checks the linked ABI
@@ -83,5 +91,5 @@ cargo build --release -p ironpress-ffi
 IRONPRESS_PROFILE=release bindings/cpp/tests/run.sh
 ```
 
-CI compiles and runs the consumer against static and shared libraries with GCC
-and Clang. The Windows consumer is compiled and run with MSVC.
+CI extracts the exact release archive, then compiles and runs CMake consumers
+against static and shared libraries with GCC, Clang, and MSVC.

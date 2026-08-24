@@ -54,12 +54,10 @@
 
           <article class="prose">
             <h2 id="install">Download the native library</h2>
-            <p>Choose the archive for your platform from the matching GitHub release. It contains the public header, shared and static libraries, the ABI contract, and checksums.</p>
-            <pre><code>cc main.c \
-  -I ironpress-c-&lt;VERSION&gt;-linux-x86_64/include \
-  -L ironpress-c-&lt;VERSION&gt;-linux-x86_64/lib \
-  -lironpress_ffi -o render</code></pre>
-            <p>Set your platform's shared-library search path when the library is not installed in a system location.</p>
+            <p>Choose the archive for your platform from the matching GitHub release. It contains the public header, shared and static libraries, relocatable CMake and pkg-config metadata, the ABI contract, and checksums.</p>
+            <pre><code>find_package(Ironpress CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE Ironpress::C)</code></pre>
+            <p>Point <code>CMAKE_PREFIX_PATH</code> at the extracted archive. Use <code>Ironpress::CStatic</code> for static linkage, or resolve <code>ironpress</code> from the archive's <code>lib/pkgconfig</code> directory on Unix.</p>
 
             <h2 id="first-pdf">Create an HTML PDF</h2>
             <pre><code>#include "ironpress.h"

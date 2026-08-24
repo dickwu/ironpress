@@ -6,11 +6,15 @@
 
 - A header-only C++17 binding provides move-only RAII owners, typed errors, and
   the complete portable converter contract over the stable C ABI.
+- Native release archives provide relocatable CMake targets for C and C++, plus
+  pkg-config metadata for Unix C consumers.
 
 ### CI
 
 - C++ consumers render through GCC, Clang, and MSVC, then repeat the smoke test
   from the exact native archive prepared for release.
+- CMake consumers link static and shared archives on every native platform;
+  Unix jobs also verify pkg-config discovery and transitive static link flags.
 
 ### Documentation
 

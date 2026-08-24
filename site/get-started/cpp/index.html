@@ -54,12 +54,10 @@
 
           <article class="prose">
             <h2 id="install">Download the native library</h2>
-            <p>Choose the archive for your platform from the matching GitHub release. It contains the C++ wrapper, the underlying C header, shared and static libraries, the ABI contract, and checksums.</p>
-            <pre><code>c++ -std=c++17 main.cpp \
-  -I ironpress-c-&lt;VERSION&gt;-linux-x86_64/include \
-  -L ironpress-c-&lt;VERSION&gt;-linux-x86_64/lib \
-  -lironpress_ffi -o render</code></pre>
-            <p>Keep the headers and library from the same archive. The wrapper checks the linked ABI generation before use.</p>
+            <p>Choose the archive for your platform from the matching GitHub release. It contains the C++ wrapper, the underlying C header, shared and static libraries, relocatable CMake metadata, the ABI contract, and checksums.</p>
+            <pre><code>find_package(Ironpress CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE Ironpress::CXX)</code></pre>
+            <p>Point <code>CMAKE_PREFIX_PATH</code> at the extracted archive. Use <code>Ironpress::CXXStatic</code> for static linkage. Both targets require C++17 and preserve the linked ABI check.</p>
 
             <h2 id="first-pdf">Create an HTML PDF</h2>
             <pre><code>#include "ironpress.hpp"
