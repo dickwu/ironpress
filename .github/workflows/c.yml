@@ -59,8 +59,8 @@ jobs:
         run: bindings/c/generate-header.sh --check
       - name: Test the Rust boundary
         run: cargo test -p ironpress-ffi
-      - name: Install the memory checker
-        run: dnf install -y valgrind
+      - name: Install native test tools
+        run: dnf install -y cmake pkgconf-pkg-config valgrind
       - name: Compile and test the C consumer under Valgrind
         env:
           IRONPRESS_VALGRIND: '1'
@@ -101,6 +101,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.88.0'
+      - name: Install native package test tools
+        run: dnf install -y cmake pkgconf-pkg-config
       - name: Compile and test the release library from C
         env:
           IRONPRESS_PROFILE: release
