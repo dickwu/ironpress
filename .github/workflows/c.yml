@@ -188,9 +188,9 @@ jobs:
           Copy-Item bindings/cpp/include/ironpress/* "$root/include/ironpress/" -Recurse
           Copy-Item bindings/c/ABI.md, bindings/c/README.md, LICENSE "$root/"
           Copy-Item bindings/cpp/README.md "$root/CPP.md"
-          $packageRoot = (Resolve-Path $root).Path
-          $cmakeSource = (Resolve-Path bindings/c/package/cmake).Path
-          $cmakeOutput = (Resolve-Path "$root/lib/cmake/Ironpress").Path
+          $packageRoot = (Resolve-Path $root).Path.Replace('\', '/')
+          $cmakeSource = (Resolve-Path bindings/c/package/cmake).Path.Replace('\', '/')
+          $cmakeOutput = (Resolve-Path "$root/lib/cmake/Ironpress").Path.Replace('\', '/')
           cmake "-DIRONPRESS_PACKAGE_SOURCE_DIR=$cmakeSource" "-DIRONPRESS_PACKAGE_OUTPUT_DIR=$cmakeOutput" "-DIRONPRESS_PACKAGE_ROOT=$packageRoot" "-DIRONPRESS_VERSION=$version" -P bindings/c/package/cmake/generate-package.cmake
           Copy-Item target/release/ironpress_ffi.dll, target/release/ironpress_ffi*.lib "$root/lib/"
           Compress-Archive -Path $root -DestinationPath "dist/c/$bundle.zip"
