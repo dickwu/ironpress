@@ -54,7 +54,7 @@
 
           <article class="prose">
             <h2 id="install">Download the native library</h2>
-            <p>Choose the archive for your platform from the matching GitHub release. It contains the public header, shared and static libraries, relocatable CMake and pkg-config metadata, the ABI contract, and checksums.</p>
+            <p>Choose the archive for your platform from the matching GitHub release. It contains the public header, shared and static libraries, relocatable CMake metadata, the ABI contract, and checksums. Unix archives also contain pkg-config metadata.</p>
             <pre><code>find_package(Ironpress CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE Ironpress::C)</code></pre>
             <p>Point <code>CMAKE_PREFIX_PATH</code> at the extracted archive. Use <code>Ironpress::CStatic</code> for static linkage. Unix pkg-config consumers can resolve <code>ironpress</code> for shared linkage or <code>ironpress-static</code> for static linkage.</p>

@@ -19,8 +19,8 @@ platform:
 
 Every archive contains the C header, the header-only C++17 wrapper, a shared
 library, a static library, both native guides, the ABI contract, and the
-license. It also includes relocatable CMake and pkg-config metadata.
-`SHA256SUMS` in the release verifies the archives.
+license. All archives include relocatable CMake metadata; Unix archives also
+include pkg-config metadata. `SHA256SUMS` in the release verifies the archives.
 
 Use the shared C target by default:
 
