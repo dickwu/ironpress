@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [1.5.5] — 2026-08-25
+
 ### Added
 
 - A header-only C++17 binding provides move-only RAII owners, typed errors, and
