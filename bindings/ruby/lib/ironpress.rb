@@ -36,7 +36,9 @@ module Ironpress
       base_path
       resource_root
       header
+      header_html
       footer
+      footer_html
     ].freeze
 
     def initialize

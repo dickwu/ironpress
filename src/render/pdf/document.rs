@@ -455,12 +455,122 @@ mod page_margin_text_tests {
             PdfRect::new(0.0, 0.0, 24.0, 108.0)
         );
     }
+
+    #[test]
+    fn auto_width_running_element_uses_its_content_width() {
+        let element = TextBlock::plain(vec![TextLine {
+            runs: vec![TextRun {
+                text: "RUN HEAD".into(),
+                font_size: 12.0,
+                ..Default::default()
+            }],
+            height: 14.4,
+            ..Default::default()
+        }]);
+        let available_width = 180.0;
+
+        let width = RunningElementInlineSize {
+            available_width,
+            custom_fonts: &HashMap::new(),
+        }
+        .resolve(&element);
+
+        assert!(width > 0.0);
+        assert!(width < available_width);
+    }
 }
 
 pub(super) fn page_selector_specificity(
     selector: &crate::parser::css::PageSelector,
 ) -> (u32, u32, u32) {
     selector.specificity()
+}
+
+struct RunningElementInlineSize<'a> {
+    available_width: f32,
+    custom_fonts: &'a HashMap<String, TtfFont>,
+}
+
+impl RunningElementInlineSize<'_> {
+    fn resolve(&self, element: &dyn LayoutElement) -> f32 {
+        self.preferred_width(element)
+            .unwrap_or(self.available_width)
+            .max(0.0)
+    }
+
+    fn preferred_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        self.fixed_width(element)
+            .or_else(|| self.replaced_width(element))
+            .or_else(|| self.text_width(element))
+            .or_else(|| {
+                element
+                    .inline_flow_extent()
+                    .and_then(|extent| extent.max_content_outer_extent())
+            })
+            .or_else(|| self.children_width(element))
+    }
+
+    fn fixed_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        element
+            .box_fragmentation_owner()?
+            .fragmentation_box_model()
+            .size
+            .width
+            .fixed_value()
+    }
+
+    fn replaced_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        element
+            .replaced_element()
+            .map(|replaced| replaced.geometry().size.width)
+    }
+
+    fn text_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        struct TextWidth<'a> {
+            custom_fonts: &'a HashMap<String, TtfFont>,
+            width: Option<f32>,
+        }
+
+        impl LayoutVisitor for TextWidth<'_> {
+            fn visit_text_block(&mut self, block: &TextBlock) {
+                let content_width = block
+                    .lines
+                    .iter()
+                    .map(|line| estimate_line_width_with_fonts(line, self.custom_fonts))
+                    .fold(0.0f32, f32::max);
+                self.width = Some(
+                    content_width
+                        + block.box_model.padding.horizontal()
+                        + block.box_model.border.horizontal_width(),
+                );
+            }
+        }
+
+        let mut measurement = TextWidth {
+            custom_fonts: self.custom_fonts,
+            width: None,
+        };
+        element.accept(&mut measurement);
+        measurement.width
+    }
+
+    fn children_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        let mut width: Option<f32> = None;
+        element.visit_children(&mut |child| {
+            if let Some(child_width) = self.preferred_width(child) {
+                width = Some(width.map_or(child_width, |current| current.max(child_width)));
+            }
+        });
+        let content_width = width?;
+        let edges = element
+            .box_fragmentation_owner()
+            .map(|owner| {
+                let box_model = owner.fragmentation_box_model();
+                box_model.padding.horizontal() + box_model.border.horizontal_width()
+            })
+            .unwrap_or_default();
+        Some(content_width + edges)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -488,31 +598,12 @@ pub(super) fn render_running_margin_element(
     }
 
     impl Renderer<'_, '_> {
-        fn available_width(&self) -> f32 {
-            (self.page_size.width - self.margin.horizontal()).max(0.0)
-        }
-
         fn element_width(&self, element: &dyn LayoutElement) -> f32 {
-            element
-                .box_fragmentation_owner()
-                .map(|owner| {
-                    owner
-                        .fragmentation_box_model()
-                        .size
-                        .resolve_width(self.available_width())
-                })
-                .or_else(|| {
-                    element
-                        .replaced_element()
-                        .map(|replaced| replaced.geometry().size.width)
-                })
-                .or_else(|| {
-                    element
-                        .inline_flow_extent()
-                        .and_then(|extent| extent.max_content_outer_extent())
-                })
-                .unwrap_or_else(|| self.available_width())
-                .max(0.0)
+            RunningElementInlineSize {
+                available_width: (self.page_size.width - self.margin.horizontal()).max(0.0),
+                custom_fonts: self.ctx.text.custom_fonts,
+            }
+            .resolve(element)
         }
 
         fn render_layout_element(&mut self, element: &dyn LayoutElement) {
