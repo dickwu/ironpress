@@ -138,8 +138,16 @@ impl NativeConverter {
         self.configured(|converter| converter.header(text))
     }
 
+    fn header_html(&self, html: String) -> Self {
+        self.configured(|converter| converter.header_html(html))
+    }
+
     fn footer(&self, text: String) -> Self {
         self.configured(|converter| converter.footer(text))
+    }
+
+    fn footer_html(&self, html: String) -> Self {
+        self.configured(|converter| converter.footer_html(html))
     }
 
     fn convert(ruby: &Ruby, this: &Self, html: String) -> Result<RString, Error> {
@@ -220,7 +228,9 @@ fn init(_ruby: &Ruby) -> Result<(), Error> {
     class.define_method("base_path", method!(NativeConverter::base_path, 1))?;
     class.define_method("resource_root", method!(NativeConverter::resource_root, 1))?;
     class.define_method("header", method!(NativeConverter::header, 1))?;
+    class.define_method("header_html", method!(NativeConverter::header_html, 1))?;
     class.define_method("footer", method!(NativeConverter::footer, 1))?;
+    class.define_method("footer_html", method!(NativeConverter::footer_html, 1))?;
     class.define_method("convert", method!(NativeConverter::convert, 1))?;
     class.define_method(
         "convert_markdown",

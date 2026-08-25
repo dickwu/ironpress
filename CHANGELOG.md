@@ -6,6 +6,8 @@
 
 ### Added
 
+- Explicit rich-header and rich-footer APIs render sanitized HTML fragments,
+  including images and tables, through CSS running elements on every page.
 - A header-only C++17 binding provides move-only RAII owners, typed errors, and
   the complete portable converter contract over the stable C ABI.
 - Native release archives provide relocatable CMake targets for C and C++, plus

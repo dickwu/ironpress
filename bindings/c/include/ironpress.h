@@ -232,6 +232,15 @@ IronpressStatus ironpress_converter_set_footer(IronpressConverter *converter,
                                                IronpressBytes footer,
                                                IronpressError **out_error);
 
+// Configure an HTML fragment in the bottom page margin.
+//
+// # Safety
+//
+// Handles, input bytes, and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_footer_html(IronpressConverter *converter,
+                                                    IronpressBytes footer,
+                                                    IronpressError **out_error);
+
 // Configure the plain-text page header.
 //
 // # Safety
@@ -240,6 +249,15 @@ IronpressStatus ironpress_converter_set_footer(IronpressConverter *converter,
 IronpressStatus ironpress_converter_set_header(IronpressConverter *converter,
                                                IronpressBytes header,
                                                IronpressError **out_error);
+
+// Configure an HTML fragment in the top page margin.
+//
+// # Safety
+//
+// Handles, input bytes, and output pointers must follow `ABI.md`.
+IronpressStatus ironpress_converter_set_header_html(IronpressConverter *converter,
+                                                    IronpressBytes header,
+                                                    IronpressError **out_error);
 
 // Set target source-image resolution in dots per inch.
 //

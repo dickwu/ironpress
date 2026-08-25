@@ -26,7 +26,9 @@ class BindingContractTest < Minitest::Test
     add_font
     add_font_pack
     header
+    header_html
     footer
+    footer_html
     convert
     convert_markdown
   ].freeze
@@ -68,7 +70,9 @@ class BindingContractTest < Minitest::Test
       .occlusion_cull(true)
       .sanitize(true)
       .header("Contract header")
+      .header_html("<strong>Contract HTML header</strong>")
       .footer("Page {page} of {pages}")
+      .footer_html("<em>Contract HTML footer</em>")
 
     pdf = converter.convert("<h1>Ruby binding</h1>")
 

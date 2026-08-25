@@ -42,6 +42,9 @@ int main() {
 }
 ```
 
+Use `set_header_html` or `set_footer_html` for sanitized images, tables, and
+styled markup in page margins. The plain setters never infer HTML.
+
 `Converter` and `Pdf` cannot be copied. Moving either object transfers its one
 native owner, and destruction releases that owner through the matching C ABI
 function. A moved-from object is empty and may be destroyed or assigned again.

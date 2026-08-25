@@ -86,6 +86,7 @@ pub mod error;
 pub mod font_pack;
 pub(crate) mod fonts;
 pub(crate) mod layout;
+mod page_margin;
 pub(crate) mod parser;
 pub(crate) mod render;
 pub(crate) mod security;
@@ -235,11 +236,7 @@ pub struct HtmlConverter {
     custom_fonts: std::collections::HashMap<String, Vec<u8>>,
     font_catalog: font_pack::FontCatalog,
     resources: ResourcePaths,
-    /// Optional header text rendered at the top of each page.
-    header: Option<String>,
-    /// Optional footer text rendered at the bottom of each page.
-    /// Use `{page}` for current page number and `{pages}` for total page count.
-    footer: Option<String>,
+    page_margins: page_margin::PageMargins,
     /// FlateDecode-compress page content streams (lossless). Defaults to `true`;
     /// disable for raw, human-readable PDF content streams.
     compress: bool,
@@ -268,8 +265,7 @@ impl HtmlConverter {
             custom_fonts: std::collections::HashMap::new(),
             font_catalog: font_pack::FontCatalog::default(),
             resources: ResourcePaths::default(),
-            header: None,
-            footer: None,
+            page_margins: page_margin::PageMargins::default(),
             // On by default for production output (FlateDecode is lossless and
             // transparent to any rasterizer). The crate's own unit tests inspect
             // raw content-stream operators, so the in-crate test build defaults
@@ -498,7 +494,16 @@ impl HtmlConverter {
 
     /// Set a header text rendered at the top of each page (in the top margin area).
     pub fn header(mut self, text: impl Into<String>) -> Self {
-        self.header = Some(text.into());
+        self.page_margins.set_header_text(text.into());
+        self
+    }
+
+    /// Set an HTML fragment rendered in the top margin on every page.
+    ///
+    /// The fragment uses the same sanitization, resource policy, fonts, and CSS
+    /// cascade as the document. Reserve enough top margin for its content.
+    pub fn header_html(mut self, html: impl Into<String>) -> Self {
+        self.page_margins.set_header_html(html.into());
         self
     }
 
@@ -507,7 +512,16 @@ impl HtmlConverter {
     /// Use `{page}` for the current page number and `{pages}` for the total page count.
     /// For example: `"Page {page} of {pages}"`.
     pub fn footer(mut self, text: impl Into<String>) -> Self {
-        self.footer = Some(text.into());
+        self.page_margins.set_footer_text(text.into());
+        self
+    }
+
+    /// Set an HTML fragment rendered in the bottom margin on every page.
+    ///
+    /// The fragment uses the same sanitization, resource policy, fonts, and CSS
+    /// cascade as the document. Reserve enough bottom margin for its content.
+    pub fn footer_html(mut self, html: impl Into<String>) -> Self {
+        self.page_margins.set_footer_html(html.into());
         self
     }
 
@@ -563,6 +577,11 @@ impl HtmlConverter {
 
         // Step 2: Parse HTML and extract stylesheets
         let mut result = parser::html::parse_html_with_styles(html)?;
+        self.page_margins.enrich_document(
+            &mut result,
+            self.sanitize,
+            resource_loader.resources(),
+        )?;
         security::sanitizer::sanitize_dom_resources(&mut result.nodes, resource_loader.resources());
         #[cfg(feature = "remote")]
         resource_loader.preload_document_resources(security::sanitizer::document_image_references(
@@ -784,15 +803,14 @@ impl HtmlConverter {
         let has_physical_decoration = page_sheet.has_effect();
         let has_footnote_decoration = footnote_area.style.padding != EdgeSizes::ZERO
             || footnote_area.style.separator.width > 0.0;
-        let decoration = if self.header.is_some()
-            || self.footer.is_some()
+        let decoration = if self.page_margins.has_content()
             || !margin_boxes.is_empty()
             || has_physical_decoration
             || has_footnote_decoration
         {
             Some(render::pdf::PageDecoration {
-                header: self.header.clone(),
-                footer: self.footer.clone(),
+                header: self.page_margins.header_text().map(str::to_string),
+                footer: self.page_margins.footer_text().map(str::to_string),
                 margin_boxes,
                 margin_text: layout::engine::compute_page_margin_text_context(
                     &rules,

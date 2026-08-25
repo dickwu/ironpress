@@ -26,7 +26,9 @@ PORTABLE_CONVERTER_METHODS = {
     "add_font",
     "add_font_pack",
     "header",
+    "header_html",
     "footer",
+    "footer_html",
     "convert",
     "convert_markdown",
 }
@@ -64,7 +66,9 @@ class BindingContractTest(unittest.TestCase):
         converter.occlusion_cull(True)
         converter.sanitize(True)
         converter.header("Contract header")
+        converter.header_html("<strong>Contract HTML header</strong>")
         converter.footer("Page {page} of {pages}")
+        converter.footer_html("<em>Contract HTML footer</em>")
 
         pdf = converter.convert("<h1>Python binding</h1>")
 

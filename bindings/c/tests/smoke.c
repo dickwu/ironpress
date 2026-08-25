@@ -65,10 +65,18 @@ int main(int argc, char **argv) {
     require(ironpress_converter_set_header(converter, text("C ABI"), &error) ==
                 IRONPRESS_STATUS_OK,
             "header configuration failed");
+    require(ironpress_converter_set_header_html(
+                converter, text("<strong>C ABI HTML</strong>"), &error) ==
+                IRONPRESS_STATUS_OK,
+            "HTML header configuration failed");
     require(ironpress_converter_set_footer(
                 converter, text("Page {page} / {pages}"), &error) ==
                 IRONPRESS_STATUS_OK,
             "footer configuration failed");
+    require(ironpress_converter_set_footer_html(
+                converter, text("<em>C ABI HTML footer</em>"), &error) ==
+                IRONPRESS_STATUS_OK,
+            "HTML footer configuration failed");
     require(ironpress_converter_set_compress(converter, IRONPRESS_TRUE, &error) ==
                 IRONPRESS_STATUS_OK,
             "compression configuration failed");

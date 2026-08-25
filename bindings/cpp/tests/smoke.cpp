@@ -123,7 +123,9 @@ int main(int argc, char** argv) {
         .set_margins(ironpress::PageMargins::from_points(36.0F, 36.0F, 36.0F,
                                                         36.0F))
         .set_header("C++ RAII")
+        .set_header_html("<strong>C++ HTML header</strong>")
         .set_footer("Page {page} / {pages}")
+        .set_footer_html("<em>C++ HTML footer</em>")
         .set_compression(true)
         .set_jpeg_quality(82)
         .set_auto_resize_images(true)

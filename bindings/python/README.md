@@ -45,6 +45,8 @@ converter.page_size("Letter")
 converter.margin_sides(36, 48, 36, 48)
 converter.header("Quarterly report")
 converter.footer("Page {page} of {pages}")
+# Use header_html/footer_html for sanitized images, tables, and styled markup.
+converter.header_html("<strong>Quarterly report</strong>")
 
 pdf = converter.convert("<h1>Results</h1>")
 markdown_pdf = converter.convert_markdown("# Results")

@@ -67,7 +67,9 @@ internal static class Program
             .SetOcclusionCulling(true)
             .SetSanitization(true)
             .SetHeader("Contract header")
+            .SetHeaderHtml("<strong>Contract HTML header</strong>")
             .SetFooter("Page {page} of {pages}")
+            .SetFooterHtml("<em>Contract HTML footer</em>")
             .AddFont("ParitySans", File.ReadAllBytes(context.CustomFontPath))
             .AddFontPack(
                 FontPackKind.CjkJapanese,

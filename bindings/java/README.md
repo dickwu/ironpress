@@ -40,6 +40,9 @@ HTML sanitization is enabled and resource access is disabled by default.
 Custom fonts and the optional CJK or emoji packs are supplied as bytes; the
 binding never downloads them.
 
+Use `setHeaderHtml` or `setFooterHtml` for sanitized images, tables, and styled
+markup in the page margins. The plain setters keep their existing text contract.
+
 ## Supported runtimes
 
 - Linux x86-64 with glibc 2.28 or newer

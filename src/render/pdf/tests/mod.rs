@@ -2,6 +2,7 @@ use crate::render::pdf::border_images::BorderImageShadings;
 
 include!("foundation.rs");
 mod flex_cells;
+mod rich_page_margins;
 mod stacking;
 include!("conic_and_effects.rs");
 include!("document_basics.rs");

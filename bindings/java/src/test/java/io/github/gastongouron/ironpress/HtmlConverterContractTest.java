@@ -38,7 +38,9 @@ final class HtmlConverterContractTest {
             .setOcclusionCulling(true)
             .setSanitization(true)
             .setHeader("Contract header")
+            .setHeaderHtml("<strong>Contract HTML header</strong>")
             .setFooter("Page {page} of {pages}")
+            .setFooterHtml("<em>Contract HTML footer</em>")
             .addFont("ParitySans", Files.readAllBytes(CUSTOM_FONT))
             .addFontPack(FontPackKind.CJK_JAPANESE, Files.readAllBytes(FONT_PACK))) {
       var pdf =

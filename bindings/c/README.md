@@ -81,6 +81,8 @@ the compatibility, ownership, error, and threading contracts.
 Generation 1 covers HTML and Markdown PDF bytes, named and custom page sizes,
 per-side margins, compression and raster controls, sanitization, headers,
 footers, custom TrueType fonts, and optional CJK or emoji packs.
+Rich page margins use `ironpress_converter_set_header_html` and
+`ironpress_converter_set_footer_html`; the existing setters remain plain text.
 
 Local paths, direct file output, streaming, asynchronous conversion, and remote
 resources are intentionally absent. Applications provide document and font

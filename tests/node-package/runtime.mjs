@@ -13,6 +13,8 @@ if (firstRuntime !== secondRuntime || (await init()) !== firstRuntime) {
 }
 
 const converter = new HtmlConverter();
+converter.headerHtml('<strong>Node HTML header</strong>');
+converter.footerHtml('<em>Node HTML footer</em>');
 converter.pageSizeCustom(320, 480);
 converter.addFontPack('cjk-jp', await readFile(process.argv[2]));
 

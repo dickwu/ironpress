@@ -101,9 +101,21 @@ public final class HtmlConverter implements AutoCloseable {
     return this;
   }
 
+  /** Set an HTML fragment rendered in the top margin of every page. */
+  public HtmlConverter setHeaderHtml(String html) {
+    owner.setPageText(ConverterOwner.PageTextKind.HEADER_HTML, html);
+    return this;
+  }
+
   /** Set footer text, with optional {@code {page}} and {@code {pages}} placeholders. */
   public HtmlConverter setFooter(String text) {
     owner.setPageText(ConverterOwner.PageTextKind.FOOTER, text);
+    return this;
+  }
+
+  /** Set an HTML fragment rendered in the bottom margin of every page. */
+  public HtmlConverter setFooterHtml(String html) {
+    owner.setPageText(ConverterOwner.PageTextKind.FOOTER_HTML, html);
     return this;
   }
 

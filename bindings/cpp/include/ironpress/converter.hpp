@@ -118,9 +118,19 @@ public:
         return configure_text(ironpress_converter_set_header, header);
     }
 
+    /// Configure an HTML fragment in the top page margin.
+    Converter& set_header_html(std::string_view header) {
+        return configure_text(ironpress_converter_set_header_html, header);
+    }
+
     /// Configure the plain-text page footer.
     Converter& set_footer(std::string_view footer) {
         return configure_text(ironpress_converter_set_footer, footer);
+    }
+
+    /// Configure an HTML fragment in the bottom page margin.
+    Converter& set_footer_html(std::string_view footer) {
+        return configure_text(ironpress_converter_set_footer_html, footer);
     }
 
     /// Add or replace one custom TrueType font family.

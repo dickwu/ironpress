@@ -129,7 +129,21 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial NativeStatus ironpress_converter_set_header_html(
+        ConverterHandle converter,
+        NativeBytes header,
+        out nint error);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial NativeStatus ironpress_converter_set_footer(
+        ConverterHandle converter,
+        NativeBytes footer,
+        out nint error);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial NativeStatus ironpress_converter_set_footer_html(
         ConverterHandle converter,
         NativeBytes footer,
         out nint error);

@@ -28,13 +28,12 @@ use super::block::layout_block_element;
 use super::cells::CellBoxHolder;
 pub use super::cells::{GridCell, TableCell};
 pub(crate) use super::elements::{
-    AvoidPageBreak, BackgroundBox, BackgroundBoxGeometry, BoxFragmentation, BoxModel, BoxPaint,
-    Container, FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
+    AvoidPageBreak, BackgroundBox, BackgroundBoxGeometry, BoxFragmentation, BoxModel, Container,
+    FlexRow, GridRow, HorizontalRule, Image, ImagePaint, ImageSampling, IntoLayoutNode,
     LayoutElement, LayoutNode, LayoutSize, LayoutVisitor, LayoutVisitorMut, LineFragmentation,
     MathBlock, NamedString, PageBreak, Positioning, ProgressBar, ProgressColors, ReplacedContent,
     ReplacedFragment, ReplacedGeometry, RunningElement, Svg, SvgPaint, TableRow, TextBlock,
-    TextBlockStyle, TextFragmentation, TextSemantics, TextSpacing, visit_layout_tree,
-    visit_layout_tree_mut,
+    TextBlockStyle, TextFragmentation, TextSpacing, visit_layout_tree, visit_layout_tree_mut,
 };
 use super::flex::layout_flex_container;
 pub(crate) use super::flow_metrics::BlockMargins;
@@ -2540,92 +2539,36 @@ fn resolve_target_payload(
     }
 }
 
-fn build_running_element(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunningElementMode {
+    Capture,
+    LayoutCapturedContent,
+}
+
+fn capture_running_element(
     name: String,
     el: &ElementNode,
-    style: &ComputedStyle,
-    ctx: &LayoutContext,
-    ancestors: &[AncestorInfo],
+    context: ElementLayoutContext<'_, '_, '_>,
     env: &mut LayoutEnv,
 ) -> Option<LayoutNode> {
-    let mut runs = Vec::new();
-    InlineRunCollector::new(env.rules, env.fonts, env.counter_state, &mut *env.resources)
-        .collect_box_content(&el.children, style, &mut runs, None, ancestors);
-    if runs.is_empty() {
-        let mut text = String::new();
-        collect_plain_text(&el.children, &mut text);
-        let text = collapse_whitespace(&text);
-        if !text.is_empty() {
-            push_text_run_with_fallback(
-                TextRun {
-                    text,
-                    font_size: used_font_size(style, env.fonts),
-                    bold: style.font_weight == FontWeight::Bold,
-                    font_style: style.font_style,
-                    decorations: style.text_decorations.active(style.color),
-                    color: style.color,
-                    font_family: resolve_style_font_family(style, env.fonts),
-                    line_height_factor: text_run_line_height_factor(style, env.fonts),
-                    vertical_align: style.vertical_align,
-                    text_shadow: style.text_shadow.clone(),
-                    shaping: crate::layout::text::text_run_shaping(style),
-                    metadata: crate::layout::text::text_run_metadata(style),
-                    ..Default::default()
-                },
-                &mut runs,
-                env.fonts,
-            );
-        }
-    }
-    let text_indent = style.text_indent.resolve(ctx.available_width().max(0.0));
-    let lines = if runs.is_empty() {
-        Vec::new()
+    let mut captured = Vec::new();
+    flatten_element_with_running_mode(
+        el,
+        context,
+        &mut captured,
+        env,
+        RunningElementMode::LayoutCapturedContent,
+    );
+    let element = if captured.len() == 1 {
+        captured.pop()?
     } else {
-        wrap_text_runs(
-            runs,
-            TextWrapOptions::new(
-                ctx.available_width().max(0.0),
-                used_font_size(style, env.fonts),
-                text_run_line_height_factor(style, env.fonts),
-                style.overflow_wrap,
-            )
-            .with_white_space(style.white_space)
-            .with_parent_strut(parent_line_strut(style, env.fonts))
-            .with_text_indent(text_indent)
-            .with_rtl(style.direction_rtl)
-            .with_bidi_override(style.bidi_override),
-            env.fonts,
-        )
-    };
-
-    let box_model = BoxModel::from_style(style, BlockMargins::default());
-    let paint = BoxPaint::from_style(style, box_model.size);
-    let element = TextBlock {
-        lines,
-        box_model,
-        paint,
-        positioning: Positioning::default(),
-        fragmentation: TextFragmentation {
-            lines: LineFragmentation::from_style(style),
+        Container {
+            children: captured,
             ..Default::default()
-        },
-        text: TextBlockStyle {
-            alignment: style.text_align,
-            writing_mode: style.writing_mode,
-            indent: text_indent,
-        },
-        semantics: TextSemantics {
-            heading_level: heading_level(el.tag),
-        },
-        ..Default::default()
-    };
-    Some(
-        RunningElement {
-            name,
-            element: element.boxed(),
         }
-        .boxed(),
-    )
+        .boxed()
+    };
+    Some(RunningElement { name, element }.boxed())
 }
 
 fn effective_transform(
@@ -3292,9 +3235,17 @@ pub(crate) fn flatten_nodes(
                         env,
                     );
                     flush_ib(&mut ib_group, parent_style, &ib_ctx, output, ancestors, env);
-                    if let Some(running) =
-                        build_running_element(name, el, &style, &ib_ctx, ancestors, env)
-                    {
+                    let running_context = LayoutTreeContext::new(parent_style, &ib_ctx, ancestors)
+                        .with_list(list_ctx)
+                        .with_positioned_ancestor_depth(positioned_ancestor_depth)
+                        .for_element(
+                            ElementSiblingContext::new(element_index, element_count)
+                                .with_neighbors(
+                                    &preceding_siblings,
+                                    forward_siblings(&all_element_siblings, element_index),
+                                ),
+                        );
+                    if let Some(running) = capture_running_element(name, el, running_context, env) {
                         output.push(running);
                     }
                 } else if style.display == Display::TableCell {
@@ -3425,6 +3376,16 @@ pub(crate) fn flatten_element(
     output: &mut Vec<LayoutNode>,
     env: &mut LayoutEnv,
 ) {
+    flatten_element_with_running_mode(el, context, output, env, RunningElementMode::Capture);
+}
+
+fn flatten_element_with_running_mode(
+    el: &ElementNode,
+    context: ElementLayoutContext<'_, '_, '_>,
+    output: &mut Vec<LayoutNode>,
+    env: &mut LayoutEnv,
+    running_mode: RunningElementMode,
+) {
     let tree = context.tree();
     let siblings = context.siblings();
     let parent_style = tree.parent_style();
@@ -3485,6 +3446,14 @@ pub(crate) fn flatten_element(
     if style.display == Display::None {
         return;
     }
+    if running_mode == RunningElementMode::Capture
+        && let Some(name) = style.running_name.clone()
+    {
+        if let Some(running) = capture_running_element(name, el, context, env) {
+            output.push(running);
+        }
+        return;
+    }
     let counter_scope = env.counter_state.enter_element(&style);
 
     // Layout may select a specialized leaf/container route, but all routes
@@ -3492,13 +3461,6 @@ pub(crate) fn flatten_element(
     // fixed-position metadata, counter cleanup, and trailing page breaks from
     // depending on which element kind happened to produce the layout nodes.
     (|| {
-        if let Some(name) = style.running_name.clone() {
-            if let Some(running) = build_running_element(name, el, &style, ctx, ancestors, env) {
-                output.push(running);
-            }
-            return;
-        }
-
         // Bail out on excessively deep nesting to prevent stack overflow.
         if ancestors.len() > 30 {
             return;
@@ -4957,7 +4919,7 @@ pub(crate) use super::paginate::estimate_element_height;
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
-    use crate::layout::elements::LayoutElementTestExt;
+    use crate::layout::elements::{BoxPaint, LayoutElementTestExt};
     use crate::parser::css::{parse_page_rules, parse_stylesheet};
     use crate::parser::html::{parse_html, parse_html_with_styles};
     use crate::style::computed::{FootnoteDisplay, FootnotePolicy};
@@ -9416,9 +9378,9 @@ mod tests {
                 crate::parser::css::PageContentPolicy::Last,
             ))
             .and_then(|element| {
-                element.inspect_text(|block| {
+                element.inspect_container(|block| {
                     assert!(
-                        block.lines.is_empty(),
+                        block.children.is_empty(),
                         "the box must not need a text run to exist"
                     );
                     assert!(

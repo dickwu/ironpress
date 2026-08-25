@@ -198,6 +198,12 @@ let pdf = HtmlConverter::new()
     .footer("Page {page} of {pages}")
     .convert("&lt;h1&gt;Invoice #042&lt;/h1&gt;")?;</code></pre>
             <p>
+              Use <code>header_html</code> or <code>footer_html</code> for
+              sanitized images, tables, and styled markup. Reserve enough page
+              margin for the fragment; page-number placeholders remain a
+              plain-text footer feature.
+            </p>
+            <p>
               The same engine is packaged for Python, Ruby, and WebAssembly.
               You can evaluate its rendering directly in the
               <a href="../../playground/">client-side playground</a>; the HTML
