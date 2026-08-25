@@ -12,7 +12,7 @@ Ironpress requires Java 17 or newer.
 <dependency>
   <groupId>io.github.gastongouron</groupId>
   <artifactId>ironpress</artifactId>
-  <version>1.5.4</version>
+  <version>1.5.5</version>
 </dependency>
 ```
 

@@ -265,7 +265,7 @@ byte[] pdf = converter.ConvertHtml("<h1>Hello</h1>");
 <dependency>
   <groupId>io.github.gastongouron</groupId>
   <artifactId>ironpress</artifactId>
-  <version>1.5.4</version>
+  <version>1.5.5</version>
 </dependency>
 ```
 
