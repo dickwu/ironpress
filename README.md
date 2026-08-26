@@ -145,6 +145,7 @@ ironpress input.html output.pdf
 ironpress document.md output.pdf
 ironpress --page-size letter --landscape --margin 54 input.html output.pdf
 ironpress --header "Report" --footer "Page {page} of {pages}" input.html output.pdf
+ironpress --header-html '<strong>Report</strong>' input.html output.pdf
 echo '<h1>Hello</h1>' | ironpress --stdin output.pdf
 ```
 
@@ -165,6 +166,12 @@ let pdf = HtmlConverter::new()
     .convert("<h1>Custom page</h1>")
     .unwrap();
 ```
+
+Use `.header_html(...)` or `.footer_html(...)` for images, tables, and styled
+markup. Rich fragments use the document sanitizer, resource policy, fonts, and
+CSS cascade. Reserve enough top or bottom margin for the fragment. The existing
+`.header(...)` and `.footer(...)` methods remain plain text; `{page}` and
+`{pages}` substitution remains a plain-text footer feature.
 
 `RasterQuality` keeps source-image, filter, and flattened-background resolution
 in one physical-DPI policy. Its default preserves sharp source/filter output

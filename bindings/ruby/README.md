@@ -51,6 +51,9 @@ converter = Ironpress::HtmlConverter.new
   .header("Quarterly report")
   .footer("Page {page} of {pages}")
 
+# Use header_html/footer_html for sanitized images, tables, and styled markup.
+converter.header_html("<strong>Quarterly report</strong>")
+
 pdf = converter.convert("<h1>Results</h1>")
 markdown_pdf = converter.convert_markdown("# Results")
 ```

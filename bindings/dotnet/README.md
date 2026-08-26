@@ -31,6 +31,8 @@ File.WriteAllBytes("output.pdf", pdf);
 ```
 
 `ConvertMarkdown` accepts Markdown and returns the same owned `byte[]` result.
+Use `SetHeaderHtml` or `SetFooterHtml` for sanitized images, tables, and styled
+markup in the page margins.
 
 ## Configure rendering
 

@@ -17,8 +17,12 @@ pub struct CliOptions {
     pub margin: Margin,
     /// Header text.
     pub header: Option<String>,
+    /// Header HTML fragment.
+    pub header_html: Option<String>,
     /// Footer text (`{page}` and `{pages}` are substituted).
     pub footer: Option<String>,
+    /// Footer HTML fragment.
+    pub footer_html: Option<String>,
     /// Enable HTML sanitization.
     pub sanitize: bool,
     /// FlateDecode-compress page content streams (default true).
@@ -52,7 +56,9 @@ impl Default for CliOptions {
             landscape: false,
             margin: Margin::default(),
             header: None,
+            header_html: None,
             footer: None,
+            footer_html: None,
             sanitize: true,
             // The real CLI compresses by default; the in-crate test build renders
             // raw so cli tests can inspect content-stream operators (see lib.rs).
@@ -119,10 +125,24 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, String> {
             "--header" => {
                 i += 1;
                 opts.header = Some(args.get(i).ok_or("--header requires a value")?.clone());
+                opts.header_html = None;
+            }
+            "--header-html" => {
+                i += 1;
+                opts.header_html =
+                    Some(args.get(i).ok_or("--header-html requires a value")?.clone());
+                opts.header = None;
             }
             "--footer" => {
                 i += 1;
                 opts.footer = Some(args.get(i).ok_or("--footer requires a value")?.clone());
+                opts.footer_html = None;
+            }
+            "--footer-html" => {
+                i += 1;
+                opts.footer_html =
+                    Some(args.get(i).ok_or("--footer-html requires a value")?.clone());
+                opts.footer = None;
             }
             "--sanitize" => {
                 i += 1;
@@ -230,8 +250,14 @@ pub fn convert(opts: &CliOptions, html: &str) -> Result<Vec<u8>, IronpressError>
     if let Some(ref h) = opts.header {
         converter = converter.header(h.as_str());
     }
+    if let Some(ref h) = opts.header_html {
+        converter = converter.header_html(h.as_str());
+    }
     if let Some(ref f) = opts.footer {
         converter = converter.footer(f.as_str());
+    }
+    if let Some(ref f) = opts.footer_html {
+        converter = converter.footer_html(f.as_str());
     }
     if let Some(ref bp) = opts.base_path {
         converter = converter.base_path(bp);
@@ -260,8 +286,14 @@ pub fn convert_markdown(opts: &CliOptions, md: &str) -> Result<Vec<u8>, Ironpres
     if let Some(ref h) = opts.header {
         converter = converter.header(h.as_str());
     }
+    if let Some(ref h) = opts.header_html {
+        converter = converter.header_html(h.as_str());
+    }
     if let Some(ref f) = opts.footer {
         converter = converter.footer(f.as_str());
+    }
+    if let Some(ref f) = opts.footer_html {
+        converter = converter.footer_html(f.as_str());
     }
     if let Some(ref bp) = opts.base_path {
         converter = converter.base_path(bp);
@@ -287,7 +319,9 @@ OPTIONS:
     --landscape             Use landscape orientation
     --margin <PT>           Uniform margin in points (default: 72)
     --header <TEXT>         Header text on each page
+    --header-html <HTML>    Header HTML fragment on each page
     --footer <TEXT>         Footer text ({page} and {pages} for numbering)
+    --footer-html <HTML>    Footer HTML fragment on each page
     --sanitize <BOOL>       Enable/disable HTML sanitization (default: true)
     --compress <BOOL>       FlateDecode-compress content streams (default: true)
     --jpeg-quality <N>      JPEG quality for optimized image embedding (default: 95)
@@ -423,6 +457,34 @@ mod tests {
         let opts = parse_args(&a).unwrap();
         assert_eq!(opts.header.as_deref(), Some("My Doc"));
         assert_eq!(opts.footer.as_deref(), Some("Page {page}"));
+    }
+
+    #[test]
+    fn parse_rich_header_footer_selects_html_over_earlier_plain_text() {
+        let options = vec![
+            "--header",
+            "plain header",
+            "--header-html",
+            "<strong>rich header</strong>",
+            "--footer",
+            "plain footer",
+            "--footer-html",
+            "<em>rich footer</em>",
+            "in.html",
+            "out.pdf",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
+        let opts = parse_args(&options).unwrap();
+
+        assert_eq!(opts.header, None);
+        assert_eq!(opts.footer, None);
+        assert_eq!(
+            opts.header_html.as_deref(),
+            Some("<strong>rich header</strong>")
+        );
+        assert_eq!(opts.footer_html.as_deref(), Some("<em>rich footer</em>"));
     }
 
     #[test]

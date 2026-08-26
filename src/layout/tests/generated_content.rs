@@ -2,7 +2,51 @@ use super::support::{layout_pages, visible_runs};
 use crate::layout::elements::test_support::LayoutElementTestExt;
 use crate::layout::elements::{Container, Image, LayoutVisitor, TextBlock};
 use crate::layout::engine::visit_layout_tree;
+use crate::parser::css::{PageContentPolicy, PageContentReference};
 use crate::style::computed::Position;
+
+#[test]
+fn running_element_retains_image_and_table_descendants() {
+    let pages = layout_pages(
+        r#"<style>
+            .header { position: running(issue245); width: 180pt; height: 36pt }
+        </style>
+        <div class="header">
+            <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+                 style="width: 12pt; height: 12pt" alt="">
+            <table><tr><td>ISSUE245</td></tr></table>
+        </div>
+        <div>Body</div>"#,
+    );
+    let running = pages[0]
+        .generated_content
+        .running_element(&PageContentReference::new(
+            "issue245".into(),
+            PageContentPolicy::Last,
+        ))
+        .expect("running element");
+
+    #[derive(Default)]
+    struct RichDescendants {
+        images: usize,
+        table_rows: usize,
+    }
+
+    impl LayoutVisitor for RichDescendants {
+        fn visit_image(&mut self, _image: &Image) {
+            self.images += 1;
+        }
+
+        fn visit_table_row(&mut self, _row: &crate::layout::elements::TableRow) {
+            self.table_rows += 1;
+        }
+    }
+
+    let mut descendants = RichDescendants::default();
+    visit_layout_tree(running, &mut descendants);
+    assert_eq!(descendants.images, 1, "captured image descendant");
+    assert_eq!(descendants.table_rows, 1, "captured table descendant");
+}
 
 #[test]
 fn generated_content_survives_grid_item_block_content_layout() {

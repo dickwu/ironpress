@@ -89,6 +89,10 @@ final class ConverterOwner implements AutoCloseable {
               switch (kind) {
                 case HEADER -> api.ironpress_converter_set_header(owner, input.bytes(), error);
                 case FOOTER -> api.ironpress_converter_set_footer(owner, input.bytes(), error);
+                case HEADER_HTML ->
+                    api.ironpress_converter_set_header_html(owner, input.bytes(), error);
+                case FOOTER_HTML ->
+                    api.ironpress_converter_set_footer_html(owner, input.bytes(), error);
               });
     }
   }
@@ -167,7 +171,9 @@ final class ConverterOwner implements AutoCloseable {
 
   enum PageTextKind {
     HEADER,
-    FOOTER
+    FOOTER,
+    HEADER_HTML,
+    FOOTER_HTML
   }
 
   enum DocumentKind {

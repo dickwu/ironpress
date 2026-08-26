@@ -56,7 +56,13 @@ interface NativeApi extends Library {
   int ironpress_converter_set_header(
       Pointer converter, NativeBytes header, PointerByReference error);
 
+  int ironpress_converter_set_header_html(
+      Pointer converter, NativeBytes header, PointerByReference error);
+
   int ironpress_converter_set_footer(
+      Pointer converter, NativeBytes footer, PointerByReference error);
+
+  int ironpress_converter_set_footer_html(
       Pointer converter, NativeBytes footer, PointerByReference error);
 
   int ironpress_converter_add_font(

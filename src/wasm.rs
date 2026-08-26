@@ -138,9 +138,21 @@ impl WasmHtmlConverter {
         self.update(|converter| converter.header(text));
     }
 
+    /// Set an HTML fragment rendered in the top margin of every page.
+    #[wasm_bindgen(js_name = headerHtml)]
+    pub fn header_html(&mut self, html: &str) {
+        self.update(|converter| converter.header_html(html));
+    }
+
     /// Set footer text, with optional `{page}` and `{pages}` placeholders.
     pub fn footer(&mut self, text: &str) {
         self.update(|converter| converter.footer(text));
+    }
+
+    /// Set an HTML fragment rendered in the bottom margin of every page.
+    #[wasm_bindgen(js_name = footerHtml)]
+    pub fn footer_html(&mut self, html: &str) {
+        self.update(|converter| converter.footer_html(html));
     }
 
     /// Convert HTML with this converter's settings.

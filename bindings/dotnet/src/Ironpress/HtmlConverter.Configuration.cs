@@ -130,8 +130,14 @@ public sealed partial class HtmlConverter
     /// <summary>Set plain text rendered in the top page margin.</summary>
     public HtmlConverter SetHeader(string text) => SetPageText(PageTextKind.Header, text);
 
+    /// <summary>Set an HTML fragment rendered in the top margin of every page.</summary>
+    public HtmlConverter SetHeaderHtml(string html) => SetPageText(PageTextKind.HeaderHtml, html);
+
     /// <summary>Set footer text, with optional {page} and {pages} placeholders.</summary>
     public HtmlConverter SetFooter(string text) => SetPageText(PageTextKind.Footer, text);
+
+    /// <summary>Set an HTML fragment rendered in the bottom margin of every page.</summary>
+    public HtmlConverter SetFooterHtml(string html) => SetPageText(PageTextKind.FooterHtml, html);
 
     private HtmlConverter SetResolution(ResolutionKind kind, float dotsPerInch)
     {
@@ -166,6 +172,10 @@ public sealed partial class HtmlConverter
                     converter, input, out error),
                 PageTextKind.Footer => NativeMethods.ironpress_converter_set_footer(
                     converter, input, out error),
+                PageTextKind.HeaderHtml => NativeMethods.ironpress_converter_set_header_html(
+                    converter, input, out error),
+                PageTextKind.FooterHtml => NativeMethods.ironpress_converter_set_footer_html(
+                    converter, input, out error),
                 _ => throw new UnreachableException(),
             };
             return Complete(status, error);
@@ -186,5 +196,7 @@ public sealed partial class HtmlConverter
     {
         Header,
         Footer,
+        HeaderHtml,
+        FooterHtml,
     }
 }

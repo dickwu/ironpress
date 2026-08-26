@@ -455,12 +455,122 @@ mod page_margin_text_tests {
             PdfRect::new(0.0, 0.0, 24.0, 108.0)
         );
     }
+
+    #[test]
+    fn auto_width_running_element_uses_its_content_width() {
+        let element = TextBlock::plain(vec![TextLine {
+            runs: vec![TextRun {
+                text: "RUN HEAD".into(),
+                font_size: 12.0,
+                ..Default::default()
+            }],
+            height: 14.4,
+            ..Default::default()
+        }]);
+        let available_width = 180.0;
+
+        let width = RunningElementInlineSize {
+            available_width,
+            custom_fonts: &HashMap::new(),
+        }
+        .resolve(&element);
+
+        assert!(width > 0.0);
+        assert!(width < available_width);
+    }
 }
 
 pub(super) fn page_selector_specificity(
     selector: &crate::parser::css::PageSelector,
 ) -> (u32, u32, u32) {
     selector.specificity()
+}
+
+struct RunningElementInlineSize<'a> {
+    available_width: f32,
+    custom_fonts: &'a HashMap<String, TtfFont>,
+}
+
+impl RunningElementInlineSize<'_> {
+    fn resolve(&self, element: &dyn LayoutElement) -> f32 {
+        self.preferred_width(element)
+            .unwrap_or(self.available_width)
+            .max(0.0)
+    }
+
+    fn preferred_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        self.fixed_width(element)
+            .or_else(|| self.replaced_width(element))
+            .or_else(|| self.text_width(element))
+            .or_else(|| {
+                element
+                    .inline_flow_extent()
+                    .and_then(|extent| extent.max_content_outer_extent())
+            })
+            .or_else(|| self.children_width(element))
+    }
+
+    fn fixed_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        element
+            .box_fragmentation_owner()?
+            .fragmentation_box_model()
+            .size
+            .width
+            .fixed_value()
+    }
+
+    fn replaced_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        element
+            .replaced_element()
+            .map(|replaced| replaced.geometry().size.width)
+    }
+
+    fn text_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        struct TextWidth<'a> {
+            custom_fonts: &'a HashMap<String, TtfFont>,
+            width: Option<f32>,
+        }
+
+        impl LayoutVisitor for TextWidth<'_> {
+            fn visit_text_block(&mut self, block: &TextBlock) {
+                let content_width = block
+                    .lines
+                    .iter()
+                    .map(|line| estimate_line_width_with_fonts(line, self.custom_fonts))
+                    .fold(0.0f32, f32::max);
+                self.width = Some(
+                    content_width
+                        + block.box_model.padding.horizontal()
+                        + block.box_model.border.horizontal_width(),
+                );
+            }
+        }
+
+        let mut measurement = TextWidth {
+            custom_fonts: self.custom_fonts,
+            width: None,
+        };
+        element.accept(&mut measurement);
+        measurement.width
+    }
+
+    fn children_width(&self, element: &dyn LayoutElement) -> Option<f32> {
+        let mut width: Option<f32> = None;
+        element.visit_children(&mut |child| {
+            if let Some(child_width) = self.preferred_width(child) {
+                width = Some(width.map_or(child_width, |current| current.max(child_width)));
+            }
+        });
+        let content_width = width?;
+        let edges = element
+            .box_fragmentation_owner()
+            .map(|owner| {
+                let box_model = owner.fragmentation_box_model();
+                box_model.padding.horizontal() + box_model.border.horizontal_width()
+            })
+            .unwrap_or_default();
+        Some(content_width + edges)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -472,40 +582,140 @@ pub(super) fn render_running_margin_element(
     page_size: PageSize,
     margin: Margin,
     margin_box_background: Option<crate::types::Color>,
-    custom_fonts: &HashMap<String, TtfFont>,
-    prepared_custom_fonts: &PreparedCustomFonts,
-    pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
+    page_index: usize,
+    ctx: &mut PageRenderContext<'_>,
 ) -> bool {
-    struct Renderer<'call, 'fonts> {
+    struct Renderer<'call, 'page> {
         content: &'call mut String,
         align: crate::parser::css::MarginBoxAlign,
         band: crate::parser::css::MarginBoxBand,
         page_size: PageSize,
         margin: Margin,
         margin_box_background: Option<crate::types::Color>,
-        custom_fonts: &'fonts HashMap<String, TtfFont>,
-        prepared_custom_fonts: &'fonts PreparedCustomFonts,
-        pdf_writer: &'call mut PdfWriter,
-        page_images: &'call mut Vec<ImageRef>,
+        page_index: usize,
+        ctx: &'call mut PageRenderContext<'page>,
         rendered: bool,
+    }
+
+    impl Renderer<'_, '_> {
+        fn element_width(&self, element: &dyn LayoutElement) -> f32 {
+            RunningElementInlineSize {
+                available_width: (self.page_size.width - self.margin.horizontal()).max(0.0),
+                custom_fonts: self.ctx.text.custom_fonts,
+            }
+            .resolve(element)
+        }
+
+        fn render_layout_element(&mut self, element: &dyn LayoutElement) {
+            if let Some(background) = self.margin_box_background.take() {
+                let (r, g, b, alpha) = background.to_f32_rgba();
+                if alpha > 0.0 {
+                    let (y, height) = match self.band {
+                        crate::parser::css::MarginBoxBand::Top => {
+                            (self.page_size.height - self.margin.top, self.margin.top)
+                        }
+                        crate::parser::css::MarginBoxBand::Bottom => (0.0, self.margin.bottom),
+                    };
+                    self.content.push_str(&format!("{r} {g} {b} rg\n"));
+                    self.content
+                        .push_str(&format!("0 {y} {} {height} re f\n", self.page_size.width));
+                }
+            }
+            let width = self.element_width(element);
+            let height = crate::layout::paginate::estimate_element_height(element).max(0.0);
+            let x = match self.align {
+                crate::parser::css::MarginBoxAlign::Left => 0.0,
+                crate::parser::css::MarginBoxAlign::Center => {
+                    self.page_size.width / 2.0 - width / 2.0
+                }
+                crate::parser::css::MarginBoxAlign::Right => {
+                    self.page_size.width - self.margin.right - width
+                }
+            };
+            let band_center_y = match self.band {
+                crate::parser::css::MarginBoxBand::Top => {
+                    self.page_size.height - self.margin.top / 2.0
+                }
+                crate::parser::css::MarginBoxBand::Bottom => self.margin.bottom / 2.0,
+            };
+            let top_inset = self.page_size.height - band_center_y - height / 2.0;
+            let frame = PageElementFrame {
+                occlusion_coverers: &[],
+                page_size: self.page_size,
+                margin: Margin::new(top_inset, 0.0, 0.0, x),
+                available_width: width,
+                y_pos: 0.0,
+                element_index: 0,
+                page_index: self.page_index,
+            };
+            let marker = self.ctx.stacking.marker();
+            let mut element_content = String::new();
+            let mut discarded_bookmarks = Vec::new();
+            element.accept(&mut PageElementRenderer {
+                content: &mut element_content,
+                frame,
+                paint_phase: ElementPaintPhase::All,
+                bookmarks: &mut discarded_bookmarks,
+                ctx: self.ctx,
+            });
+            let descendants = self.ctx.stacking.take_since(marker);
+            let mut plan = StackingPaintPlan::default();
+            self.ctx.stacking.commit(
+                StackingScope::Local,
+                self.content,
+                &mut plan,
+                layout_element_paint_order(element).with_in_flow_phase(true, true),
+                element_content,
+                descendants,
+            );
+            self.ctx.stacking.paint_plan(plan, self.content);
+            self.rendered = true;
+        }
     }
 
     impl LayoutVisitor for Renderer<'_, '_> {
         fn visit_text_block(&mut self, element: &TextBlock) {
-            self.rendered = render_running_text_margin_element(
-                self.content,
-                element,
-                self.align,
-                self.band,
-                self.page_size,
-                self.margin,
-                self.margin_box_background,
-                self.custom_fonts,
-                self.prepared_custom_fonts,
-                self.pdf_writer,
-                self.page_images,
-            );
+            self.render_layout_element(element);
+        }
+
+        fn visit_table_row(&mut self, element: &TableRow) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_grid_row(&mut self, element: &GridRow) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_flex_row(&mut self, element: &FlexRow) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_container(&mut self, element: &Container) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_image(&mut self, element: &Image) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_svg(&mut self, element: &Svg) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_horizontal_rule(&mut self, element: &HorizontalRule) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_progress_bar(&mut self, element: &ProgressBar) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_math_block(&mut self, element: &MathBlock) {
+            self.render_layout_element(element);
+        }
+
+        fn visit_column_rule(&mut self, element: &ColumnRule) {
+            self.render_layout_element(element);
         }
     }
 
@@ -516,127 +726,12 @@ pub(super) fn render_running_margin_element(
         page_size,
         margin,
         margin_box_background,
-        custom_fonts,
-        prepared_custom_fonts,
-        pdf_writer,
-        page_images,
+        page_index,
+        ctx,
         rendered: false,
     };
     element.accept(&mut renderer);
     renderer.rendered
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_running_text_margin_element(
-    content: &mut String,
-    element: &TextBlock,
-    align: crate::parser::css::MarginBoxAlign,
-    band: crate::parser::css::MarginBoxBand,
-    page_size: PageSize,
-    margin: Margin,
-    margin_box_background: Option<crate::types::Color>,
-    custom_fonts: &HashMap<String, TtfFont>,
-    prepared_custom_fonts: &PreparedCustomFonts,
-    pdf_writer: &mut PdfWriter,
-    page_images: &mut Vec<ImageRef>,
-) -> bool {
-    let lines = &element.lines;
-    let background_color = &element.paint.background.color;
-    let block_width = &element.box_model.size.width;
-    let block_height = &element.box_model.size.height;
-    let padding = &element.box_model.padding;
-    let border = &element.box_model.border;
-    let text_align = &element.text.alignment;
-    let text_w_max = lines
-        .iter()
-        .map(|line| estimate_line_width_with_fonts(line, custom_fonts))
-        .fold(0.0f32, f32::max);
-    let horizontal_extra = padding.horizontal() + border.horizontal_width();
-    let vertical_extra = padding.vertical() + border.vertical_width();
-    let element_w = block_width.resolve(text_w_max + horizontal_extra);
-    let content_w = (element_w - horizontal_extra).max(0.0);
-    let x = match align {
-        crate::parser::css::MarginBoxAlign::Left => 0.0,
-        crate::parser::css::MarginBoxAlign::Center => page_size.width / 2.0 - element_w / 2.0,
-        crate::parser::css::MarginBoxAlign::Right => page_size.width - margin.right - element_w,
-    };
-    let band_center_y = match band {
-        crate::parser::css::MarginBoxBand::Top => page_size.height - margin.top / 2.0,
-        crate::parser::css::MarginBoxBand::Bottom => margin.bottom / 2.0,
-    };
-    let total_h: f32 = block_height
-        .used()
-        .unwrap_or_else(|| lines.iter().map(|line| line.height).sum::<f32>() + vertical_extra);
-    if let Some(bg) = margin_box_background {
-        let (r, g, b, a) = bg.to_f32_rgba();
-        if a > 0.0 {
-            let (bg_y, bg_h) = match band {
-                crate::parser::css::MarginBoxBand::Top => {
-                    (page_size.height - margin.top, margin.top)
-                }
-                crate::parser::css::MarginBoxBand::Bottom => (0.0, margin.bottom),
-            };
-            content.push_str(&format!("{r} {g} {b} rg\n"));
-            content.push_str(&format!("0 {bg_y} {} {bg_h} re f\n", page_size.width));
-        }
-    }
-    if let Some(background) = background_color {
-        let (r, g, b, a) = background.to_f32_rgba();
-        if a > 0.0 {
-            content.push_str(&format!("{r} {g} {b} rg\n"));
-            content.push_str(&format!(
-                "{x} {} {element_w} {total_h} re f\n",
-                band_center_y - total_h / 2.0
-            ));
-        }
-    }
-    let mut baseline_cursor = TextBaselineCursor::new(
-        band_center_y + total_h / 2.0 - border.top.width - padding.top,
-        pdf_writer.page_content_transform,
-    );
-    for line in lines {
-        let metrics = page_margin_line_box_metrics(line, custom_fonts);
-        // Margin boxes are centered directly in the physical page band rather
-        // than participating in document-flow print snapping. Preserve their
-        // fractional center-derived baseline.
-        let baseline_y = baseline_cursor.next_raw(metrics);
-        let line_w = estimate_line_width_with_fonts(line, custom_fonts);
-        let line_x = match text_align {
-            TextAlign::Center => x + border.left.width + padding.left + (content_w - line_w) / 2.0,
-            TextAlign::Right => x + border.left.width + padding.left + content_w - line_w,
-            _ => x + border.left.width + padding.left,
-        };
-        let merged = crate::text::coalesce_text_runs(&line.runs);
-        let mut cursor_x = line_x;
-        let parent_font_size = crate::layout::text::line_primary_font_size(&merged);
-        for (run_index, run) in merged.iter().enumerate() {
-            if let Some(advance) = run.atomic_inline_advance() {
-                cursor_x += advance;
-                continue;
-            }
-            if run.text.is_empty() {
-                continue;
-            }
-            let run_width = estimate_run_width_with_fonts(run, custom_fonts);
-            let previous = merged[..run_index]
-                .iter()
-                .rev()
-                .find(|previous| previous.inline_box.is_none() && !previous.text.is_empty());
-            let decoration =
-                HorizontalRunDecorations::new(run, cursor_x, run_width, baseline_y, custom_fonts)
-                    .continuing_after(previous);
-            let rw = decoration.paint_text(
-                content,
-                parent_font_size,
-                prepared_custom_fonts,
-                0.0,
-                pdf_writer,
-                page_images,
-            );
-            cursor_x += rw;
-        }
-    }
-    true
 }
 
 pub(super) fn wrapped_footnote_lines(

@@ -241,6 +241,28 @@ pub unsafe extern "C" fn ironpress_converter_set_header(
     }
 }
 
+/// Configure an HTML fragment in the top page margin.
+///
+/// # Safety
+///
+/// Handles, input bytes, and output pointers must follow `ABI.md`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ironpress_converter_set_header_html(
+    converter: *mut IronpressConverter,
+    header: IronpressBytes,
+    out_error: *mut *mut IronpressError,
+) -> IronpressStatus {
+    // SAFETY: Raw handles, input bytes, and output slots are validated before use.
+    unsafe {
+        boundary(out_error, || {
+            let converter = IronpressConverter::parse_mut(converter)?;
+            let header = header.parse_text("header HTML")?.to_owned();
+            converter.update(|current| current.header_html(header));
+            Ok(())
+        })
+    }
+}
+
 /// Configure the plain-text page footer.
 ///
 /// # Safety
@@ -258,6 +280,28 @@ pub unsafe extern "C" fn ironpress_converter_set_footer(
             let converter = IronpressConverter::parse_mut(converter)?;
             let footer = footer.parse_text("footer")?.to_owned();
             converter.update(|current| current.footer(footer));
+            Ok(())
+        })
+    }
+}
+
+/// Configure an HTML fragment in the bottom page margin.
+///
+/// # Safety
+///
+/// Handles, input bytes, and output pointers must follow `ABI.md`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ironpress_converter_set_footer_html(
+    converter: *mut IronpressConverter,
+    footer: IronpressBytes,
+    out_error: *mut *mut IronpressError,
+) -> IronpressStatus {
+    // SAFETY: Raw handles, input bytes, and output slots are validated before use.
+    unsafe {
+        boundary(out_error, || {
+            let converter = IronpressConverter::parse_mut(converter)?;
+            let footer = footer.parse_text("footer HTML")?.to_owned();
+            converter.update(|current| current.footer_html(footer));
             Ok(())
         })
     }

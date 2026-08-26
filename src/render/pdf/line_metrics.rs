@@ -192,19 +192,6 @@ pub(super) fn line_box_metrics(
     line_box_metrics_with_resolved_baseline(line, custom_fonts, true)
 }
 
-/// Resolve metrics for a generated page-margin element.
-///
-/// A running element was initially laid out in its source flow, where inline
-/// boxes can move its stored baseline. A page-margin box establishes a fresh
-/// inline formatting context, so its baseline must be derived from the text
-/// strut rather than reused from that earlier context.
-pub(super) fn page_margin_line_box_metrics(
-    line: &TextLine,
-    custom_fonts: &HashMap<String, TtfFont>,
-) -> LineBoxMetrics {
-    line_box_metrics_with_resolved_baseline(line, custom_fonts, false)
-}
-
 fn line_box_metrics_with_resolved_baseline(
     line: &TextLine,
     custom_fonts: &HashMap<String, TtfFont>,
@@ -574,26 +561,6 @@ pub(super) fn text_block_total_height(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn page_margin_metrics_do_not_reuse_a_source_flow_baseline() {
-        let line = TextLine {
-            runs: vec![TextRun {
-                text: "margin".to_string(),
-                font_size: 9.0,
-                font_family: FontFamily::Helvetica,
-                line_height_factor: 1.5,
-                ..Default::default()
-            }],
-            height: 13.5,
-            baseline_ascent: Some(9.75),
-            ..Default::default()
-        };
-        let fonts = HashMap::new();
-
-        assert_eq!(line_box_metrics(&line, &fonts).ascender, 9.75);
-        assert!((page_margin_line_box_metrics(&line, &fonts).ascender - 9.049_5).abs() < 0.000_1);
-    }
 
     #[test]
     fn upright_metrics_keep_ascii_in_its_one_em_slot() {

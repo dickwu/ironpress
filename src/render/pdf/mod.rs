@@ -688,21 +688,43 @@ pub(crate) fn render_pdf_to_writer_full_opts_with_resources<W: std::io::Write>(
                     }
                 }
                 if let Some(element) = running_element {
-                    if let Some(band) = band
-                        && render_running_margin_element(
-                            &mut decoration_content,
-                            element,
-                            mb.position.align(),
-                            band,
-                            page_size,
-                            page_margin,
-                            mb.background_color,
-                            custom_fonts,
-                            &prepared_custom_fonts,
-                            &mut pdf_writer,
-                            &mut page_images,
-                        )
-                    {
+                    let rendered = band.is_some_and(|band| {
+                        let document_transform = pdf_writer.page_content_transform;
+                        pdf_writer.page_content_transform = physical_page_transform;
+                        let rendered = {
+                            let mut margin_ctx = PageRenderContext::new(
+                                &mut pdf_writer,
+                                &mut page_images,
+                                custom_fonts,
+                                &prepared_custom_fonts,
+                                &mut page_shadings,
+                                &mut shading_counter,
+                                &mut page_ext_gstates,
+                                &mut bg_alpha_counter,
+                                &mut annotations,
+                                page_paint_box,
+                                page_size.height,
+                            )
+                            .with_initial_fixed_origin(PdfPoint::new(
+                                page_margin.left,
+                                page_size.height - page_margin.top,
+                            ));
+                            render_running_margin_element(
+                                &mut decoration_content,
+                                element,
+                                mb.position.align(),
+                                band,
+                                page_size,
+                                page_margin,
+                                mb.background_color,
+                                page_idx,
+                                &mut margin_ctx,
+                            )
+                        };
+                        pdf_writer.page_content_transform = document_transform;
+                        rendered
+                    });
+                    if rendered {
                         continue;
                     }
                 }
