@@ -6,6 +6,10 @@
 
 - Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
   verify static and shared consumers across the native platform matrix.
+- `HtmlConverter::measure_sentinel_tops` lays a document out through the full
+  `convert()` pipeline without rendering and returns the y-position of every
+  sentinel marker block, giving callers exact per-block flow heights for
+  external pagination.
 
 ## [1.6.0] — 2026-08-26
 
