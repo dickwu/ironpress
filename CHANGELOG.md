@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
+  verify static and shared consumers across the native platform matrix.
+
 ## [1.6.0] — 2026-08-26
 
 ### Added
