@@ -20,6 +20,12 @@
   inside CSS background-image SVGs uses the registered custom fonts instead of
   always falling back to standard fonts.
 
+### Fixed
+
+- An inline-tagged `display: inline-block` inside a table cell (form fill-in
+  underlines, checkbox squares) flows inline with the cell's sibling text
+  again instead of dropping onto its own stacked line below it.
+
 ## [1.6.0] — 2026-08-26
 
 ### Added
