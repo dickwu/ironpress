@@ -42,3 +42,6 @@ target/parity-tmp/
 /tests/parity/_svgtmp/
 /tests/parity/_diag/
 /tests/parity/.chtmp/
+
+# oh-my-claudecode local state
+.omc/
