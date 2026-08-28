@@ -1,0 +1,4 @@
+sources:
+  "1.6.0":
+    url: "https://github.com/gastongouron/ironpress/archive/refs/tags/v1.6.0.tar.gz"
+    sha256: "380f174720f813d16d69cfd14f5a2af7657b0c2b58c33ec42dad612d7dcb974b"

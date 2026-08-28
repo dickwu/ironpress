@@ -53,6 +53,7 @@ source of truth for complete platform and release-package matrices.
 | Area | Local checks |
 |---|---|
 | C ABI | `cargo test -p ironpress-ffi`, `bindings/c/generate-header.sh --check`, `bindings/c/tests/run.sh` |
+| Conan and vcpkg | Build both linkage modes with the commands in `packaging/README.md` |
 | .NET | `dotnet build bindings/dotnet/src/Ironpress/Ironpress.csproj --configuration Release` |
 | Java | `mvn -B -f bindings/java/pom.xml clean verify` after preparing the native assets described by the Java workflow |
 | Python | Install the built wheel, then run `python -m unittest discover -s bindings/python/tests -v` |

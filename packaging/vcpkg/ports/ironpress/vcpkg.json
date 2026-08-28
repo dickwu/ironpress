@@ -1,0 +1,8 @@
+{
+  "name": "ironpress",
+  "version": "1.6.0",
+  "description": "In-process HTML, CSS, and Markdown to PDF renderer",
+  "homepage": "https://github.com/gastongouron/ironpress",
+  "license": "MIT",
+  "supports": "(linux | osx | (windows & x64)) & (x64 | arm64) & !uwp & !mingw"
+}

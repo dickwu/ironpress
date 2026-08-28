@@ -34,6 +34,13 @@ Use `Ironpress::CStatic` for static linkage. Unix C consumers may instead set
 `ironpress` through pkg-config. The separate `ironpress-static` module selects
 the archive and carries the extra system libraries required by static linkage.
 
+The repository also maintains source recipes for Conan 2 and vcpkg. They build
+and test `Ironpress::C` from the tagged source on the full native matrix before
+submission to the public registries. See the [native package manager
+guide](../../packaging/README.md) to validate or consume the in-repository
+recipes. GitHub release archives remain the public installation path until the
+external submissions are accepted.
+
 ## Convert HTML
 
 ```c
