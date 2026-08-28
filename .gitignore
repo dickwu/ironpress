@@ -1,7 +1,8 @@
 /target
 /dist/
 /playground/font-packs/
-Cargo.lock
+**/CMakeUserPresets.json
+/packaging/conan/all/test_package/build/
 .claude/
 .DS_Store
 docs/
