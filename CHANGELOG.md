@@ -6,6 +6,30 @@
 
 - Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
   verify static and shared consumers across the native platform matrix.
+- `HtmlConverter::measure_sentinel_tops` lays a document out through the full
+  `convert()` pipeline without rendering and returns the y-position of every
+  sentinel marker block, giving callers exact per-block flow heights for
+  external pagination.
+- SVG `<text>` honors `letter-spacing` (attribute or inline style, plain
+  number / px user units) through the PDF character-spacing operator on both
+  the custom-font and base-14 paths.
+
+### Changed
+
+- Font setup and table auto-sizing reuse process-global caches: parsed
+  `add_font`/`@font-face` faces, system-font resolution, rustybuzz shaping
+  faces, and per-cell preferred widths are computed once per process or
+  document instead of on every `convert()` call, with byte-identical output.
+
+### Fixed
+
+- SVG `<text>` with a CSS font-family stack ("MyFace, Helvetica") resolves
+  registered custom faces again, and every font the SVG renderer binds is also
+  subset and embedded; `<text>` inside CSS background-image SVGs now uses the
+  registered custom fonts instead of always falling back to standard fonts.
+- An inline-tagged `display: inline-block` inside a table cell (form fill-in
+  underlines, checkbox squares) flows inline with the cell's sibling text
+  again instead of dropping onto its own stacked line below it.
 
 ## [1.6.0] — 2026-08-26
 
