@@ -6,7 +6,15 @@ vcpkg_from_github(
     HEAD_REF main
 )
 
-find_program(CARGO cargo REQUIRED)
+find_program(
+    CARGO
+    NAMES cargo cargo.exe
+    HINTS
+        "$ENV{CARGO_HOME}/bin"
+        "$ENV{USERPROFILE}/.cargo/bin"
+        "$ENV{HOME}/.cargo/bin"
+    REQUIRED
+)
 
 string(REGEX MATCH "^[^-]+" HOST_ARCHITECTURE "${HOST_TRIPLET}")
 if(NOT HOST_ARCHITECTURE STREQUAL VCPKG_TARGET_ARCHITECTURE)
