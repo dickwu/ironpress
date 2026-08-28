@@ -1,0 +1,145 @@
+name: Native package managers
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'packaging/conan/**'
+      - 'packaging/vcpkg/**'
+      - '.github/workflows/native-packages.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'packaging/conan/**'
+      - 'packaging/vcpkg/**'
+      - '.github/workflows/native-packages.yml'
+
+permissions:
+  contents: read
+
+env:
+  CONAN_VERSION: 2.31.1
+  VCPKG_COMMIT: ddd0023b0eee70986e42ed49d9d4afb8098f212e
+
+jobs:
+  conan:
+    name: Conan - ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - platform: macos-x86_64
+            runner: macos-15-intel
+          - platform: macos-aarch64
+            runner: macos-15
+          - platform: windows-x86_64
+            runner: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-conan-${{ matrix.platform }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install Conan
+        run: python -m pip install "conan==${{ env.CONAN_VERSION }}"
+      - name: Detect the native Conan profile
+        run: conan profile detect --force
+      - name: Build and test the static package
+        run: conan create packaging/conan/all --version=1.6.0 --build=missing
+      - name: Build and test the shared package
+        run: >-
+          conan create packaging/conan/all --version=1.6.0 --build=missing
+          -o "ironpress/*:shared=True"
+
+  vcpkg:
+    name: vcpkg - ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            static-triplet: x64-linux
+            shared-triplet: x64-linux-dynamic
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            static-triplet: arm64-linux
+            shared-triplet: arm64-linux-dynamic
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            static-triplet: x64-osx
+            shared-triplet: x64-osx-dynamic
+          - platform: macos-aarch64
+            runner: macos-15
+            static-triplet: arm64-osx
+            shared-triplet: arm64-osx-dynamic
+          - platform: windows-x86_64
+            runner: windows-2022
+            static-triplet: x64-windows-static
+            shared-triplet: x64-windows
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: target/vcpkg
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88.0'
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-vcpkg-${{ matrix.platform }}-${{ hashFiles('Cargo.lock') }}
+      - name: Bootstrap vcpkg
+        if: runner.os != 'Windows'
+        run: ./target/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Bootstrap vcpkg
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./target/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+      - name: Test static C and C++ consumers
+        if: runner.os != 'Windows'
+        run: >-
+          ./packaging/vcpkg/test/run.sh target/vcpkg
+          ${{ matrix.static-triplet }}
+      - name: Test shared C and C++ consumers
+        if: runner.os != 'Windows'
+        run: >-
+          ./packaging/vcpkg/test/run.sh target/vcpkg
+          ${{ matrix.shared-triplet }}
+      - name: Test static C and C++ consumers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          ./packaging/vcpkg/test/run.ps1
+          -VcpkgRoot target/vcpkg
+          -Triplet ${{ matrix.static-triplet }}
+      - name: Test shared C and C++ consumers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          ./packaging/vcpkg/test/run.ps1
+          -VcpkgRoot target/vcpkg
+          -Triplet ${{ matrix.shared-triplet }}

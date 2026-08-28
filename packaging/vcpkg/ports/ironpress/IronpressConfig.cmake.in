@@ -5,7 +5,10 @@ if(NOT TARGET Ironpress::C)
     set_target_properties(
         Ironpress::C
         PROPERTIES
+            IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
             INTERFACE_INCLUDE_DIRECTORIES "${_ironpress_prefix}/include"
+            MAP_IMPORTED_CONFIG_MINSIZEREL RELEASE
+            MAP_IMPORTED_CONFIG_RELWITHDEBINFO RELEASE
     )
 
     if(WIN32 AND "@IRONPRESS_LIBRARY_TYPE@" STREQUAL "SHARED")
