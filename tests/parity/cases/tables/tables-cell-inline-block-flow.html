@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>table cell inline block flow</title>
+<style>
+  @page { size: 384px 128px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; font: 20px/1.2 ParitySans; }
+  table { border-collapse: collapse; table-layout: fixed; width: 352px; }
+  td { height: 96px; padding: 12px; border: 3px solid #264653; white-space: nowrap; }
+  .chip {
+    display: inline-block;
+    width: 64px;
+    height: 28px;
+    border: 3px solid #e76f51;
+    background: #f4a261;
+    vertical-align: baseline;
+  }
+</style>
+</head>
+<body>
+  <table><tr><td>Before <span class="chip"></span> after</td></tr></table>
+</body>
+</html>

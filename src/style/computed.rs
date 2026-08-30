@@ -846,33 +846,35 @@ fn parse_font_family_name(raw: &str) -> FontFamily {
     }
 }
 
-fn split_font_family_list(raw: &str) -> Vec<&str> {
-    let mut families = Vec::new();
-    let mut start = 0usize;
-    let mut quote = None;
-
-    for (index, ch) in raw.char_indices() {
-        match ch {
-            '\'' | '"' if quote == Some(ch) => quote = None,
-            '\'' | '"' if quote.is_none() => quote = Some(ch),
-            ',' if quote.is_none() => {
-                families.push(raw[start..index].trim());
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-
-    families.push(raw[start..].trim());
-    families.retain(|family| !family.is_empty());
-    families
-}
-
 pub(crate) fn parse_font_stack(raw: &str) -> FontStack {
-    let families: Vec<FontFamily> = split_font_family_list(raw)
-        .into_iter()
-        .map(parse_font_family_name)
-        .collect();
+    use cssparser::{Parser, ParserInput};
+
+    let mut input = ParserInput::new(raw);
+    let mut parser = Parser::new(&mut input);
+    let families = parser
+        .parse_comma_separated(|item| {
+            if let Ok(quoted) = item.try_parse(|input| input.expect_string_cloned()) {
+                if quoted.is_empty() || !item.is_exhausted() {
+                    return Err(item.new_custom_error::<(), ()>(()));
+                }
+                let lower = quoted.to_ascii_lowercase();
+                return Ok(
+                    if matches!(lower.as_str(), "serif" | "sans-serif" | "monospace") {
+                        FontFamily::Custom(lower)
+                    } else {
+                        parse_font_family_name(&quoted)
+                    },
+                );
+            }
+
+            let mut name = item.expect_ident_cloned()?.to_string();
+            while !item.is_exhausted() {
+                name.push(' ');
+                name.push_str(item.expect_ident_cloned()?.as_ref());
+            }
+            Ok(parse_font_family_name(&name))
+        })
+        .unwrap_or_default();
     if families.is_empty() {
         FontStack::default()
     } else {

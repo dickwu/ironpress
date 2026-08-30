@@ -330,6 +330,7 @@ fn collect_font_usage_from_svg(
             None,
             None,
             None,
+            None,
             custom_fonts,
             usage,
         );
@@ -343,6 +344,7 @@ fn collect_font_usage_from_svg_node(
     inherited_family: Option<&str>,
     inherited_bold: Option<bool>,
     inherited_italic: Option<bool>,
+    inherited_letter_spacing: Option<&crate::parser::svg::SvgLetterSpacing>,
     custom_fonts: &HashMap<String, TtfFont>,
     usage: &mut BTreeMap<FontUsageKey, FontUsage>,
 ) {
@@ -354,6 +356,7 @@ fn collect_font_usage_from_svg_node(
             let family = style.font_family.as_deref().or(inherited_family);
             let bold = style.font_bold.or(inherited_bold);
             let italic = style.font_italic.or(inherited_italic);
+            let letter_spacing = style.letter_spacing.as_ref().or(inherited_letter_spacing);
             for child in children {
                 collect_font_usage_from_svg_node(
                     child,
@@ -361,6 +364,7 @@ fn collect_font_usage_from_svg_node(
                     family,
                     bold,
                     italic,
+                    letter_spacing,
                     custom_fonts,
                     usage,
                 );
@@ -370,6 +374,7 @@ fn collect_font_usage_from_svg_node(
             font_family,
             font_bold,
             font_italic,
+            letter_spacing,
             content,
             style,
             ..
@@ -405,7 +410,20 @@ fn collect_font_usage_from_svg_node(
             // Glyph identity is size-independent for our shaping path, so shape
             // at a nominal size purely to discover the used glyph ids.
             let font_usage = usage.entry(FontUsageKey::plain(resolved_name)).or_default();
-            if let Some(shaped) = crate::text::shape_text_with_explicit_font(content, 16.0, font) {
+            let effective_letter_spacing = letter_spacing
+                .as_ref()
+                .or(style.letter_spacing.as_ref())
+                .or(inherited_letter_spacing);
+            let shaping = if effective_letter_spacing
+                .is_some_and(|spacing| spacing.resolve_user_units(16.0) != 0.0)
+            {
+                crate::layout::engine::TextShaping::KERNING_ONLY
+            } else {
+                crate::layout::engine::TextShaping::default()
+            };
+            if let Some(shaped) =
+                crate::text::shape_text_with_explicit_font_and_shaping(content, 16.0, font, shaping)
+            {
                 for glyph in shaped.glyphs {
                     font_usage.record_glyph(glyph.glyph_id, glyph.unicode);
                 }

@@ -1407,5 +1407,21 @@
       "probe-fill-box",
       "probe-block-flow"
     ]
+  },
+  {
+    "id": "tables-cell-inline-block-flow",
+    "category": "tables",
+    "feature": "table-cell-children",
+    "subfeature": "inline-block-text-flow",
+    "description": "An inline-block in table-cell text remains on the same line, contributes its atomic width and baseline, and paints its border and background.",
+    "file": "cases/tables/tables-cell-inline-block-flow.html",
+    "kind": "feature",
+    "oracle": "chrome",
+    "expected_support": "implemented",
+    "sanitize": true,
+    "depends_on": [
+      "probe-fill-box",
+      "probe-text-baseline"
+    ]
   }
 ]

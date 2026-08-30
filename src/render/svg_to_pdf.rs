@@ -1,5 +1,7 @@
 //! SVG tree to PDF content stream renderer.
 
+use crate::layout::elements::TypographicCharacterUnits;
+use crate::layout::engine::TextShaping;
 use crate::parser::svg::{
     PathCommand, SvgClipPathUnits, SvgClipRule, SvgGradientUnits, SvgLinearGradient, SvgNode,
     SvgPaint, SvgRadialGradient, SvgStyle, SvgTextAnchor, SvgTextContext, SvgTransform, SvgTree,
@@ -201,6 +203,7 @@ pub(crate) fn render_svg_tree_with_resources(
         font_family: None,
         font_bold: None,
         font_italic: None,
+        letter_spacing: None,
         opacity: 1.0,
     };
     for node in &tree.children {
@@ -227,6 +230,7 @@ struct ResolvedStyle {
     font_family: Option<String>,
     font_bold: Option<bool>,
     font_italic: Option<bool>,
+    letter_spacing: Option<crate::parser::svg::SvgLetterSpacing>,
     /// Accumulated (multiplicative) opacity from ancestor groups and self.
     opacity: f32,
 }
@@ -338,6 +342,7 @@ fn resolve_style(parent: ResolvedStyle, local: &SvgStyle) -> ResolvedStyle {
         font_family: local.font_family.clone().or(parent.font_family),
         font_bold: local.font_bold.or(parent.font_bold),
         font_italic: local.font_italic.or(parent.font_italic),
+        letter_spacing: local.letter_spacing.clone().or(parent.letter_spacing),
         opacity,
     }
 }
@@ -657,32 +662,39 @@ fn render_node(
                 (false, false) => 3,
             };
 
-            // letter-spacing adds a constant advance between glyphs; it is
-            // painted via the Tc operator and included in anchor width math.
-            let letter_spacing = letter_spacing.unwrap_or(0.0);
-            let spacing_gaps = |glyph_count: usize| -> f32 {
-                letter_spacing * glyph_count.saturating_sub(1) as f32
+            let letter_spacing = letter_spacing
+                .as_ref()
+                .or(style.letter_spacing.as_ref())
+                .map_or(0.0, |spacing| spacing.resolve_user_units(size));
+            let typographic_units = TypographicCharacterUnits::new(content);
+            let base14_content = typographic_units.segments().collect::<String>();
+            let spacing_advance =
+                letter_spacing * typographic_units.unit_count().saturating_sub(1) as f32;
+            let shaping = if letter_spacing == 0.0 {
+                TextShaping::default()
+            } else {
+                TextShaping::KERNING_ONLY
             };
+            let shaped_custom = custom_font.as_ref().and_then(|custom| {
+                crate::text::shape_text_with_explicit_font_and_shaping(
+                    content,
+                    size,
+                    custom.font,
+                    shaping,
+                )
+            });
 
             // Adjust x for text-anchor. Use the real shaped advance for custom
             // fonts so anchoring matches the actual glyph widths.
             let text_x = match text_anchor {
                 SvgTextAnchor::Start => *x,
                 SvgTextAnchor::Middle | SvgTextAnchor::End => {
-                    let text_w = if let Some(custom) = custom_font.as_ref() {
-                        crate::text::shape_text_with_explicit_font(content, size, custom.font)
-                            .map_or_else(
-                                || {
-                                    let (ff, is_bold) = font_metrics_font(&font);
-                                    crate::fonts::str_width(content, size, &ff, is_bold)
-                                        + spacing_gaps(content.chars().count())
-                                },
-                                |shaped| shaped.width + spacing_gaps(shaped.glyphs.len()),
-                            )
+                    let text_w = if let Some(shaped) = shaped_custom.as_ref() {
+                        shaped.width + spacing_advance
                     } else {
                         let (ff, is_bold) = font_metrics_font(&font);
-                        crate::fonts::str_width(content, size, &ff, is_bold)
-                            + spacing_gaps(content.chars().count())
+                        crate::fonts::str_width(&base14_content, size, &ff, is_bold)
+                            + spacing_advance
                     };
                     if *text_anchor == SvgTextAnchor::Middle {
                         x - text_w * 0.5
@@ -692,10 +704,11 @@ fn render_node(
                 }
             };
 
-            if let Some(custom) = custom_font.as_ref() {
+            if let (Some(custom), Some(shaped)) = (custom_font.as_ref(), shaped_custom.as_ref()) {
                 emit_custom_svg_text(
                     custom,
-                    content,
+                    shaped,
+                    &typographic_units,
                     size,
                     text_x,
                     *y,
@@ -709,9 +722,6 @@ fn render_node(
             } else {
                 out.push_str("BT\n");
                 out.push_str(&format!("/{font} {size} Tf\n"));
-                if letter_spacing != 0.0 {
-                    out.push_str(&format!("{letter_spacing} Tc\n"));
-                }
                 out.push_str(&format!("{text_render_mode} Tr\n"));
                 if let Some((r, g, b)) = fill {
                     out.push_str(&format!("{r} {g} {b} rg\n"));
@@ -721,12 +731,16 @@ fn render_node(
                     out.push_str(&format!("{} w\n", style.stroke_width));
                 }
                 out.push_str(&format!("1 0 0 -1 {text_x} {y} Tm\n"));
-                let encoded = encode_pdf_text(content);
-                out.push_str(&format!("({encoded}) Tj\n"));
-                if letter_spacing != 0.0 {
-                    // Character spacing survives ET; reset so later text on the
-                    // same content stream is unaffected.
-                    out.push_str("0 Tc\n");
+                if letter_spacing == 0.0 {
+                    let encoded = encode_pdf_text(&base14_content);
+                    out.push_str(&format!("({encoded}) Tj\n"));
+                } else {
+                    emit_standard_svg_text_with_tracking(
+                        &typographic_units,
+                        size,
+                        letter_spacing,
+                        out,
+                    );
                 }
                 out.push_str("ET\n");
             }
@@ -904,6 +918,7 @@ fn render_clip_path(
         font_family: None,
         font_bold: None,
         font_italic: None,
+        letter_spacing: None,
         opacity: 1.0,
     };
 
@@ -1470,7 +1485,14 @@ fn resolve_svg_text_font(
         .unwrap_or(text_ctx.font_italic);
 
     if let Some(base) = font_family.or(inherited_font_family) {
-        crate::fonts::pdf_font_name(base, bold, italic).to_string()
+        let stack = parse_font_stack(base);
+        let family = stack
+            .families()
+            .iter()
+            .find(|family| !matches!(family, FontFamily::Custom(_)))
+            .cloned()
+            .unwrap_or_else(|| stack.primary());
+        crate::fonts::pdf_font_name(family.name(), bold, italic).to_string()
     } else if font_bold.is_some()
         || font_italic.is_some()
         || inherited_font_bold.is_some()
@@ -1536,7 +1558,8 @@ struct SvgCustomTextFont<'a> {
 #[allow(clippy::too_many_arguments)]
 fn emit_custom_svg_text(
     custom: &SvgCustomTextFont<'_>,
-    content: &str,
+    shaped: &crate::text::ShapedRun,
+    typographic_units: &TypographicCharacterUnits<'_>,
     size: f32,
     text_x: f32,
     y: f32,
@@ -1547,16 +1570,8 @@ fn emit_custom_svg_text(
     letter_spacing: f32,
     out: &mut String,
 ) {
-    let Some(shaped) = crate::text::shape_text_with_explicit_font(content, size, custom.font)
-    else {
-        return;
-    };
-
     out.push_str("BT\n");
     out.push_str(&format!("/{} {size} Tf\n", custom.resource_name));
-    if letter_spacing != 0.0 {
-        out.push_str(&format!("{letter_spacing} Tc\n"));
-    }
     out.push_str(&format!("{text_render_mode} Tr\n"));
     if let Some((r, g, b)) = fill {
         out.push_str(&format!("{r} {g} {b} rg\n"));
@@ -1571,7 +1586,13 @@ fn emit_custom_svg_text(
 
     out.push('[');
     let mut first = true;
-    for glyph in &shaped.glyphs {
+    let clusters = shaped
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.cluster)
+        .collect::<Vec<_>>();
+    let tracking_after = typographic_units.tracking_after_glyphs(&clusters);
+    for (glyph_index, glyph) in shaped.glyphs.iter().enumerate() {
         if !first {
             out.push(' ');
         }
@@ -1586,17 +1607,37 @@ fn emit_custom_svg_text(
         // matches the shaped widths (Identity-H ignores the embedded /W when a
         // TJ adjustment is supplied).
         let nominal = custom.font.glyph_width_scaled(glyph.glyph_id, size);
-        let advance_adjustment = glyph.x_advance - nominal;
+        let tracking = if tracking_after.get(glyph_index).copied().unwrap_or(false) {
+            letter_spacing
+        } else {
+            0.0
+        };
+        let advance_adjustment = glyph.x_advance - nominal + tracking;
         let tj_adjustment = -(advance_adjustment * 1000.0 / size.max(f32::EPSILON));
         crate::render::pdf::append_pdf_tj_adjustment(out, tj_adjustment);
     }
     out.push_str("] TJ\n");
-    if letter_spacing != 0.0 {
-        // Character spacing survives ET; reset so later text on the same
-        // content stream is unaffected.
-        out.push_str("0 Tc\n");
-    }
     out.push_str("ET\n");
+}
+
+fn emit_standard_svg_text_with_tracking(
+    typographic_units: &TypographicCharacterUnits<'_>,
+    size: f32,
+    letter_spacing: f32,
+    out: &mut String,
+) {
+    out.push('[');
+    let adjustment = -(letter_spacing * 1000.0 / size.max(f32::EPSILON));
+    let mut segments = typographic_units.segments().peekable();
+    while let Some(segment) = segments.next() {
+        out.push('(');
+        out.push_str(&encode_pdf_text(segment));
+        out.push(')');
+        if segments.peek().is_some() {
+            crate::render::pdf::append_pdf_tj_adjustment(out, adjustment);
+        }
+    }
+    out.push_str("] TJ\n");
 }
 
 /// Extract the base family name from a fully-qualified PDF font name.
@@ -2036,6 +2077,7 @@ mod tests {
             font_family: None,
             font_bold: None,
             font_italic: None,
+            letter_spacing: None,
             opacity: 1.0,
         }
     }
@@ -2051,6 +2093,7 @@ mod tests {
             font_family: None,
             font_bold: None,
             font_italic: None,
+            letter_spacing: None,
             opacity: 1.0,
         }
     }
@@ -2066,6 +2109,7 @@ mod tests {
             font_family: None,
             font_bold: None,
             font_italic: None,
+            letter_spacing: None,
             opacity: 1.0,
         }
     }
@@ -2081,6 +2125,7 @@ mod tests {
             font_family: None,
             font_bold: None,
             font_italic: None,
+            letter_spacing: None,
             opacity: 1.0,
         }
     }
@@ -3331,6 +3376,7 @@ mod tests {
                 font_family: None,
                 font_bold: None,
                 font_italic: None,
+                letter_spacing: None,
                 opacity: 1.0,
             },
         }]);
@@ -3410,6 +3456,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     opacity: 1.0,
                 },
             }],
@@ -3465,6 +3512,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     opacity: 1.0,
                 },
             }],
@@ -3563,6 +3611,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     opacity: 1.0,
                 },
             }],
@@ -3613,6 +3662,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     opacity: 1.0,
                 },
             }],
@@ -3709,6 +3759,7 @@ mod tests {
                     font_family: None,
                     font_bold: None,
                     font_italic: None,
+                    letter_spacing: None,
                     opacity: 1.0,
                 },
             }],

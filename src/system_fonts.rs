@@ -236,13 +236,10 @@ pub(crate) fn find_font_in_stack<'a>(
     bold: bool,
     italic: bool,
 ) -> Option<(&'a str, &'a TtfFont)> {
-    stack.split(',').find_map(|family| {
-        let family = family.trim().trim_matches(|c| c == '\'' || c == '"').trim();
-        if family.is_empty() {
-            return None;
-        }
-        find_font(fonts, family, bold, italic)
-    })
+    parse_font_stack(stack)
+        .families()
+        .iter()
+        .find_map(|family| find_font(fonts, family.name(), bold, italic))
 }
 
 /// Resolve a face using CSS Fonts' discrete width matching order before style
@@ -1063,6 +1060,39 @@ mod tests {
     fn find_font_returns_none_when_family_absent() {
         let fonts: HashMap<String, TtfFont> = HashMap::new();
         assert!(find_font(&fonts, "NonExistent", false, false).is_none());
+    }
+
+    #[test]
+    fn find_font_in_stack_preserves_a_quoted_comma() {
+        let mut fonts = HashMap::new();
+        fonts.insert("acme, sans".to_string(), stub_font("ACME, Sans"));
+
+        let (key, _) =
+            find_font_in_stack(&fonts, r#""ACME, Sans", Helvetica"#, false, false).unwrap();
+
+        assert_eq!(key, "acme, sans");
+    }
+
+    #[test]
+    fn find_font_in_stack_decodes_css_identifier_escapes() {
+        let mut fonts = HashMap::new();
+        fonts.insert("testfont".to_string(), stub_font("testfont"));
+
+        let (key, _) = find_font_in_stack(&fonts, r"test\66 ont, serif", false, false).unwrap();
+
+        assert_eq!(key, "testfont");
+    }
+
+    #[test]
+    fn quoted_named_family_keeps_alias_mapping_but_quoted_generic_does_not() {
+        assert_eq!(
+            parse_font_stack(r#""Times New Roman""#).primary(),
+            FontFamily::TimesRoman
+        );
+        assert_eq!(
+            parse_font_stack(r#""serif""#).primary(),
+            FontFamily::Custom("serif".to_string())
+        );
     }
 
     // ── resolve_font_family ──────────────────────────────────────────────────

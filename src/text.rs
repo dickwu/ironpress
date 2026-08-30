@@ -9,6 +9,8 @@ pub(crate) use run_coalescing::{coalesce_text_runs, text_runs_share_shaping_buff
 #[derive(Debug, Clone)]
 pub(crate) struct ShapedGlyph {
     pub glyph_id: u16,
+    /// UTF-8 byte offset of the source cluster that produced this glyph.
+    pub cluster: usize,
     pub x_advance: f32,
     pub y_advance: f32,
     pub x_offset: f32,
@@ -288,16 +290,14 @@ impl<'a> AuthoredFontFaces<'a> {
     }
 }
 
-/// Shape arbitrary text with an explicit `TtfFont` face.
-///
-/// Used by the SVG `<text>` renderer, which resolves its own face (via
-/// `find_font`) rather than going through a layout `TextRun`.
-pub(crate) fn shape_text_with_explicit_font(
+/// Shape arbitrary text with an explicit face and resolved CSS feature set.
+pub(crate) fn shape_text_with_explicit_font_and_shaping(
     text: &str,
     font_size: f32,
     font: &TtfFont,
+    shaping: TextShaping,
 ) -> Option<ShapedRun> {
-    shape_text_with_font(text, font_size, font, TextShaping::default())
+    shape_text_with_font(text, font_size, font, shaping)
 }
 
 /// Pair-positioning advance retained across separately painted inline runs.
@@ -785,6 +785,7 @@ fn shape_text_glyphs(
         .map(|((info, position), unicode)| {
             Some(ShapedGlyph {
                 glyph_id: u16::try_from(info.glyph_id).ok()?,
+                cluster: usize::try_from(info.cluster).ok()?,
                 x_advance: resolve_position(position.x_advance),
                 y_advance: resolve_position(position.y_advance),
                 x_offset: resolve_position(position.x_offset),
@@ -1077,6 +1078,7 @@ mod tests {
     fn shaped_glyph_fields_and_clone() {
         let g = ShapedGlyph {
             glyph_id: 42,
+            cluster: 0,
             x_advance: 10.5,
             y_advance: 0.0,
             x_offset: 1.0,
@@ -1099,6 +1101,7 @@ mod tests {
         let run = ShapedRun {
             glyphs: vec![ShapedGlyph {
                 glyph_id: 1,
+                cluster: 0,
                 x_advance: 5.0,
                 y_advance: 0.0,
                 x_offset: 0.0,

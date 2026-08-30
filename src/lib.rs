@@ -1100,20 +1100,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn svg_text_letter_spacing_emits_character_spacing() {
-        let pdf = html_to_pdf(
-            r#"<svg width="200" height="50" viewBox="0 0 200 50"><text x="10" y="30" font-size="20" letter-spacing="3">Hello</text></svg>"#,
-        )
-        .unwrap();
+    fn svg_text_letter_spacing_disables_optional_ligatures() {
+        let pdf = HtmlConverter::new()
+            .add_font(
+                "testfont",
+                include_bytes!("../assets/LiberationSans-Regular.ttf").to_vec(),
+            )
+            .convert(
+                r#"<svg width="200" height="50" viewBox="0 0 200 50"><g letter-spacing=".1em"><text x="10" y="30" font-family="testfont" font-size="20">office</text></g></svg>"#,
+            )
+            .unwrap();
         let content = String::from_utf8_lossy(&pdf);
+        let text_array = content
+            .lines()
+            .find(|line| line.starts_with('[') && line.ends_with("] TJ"))
+            .expect("custom SVG text must use a TJ glyph array");
         assert!(
-            content.contains("3 Tc"),
-            "letter-spacing should map to the PDF character-spacing operator"
+            !content.contains(" Tc"),
+            "CSS tracking must be emitted at typographic-unit boundaries, not PDF glyph boundaries"
+        );
+        assert_eq!(
+            text_array.matches('<').count(),
+            6,
+            "nonzero letter-spacing must suppress the optional ffi ligature"
         );
         assert!(
-            content.contains("0 Tc"),
-            "character spacing should be reset after the text object"
+            !text_array.contains("<0000>"),
+            "the non-ligature glyphs must survive custom-font subsetting"
         );
+    }
+
+    #[test]
+    fn svg_text_anchor_ignores_formatting_only_character_units() {
+        let render = |text: &str| {
+            let pdf = HtmlConverter::new()
+                .add_font(
+                    "testfont",
+                    include_bytes!("../assets/LiberationSans-Regular.ttf").to_vec(),
+                )
+                .convert(&format!(
+                    r#"<svg width="200" height="50"><text x="100" y="30" text-anchor="end" font-family="testfont" font-size="20" letter-spacing="2px">{text}</text></svg>"#
+                ))
+                .unwrap();
+            String::from_utf8_lossy(&pdf)
+                .lines()
+                .find(|line| line.ends_with(" Tm"))
+                .expect("SVG text must emit a text matrix")
+                .to_string()
+        };
+
+        assert_eq!(render("A\u{200b}B"), render("AB"));
+    }
+
+    #[test]
+    fn svg_custom_font_stack_preserves_quoted_commas() {
+        let pdf = HtmlConverter::new()
+            .add_font(
+                "ACME, Sans",
+                include_bytes!("../assets/LiberationSans-Regular.ttf").to_vec(),
+            )
+            .convert(
+                r#"<svg width="200" height="50"><text x="10" y="30" font-family="'ACME, Sans', Helvetica" font-size="20">Hello</text></svg>"#,
+            )
+            .unwrap();
+        let content = String::from_utf8_lossy(&pdf);
+
+        assert!(content.contains("/acmesans 20 Tf"));
+        assert!(content.contains("/Subtype /CIDFontType2"));
     }
 
     #[test]

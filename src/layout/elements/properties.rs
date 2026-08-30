@@ -867,9 +867,74 @@ impl TextSpacing {
     /// included here: it belongs to the nearest inline ancestor containing the
     /// adjacent units and is carried separately by `TextRun`.
     pub(crate) fn add_internal_advance(self, raw_width: f32, text: &str) -> f32 {
-        let unit_count = unicode_segmentation::UnicodeSegmentation::graphemes(text, true).count();
+        let unit_count = TypographicCharacterUnits::new(text).unit_count();
         let spaces = text.chars().filter(|character| *character == ' ').count();
         raw_width + self.internal_letter_advance(unit_count) + self.word * spaces as f32
+    }
+}
+
+/// CSS Text's baseline typographic-character segmentation for letter spacing.
+#[derive(Debug)]
+pub(crate) struct TypographicCharacterUnits<'a> {
+    text: &'a str,
+    ranges: Vec<std::ops::Range<usize>>,
+}
+
+impl<'a> TypographicCharacterUnits<'a> {
+    /// Segment text into extended grapheme clusters, excluding standalone
+    /// Unicode format controls as required by CSS Text 3.
+    pub(crate) fn new(text: &'a str) -> Self {
+        use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+        use unicode_segmentation::UnicodeSegmentation;
+
+        let ranges = text
+            .grapheme_indices(true)
+            .filter_map(|(start, unit)| {
+                (!unit
+                    .chars()
+                    .all(|character| character.general_category() == GeneralCategory::Format))
+                .then_some(start..start + unit.len())
+            })
+            .collect();
+        Self { text, ranges }
+    }
+
+    /// Return the number of typographic character units in the source text.
+    pub(crate) fn unit_count(&self) -> usize {
+        self.ranges.len()
+    }
+
+    /// Iterate the source slices that form visible typographic units.
+    pub(crate) fn segments(&self) -> impl Iterator<Item = &str> {
+        self.ranges
+            .iter()
+            .filter_map(|range| self.text.get(range.clone()))
+    }
+
+    /// Mark shaped glyphs after which letter spacing belongs.
+    pub(crate) fn tracking_after_glyphs(&self, glyph_clusters: &[usize]) -> Vec<bool> {
+        let mut tracking = vec![false; glyph_clusters.len()];
+        let mut current_unit = None;
+        let mut previous_glyph = None;
+
+        for (glyph_index, cluster) in glyph_clusters.iter().copied().enumerate() {
+            let unit = self
+                .ranges
+                .partition_point(|range| range.start <= cluster)
+                .checked_sub(1);
+            if let Some(unit) = unit
+                && current_unit.is_some_and(|current| current != unit)
+                && let Some(previous) = previous_glyph
+                && let Some(slot) = tracking.get_mut(previous)
+            {
+                *slot = true;
+            }
+            if unit.is_some() {
+                current_unit = unit;
+            }
+            previous_glyph = Some(glyph_index);
+        }
+        tracking
     }
 }
 

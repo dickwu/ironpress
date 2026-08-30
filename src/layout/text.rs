@@ -4965,6 +4965,14 @@ mod indent_tests {
     }
 
     #[test]
+    fn tracking_ignores_formatting_only_character_units() {
+        let spacing = crate::layout::elements::TextSpacing::new(3.0, 0.0);
+
+        assert_eq!(spacing.add_internal_advance(5.0, "A\u{200b}B"), 8.0);
+        assert_eq!(spacing.add_internal_advance(5.0, "A\u{2060}B"), 8.0);
+    }
+
+    #[test]
     fn collapsed_word_tokens_preserve_every_internal_tracking_boundary() {
         let fonts = parity_sans_fonts();
         let mut run = parity_run("alpha beta");

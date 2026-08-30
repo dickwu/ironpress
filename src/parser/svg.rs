@@ -1,5 +1,6 @@
 //! SVG parser — converts DOM SVG elements into an SvgTree for PDF rendering.
 
+use crate::parser::css::{CssValue, MathUnitContext, parse_property_value};
 use crate::parser::dom::{DomNode, ElementNode};
 use crate::types::Color;
 use std::collections::HashMap;
@@ -258,8 +259,8 @@ pub enum SvgNode {
         font_bold: Option<bool>,
         /// Per-element font-style override (true = italic/oblique).
         font_italic: Option<bool>,
-        /// `letter-spacing` in SVG user units (plain number / px values only).
-        letter_spacing: Option<f32>,
+        /// Parsed SVG 2 `letter-spacing` override.
+        letter_spacing: Option<SvgLetterSpacing>,
         /// SVG text-anchor: "start" (default), "middle", or "end".
         text_anchor: SvgTextAnchor,
         content: String,
@@ -274,6 +275,61 @@ pub enum SvgTextAnchor {
     Start,
     Middle,
     End,
+}
+
+/// A parsed SVG 2 `letter-spacing` value.
+///
+/// The canonical CSS value parser establishes the grammar once. Conversion to
+/// SVG user units is deferred until the text element's used font size is known.
+#[derive(Debug, Clone)]
+pub enum SvgLetterSpacing {
+    Normal,
+    Length(CssValue),
+}
+
+impl SvgLetterSpacing {
+    fn parse(raw: &str) -> Option<Self> {
+        match parse_property_value("letter-spacing", raw)? {
+            CssValue::Keyword(value) if value.eq_ignore_ascii_case("normal") => Some(Self::Normal),
+            CssValue::Length(value) if value.is_finite() => {
+                Some(Self::Length(CssValue::Length(value)))
+            }
+            CssValue::Em(value) if value.is_finite() => Some(Self::Length(CssValue::Em(value))),
+            CssValue::Ex(value) if value.is_finite() => Some(Self::Length(CssValue::Ex(value))),
+            CssValue::Ch(value) if value.is_finite() => Some(Self::Length(CssValue::Ch(value))),
+            CssValue::Rem(value) if value.is_finite() => Some(Self::Length(CssValue::Rem(value))),
+            CssValue::Vw(value) if value.is_finite() => Some(Self::Length(CssValue::Vw(value))),
+            CssValue::Vh(value) if value.is_finite() => Some(Self::Length(CssValue::Vh(value))),
+            CssValue::Vmin(value) if value.is_finite() => Some(Self::Length(CssValue::Vmin(value))),
+            CssValue::Vmax(value) if value.is_finite() => Some(Self::Length(CssValue::Vmax(value))),
+            CssValue::Math(value) => Some(Self::Length(CssValue::Math(value))),
+            CssValue::PendingMath(value) => Some(Self::Length(CssValue::PendingMath(value))),
+            CssValue::Var(name, fallback) => Some(Self::Length(CssValue::Var(name, fallback))),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn resolve_user_units(&self, font_size: f32) -> f32 {
+        const PDF_POINTS_PER_CSS_PIXEL: f32 = 0.75;
+        match self {
+            Self::Normal => 0.0,
+            Self::Length(value) => crate::style::resolve::resolve_length_value_in_context(
+                value,
+                crate::style::resolve::LengthResolutionContext::new(
+                    0.0,
+                    MathUnitContext::from_font_and_viewport(
+                        font_size * PDF_POINTS_PER_CSS_PIXEL,
+                        font_size * PDF_POINTS_PER_CSS_PIXEL,
+                        0.0,
+                        0.0,
+                    ),
+                ),
+                &HashMap::new(),
+            )
+            .filter(|value| value.is_finite())
+            .map_or(0.0, |value| value / PDF_POINTS_PER_CSS_PIXEL),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -306,6 +362,8 @@ pub struct SvgStyle {
     pub font_bold: Option<bool>,
     /// Inherited SVG font-style.
     pub font_italic: Option<bool>,
+    /// Inherited SVG `letter-spacing`.
+    pub letter_spacing: Option<SvgLetterSpacing>,
     // Opacity isn't wired through to PDF output yet; keep it simple until needed.
     pub opacity: f32,
 }
@@ -322,6 +380,7 @@ impl Default for SvgStyle {
             font_family: None,
             font_bold: None,
             font_italic: None,
+            letter_spacing: None,
             opacity: 1.0,
         }
     }
@@ -1515,6 +1574,10 @@ fn svg_style_is_default(style: &SvgStyle) -> bool {
         && matches!(style.stroke, SvgPaint::Unspecified)
         && style.clip_path.is_none()
         && style.stroke_width.is_none()
+        && style.font_family.is_none()
+        && style.font_bold.is_none()
+        && style.font_italic.is_none()
+        && style.letter_spacing.is_none()
         && (style.opacity - 1.0).abs() < f32::EPSILON
 }
 
@@ -1787,6 +1850,7 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
         opacity = val.trim().parse().ok().unwrap_or(opacity);
     }
     let (font_family, font_bold, font_italic) = parse_svg_font_attrs(el);
+    let letter_spacing = parse_svg_letter_spacing(el);
 
     SvgStyle {
         color,
@@ -1798,6 +1862,7 @@ fn parse_svg_style(el: &ElementNode) -> SvgStyle {
         font_family,
         font_bold,
         font_italic,
+        letter_spacing,
         opacity,
     }
 }
@@ -1818,11 +1883,17 @@ fn parse_svg_font_family_value(val: &str) -> Option<String> {
     if val.eq_ignore_ascii_case("inherit") {
         return None;
     }
-    let val = val.trim_matches(|c| c == '\'' || c == '"');
     if val.is_empty() {
         None
+    } else if val.contains(',') {
+        Some(val.to_string())
     } else {
-        Some(resolve_svg_font_family(val))
+        Some(
+            crate::style::computed::parse_font_stack(val)
+                .primary()
+                .name()
+                .to_string(),
+        )
     }
 }
 
@@ -1844,15 +1915,11 @@ fn parse_svg_font_style_value(val: &str) -> Option<bool> {
 
 /// Parse `letter-spacing` from a `<text>` element (attribute or inline style).
 ///
-/// Only plain numbers and `px` values are supported (SVG user units);
-/// `normal`, `em`, and percentage values resolve to `None`.
-fn parse_svg_letter_spacing(el: &ElementNode) -> Option<f32> {
+fn parse_svg_letter_spacing(el: &ElementNode) -> Option<SvgLetterSpacing> {
     let raw = style_property_value(el, "letter-spacing")
         .map(str::to_string)
         .or_else(|| el.attributes.get("letter-spacing").map(|v| v.to_string()))?;
-    let raw = raw.trim();
-    let raw = raw.strip_suffix("px").unwrap_or(raw).trim();
-    raw.parse::<f32>().ok().filter(|v| v.is_finite())
+    SvgLetterSpacing::parse(raw.trim())
 }
 
 fn parse_svg_font_attrs(el: &ElementNode) -> (Option<String>, Option<bool>, Option<bool>) {
@@ -5358,6 +5425,17 @@ mod tests {
         assert!(!svg_style_is_default(&style));
     }
 
+    #[test]
+    fn svg_style_is_default_false_for_inherited_text_properties() {
+        let mut style = SvgStyle::default();
+        style.letter_spacing = SvgLetterSpacing::parse(".1em");
+        assert!(!svg_style_is_default(&style));
+
+        let mut style = SvgStyle::default();
+        style.font_family = Some("ParitySans".to_string());
+        assert!(!svg_style_is_default(&style));
+    }
+
     // ── compose_transform ──────────────────────────────────────────────
 
     #[test]
@@ -5583,6 +5661,27 @@ mod tests {
             }
             other => panic!("expected Text, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn svg_letter_spacing_resolves_font_relative_and_absolute_lengths() {
+        let em = SvgLetterSpacing::parse("0.1em").unwrap();
+        let points = SvgLetterSpacing::parse("2pt").unwrap();
+
+        assert!((em.resolve_user_units(20.0) - 2.0).abs() < 0.001);
+        assert!((points.resolve_user_units(20.0) - (8.0 / 3.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn svg_letter_spacing_rejects_percentages_and_bare_nonzero_numbers() {
+        assert!(SvgLetterSpacing::parse("10%").is_none());
+        assert!(SvgLetterSpacing::parse("2").is_none());
+        assert_eq!(
+            SvgLetterSpacing::parse("normal")
+                .unwrap()
+                .resolve_user_units(20.0),
+            0.0
+        );
     }
 
     // ── tspan text content ─────────────────────────────────────────────
