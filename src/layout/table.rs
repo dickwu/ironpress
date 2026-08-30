@@ -41,9 +41,12 @@ use super::text::{
 };
 
 mod collapsed_borders;
+mod sizing;
 use collapsed_borders::{
     CollapsedBorderSources, CollapsedBorderTrack, resolve_collapsed_border_grid,
 };
+pub(crate) use sizing::TableCellSizingMemo;
+use sizing::{TableCellIntrinsicWidths, TableCellPosition};
 
 const MAX_COLSPAN: usize = 1000;
 const MAX_ROWSPAN: usize = 65_534;
@@ -1334,6 +1337,7 @@ fn measure_caption_min_width(
     filter_dpi: f32,
     counter_state: &mut CounterState,
     resources: &mut crate::security::resources::ResourceLoader,
+    table_cell_sizing: &mut TableCellSizingMemo,
     available_width: f32,
     descendant_layout: TableDescendantLayout,
 ) -> f32 {
@@ -1356,6 +1360,7 @@ fn measure_caption_min_width(
             resources,
             filter_defs,
             filter_dpi,
+            table_cell_sizing,
         };
         layout_table_cell_flow(
             &caption_el.children,
@@ -1762,42 +1767,6 @@ fn collapse_outer_horizontal_borders(
     )
 }
 
-thread_local! {
-    /// Per-document memo of the table auto-sizing pass's per-cell preferred
-    /// and minimum content widths, keyed by `(cell element pointer, table
-    /// inner-width bits)`.
-    ///
-    /// The sizing pass measures every cell — including flattening any nested
-    /// tables just to read their width — and an ancestor table is re-flattened
-    /// once per pass (sizing + placement) at every nesting level, so nested
-    /// cells are otherwise re-measured `2^depth` times. Caching the reduced
-    /// widths collapses that to once per `(cell, width)`.
-    ///
-    /// Only populated for cells whose measurement touches no CSS counter or
-    /// quote state (see the sizing pass in [`flatten_table`]), so a cached
-    /// width never depends on counter context. Cleared at the start of every
-    /// top-level layout via [`reset_table_sizing_cache`], so pointers from a
-    /// freed DOM are never reused as keys.
-    static TABLE_CELL_SIZING_CACHE: std::cell::RefCell<HashMap<(usize, u32), (f32, f32)>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
-/// Clear the per-document table auto-sizing memo. Called once at the start of
-/// each top-level layout.
-pub(crate) fn reset_table_sizing_cache() {
-    TABLE_CELL_SIZING_CACHE.with(|c| c.borrow_mut().clear());
-}
-
-fn table_cell_sizing_get(key: (usize, u32)) -> Option<(f32, f32)> {
-    TABLE_CELL_SIZING_CACHE.with(|c| c.borrow().get(&key).copied())
-}
-
-fn table_cell_sizing_insert(key: (usize, u32), widths: (f32, f32)) {
-    TABLE_CELL_SIZING_CACHE.with(|c| {
-        c.borrow_mut().insert(key, widths);
-    });
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn flatten_table(
     el: &ElementNode,
@@ -1825,6 +1794,7 @@ pub(crate) fn flatten_table(
     let filter_dpi = env.filter_dpi;
     let counter_state = &mut *env.counter_state;
     let resources = &mut *env.resources;
+    let table_cell_sizing = &mut *env.table_cell_sizing;
     let mut measurement_counter_state = counter_state.clone();
     let table_border = LayoutBorder::from_computed(&style.border, style.color);
     let effective_border_spacing = style.border_spacing;
@@ -2061,6 +2031,7 @@ pub(crate) fn flatten_table(
                 filter_dpi,
                 &mut measurement_counter_state,
                 &mut *resources,
+                &mut *table_cell_sizing,
                 inner_width,
                 descendant_layout,
             )
@@ -2433,15 +2404,22 @@ pub(crate) fn flatten_table(
                         // when no counter/quote context is live (an empty
                         // state cannot influence the measurement, and an
                         // empty-to-empty measurement cannot have leaked any).
-                        let cache_key =
-                            (std::ptr::from_ref(cell_el) as usize, inner_width.to_bits());
-                        let counters_empty_before = measurement_counter_state.stacks.is_empty()
-                            && measurement_counter_state.quote_depth == 0;
+                        let cell_position =
+                            TableCellPosition::new(sizing_row_idx, cell_siblings.child_index());
+                        let counters_empty_before =
+                            measurement_counter_state.is_generated_content_context_free();
                         let (total_preferred, total_min) = 'cell_sizing: {
                             if counters_empty_before
-                                && let Some(widths) = table_cell_sizing_get(cache_key)
+                                && let Some(widths) = table_cell_sizing.lookup(
+                                    &table_grid,
+                                    cell_position,
+                                    inner_width,
+                                )
                             {
-                                break 'cell_sizing widths;
+                                break 'cell_sizing (
+                                    widths.preferred_outer(),
+                                    widths.minimum_outer(),
+                                );
                             }
                             let cell_classes = cell_el.class_list();
                             let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
@@ -2506,6 +2484,7 @@ pub(crate) fn flatten_table(
                                     resources: &mut *resources,
                                     filter_defs,
                                     filter_dpi,
+                                    table_cell_sizing: &mut *table_cell_sizing,
                                 };
                                 layout_table_cell_flow(
                                     &cell_el.children,
@@ -2598,10 +2577,16 @@ pub(crate) fn flatten_table(
                             )
                             .max(explicit_cell_width);
                             if counters_empty_before
-                                && measurement_counter_state.stacks.is_empty()
-                                && measurement_counter_state.quote_depth == 0
+                                && measurement_counter_state.is_generated_content_context_free()
+                                && let Some(widths) =
+                                    TableCellIntrinsicWidths::parse(total_preferred, total_min)
                             {
-                                table_cell_sizing_insert(cache_key, (total_preferred, total_min));
+                                table_cell_sizing.remember(
+                                    &table_grid,
+                                    cell_position,
+                                    inner_width,
+                                    widths,
+                                );
                             }
                             (total_preferred, total_min)
                         };
@@ -3195,6 +3180,7 @@ pub(crate) fn flatten_table(
                     resources: &mut *resources,
                     filter_defs,
                     filter_dpi,
+                    table_cell_sizing: &mut *table_cell_sizing,
                 };
                 layout_table_cell_flow(
                     &cell_el.children,
@@ -3617,6 +3603,7 @@ pub(crate) fn flatten_table(
                 resources: &mut *resources,
                 filter_defs,
                 filter_dpi,
+                table_cell_sizing: &mut *table_cell_sizing,
             };
             layout_table_cell_flow(
                 &caption_el.children,
@@ -3941,6 +3928,73 @@ mod subpoint_width_tests {
             visit_layout_tree(element.as_ref(), &mut rows);
         }
         rows.0
+    }
+
+    #[test]
+    fn separate_anonymous_tables_measure_their_own_cells() {
+        let parsed = parse_html_with_styles(
+            r#"<style>
+                * { margin: 0; padding: 0; }
+                .cell { display: table-cell; white-space: nowrap; }
+                .separator { display: block; height: 1px; }
+            </style>
+            <div>
+                <span class="cell">i</span>
+                <div class="separator"></div>
+                <span class="cell">WWWWWWWWWWWWWWWW</span>
+            </div>"#,
+        )
+        .expect("valid anonymous-table fixture");
+        let rules = parsed
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(
+            &parsed.nodes,
+            PageSize::new(400.0, 200.0),
+            Margin::uniform(0.0),
+            &rules,
+        );
+        let rows = table_rows(&pages[0]);
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "the separator creates two table fixup groups"
+        );
+        assert!(
+            rows[1].content.column_widths[0] > rows[0].content.column_widths[0] * 8.0,
+            "each anonymous table must measure its own authored cell: {:?}",
+            rows.iter()
+                .map(|row| row.content.column_widths[0])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn nested_table_measurements_preserve_each_layout_level() {
+        let mut markup = "leaf".to_string();
+        for _ in 0..6 {
+            markup = format!(
+                r#"<table style="border-spacing:0"><tr><td style="padding:1pt">{markup}</td></tr></table>"#
+            );
+        }
+        let nodes = parse_html(&markup).expect("valid nested-table fixture");
+        let pages = layout(&nodes, PageSize::new(400.0, 300.0), Margin::uniform(0.0));
+        let rows = table_rows(&pages[0]);
+
+        assert_eq!(rows.len(), 6, "every nested table keeps one row");
+        assert!(rows.iter().all(|row| {
+            row.content.column_widths.len() == 1
+                && row.content.column_widths[0].is_finite()
+                && row.content.column_widths[0] > 0.0
+        }));
+        assert!(rows.windows(2).all(|nested| {
+            let outer_width = nested[0].content.column_widths[0];
+            let inner_width = nested[1].content.column_widths[0];
+            (outer_width - inner_width - 2.0).abs() < 0.001
+        }));
     }
 
     /// An inline-tagged `display:inline-block` inside a table cell stays in

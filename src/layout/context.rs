@@ -5,6 +5,7 @@ use crate::style::font_metrics::FontMetrics;
 use std::collections::HashMap;
 
 use super::engine::CounterState;
+use super::table::TableCellSizingMemo;
 
 /// Shared mutable environment for the layout traversal.
 ///
@@ -22,6 +23,8 @@ pub(crate) struct LayoutEnv<'a> {
     /// Rasterization DPI for layout-time filter bitmaps such as replaced-image
     /// `filter: blur()` and `filter: drop-shadow()`.
     pub filter_dpi: f32,
+    /// Intrinsic table-cell widths already measured during this layout.
+    pub table_cell_sizing: &'a mut TableCellSizingMemo,
 }
 
 impl<'a> LayoutEnv<'a> {

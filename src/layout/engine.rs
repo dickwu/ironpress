@@ -249,6 +249,11 @@ pub(crate) struct CounterScope {
 
 #[allow(dead_code)]
 impl CounterState {
+    /// Whether no generated-content counter or quote context is currently active.
+    pub(crate) fn is_generated_content_context_free(&self) -> bool {
+        self.stacks.is_empty() && self.quote_depth == 0
+    }
+
     pub(crate) fn enter_element(&mut self, style: &ComputedStyle) -> CounterScope {
         self.apply_resets(&style.counter_reset);
         self.apply_increments(&style.counter_increment);
@@ -2052,10 +2057,6 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     raster_quality: crate::style::raster_quality::RasterQuality,
     resources: &mut crate::security::resources::ResourceLoader,
 ) -> Vec<Page> {
-    // Fresh document: drop any table-sizing memo from a previous layout so
-    // cell pointers from a freed DOM are never reused as cache keys.
-    super::table::reset_table_sizing_cache();
-
     let DocumentGeometry {
         page_size,
         content_margin: margin,
@@ -2163,6 +2164,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     // element regardless of where in the tree it lives.
     let mut filter_defs: HashMap<String, ElementNode> = HashMap::new();
     collect_id_defs(nodes, &mut filter_defs);
+    let mut table_cell_sizing = super::table::TableCellSizingMemo::default();
     let mut env = LayoutEnv {
         rules,
         fonts: custom_fonts,
@@ -2170,6 +2172,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         resources,
         filter_defs: &filter_defs,
         filter_dpi: raster_quality.filter_dpi,
+        table_cell_sizing: &mut table_cell_sizing,
     };
     if let Some(root) =
         RootFormattingContext::from_projected_body(nodes, &body_style, available_width)
