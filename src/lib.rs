@@ -557,71 +557,6 @@ impl HtmlConverter {
         html: &str,
         writer: &mut W,
     ) -> Result<(), IronpressError> {
-        let doc = self.layout_document(html)?;
-
-        // Step 6: Render PDF
-        //
-        // Collect the `@page` margin boxes (CSS Paged Media 3 §5) into the page
-        // decoration so running headers/footers + page counters render on every
-        // page. Keep selected boxes too; the renderer applies the page-context
-        // selector cascade per physical page.
-        let margin_boxes: Vec<parser::css::MarginBox> = doc
-            .page_rules
-            .iter()
-            .flat_map(|pr| pr.margin_boxes.iter().cloned())
-            .collect();
-
-        let has_physical_decoration = doc.page_sheet.has_effect();
-        let has_footnote_decoration = doc.footnote_area.style.padding != EdgeSizes::ZERO
-            || doc.footnote_area.style.separator.width > 0.0;
-        let decoration = if self.page_margins.has_content()
-            || !margin_boxes.is_empty()
-            || has_physical_decoration
-            || has_footnote_decoration
-        {
-            Some(render::pdf::PageDecoration {
-                header: self.page_margins.header_text().map(str::to_string),
-                footer: self.page_margins.footer_text().map(str::to_string),
-                margin_boxes,
-                margin_text: layout::engine::compute_page_margin_text_context(
-                    &doc.rules,
-                    &doc.page_rules,
-                    doc.effective_page_size,
-                ),
-                sheet: doc.page_sheet,
-                footnote_area: doc.footnote_area.style,
-            })
-        } else {
-            None
-        };
-
-        let render_opts = render::pdf::RenderOpts {
-            compress: self.compress,
-            jpeg_quality: self.jpeg_quality,
-            auto_resize_images: self.auto_resize_images,
-            raster_quality: self.raster_quality,
-            occlusion_cull: self.occlusion_cull,
-        };
-
-        render::pdf::render_pdf_to_writer_full_opts_with_resources(
-            render::pdf::PdfRenderDocument::new(
-                &doc.pages,
-                doc.effective_page_size,
-                doc.default_page_area_margin,
-                &doc.parsed_fonts,
-                decoration.as_ref(),
-            ),
-            writer,
-            render_opts,
-            doc.resource_loader,
-        )
-    }
-
-    /// Lay out `html` without rendering: run the full pipeline (sanitize,
-    /// parse, style, fonts, layout) and return the laid-out pages plus the
-    /// effective geometry, styles, fonts, and resources — everything the PDF
-    /// renderer or a measurement pass needs.
-    fn layout_document(&self, html: &str) -> Result<LaidOutDocument, IronpressError> {
         let resources = security::resources::DocumentResources::new(
             self.resources.base.as_deref(),
             self.resources.authorized_root.as_deref(),
@@ -854,68 +789,61 @@ impl HtmlConverter {
             &parsed_fonts,
         );
 
-        Ok(LaidOutDocument {
-            pages,
-            effective_page_size,
-            default_page_area_margin,
-            parsed_fonts,
-            page_rules,
-            rules,
-            page_sheet,
-            footnote_area,
-            resource_loader,
-        })
-    }
+        // Step 6: Render PDF
+        //
+        // Collect the `@page` margin boxes (CSS Paged Media 3 §5) into the page
+        // decoration so running headers/footers + page counters render on every
+        // page. Keep selected boxes too; the renderer applies the page-context
+        // selector cascade per physical page.
+        let margin_boxes: Vec<parser::css::MarginBox> = page_rules
+            .iter()
+            .flat_map(|pr| pr.margin_boxes.iter().cloned())
+            .collect();
 
-    /// Lay out `html` (without rendering a PDF) and return the top y-position,
-    /// in points from the top of the page content box, of every "sentinel"
-    /// element, in flow order.
-    ///
-    /// A sentinel is an empty block whose computed `height` AND solid
-    /// `background-color` both match the given signature — both values are
-    /// author-controlled, so exact matching is reliable, e.g.
-    /// `.msr { height: 2.5pt; background-color: #010203; margin: 0; }`.
-    ///
-    /// Interleave sentinel divs between the blocks you want measured: the
-    /// distance between consecutive sentinel tops, minus the sentinel height,
-    /// is the exact flow height (content plus vertical margins) of the block
-    /// between them. Wrapping, fonts and CSS resolve exactly as in
-    /// [`convert`](HtmlConverter::convert), so the numbers match the rendered
-    /// PDF.
-    ///
-    /// Declare a page tall enough for the whole document (e.g.
-    /// `@page { size: 612pt 14000pt; }`) — band geometry is only meaningful
-    /// when nothing paginates, so this returns `LayoutError` if layout
-    /// produced more than one page.
-    pub fn measure_sentinel_tops(
-        &self,
-        html: &str,
-        sentinel_height: f32,
-        sentinel_color: (u8, u8, u8),
-    ) -> Result<Vec<f32>, IronpressError> {
-        let doc = self.layout_document(html)?;
-        if doc.pages.len() > 1 {
-            return Err(IronpressError::LayoutError(format!(
-                "measure_sentinel_tops needs the whole document on one page, got {} pages — declare a taller @page size",
-                doc.pages.len()
-            )));
-        }
-
-        let mut tops: Vec<f32> = doc
-            .pages
-            .first()
-            .map(|page| {
-                page.elements
-                    .iter()
-                    .filter(|(_, el)| {
-                        sentinel_matches(el.as_ref(), sentinel_height, sentinel_color)
-                    })
-                    .map(|(y, _)| *y)
-                    .collect()
+        let has_physical_decoration = page_sheet.has_effect();
+        let has_footnote_decoration = footnote_area.style.padding != EdgeSizes::ZERO
+            || footnote_area.style.separator.width > 0.0;
+        let decoration = if self.page_margins.has_content()
+            || !margin_boxes.is_empty()
+            || has_physical_decoration
+            || has_footnote_decoration
+        {
+            Some(render::pdf::PageDecoration {
+                header: self.page_margins.header_text().map(str::to_string),
+                footer: self.page_margins.footer_text().map(str::to_string),
+                margin_boxes,
+                margin_text: layout::engine::compute_page_margin_text_context(
+                    &rules,
+                    &page_rules,
+                    effective_page_size,
+                ),
+                sheet: page_sheet,
+                footnote_area: footnote_area.style,
             })
-            .unwrap_or_default();
-        tops.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(tops)
+        } else {
+            None
+        };
+
+        let render_opts = render::pdf::RenderOpts {
+            compress: self.compress,
+            jpeg_quality: self.jpeg_quality,
+            auto_resize_images: self.auto_resize_images,
+            raster_quality: self.raster_quality,
+            occlusion_cull: self.occlusion_cull,
+        };
+
+        render::pdf::render_pdf_to_writer_full_opts_with_resources(
+            render::pdf::PdfRenderDocument::new(
+                &pages,
+                effective_page_size,
+                default_page_area_margin,
+                &parsed_fonts,
+                decoration.as_ref(),
+            ),
+            writer,
+            render_opts,
+            resource_loader,
+        )
     }
 
     /// Convert a Markdown string to PDF, writing directly to any `std::io::Write` implementation.
@@ -996,92 +924,6 @@ fn inject_gcpm_footnote_declarations(css: &str, rules: &mut Vec<parser::css::Css
         }
         cursor = close + 1;
     }
-}
-
-/// A document laid out into pages, plus the effective geometry, styles,
-/// fonts, and resources the layout resolved — everything the PDF renderer or
-/// a measurement pass needs.
-struct LaidOutDocument {
-    pages: Vec<layout::engine::Page>,
-    effective_page_size: PageSize,
-    default_page_area_margin: Margin,
-    parsed_fonts: std::collections::HashMap<String, parser::ttf::TtfFont>,
-    page_rules: Vec<parser::css::PageRule>,
-    rules: Vec<parser::css::CssRule>,
-    page_sheet: render::pdf::PageSheet,
-    footnote_area: layout::paginate::FootnoteAreaLayout,
-    resource_loader: security::resources::ResourceLoader,
-}
-
-/// Recognises a measurement sentinel while visiting one laid-out node: an
-/// empty block whose definite height and solid background color both match
-/// the caller's signature (see [`HtmlConverter::measure_sentinel_tops`]). An
-/// empty div can lay out as either a childless `Container` or a line-less
-/// `TextBlock`, so both are recognised — while tables and multicol boxes,
-/// which merely reuse `Container` as their principal box, are not.
-struct SentinelProbe {
-    height: f32,
-    color: (u8, u8, u8),
-    matched: bool,
-}
-
-impl SentinelProbe {
-    fn box_matches(
-        &self,
-        box_model: &layout::elements::BoxModel,
-        paint: &layout::elements::BoxPaint,
-    ) -> bool {
-        if !box_model.size.height.is_definite() {
-            return false;
-        }
-        let (Some(used), Some(bg)) = (box_model.size.height.used(), paint.background.color) else {
-            return false;
-        };
-        // Color channels stay on the CSS 0..=255 number scale, so
-        // byte-authored sentinel colors compare exactly.
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
-        close(used, self.height)
-            && bg.a / 255.0 > 0.99
-            && close(bg.r, f32::from(self.color.0))
-            && close(bg.g, f32::from(self.color.1))
-            && close(bg.b, f32::from(self.color.2))
-    }
-}
-
-impl layout::elements::LayoutVisitor for SentinelProbe {
-    fn visit_text_block(&mut self, element: &layout::elements::TextBlock) {
-        if element.lines.is_empty() {
-            self.matched = self.box_matches(&element.box_model, &element.paint);
-        }
-    }
-
-    fn visit_container(&mut self, element: &layout::elements::Container) {
-        if element.children.is_empty() {
-            self.matched = self.box_matches(&element.box_model, &element.paint);
-        }
-    }
-
-    // Tables and multicol boxes forward their principal `Container` to
-    // `visit_container` by default; a sentinel is never one of those.
-    fn visit_table(&mut self, _element: &layout::elements::Table) {}
-    fn visit_multicol_container(&mut self, _element: &layout::elements::MulticolContainer) {}
-    fn visit_multicol_column(&mut self, _element: &layout::elements::MulticolColumn) {}
-}
-
-/// True when a laid-out element is a measurement sentinel matching the
-/// caller's height + background-color signature.
-fn sentinel_matches(
-    element: &dyn layout::elements::LayoutElement,
-    height: f32,
-    color: (u8, u8, u8),
-) -> bool {
-    let mut probe = SentinelProbe {
-        height,
-        color,
-        matched: false,
-    };
-    element.accept(&mut probe);
-    probe.matched
 }
 
 fn resolve_footnote_area(
@@ -1260,67 +1102,6 @@ pub mod wasm;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Sentinel bands: interleaved marker divs report exact per-block flow
-    /// heights (content + margins), the contract external pre-pagination
-    /// pipelines rely on.
-    #[test]
-    fn measure_sentinel_tops_reports_block_heights() {
-        let html = r##"<html><head><style>
-            @page { size: 612pt 5000pt; margin: 20pt; }
-            .msr { height: 2.5pt; background-color: #010203; margin: 0; padding: 0; }
-            p { margin: 0 0 10pt 0; font-size: 12pt; }
-        </style></head><body>
-            <div class="msr"></div>
-            <p>one line</p>
-            <div class="msr"></div>
-            <p>one line</p>
-            <p>another line</p>
-            <div class="msr"></div>
-        </body></html>"##;
-
-        let tops = HtmlConverter::new()
-            .measure_sentinel_tops(html, 2.5, (1, 2, 3))
-            .expect("measurement must succeed on a single tall page");
-
-        assert_eq!(
-            tops.len(),
-            3,
-            "all three sentinels must be found, got {tops:?}"
-        );
-        let band1 = tops[1] - tops[0] - 2.5;
-        let band2 = tops[2] - tops[1] - 2.5;
-        assert!(
-            band1 > 10.0,
-            "one-paragraph band must include line + margin, got {band1}"
-        );
-        assert!(
-            band2 > band1 * 1.6 && band2 < band1 * 2.4,
-            "two-paragraph band must be roughly double one paragraph, got {band1} vs {band2}"
-        );
-    }
-
-    /// The one-page contract: a document too tall for its declared page must
-    /// error rather than silently return cross-page geometry.
-    #[test]
-    fn measure_sentinel_tops_rejects_multi_page_documents() {
-        let mut html = String::from(
-            r##"<html><head><style>
-            @page { size: 612pt 200pt; margin: 20pt; }
-            .msr { height: 2.5pt; background-color: #010203; margin: 0; padding: 0; }
-        </style></head><body><div class="msr"></div>"##,
-        );
-        for i in 0..60 {
-            html.push_str(&format!("<p>filler paragraph number {i}</p>"));
-        }
-        html.push_str(r##"<div class="msr"></div></body></html>"##);
-
-        let result = HtmlConverter::new().measure_sentinel_tops(&html, 2.5, (1, 2, 3));
-        assert!(
-            matches!(result, Err(IronpressError::LayoutError(_))),
-            "must reject multi-page docs"
-        );
-    }
 
     #[test]
     fn svg_text_letter_spacing_emits_character_spacing() {
