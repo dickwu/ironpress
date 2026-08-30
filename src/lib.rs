@@ -84,6 +84,7 @@ pub mod cli;
 pub mod error;
 /// Optional fallback-font packs.
 pub mod font_pack;
+mod font_registry;
 pub(crate) mod fonts;
 pub(crate) mod layout;
 mod page_margin;
@@ -233,7 +234,7 @@ pub struct HtmlConverter {
     page_size: PageSize,
     margin: Margin,
     sanitize: bool,
-    custom_fonts: std::collections::HashMap<String, Vec<u8>>,
+    custom_fonts: font_registry::CustomFontCatalog,
     font_catalog: font_pack::FontCatalog,
     resources: ResourcePaths,
     page_margins: page_margin::PageMargins,
@@ -262,7 +263,7 @@ impl HtmlConverter {
             page_size: PageSize::default(),
             margin: Margin::default(),
             sanitize: true,
-            custom_fonts: std::collections::HashMap::new(),
+            custom_fonts: font_registry::CustomFontCatalog::default(),
             font_catalog: font_pack::FontCatalog::default(),
             resources: ResourcePaths::default(),
             page_margins: page_margin::PageMargins::default(),
@@ -386,8 +387,7 @@ impl HtmlConverter {
     ///     .unwrap();
     /// ```
     pub fn add_font(mut self, name: &str, ttf_data: Vec<u8>) -> Self {
-        self.custom_fonts
-            .insert(name.to_ascii_lowercase(), ttf_data);
+        self.custom_fonts.replace(name, ttf_data);
         self
     }
 
@@ -858,14 +858,10 @@ impl HtmlConverter {
         self.convert_to_writer(&html, writer)
     }
 
-    /// Parse all registered custom fonts into TtfFont structs.
+    /// Assemble the parsed font registry used by one conversion.
     fn parse_custom_fonts(&self) -> std::collections::HashMap<String, parser::ttf::TtfFont> {
         let mut fonts = std::collections::HashMap::new();
-        for (name, data) in &self.custom_fonts {
-            if let Some(font) = parser::ttf::parse_ttf_cached(data) {
-                fonts.insert(name.clone(), font);
-            }
-        }
+        self.custom_fonts.install_into(&mut fonts);
         self.font_catalog.install_into(&mut fonts);
         fonts
     }
@@ -1031,7 +1027,7 @@ fn resolve_font_face_source(
                 .map(|loaded| loaded.bytes);
 
             if let Some(data) = ttf_data
-                && let Some(font) = parser::ttf::parse_ttf_cached(&data)
+                && let Ok(font) = parser::ttf::parse_ttf(data)
             {
                 return Some(font);
             }
@@ -2721,6 +2717,26 @@ fn main() {
         let content = String::from_utf8_lossy(&pdf);
         // Should fall back to Helvetica since the font couldn't be parsed
         assert!(content.contains("/Helvetica"));
+    }
+
+    #[test]
+    fn add_font_rejects_invalid_data_at_the_registration_boundary() {
+        let converter = HtmlConverter::new().add_font("badfont", vec![0, 1, 2, 3]);
+
+        assert!(!converter.custom_fonts.contains_key("badfont"));
+    }
+
+    #[test]
+    fn add_font_invalid_replacement_removes_the_registered_family() {
+        let converter = HtmlConverter::new()
+            .add_font("testfont", build_integration_test_ttf())
+            .add_font("testfont", vec![0, 1, 2, 3]);
+
+        assert!(!converter.custom_fonts.contains_key("testfont"));
+        let pdf = converter
+            .convert(r#"<p style="font-family: testfont">Text</p>"#)
+            .unwrap();
+        assert!(String::from_utf8_lossy(&pdf).contains("/Helvetica"));
     }
 
     #[test]

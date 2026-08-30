@@ -16,10 +16,8 @@
 
 ### Changed
 
-- Font setup and table auto-sizing reuse process-global caches: parsed
-  `add_font`/`@font-face` faces, system-font resolution, rustybuzz shaping
-  faces, and per-cell preferred widths are computed once per process or
-  document instead of on every `convert()` call, with byte-identical output.
+- Fonts registered through `HtmlConverter::add_font` are parsed once when
+  configured, while per-cell preferred widths are reused within one document.
 
 ### Fixed
 
