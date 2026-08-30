@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import cross_building
-from conan.tools.files import collect_libs, copy, get
+from conan.tools.files import collect_libs, copy, download, get
 import os
 
 
@@ -27,7 +27,13 @@ class IronpressConan(ConanFile):
         self.folders.build = "build"
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        sources = self.conan_data["sources"][self.version]
+        get(self, **sources["archive"], strip_root=True)
+        download(
+            self,
+            **sources["cargo_lock"],
+            filename=os.path.join(self.source_folder, "Cargo.lock"),
+        )
 
     def validate(self):
         supported = {
@@ -58,13 +64,8 @@ class IronpressConan(ConanFile):
         release = " --release" if self._cargo_profile == "release" else ""
         target_dir = os.path.join(self.build_folder, "cargo")
         manifest = os.path.join(self.source_folder, "Cargo.toml")
-        locked = (
-            " --locked"
-            if os.path.isfile(os.path.join(self.source_folder, "Cargo.lock"))
-            else ""
-        )
         self.run(
-            f"cargo build{locked} --manifest-path=\"{manifest}\""
+            f"cargo build --locked --manifest-path=\"{manifest}\""
             " --package ironpress-ffi"
             f" --target-dir=\"{target_dir}\"{release}"
         )

@@ -6,6 +6,14 @@ vcpkg_from_github(
     HEAD_REF main
 )
 
+vcpkg_download_distfile(
+    CARGO_LOCK
+    URLS "https://raw.githubusercontent.com/gastongouron/ironpress/11256bdeed794c8721777d8c52d420dd6ec433e0/Cargo.lock"
+    FILENAME "ironpress-${VERSION}-Cargo.lock"
+    SHA512 05feb581d5dcb3af3ad11b947283e5c1e873997bb74786b2949fe7d058efc5d91151dc55e22aeff9ad1bb7f076c9fe6237f25ce588ec9679fbd3225997cecf00
+)
+configure_file("${CARGO_LOCK}" "${SOURCE_PATH}/Cargo.lock" COPYONLY)
+
 find_program(
     CARGO
     NAMES cargo cargo.exe
@@ -28,11 +36,6 @@ elseif(VCPKG_TARGET_IS_LINUX AND NOT VCPKG_HOST_IS_LINUX)
     message(FATAL_ERROR "Ironpress cannot cross-compile from ${HOST_TRIPLET} to ${TARGET_TRIPLET}.")
 endif()
 
-set(CARGO_LOCKED)
-if(EXISTS "${SOURCE_PATH}/Cargo.lock")
-    set(CARGO_LOCKED --locked)
-endif()
-
 function(ironpress_build profile cargo_profile)
     set(target_dir "${CURRENT_BUILDTREES_DIR}/${profile}")
     set(profile_argument)
@@ -42,7 +45,7 @@ function(ironpress_build profile cargo_profile)
     vcpkg_execute_required_process(
         COMMAND
             "${CARGO}" build
-            ${CARGO_LOCKED}
+            --locked
             --manifest-path "${SOURCE_PATH}/Cargo.toml"
             --package ironpress-ffi
             --target-dir "${target_dir}"

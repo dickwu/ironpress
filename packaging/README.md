@@ -13,8 +13,9 @@ names must not be advertised as generally available before that happens.
 
 ConanCenter requires recipes to build from source rather than repackage
 precompiled binaries. The vcpkg port follows the same model so both registries
-exercise one contract. Each recipe fetches an immutable Ironpress tag and
-verifies its archive checksum.
+exercise one contract. Each recipe fetches an immutable Ironpress tag, injects
+the pinned workspace lockfile, and verifies both checksums before building with
+`--locked`.
 
 Building requires Rust 1.88 or newer on the target host. The initial recipes
 support native builds for Linux and macOS on x86-64 and ARM64, and Windows on
@@ -75,10 +76,12 @@ the immutable source archive and its checksum are part of each recipe.
 
 1. Update the version in `packaging/conan/config.yml`, `conandata.yml`, and the
    vcpkg manifest.
-2. Update the Conan SHA-256 and vcpkg SHA-512 from the tagged source archive.
-3. Run the Conan and vcpkg static and shared consumer tests.
-4. Let the full native CI matrix pass before opening external registry updates.
+2. Pin the released `Cargo.lock` URL and its Conan SHA-256 and vcpkg SHA-512.
+3. Update the Conan SHA-256 and vcpkg SHA-512 from the tagged source archive.
+4. Run the Conan and vcpkg static and shared consumer tests.
+5. Let the full native CI matrix pass before opening external registry updates.
 
 The `v1.6.0` source tag predates the committed workspace lockfile, so its recipe
-resolves compatible dependencies during the build. Future release tags include
-`Cargo.lock`; both recipes detect it and build with `--locked`.
+uses the immutable lockfile from the corresponding release merge. Future
+release tags include `Cargo.lock`, which remains pinned separately so an absent
+or mismatched lock cannot silently produce an unlocked package.
