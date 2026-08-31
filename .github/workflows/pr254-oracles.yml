@@ -1,4 +1,4 @@
-name: PR 254 Oracle Generation
+name: PR 254 Full Parity Evidence
 
 on:
   push:
@@ -11,7 +11,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  generate:
+  verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -20,41 +20,6 @@ jobs:
 
       - name: Install pinned parity runtime
         run: scripts/parity-install-runtime.sh
-
-      - name: Install pinned Chrome for Testing
-        run: |
-          sudo apt-get install -y \
-            libasound2t64 \
-            libatk-bridge2.0-0t64 \
-            libatk1.0-0t64 \
-            libatspi2.0-0t64 \
-            libcups2t64 \
-            libpango-1.0-0 \
-            libxdamage1 \
-            libxkbcommon0 \
-            unzip
-          curl --fail --location --retry 3 \
-            --output /tmp/chrome-for-testing.zip \
-            https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.124/linux64/chrome-linux64.zip
-          sudo unzip -q /tmp/chrome-for-testing.zip -d /opt/chrome-for-testing
-          sudo ln -s \
-            /opt/chrome-for-testing/chrome-linux64/chrome \
-            /usr/local/bin/chromium
-          chromium --version
-
-      - name: Generate authenticated SVG oracle
-        env:
-          FORCE: "1"
-          PARITY_FIXTURE: svg-text-letter-spacing-units
-          PARITY_JOBS: "1"
-        run: bash -x scripts/parity-gen-refs.sh images-replaced
-
-      - name: Generate authenticated table oracle
-        env:
-          FORCE: "1"
-          PARITY_FIXTURE: tables-cell-inline-block-flow
-          PARITY_JOBS: "1"
-        run: scripts/parity-gen-refs.sh tables
 
       - name: Verify reference integrity
         run: scripts/parity-gen-refs.sh --check
@@ -69,7 +34,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: pr254-oracles-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+          key: pr254-full-parity-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
 
       - name: Run full parity gate
         env:
