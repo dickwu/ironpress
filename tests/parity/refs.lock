@@ -19978,6 +19978,20 @@
       "reference_file": "cases/tables/tables-cell-img-width-auto-intrinsic.html",
       "reference_html_sha256": "7be5733ea5aacb45fe0a3b6fa77b832a774d8ee8effc354e870126aa8fb585cb"
     },
+    "tables-cell-inline-block-inline-flow": {
+      "category": "tables",
+      "file": "cases/tables/tables-cell-inline-block-inline-flow.html",
+      "html_sha256": "36bddccc9727fdb546deaf086c03bc7f6ddd9b219917230e3fd6a6251dc5ab0c",
+      "manifest_sha256": "93ea4a3c316998b9f1553f404f3f7c14265bbd21ac23f0cd28bbb643333e17ba",
+      "oracle": "chrome",
+      "pdf": {
+        "file": "oracles/tables/tables-cell-inline-block-inline-flow.pdf",
+        "sha256": "28e95f15964485d8ff0433746e01e2239f3209ae0889ce08667bfe206b036ef5"
+      },
+      "provenance": "8235440bd6c57ac48c2daac7bc12d5b86b86c615716a2a8f08c00df061c8a529",
+      "reference_file": "cases/tables/tables-cell-inline-block-inline-flow.html",
+      "reference_html_sha256": "36bddccc9727fdb546deaf086c03bc7f6ddd9b219917230e3fd6a6251dc5ab0c"
+    },
     "tables-cell-inline-svg-child": {
       "category": "tables",
       "file": "cases/tables/tables-cell-inline-svg-child.html",
@@ -23442,6 +23456,27 @@
       "pagedjs": false,
       "renderer": "chromium",
       "renderer_version": "Chromium 150.0.7871.128 ",
+      "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
+    },
+    "8235440bd6c57ac48c2daac7bc12d5b86b86c615716a2a8f08c00df061c8a529": {
+      "font_backend": {
+        "features": [
+          "FontationsFontBackend",
+          "FontationsLinuxSystemFonts"
+        ],
+        "launcher": {
+          "file": "scripts/chromium-fontations.sh",
+          "sha256": "512064356160e631cef2f1eda128f6815d5329dd16671af8fcbe6a6daaf20ece"
+        },
+        "name": "fontations"
+      },
+      "font_bundle_sha256": "14e0dabd41048ffc7d0ba142a3c166656b4d14dabba93dd9185fb9aa4d9e5542",
+      "generator": "scripts/parity-gen-refs.sh",
+      "generator_sha256": "58edd23b0dfe07611bbf291af7a0b1aa6e6a457891d23a316210f46d75f8c192",
+      "oracle": "chrome",
+      "pagedjs": false,
+      "renderer": "chromium",
+      "renderer_version": "Chromium 152.0.7977.64 snap",
       "ua_stylesheet_sha256": "eb00e832fd15f723c74042b2529d22b5e2ba9a948453aa08ef0a8045f610bab9"
     },
     "e4a48dcae4253067a6d7c92b57cb940cad59f2d921059f1a6537d21d9803312b": {
