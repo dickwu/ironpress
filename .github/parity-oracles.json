@@ -1,0 +1,4 @@
+[
+  { "ref": "feat/svg-text-letter-spacing", "categories": "images-replaced" },
+  { "ref": "fix/table-cell-inline-block-flow", "categories": "tables" }
+]
