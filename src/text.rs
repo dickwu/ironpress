@@ -3,7 +3,9 @@ use crate::parser::ttf::{FontVerticalMetricSet, FontVerticalMetrics, TtfFont};
 use crate::style::computed::FontFamily;
 use std::collections::{HashMap, HashSet};
 
+mod default_ignorable;
 mod run_coalescing;
+pub(crate) use default_ignorable::is_default_ignorable;
 pub(crate) use run_coalescing::{coalesce_text_runs, text_runs_share_shaping_buffer};
 
 #[derive(Debug, Clone)]
@@ -296,8 +298,9 @@ pub(crate) fn shape_text_with_explicit_font(
     text: &str,
     font_size: f32,
     font: &TtfFont,
+    shaping: TextShaping,
 ) -> Option<ShapedRun> {
-    shape_text_with_font(text, font_size, font, TextShaping::default())
+    shape_text_with_font(text, font_size, font, shaping)
 }
 
 /// Pair-positioning advance retained across separately painted inline runs.
