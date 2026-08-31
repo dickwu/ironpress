@@ -1,0 +1,101 @@
+name: Parity oracles (fork tooling)
+
+# Fork-only helper: generate missing Chromium PDF oracles for new parity
+# fixtures on a given ref with the repository's own pinned generator
+# (scripts/parity-gen-refs.sh + scripts/chromium-fontations.sh), then run the
+# full parity gate and upload everything needed to commit the result.
+# It never touches upstream state; the artifacts are copied into the PR branch
+# by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit whose fixtures need oracles
+        required: true
+        type: string
+      categories:
+        description: Space-separated parity categories to generate
+        required: true
+        type: string
+      run_gate:
+        description: Run the full parity gate after generation
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  oracles:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: parity-oracles-cargo-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+
+      - name: Install pinned Poppler and deterministic fonts
+        timeout-minutes: 15
+        run: scripts/parity-install-runtime.sh
+
+      - name: Install snap Chromium (the distribution the committed oracles were produced with)
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          sudo snap install chromium
+          /snap/bin/chromium --version
+
+      - name: Generate missing oracles
+        env:
+          PARITY_JOBS: "2"
+          CATEGORIES: ${{ inputs.categories }}
+        run: |
+          set -euo pipefail
+          for category in $CATEGORIES; do
+            scripts/parity-gen-refs.sh "$category"
+          done
+          scripts/parity-gen-refs.sh --check
+          git status --short tests/parity
+
+      - name: Run parity gate (committed PDF oracles)
+        if: ${{ inputs.run_gate }}
+        continue-on-error: true
+        env:
+          FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
+          PARITY_PDFTOPPM: /usr/bin/pdftoppm
+        run: scripts/parity.sh
+
+      - name: Upload oracles, lock, and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: parity-oracles-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            tests/parity/oracles/
+            tests/parity/refs.lock
+            tests/parity/report.json
+            tests/parity/REPORT.md
+            tests/parity/reports/
+            tests/parity/refs/
+            tests/parity/diffs/
