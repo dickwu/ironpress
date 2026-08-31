@@ -64,21 +64,18 @@ jobs:
         timeout-minutes: 15
         run: scripts/parity-install-runtime.sh
 
-      - name: Install snap Chromium
-        if: ${{ matrix.chromium == 'snap' }}
+      - name: Install snap Chromium (the distribution the committed oracles were produced with)
         timeout-minutes: 15
         run: |
           set -euo pipefail
           sudo snap install chromium
           /snap/bin/chromium --version
 
-      - name: Diagnose Chromium candidates against the Fontations probe
+      - name: Warm up the snap and verify the Fontations probe
         env:
           FC_FONTATIONS: "1"
         run: |
-          set -uo pipefail
-          echo "== fontconfig view of the Parity faces =="
-          fc-list | grep -i parity || echo "no Parity fonts visible to fontconfig"
+          set -euo pipefail
           mkdir -p target/parity-tmp
           html="$PWD/target/parity-tmp/probe.html"
           printf '%s\n' \
@@ -90,33 +87,14 @@ jobs:
             '<script>document.fonts.ready.then(()=>document.body.dataset.fontationsEx=[...document.querySelectorAll(".probe")].map(node=>getComputedStyle(node).width).join(","))</script>' \
             > "$html"
           export FONTCONFIG_FILE="$PWD/tests/parity/fonts/fonts.conf" FONTCONFIG_PATH="$PWD/tests/parity/fonts"
-          for candidate in /snap/bin/chromium chromium-browser chromium google-chrome google-chrome-stable; do
-            exe="$(command -v "$candidate" 2>/dev/null || true)"
-            if [ -z "$exe" ]; then echo "-- $candidate: not found"; continue; fi
-            echo "-- $candidate -> $exe : $("$exe" --version 2>/dev/null | head -1)"
-            for attempt in 1 2; do
-              profile="$(mktemp -d "$PWD/target/parity-tmp/profile.XXXXXX")"
-              start=$(date +%s)
-              metrics="$(IRONPRESS_CHROMIUM_EXECUTABLE="$exe" timeout -k 5s 180s scripts/chromium-fontations.sh --headless=new --disable-gpu --no-sandbox --disable-software-rasterizer --user-data-dir="$profile" --virtual-time-budget=5000 --dump-dom "file://$html" 2>"$profile/stderr.txt" | grep -o 'data-fontations-ex="[^"]*"' || true)"
-              echo "   attempt $attempt: ${metrics:-<no metrics>} in $(( $(date +%s) - start ))s"
-              if [ -z "$metrics" ]; then tail -n 5 "$profile/stderr.txt" | sed 's/^/   stderr: /'; fi
-            done
-          done
-
-      - name: Select the Chromium executable
-        env:
-          CHROMIUM_CHOICE: ${{ matrix.chromium }}
-        run: |
-          set -euo pipefail
-          case "$CHROMIUM_CHOICE" in
-            snap) exe=/snap/bin/chromium ;;
-            google-chrome) exe="$(command -v google-chrome)" ;;
-            *) echo "unknown chromium choice: $CHROMIUM_CHOICE" >&2; exit 2 ;;
-          esac
-          mkdir -p "$RUNNER_TEMP/chromium-bin"
-          ln -sf "$exe" "$RUNNER_TEMP/chromium-bin/chromium-browser"
-          echo "$RUNNER_TEMP/chromium-bin" >> "$GITHUB_PATH"
-          echo "chromium-browser -> $exe ($("$exe" --version | head -1))"
+          # The snap's first launch initializes its confinement and font caches
+          # and can exceed the generator's own 60s probe timeout, so absorb the
+          # cold start here with a generous budget and require the pinned
+          # metrics before handing over to scripts/parity-gen-refs.sh.
+          profile="$(mktemp -d "$PWD/target/parity-tmp/profile.XXXXXX")"
+          metrics="$(IRONPRESS_CHROMIUM_EXECUTABLE=/snap/bin/chromium timeout -k 5s 300s scripts/chromium-fontations.sh --headless=new --disable-gpu --no-sandbox --disable-software-rasterizer --user-data-dir="$profile" --virtual-time-budget=5000 --dump-dom "file://$html" | grep -o 'data-fontations-ex="[^"]*"')"
+          echo "warm-up probe: $metrics"
+          [ "$metrics" = 'data-fontations-ex="80px,200px,320px"' ]
 
       - name: Generate missing oracles
         env:
