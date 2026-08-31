@@ -1,0 +1,82 @@
+name: PR 254 Oracle Generation
+
+on:
+  push:
+    branches: [automation/pr254-oracles]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pinned parity runtime
+        run: scripts/parity-install-runtime.sh
+
+      - name: Install Chromium-compatible browser
+        run: |
+          curl --fail --location --retry 3 \
+            --output /tmp/google-chrome.deb \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/google-chrome.deb
+
+      - name: Generate authenticated SVG oracle
+        env:
+          FORCE: "1"
+          PARITY_FIXTURE: svg-text-letter-spacing-units
+          PARITY_JOBS: "1"
+        run: scripts/parity-gen-refs.sh images-replaced
+
+      - name: Generate authenticated table oracle
+        env:
+          FORCE: "1"
+          PARITY_FIXTURE: tables-cell-inline-block-flow
+          PARITY_JOBS: "1"
+        run: scripts/parity-gen-refs.sh tables
+
+      - name: Verify reference integrity
+        run: scripts/parity-gen-refs.sh --check
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr254-oracles-${{ runner.os }}-${{ hashFiles('Cargo.toml') }}
+
+      - name: Run full parity gate
+        env:
+          FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
+          PARITY_PDFTOPPM: /usr/bin/pdftoppm
+        run: scripts/parity.sh
+
+      - name: Upload authenticated evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr254-parity-evidence
+          if-no-files-found: error
+          retention-days: 3
+          path: |
+            tests/parity/oracles/images-replaced/svg-text-letter-spacing-units.pdf
+            tests/parity/oracles/tables/tables-cell-inline-block-flow.pdf
+            tests/parity/refs.lock
+            tests/parity/REPORT.md
+            tests/parity/report.json
+            tests/parity/reports/
+            tests/parity/refs/
+            tests/parity/out/
+            tests/parity/diffs/
