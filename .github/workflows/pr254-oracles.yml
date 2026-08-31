@@ -21,12 +21,15 @@ jobs:
       - name: Install pinned parity runtime
         run: scripts/parity-install-runtime.sh
 
-      - name: Install Chromium-compatible browser
+      - name: Install pinned Chromium channel
         run: |
-          curl --fail --location --retry 3 \
-            --output /tmp/google-chrome.deb \
-            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y /tmp/google-chrome.deb
+          sudo apt-get install -y snapd squashfs-tools
+          snap download chromium --channel=latest/edge --target-directory=/tmp
+          sudo unsquashfs -d /opt/ironpress-chromium /tmp/chromium_*.snap
+          sudo ln -s \
+            /opt/ironpress-chromium/usr/lib/chromium-browser/chrome \
+            /usr/local/bin/chromium
+          chromium --version
 
       - name: Generate authenticated SVG oracle
         env:
