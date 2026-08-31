@@ -104,7 +104,12 @@ jobs:
           # PATH shim makes that first candidate resolve to the snap the
           # committed oracles were produced with.
           mkdir -p "$RUNNER_TEMP/chromium-bin"
-          ln -sf /snap/bin/chromium "$RUNNER_TEMP/chromium-bin/chromium-browser"
+          # Not a symlink: /snap/bin/chromium is snapd's dispatcher, which
+          # selects the app from argv[0]; a wrapper keeps that invocation
+          # intact while renaming the candidate.
+          printf '#!/bin/sh\nexec /snap/bin/chromium "$@"\n' > "$RUNNER_TEMP/chromium-bin/chromium-browser"
+          chmod +x "$RUNNER_TEMP/chromium-bin/chromium-browser"
+          "$RUNNER_TEMP/chromium-bin/chromium-browser" --version
           echo "$RUNNER_TEMP/chromium-bin" >> "$GITHUB_PATH"
 
       - name: Generate missing oracles
