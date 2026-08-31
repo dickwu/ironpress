@@ -431,9 +431,10 @@ pub(crate) fn text_run_metadata(style: &ComputedStyle) -> crate::layout::engine:
 /// disable kerning: CSS Fonts resolves those controls independently.
 pub(crate) fn text_run_shaping(style: &ComputedStyle) -> TextShaping {
     TextShaping {
-        ligatures: style.ligatures_enabled && style.letter_spacing == 0.0,
+        ligatures: style.ligatures_enabled,
         kerning: style.font_kerning_enabled,
     }
+    .tracked(style.letter_spacing)
 }
 
 /// Resolve flattened paint-run boundaries while their nearest common inline

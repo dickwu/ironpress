@@ -860,6 +860,17 @@ impl TextShaping {
         ligatures: false,
         kerning: true,
     };
+
+    /// The feature set once CSS tracking applies: a non-zero `letter-spacing`
+    /// suppresses optional ligatures, because a ligature would swallow the
+    /// spacing between its component characters (CSS Text 3 §8.2). Kerning is
+    /// controlled independently by `font-kerning`, so it is left as is.
+    pub const fn tracked(self, letter_spacing: f32) -> Self {
+        Self {
+            ligatures: self.ligatures && letter_spacing == 0.0,
+            kerning: self.kerning,
+        }
+    }
 }
 
 impl Default for TextShaping {

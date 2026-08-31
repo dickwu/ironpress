@@ -4,6 +4,9 @@ use crate::parser::dom::{DomNode, ElementNode};
 use crate::types::Color;
 use std::collections::HashMap;
 
+mod letter_spacing;
+pub use letter_spacing::SvgLetterSpacing;
+
 /// Split a style declaration string on `;`, respecting quoted strings and
 /// parenthesized function arguments.
 fn split_style_declarations(style: &str) -> Vec<&str> {
@@ -258,6 +261,9 @@ pub enum SvgNode {
         font_bold: Option<bool>,
         /// Per-element font-style override (true = italic/oblique).
         font_italic: Option<bool>,
+        /// `letter-spacing` as specified; it resolves against the used font
+        /// size when the element is rendered.
+        letter_spacing: SvgLetterSpacing,
         /// SVG text-anchor: "start" (default), "middle", or "end".
         text_anchor: SvgTextAnchor,
         content: String,
@@ -799,6 +805,10 @@ fn parse_svg_node_with_viewport(
             let fill_specified = has_fill_specified(el);
             let fill_raw = parse_fill_raw(el);
             let (font_family, font_bold, font_italic) = parse_svg_font_attrs(el);
+            let letter_spacing = SvgLetterSpacing::from_declarations(
+                style_property_value(el, "letter-spacing"),
+                el.attributes.get("letter-spacing").map(String::as_str),
+            );
             let content = collect_text_content(el);
             let style = parse_svg_style(el);
             let text_anchor = match el.attributes.get("text-anchor").map(|s| s.as_str()) {
@@ -816,6 +826,7 @@ fn parse_svg_node_with_viewport(
                 font_family,
                 font_bold,
                 font_italic,
+                letter_spacing,
                 text_anchor,
                 content,
                 style,
@@ -1809,17 +1820,18 @@ fn parse_font_size_attr(el: &ElementNode) -> Option<String> {
     style_property_value(el, "font-size").map(|val| val.to_string())
 }
 
+/// Keep the authored `font-family` list verbatim.
+///
+/// Trimming quotes or mapping families here would corrupt a list whose quoted
+/// names contain commas (`'Acme, Sans', ParitySerif`). The renderer resolves
+/// the list once, against the registered fonts first and the base-14 mapping
+/// second, through the engine's CSS font-stack parser.
 fn parse_svg_font_family_value(val: &str) -> Option<String> {
     let val = val.trim();
-    if val.eq_ignore_ascii_case("inherit") {
+    if val.eq_ignore_ascii_case("inherit") || val.is_empty() {
         return None;
     }
-    let val = val.trim_matches(|c| c == '\'' || c == '"');
-    if val.is_empty() {
-        None
-    } else {
-        Some(resolve_svg_font_family(val))
-    }
+    Some(val.to_string())
 }
 
 fn parse_svg_font_weight_value(val: &str) -> Option<bool> {
@@ -1938,30 +1950,6 @@ fn parse_fill_raw(el: &ElementNode) -> Option<String> {
 }
 
 /// Map a CSS font-family value to a PDF base-font family name.
-fn resolve_svg_font_family(css_family: &str) -> String {
-    let lower = css_family.to_ascii_lowercase();
-    if lower.contains("times") || lower == "serif" {
-        "Times-Roman".to_string()
-    } else if lower.contains("courier") || lower == "monospace" {
-        "Courier".to_string()
-    } else if lower == "sans-serif"
-        || lower == "arial"
-        || lower == "helvetica"
-        || lower == "helvetica neue"
-        || lower == "system-ui"
-    {
-        // Known sans-serif generics / standard families map to the base-14
-        // Helvetica face.
-        "Helvetica".to_string()
-    } else {
-        // Preserve any other (custom) family name verbatim so the renderer can
-        // match it against a registered bundled font via `find_font`. When no
-        // custom font is registered, the standard-font path maps unknown names
-        // to Helvetica anyway (see `crate::fonts::pdf_font_name`).
-        css_family.trim().to_string()
-    }
-}
-
 fn is_bold_value(val: &str) -> bool {
     let lower = val.to_ascii_lowercase();
     lower == "bold" || lower == "bolder" || lower.parse::<u32>().is_ok_and(|w| w >= 700)
@@ -5452,26 +5440,30 @@ mod tests {
     // ── font attribute parsing ─────────────────────────────────────────
 
     #[test]
-    fn parse_svg_font_family_times() {
+    fn parse_svg_font_family_preserves_the_authored_name() {
+        // Mapping to a base-14 face happens at render time; the parser keeps
+        // what the author wrote so a registered custom face can still win.
         let el = make_el("text", vec![("font-family", "Times New Roman")]);
         let svg = make_svg_el(vec![("width", "100"), ("height", "100")], vec![el]);
         let tree = parse_svg_from_element(&svg).unwrap();
         match &tree.children[0] {
             SvgNode::Text { font_family, .. } => {
-                assert_eq!(font_family.as_deref(), Some("Times-Roman"));
+                assert_eq!(font_family.as_deref(), Some("Times New Roman"));
             }
             other => panic!("expected Text, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_svg_font_family_courier() {
-        let el = make_el("text", vec![("font-family", "Courier New")]);
+    fn parse_svg_font_family_preserves_a_quoted_list_with_commas() {
+        // CSS Fonts allows a quoted family name to contain commas; splitting
+        // or unquoting here would corrupt the list before stack resolution.
+        let el = make_el("text", vec![("font-family", "'Acme, Sans', ParitySerif")]);
         let svg = make_svg_el(vec![("width", "100"), ("height", "100")], vec![el]);
         let tree = parse_svg_from_element(&svg).unwrap();
         match &tree.children[0] {
             SvgNode::Text { font_family, .. } => {
-                assert_eq!(font_family.as_deref(), Some("Courier"));
+                assert_eq!(font_family.as_deref(), Some("'Acme, Sans', ParitySerif"));
             }
             other => panic!("expected Text, got {other:?}"),
         }

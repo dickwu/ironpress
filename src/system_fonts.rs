@@ -226,6 +226,24 @@ pub(crate) fn find_font<'a>(
     })
 }
 
+/// Resolve a raw CSS `font-family` list (`"MyFace, Helvetica"`) against the
+/// registered fonts: the first listed family with a registered face wins, so an
+/// author-listed custom face beats a later base-14 fallback. The list goes
+/// through the engine's CSS font-stack parser, so a quoted family name may
+/// contain commas, and a single family name resolves exactly like
+/// [`find_font`].
+pub(crate) fn find_font_in_stack<'a>(
+    fonts: &'a HashMap<String, TtfFont>,
+    stack: &str,
+    bold: bool,
+    italic: bool,
+) -> Option<(&'a str, &'a TtfFont)> {
+    parse_font_stack(stack)
+        .families()
+        .iter()
+        .find_map(|family| find_font(fonts, family.name(), bold, italic))
+}
+
 /// Resolve a face using CSS Fonts' discrete width matching order before style
 /// and weight fallback. Callers that retain the returned map key can then keep
 /// using [`find_font`] for shaping, metrics, and PDF embedding.
@@ -893,6 +911,18 @@ mod tests {
     use super::*;
     use crate::parser::ttf::{FontVerticalMetricSet, FontVerticalMetrics, TtfFont};
     use crate::style::computed::{FontFamily, FontStack, parse_font_stack};
+
+    #[test]
+    fn find_font_in_stack_splits_the_list_like_css() {
+        let fonts = HashMap::from([("myface".to_string(), stub_font("MyFace"))]);
+        // A quoted family name may contain a comma; it is one (missing) family.
+        let found = find_font_in_stack(&fonts, "'ACME, Sans', MyFace, Helvetica", false, false);
+        assert_eq!(found.map(|(name, _)| name), Some("myface"));
+        assert!(find_font_in_stack(&fonts, "'MyFace, Sans'", false, false).is_none());
+        assert!(find_font_in_stack(&fonts, "Helvetica", false, false).is_none());
+        let single = find_font_in_stack(&fonts, "\"MyFace\"", false, false);
+        assert_eq!(single.map(|(name, _)| name), Some("myface"));
+    }
 
     fn stub_font(name: &str) -> TtfFont {
         let metrics = FontVerticalMetrics::new(800, -200, 0);
