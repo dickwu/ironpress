@@ -21,13 +21,24 @@ jobs:
       - name: Install pinned parity runtime
         run: scripts/parity-install-runtime.sh
 
-      - name: Install pinned Chromium channel
+      - name: Install pinned Chrome for Testing
         run: |
-          sudo apt-get install -y snapd squashfs-tools
-          snap download chromium --channel=latest/edge --target-directory=/tmp
-          sudo unsquashfs -d /opt/ironpress-chromium /tmp/chromium_*.snap
+          sudo apt-get install -y \
+            libasound2t64 \
+            libatk-bridge2.0-0t64 \
+            libatk1.0-0t64 \
+            libatspi2.0-0t64 \
+            libcups2t64 \
+            libpango-1.0-0 \
+            libxdamage1 \
+            libxkbcommon0 \
+            unzip
+          curl --fail --location --retry 3 \
+            --output /tmp/chrome-for-testing.zip \
+            https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.124/linux64/chrome-linux64.zip
+          sudo unzip -q /tmp/chrome-for-testing.zip -d /opt/chrome-for-testing
           sudo ln -s \
-            /opt/ironpress-chromium/usr/lib/chromium-browser/chrome \
+            /opt/chrome-for-testing/chrome-linux64/chrome \
             /usr/local/bin/chromium
           chromium --version
 
