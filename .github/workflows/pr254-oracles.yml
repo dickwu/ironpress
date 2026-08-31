@@ -47,7 +47,7 @@ jobs:
           FORCE: "1"
           PARITY_FIXTURE: svg-text-letter-spacing-units
           PARITY_JOBS: "1"
-        run: scripts/parity-gen-refs.sh images-replaced
+        run: bash -x scripts/parity-gen-refs.sh images-replaced
 
       - name: Generate authenticated table oracle
         env:
