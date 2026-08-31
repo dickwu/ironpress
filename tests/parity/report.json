@@ -1,22 +1,22 @@
 {
   "schema_version": 12,
-  "invocation_id": "0d99045d2b7c344e6665ca975c287a73",
+  "invocation_id": "fe9fda600470468e1878064b006dc37f",
   "run_complete": true,
   "env": {
     "dpi": 300,
     "pdftoppm_available": true,
     "rasterizer_source_path": "/usr/bin/pdftoppm",
-    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-9843-1788193633886439749-0/pdftoppm",
+    "rasterizer_executed_path": "/tmp/ironpress-pdftoppm-9728-1788197618178234563-0/pdftoppm",
     "rasterizer_arguments": "[-r, 300, -png, <PDF>, <PREFIX>]",
     "rasterizer_version": "pdftoppm version 24.08.0",
     "rasterizer_sha256": "b1f76a56605df368efd233e09faad3bd910e50c0d6556c616a7c0b0adebf6013"
   },
   "overall": {
     "score_pct": 100.0,
-    "pass": 1651,
+    "pass": 1657,
     "fail": 0,
     "reference_disputed": 20,
-    "total": 1671
+    "total": 1677
   },
   "categories": [
     {
@@ -120962,7 +120962,7 @@
       "category": "images-replaced",
       "score_pct": 100.0,
       "counts": {
-        "pass": 38,
+        "pass": 44,
         "fail": 0,
         "reference_disputed": 0
       },
@@ -124566,11 +124566,55 @@
           "feature": "inline-svg",
           "score_pct": 100.0,
           "counts": {
-            "pass": 6,
+            "pass": 12,
             "fail": 0,
             "reference_disputed": 0
           },
           "fixtures": [
+            {
+              "id": "svg-background-image-text-custom-font",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "background-image-text-custom-font",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "SVG text inside a CSS background-image data: URL resolves the ParitySans family and paints with its glyphs instead of falling back to a standard font.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "459f6bf6f203edc3e51f098650c1bea1c20b8de48042fd966b652a531289b03e",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 625,
+                    "height": 250,
+                    "rgba_sha256": "88c1c2f293554f3baa0221e64718f34750d52b132b451e3c7da69d5aef979c27",
+                    "painted_pixels": 14313
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 625,
+                    "height": 250,
+                    "rgba_sha256": "88c1c2f293554f3baa0221e64718f34750d52b132b451e3c7da69d5aef979c27",
+                    "painted_pixels": 14313
+                  }
+                ]
+              }
+            },
             {
               "id": "svg-inline-clip",
               "category": "images-replaced",
@@ -128597,6 +128641,226 @@
                     "height": 450,
                     "rgba_sha256": "0c6f6d6974a9cfb541b44eca4d975ed72b267e16595e28c5003dae9211edfcb8",
                     "painted_pixels": 218750
+                  }
+                ]
+              }
+            },
+            {
+              "id": "svg-text-font-family-stack-fallback",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "text-font-family-stack-fallback",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "SVG text whose font-family stack starts with an unavailable family falls through to the next family, including a quoted family name that contains a comma.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "a062174c45347028b43cbe735b82a14cc7a371e10c900f93c87e6d984ef66003",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1075,
+                    "height": 425,
+                    "rgba_sha256": "320480480126bc19bf929ccb20e5c8df07955c84fa2d91f94862c051ba9efb68",
+                    "painted_pixels": 22096
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1075,
+                    "height": 425,
+                    "rgba_sha256": "320480480126bc19bf929ccb20e5c8df07955c84fa2d91f94862c051ba9efb68",
+                    "painted_pixels": 22096
+                  }
+                ]
+              }
+            },
+            {
+              "id": "svg-text-letter-spacing-anchors",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "text-letter-spacing-anchors",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "SVG text with letter-spacing: 8px under text-anchor start, middle, and end; red guides mark each anchor x so the text chunk's tracked total advance must position the glyphs.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "aa1241de58431cfda3c4508a139d195b891170e12d48405ff791e1f718ced6b6",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1075,
+                    "height": 600,
+                    "rgba_sha256": "618f33c4e364f4ecf5a711318fd31c00a568baa93b1851f9621f5188e9503f3b",
+                    "painted_pixels": 29030
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1075,
+                    "height": 600,
+                    "rgba_sha256": "618f33c4e364f4ecf5a711318fd31c00a568baa93b1851f9621f5188e9503f3b",
+                    "painted_pixels": 29030
+                  }
+                ]
+              }
+            },
+            {
+              "id": "svg-text-letter-spacing-ligatures",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "text-letter-spacing-ligatures",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "Inline SVG text in ParitySerif: the unspaced row keeps the font's default fi/fl/ffi ligatures, while the row with letter-spacing: 6px spaces typographic character units and must not form optional ligatures (CSS Text 3 §8.2).",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "17bc6908e25434ab5b51d118eb6d2655066a2f0948153a0f0631feb342778b13",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1075,
+                    "height": 500,
+                    "rgba_sha256": "228b6dd61081428317ac60ebd584b58f5ca2f4de36179e90d933f2a69121e518",
+                    "painted_pixels": 32193
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1075,
+                    "height": 500,
+                    "rgba_sha256": "228b6dd61081428317ac60ebd584b58f5ca2f4de36179e90d933f2a69121e518",
+                    "painted_pixels": 32193
+                  }
+                ]
+              }
+            },
+            {
+              "id": "svg-text-letter-spacing-units",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "text-letter-spacing-units",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "SVG text letter-spacing given as unitless user units, em (presentation attribute and inline style), pt, and a negative value at font-size 32px; the four 8px rows must render identically and the negative row tighter.",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "799548b653cf0a31dfde2d8f216733d6666b6e0fc5fcb957c29b8e2f3db3e3cb",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1075,
+                    "height": 700,
+                    "rgba_sha256": "f0967fb78d65cc965f70e271f316433e8d54927fa2061ac0daf0a8303be78a01",
+                    "painted_pixels": 50095
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1075,
+                    "height": 700,
+                    "rgba_sha256": "f0967fb78d65cc965f70e271f316433e8d54927fa2061ac0daf0a8303be78a01",
+                    "painted_pixels": 50095
+                  }
+                ]
+              }
+            },
+            {
+              "id": "svg-text-letter-spacing-zero-width",
+              "category": "images-replaced",
+              "feature": "inline-svg",
+              "subfeature": "text-letter-spacing-zero-width",
+              "interaction_of": [],
+              "base_ids": [],
+              "status": "PASS",
+              "diff_pct": 0.0,
+              "semantic_diff_pct": 0.0,
+              "description": "SVG text letter-spacing ignores zero-width formatting characters (U+200B, U+200D) and treats a base letter plus combining mark as one typographic character unit; the first two rows must render identically (CSS Text 3 §8.2).",
+              "note": "",
+              "kind": "feature",
+              "depends_on": [
+                "probe-fill-box",
+                "probe-text-baseline"
+              ],
+              "expected_support": "implemented",
+              "oracle": "chrome",
+              "reference": {
+                "status": "verified",
+                "note": ""
+              },
+              "dependency_context": "",
+              "html_sha256": "50b84faf81203a970680247dd5e743d59651fb59de51f59487e961e218e67c51",
+              "raster": {
+                "candidate": [
+                  {
+                    "width": 1075,
+                    "height": 500,
+                    "rgba_sha256": "047d52aaf960e7ad21716b2b80760e5a98753b1bbcda65058aaf371200e98e6d",
+                    "painted_pixels": 30289
+                  }
+                ],
+                "oracle": [
+                  {
+                    "width": 1075,
+                    "height": 500,
+                    "rgba_sha256": "047d52aaf960e7ad21716b2b80760e5a98753b1bbcda65058aaf371200e98e6d",
+                    "painted_pixels": 30289
                   }
                 ]
               }
@@ -380031,7 +380295,7 @@
       "units-values/percentage",
       "units-values/viewport-units"
     ],
-    "implemented": 1634,
+    "implemented": 1640,
     "partial": 37,
     "unsupported": 0,
     "interaction_families": 25,
@@ -380044,7 +380308,7 @@
   "suspect_unsupported_pass": [],
   "stale_refs": [],
   "refs_lock_present": true,
-  "refs_lock_sha256": "33f21160eba089a24e3759c4933c2ee5d17939b6f96b33ab6d6dec809227a467",
+  "refs_lock_sha256": "ffc65d09dcdebc80bc5317547aa8a47866c7a71c19cc6c39601d4840fb3aadd0",
   "baseline_present": false,
-  "gate_failure": "parity gate FAILED (1 issue(s)):\n  - refs.lock identity changed (baseline fca6cb47e8c62ecd48028213c54879ce966fe8118f16fa4c51d9452962f42eb8 != current 33f21160eba089a24e3759c4933c2ee5d17939b6f96b33ab6d6dec809227a467); fixture/oracle identity changes require an explicit reviewed baseline update\nCurrent report: /home/runner/work/ironpress/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/runner/work/ironpress/ironpress/tests/parity/reports/index.html"
+  "gate_failure": "parity gate FAILED (1 issue(s)):\n  - refs.lock identity changed (baseline fca6cb47e8c62ecd48028213c54879ce966fe8118f16fa4c51d9452962f42eb8 != current ffc65d09dcdebc80bc5317547aa8a47866c7a71c19cc6c39601d4840fb3aadd0); fixture/oracle identity changes require an explicit reviewed baseline update\nCurrent report: /home/runner/work/ironpress/ironpress/tests/parity/REPORT.md\nCurrent visual report: /home/runner/work/ironpress/ironpress/tests/parity/reports/index.html"
 }
