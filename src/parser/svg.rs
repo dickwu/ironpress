@@ -1,6 +1,6 @@
 //! SVG parser — converts DOM SVG elements into an SvgTree for PDF rendering.
 
-use crate::parser::css::{CssValue, MathUnitContext, parse_property_value};
+use crate::parser::css::{CssValue, parse_property_value};
 use crate::parser::dom::{DomNode, ElementNode};
 use crate::types::Color;
 use std::collections::HashMap;
@@ -284,27 +284,16 @@ pub enum SvgTextAnchor {
 #[derive(Debug, Clone)]
 pub enum SvgLetterSpacing {
     Normal,
-    Length(CssValue),
+    AbsolutePoints(f32),
+    FontRelativeEm(f32),
 }
 
 impl SvgLetterSpacing {
     fn parse(raw: &str) -> Option<Self> {
         match parse_property_value("letter-spacing", raw)? {
             CssValue::Keyword(value) if value.eq_ignore_ascii_case("normal") => Some(Self::Normal),
-            CssValue::Length(value) if value.is_finite() => {
-                Some(Self::Length(CssValue::Length(value)))
-            }
-            CssValue::Em(value) if value.is_finite() => Some(Self::Length(CssValue::Em(value))),
-            CssValue::Ex(value) if value.is_finite() => Some(Self::Length(CssValue::Ex(value))),
-            CssValue::Ch(value) if value.is_finite() => Some(Self::Length(CssValue::Ch(value))),
-            CssValue::Rem(value) if value.is_finite() => Some(Self::Length(CssValue::Rem(value))),
-            CssValue::Vw(value) if value.is_finite() => Some(Self::Length(CssValue::Vw(value))),
-            CssValue::Vh(value) if value.is_finite() => Some(Self::Length(CssValue::Vh(value))),
-            CssValue::Vmin(value) if value.is_finite() => Some(Self::Length(CssValue::Vmin(value))),
-            CssValue::Vmax(value) if value.is_finite() => Some(Self::Length(CssValue::Vmax(value))),
-            CssValue::Math(value) => Some(Self::Length(CssValue::Math(value))),
-            CssValue::PendingMath(value) => Some(Self::Length(CssValue::PendingMath(value))),
-            CssValue::Var(name, fallback) => Some(Self::Length(CssValue::Var(name, fallback))),
+            CssValue::Length(value) if value.is_finite() => Some(Self::AbsolutePoints(value)),
+            CssValue::Em(value) if value.is_finite() => Some(Self::FontRelativeEm(value)),
             _ => None,
         }
     }
@@ -313,21 +302,8 @@ impl SvgLetterSpacing {
         const PDF_POINTS_PER_CSS_PIXEL: f32 = 0.75;
         match self {
             Self::Normal => 0.0,
-            Self::Length(value) => crate::style::resolve::resolve_length_value_in_context(
-                value,
-                crate::style::resolve::LengthResolutionContext::new(
-                    0.0,
-                    MathUnitContext::from_font_and_viewport(
-                        font_size * PDF_POINTS_PER_CSS_PIXEL,
-                        font_size * PDF_POINTS_PER_CSS_PIXEL,
-                        0.0,
-                        0.0,
-                    ),
-                ),
-                &HashMap::new(),
-            )
-            .filter(|value| value.is_finite())
-            .map_or(0.0, |value| value / PDF_POINTS_PER_CSS_PIXEL),
+            Self::AbsolutePoints(points) => points / PDF_POINTS_PER_CSS_PIXEL,
+            Self::FontRelativeEm(factor) => factor * font_size,
         }
     }
 }
@@ -5673,9 +5649,20 @@ mod tests {
     }
 
     #[test]
-    fn svg_letter_spacing_rejects_percentages_and_bare_nonzero_numbers() {
-        assert!(SvgLetterSpacing::parse("10%").is_none());
-        assert!(SvgLetterSpacing::parse("2").is_none());
+    fn svg_letter_spacing_rejects_values_without_a_svg_resolution_context() {
+        for unsupported in [
+            "10%",
+            "2",
+            "1rem",
+            "1vw",
+            "var(--tracking)",
+            "calc(1em + 1px)",
+        ] {
+            assert!(
+                SvgLetterSpacing::parse(unsupported).is_none(),
+                "unexpectedly accepted {unsupported}"
+            );
+        }
         assert_eq!(
             SvgLetterSpacing::parse("normal")
                 .unwrap()
