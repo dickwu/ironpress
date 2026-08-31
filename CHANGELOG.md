@@ -7,6 +7,12 @@
 - Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
   verify static and shared consumers across the native platform matrix.
 
+### Changed
+
+- Auto table layout memoizes each cell's intrinsic widths within a layout,
+  collapsing the exponential re-measurement of nested tables (a depth-6 nest
+  converts about twice as fast) with byte-identical output.
+
 ## [1.6.0] — 2026-08-26
 
 ### Added

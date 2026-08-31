@@ -40,7 +40,10 @@ use super::text::{
     text_run_line_height_factor, used_font_size, wrap_text_runs,
 };
 
+mod cell_sizing_memo;
 mod collapsed_borders;
+pub(crate) use cell_sizing_memo::TableCellSizingMemo;
+use cell_sizing_memo::{CellContentWidths, CellSizingKey};
 use collapsed_borders::{
     CollapsedBorderSources, CollapsedBorderTrack, resolve_collapsed_border_grid,
 };
@@ -1328,15 +1331,11 @@ fn measure_caption_min_width(
     section_count: usize,
     caption_style: &ComputedStyle,
     table_ancestors: &[AncestorInfo],
-    rules: &[CssRule],
-    fonts: &HashMap<String, TtfFont>,
-    filter_defs: &HashMap<String, ElementNode>,
-    filter_dpi: f32,
-    counter_state: &mut CounterState,
-    resources: &mut crate::security::resources::ResourceLoader,
+    env: &mut LayoutEnv,
     available_width: f32,
     descendant_layout: TableDescendantLayout,
 ) -> f32 {
+    let fonts = env.fonts;
     let mut caption_ancestors = table_ancestors.to_vec();
     caption_ancestors.push(AncestorInfo {
         element: caption_el,
@@ -1348,28 +1347,18 @@ fn measure_caption_min_width(
     });
     let mut runs = Vec::new();
     let mut nested = Vec::new();
-    {
-        let mut flow_env = LayoutEnv {
-            rules,
-            fonts,
-            counter_state,
-            resources,
-            filter_defs,
-            filter_dpi,
-        };
-        layout_table_cell_flow(
-            &caption_el.children,
-            &mut runs,
-            &mut nested,
-            TableCellFlowContext {
-                style: caption_style,
-                ancestors: &caption_ancestors,
-                available_width: available_width.max(0.0),
-                descendant_layout,
-            },
-            &mut flow_env,
-        );
-    }
+    layout_table_cell_flow(
+        &caption_el.children,
+        &mut runs,
+        &mut nested,
+        TableCellFlowContext {
+            style: caption_style,
+            ancestors: &caption_ancestors,
+            available_width: available_width.max(0.0),
+            descendant_layout,
+        },
+        env,
+    );
     let text_width: f32 = runs
         .iter()
         .map(|run| {
@@ -1789,6 +1778,7 @@ pub(crate) fn flatten_table(
     let filter_dpi = env.filter_dpi;
     let counter_state = &mut *env.counter_state;
     let resources = &mut *env.resources;
+    let table_cell_sizing = &mut *env.table_cell_sizing;
     let mut measurement_counter_state = counter_state.clone();
     let table_border = LayoutBorder::from_computed(&style.border, style.color);
     let effective_border_spacing = style.border_spacing;
@@ -2013,18 +2003,22 @@ pub(crate) fn flatten_table(
         .iter()
         .zip(&caption_styles_for_layout)
         .map(|((caption_el, caption_child_idx), caption_style)| {
+            let mut caption_env = LayoutEnv {
+                rules,
+                fonts,
+                counter_state: &mut measurement_counter_state,
+                resources: &mut *resources,
+                filter_defs,
+                filter_dpi,
+                table_cell_sizing: &mut *table_cell_sizing,
+            };
             measure_caption_min_width(
                 caption_el,
                 *caption_child_idx,
                 section_count,
                 caption_style,
                 &table_ancestors,
-                rules,
-                fonts,
-                filter_defs,
-                filter_dpi,
-                &mut measurement_counter_state,
-                &mut *resources,
+                &mut caption_env,
                 inner_width,
                 descendant_layout,
             )
@@ -2391,156 +2385,193 @@ pub(crate) fn flatten_table(
                         }
                         let colspan = parse_cell_colspan(cell_el);
                         let span = colspan.min(num_cols - col_pos);
-                        let cell_classes = cell_el.class_list();
-                        let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
-                        push_table_dom_ancestor(
-                            &mut cell_sizing_ancestors,
-                            row,
-                            ElementSiblingContext::new(
-                                row_section_indices[sizing_row_idx],
-                                row_section_sizes[sizing_row_idx],
-                            ),
-                        );
-                        let cell_sizing_ctx = cell_siblings
-                            .selector_context(&cell_sizing_ancestors, element_is_empty(cell_el));
-                        let cell_style = anonymous_table_box_style(cell_el, &row_style)
-                            .unwrap_or_else(|| {
-                                compute_style_with_context_with_font_metrics(
-                                    cell_el.tag,
-                                    cell_el.style_attr(),
-                                    &row_style,
-                                    rules,
-                                    cell_el.tag_name(),
-                                    &cell_classes,
-                                    cell_el.id(),
-                                    &cell_el.attributes,
-                                    &cell_sizing_ctx,
-                                    FontMetrics::new(fonts),
-                                )
-                            });
-                        let cell_counter_scope =
-                            measurement_counter_state.enter_element(&cell_style);
-                        let authored_generated = GeneratedContentStyles::resolve(
-                            cell_el,
-                            &cell_style,
-                            rules,
-                            &cell_sizing_ctx,
-                            fonts,
-                        );
-                        let authored_generated = authored_generated.boxes(cell_el);
-                        let mut runs = Vec::new();
-                        let mut nested_rows = Vec::new();
-                        let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
-                        push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
-                        generated_cell_content.append_before_measurement(
-                            &mut runs,
-                            fonts,
-                            &mut measurement_counter_state,
-                            &mut *resources,
-                        );
-                        authored_generated.append_before_measurement(
-                            &mut runs,
-                            fonts,
-                            &mut measurement_counter_state,
-                            &mut *resources,
-                        );
-                        {
-                            let mut measurement_env = LayoutEnv {
-                                rules,
-                                fonts,
-                                counter_state: &mut measurement_counter_state,
-                                resources: &mut *resources,
-                                filter_defs,
-                                filter_dpi,
-                            };
-                            layout_table_cell_flow(
-                                &cell_el.children,
-                                &mut runs,
-                                &mut nested_rows,
-                                TableCellFlowContext {
-                                    style: &cell_style,
-                                    ancestors: &text_ancestors,
-                                    available_width: inner_width,
-                                    descendant_layout,
-                                },
-                                &mut measurement_env,
+                        // Reuse this cell's measurement when it has already been
+                        // taken against the same inner width: a hit skips the
+                        // cell's compute_style and the entire nested flatten
+                        // below. An entry is only trusted while no counter or
+                        // quote context is live, because an empty state cannot
+                        // influence the measurement, and an empty-to-empty
+                        // measurement cannot have left any behind.
+                        let sizing_key = CellSizingKey::new(cell_el, inner_width);
+                        let counters_empty_before = measurement_counter_state.stacks.is_empty()
+                            && measurement_counter_state.quote_depth == 0;
+                        let measured = 'cell_sizing: {
+                            if counters_empty_before
+                                && let Some(widths) = table_cell_sizing.get(&sizing_key)
+                            {
+                                break 'cell_sizing widths;
+                            }
+                            let cell_classes = cell_el.class_list();
+                            let mut cell_sizing_ancestors = sizing_row_ctx.ancestors.clone();
+                            push_table_dom_ancestor(
+                                &mut cell_sizing_ancestors,
+                                row,
+                                ElementSiblingContext::new(
+                                    row_section_indices[sizing_row_idx],
+                                    row_section_sizes[sizing_row_idx],
+                                ),
                             );
-                        }
-                        generated_cell_content.append_after_measurement(
-                            &mut runs,
-                            fonts,
-                            &mut measurement_counter_state,
-                            &mut *resources,
-                        );
-                        authored_generated.append_after_measurement(
-                            &mut runs,
-                            fonts,
-                            &mut measurement_counter_state,
-                            &mut *resources,
-                        );
-                        runs.as_mut_slice().resolve_unclaimed_boundaries(
-                            crate::layout::elements::TextSpacing::from_style(&cell_style),
-                        );
-                        measurement_counter_state.leave_element(cell_counter_scope);
-                        // Measure the same prepared styled tokens and the same
-                        // ordered advances that the final line wrapper consumes.
-                        // This makes max-content an actual exact fit: no point- or
-                        // pixel-based slack is added to table geometry.
-                        let text_options =
-                            table_cell_text_wrap_options(&cell_style, inner_width, fonts);
-                        let intrinsic = measure_text_intrinsic_widths(
-                            runs,
-                            text_options,
-                            table_cell_allows_soft_wrap(&cell_style),
-                            fonts,
-                        );
-                        let content_width = intrinsic.max_content;
-                        let content_min_width = intrinsic.min_content;
-                        // Nested block descendants (e.g. a fixed-width <div>) and
-                        // nested tables both contribute a minimum content width so
-                        // a shrink-to-fit cell does not crush them narrower than
-                        // their own declared/intrinsic width.
-                        let nested_width = nested_rows
-                            .iter()
-                            .map(|element| nested_element_preferred_width(element.as_ref()))
-                            .fold(0.0f32, f32::max);
-                        // An explicit width on the cell (CSS or `width` attribute)
-                        // seeds the column's preferred width: the column is at least
-                        // as wide as the declared width, taken as the track width
-                        // (consistent with the fixed-layout path).
-                        let explicit_cell_width =
-                            resolve_cell_track_width(cell_el, &cell_style, inner_width)
-                                .unwrap_or(0.0);
-                        // Content-box → border-box: the column track must hold the
-                        // content plus the cell's horizontal padding AND border
-                        // (borders paint inside the cell box). Under
-                        // `border-collapse: collapse` adjacent borders merge onto a
-                        // shared grid line and each cell owns only HALF of a
-                        // collapsed border, so the track contribution scales the
-                        // border by the same half factor used by the paint inset
-                        // (see `border_inset_factor` below); `separate` keeps the
-                        // full border. Without this the track is sized for the full
-                        // border but painted center-to-center on the grid line,
-                        // making each collapsed column ~half-a-border too wide.
-                        let cell_border =
-                            LayoutBorder::from_computed(&cell_style.border, cell_style.color);
-                        let cell_insets = table_cell_content_insets(
-                            &cell_style,
-                            &cell_border,
-                            style.border_collapse,
-                        );
-                        let cell_padding_x = cell_insets.horizontal();
-                        let total_preferred =
-                            required_outer_width(content_width.max(nested_width), cell_padding_x)
-                                .max(explicit_cell_width);
-                        // Min-content includes padding and is floored by an explicit
-                        // cell width (an explicit `width` makes the column at least
-                        // that wide even for shrinking).
-                        let total_min = required_outer_width(
-                            content_min_width.max(nested_width),
-                            cell_padding_x,
-                        )
-                        .max(explicit_cell_width);
+                            let cell_sizing_ctx = cell_siblings.selector_context(
+                                &cell_sizing_ancestors,
+                                element_is_empty(cell_el),
+                            );
+                            let cell_style = anonymous_table_box_style(cell_el, &row_style)
+                                .unwrap_or_else(|| {
+                                    compute_style_with_context_with_font_metrics(
+                                        cell_el.tag,
+                                        cell_el.style_attr(),
+                                        &row_style,
+                                        rules,
+                                        cell_el.tag_name(),
+                                        &cell_classes,
+                                        cell_el.id(),
+                                        &cell_el.attributes,
+                                        &cell_sizing_ctx,
+                                        FontMetrics::new(fonts),
+                                    )
+                                });
+                            let cell_counter_scope =
+                                measurement_counter_state.enter_element(&cell_style);
+                            let authored_generated = GeneratedContentStyles::resolve(
+                                cell_el,
+                                &cell_style,
+                                rules,
+                                &cell_sizing_ctx,
+                                fonts,
+                            );
+                            let authored_generated = authored_generated.boxes(cell_el);
+                            let mut runs = Vec::new();
+                            let mut nested_rows = Vec::new();
+                            let mut text_ancestors = cell_sizing_ctx.ancestors.clone();
+                            push_table_dom_ancestor(&mut text_ancestors, cell_el, cell_siblings);
+                            generated_cell_content.append_before_measurement(
+                                &mut runs,
+                                fonts,
+                                &mut measurement_counter_state,
+                                &mut *resources,
+                            );
+                            authored_generated.append_before_measurement(
+                                &mut runs,
+                                fonts,
+                                &mut measurement_counter_state,
+                                &mut *resources,
+                            );
+                            {
+                                let mut measurement_env = LayoutEnv {
+                                    rules,
+                                    fonts,
+                                    counter_state: &mut measurement_counter_state,
+                                    resources: &mut *resources,
+                                    filter_defs,
+                                    filter_dpi,
+                                    table_cell_sizing: &mut *table_cell_sizing,
+                                };
+                                layout_table_cell_flow(
+                                    &cell_el.children,
+                                    &mut runs,
+                                    &mut nested_rows,
+                                    TableCellFlowContext {
+                                        style: &cell_style,
+                                        ancestors: &text_ancestors,
+                                        available_width: inner_width,
+                                        descendant_layout,
+                                    },
+                                    &mut measurement_env,
+                                );
+                            }
+                            generated_cell_content.append_after_measurement(
+                                &mut runs,
+                                fonts,
+                                &mut measurement_counter_state,
+                                &mut *resources,
+                            );
+                            authored_generated.append_after_measurement(
+                                &mut runs,
+                                fonts,
+                                &mut measurement_counter_state,
+                                &mut *resources,
+                            );
+                            runs.as_mut_slice().resolve_unclaimed_boundaries(
+                                crate::layout::elements::TextSpacing::from_style(&cell_style),
+                            );
+                            measurement_counter_state.leave_element(cell_counter_scope);
+                            // Measure the same prepared styled tokens and the same
+                            // ordered advances that the final line wrapper consumes.
+                            // This makes max-content an actual exact fit: no point- or
+                            // pixel-based slack is added to table geometry.
+                            let text_options =
+                                table_cell_text_wrap_options(&cell_style, inner_width, fonts);
+                            let intrinsic = measure_text_intrinsic_widths(
+                                runs,
+                                text_options,
+                                table_cell_allows_soft_wrap(&cell_style),
+                                fonts,
+                            );
+                            let content_width = intrinsic.max_content;
+                            let content_min_width = intrinsic.min_content;
+                            // Nested block descendants (e.g. a fixed-width <div>) and
+                            // nested tables both contribute a minimum content width so
+                            // a shrink-to-fit cell does not crush them narrower than
+                            // their own declared/intrinsic width.
+                            let nested_width = nested_rows
+                                .iter()
+                                .map(|element| nested_element_preferred_width(element.as_ref()))
+                                .fold(0.0f32, f32::max);
+                            // An explicit width on the cell (CSS or `width` attribute)
+                            // seeds the column's preferred width: the column is at least
+                            // as wide as the declared width, taken as the track width
+                            // (consistent with the fixed-layout path).
+                            let explicit_cell_width =
+                                resolve_cell_track_width(cell_el, &cell_style, inner_width)
+                                    .unwrap_or(0.0);
+                            // Content-box → border-box: the column track must hold the
+                            // content plus the cell's horizontal padding AND border
+                            // (borders paint inside the cell box). Under
+                            // `border-collapse: collapse` adjacent borders merge onto a
+                            // shared grid line and each cell owns only HALF of a
+                            // collapsed border, so the track contribution scales the
+                            // border by the same half factor used by the paint inset
+                            // (see `border_inset_factor` below); `separate` keeps the
+                            // full border. Without this the track is sized for the full
+                            // border but painted center-to-center on the grid line,
+                            // making each collapsed column ~half-a-border too wide.
+                            let cell_border =
+                                LayoutBorder::from_computed(&cell_style.border, cell_style.color);
+                            let cell_insets = table_cell_content_insets(
+                                &cell_style,
+                                &cell_border,
+                                style.border_collapse,
+                            );
+                            let cell_padding_x = cell_insets.horizontal();
+                            let total_preferred = required_outer_width(
+                                content_width.max(nested_width),
+                                cell_padding_x,
+                            )
+                            .max(explicit_cell_width);
+                            // Min-content includes padding and is floored by an explicit
+                            // cell width (an explicit `width` makes the column at least
+                            // that wide even for shrinking).
+                            let total_min = required_outer_width(
+                                content_min_width.max(nested_width),
+                                cell_padding_x,
+                            )
+                            .max(explicit_cell_width);
+                            let measured = CellContentWidths {
+                                preferred: total_preferred,
+                                min: total_min,
+                            };
+                            if counters_empty_before
+                                && measurement_counter_state.stacks.is_empty()
+                                && measurement_counter_state.quote_depth == 0
+                            {
+                                table_cell_sizing.insert(sizing_key, measured);
+                            }
+                            measured
+                        };
+                        let CellContentWidths {
+                            preferred: total_preferred,
+                            min: total_min,
+                        } = measured;
                         if span == 1 {
                             if col_pos < num_cols {
                                 preferred_widths[col_pos] =
@@ -3131,6 +3162,7 @@ pub(crate) fn flatten_table(
                     resources: &mut *resources,
                     filter_defs,
                     filter_dpi,
+                    table_cell_sizing: &mut *table_cell_sizing,
                 };
                 layout_table_cell_flow(
                     &cell_el.children,
@@ -3553,6 +3585,7 @@ pub(crate) fn flatten_table(
                 resources: &mut *resources,
                 filter_defs,
                 filter_dpi,
+                table_cell_sizing: &mut *table_cell_sizing,
             };
             layout_table_cell_flow(
                 &caption_el.children,
@@ -4573,5 +4606,151 @@ mod border_tests {
         assert!(used_height > 68.0 * 0.75);
         assert!(!is_definite, "table height is a minimum, not a hard cap");
         assert!(estimate_element_height(table_root) >= used_height);
+    }
+}
+
+#[cfg(test)]
+mod nested_table_sizing_tests {
+    use super::*;
+    use crate::layout::elements::visit_layout_tree;
+    use crate::layout::engine::layout_with_rules;
+    use crate::parser::css::parse_stylesheet;
+    use crate::parser::html::parse_html_with_styles;
+    use crate::types::{Margin, PageSize};
+
+    const PAGE: PageSize = PageSize {
+        width: 400.0,
+        height: 400.0,
+    };
+    /// Explicit width on the innermost cell. Every enclosing column has to hold
+    /// it, so it is the floor the whole nest is measured against.
+    const SEED_WIDTH_PX: f32 = 20.0;
+    /// The same length in the points layout resolves to. css-values-4 § 5.2
+    /// pins `1px` to `1/96in` and `1pt` to `1/72in`.
+    const SEED_WIDTH_PT: f32 = SEED_WIDTH_PX * 72.0 / 96.0;
+
+    /// Strips every padding, border, and spacing contribution from the nest, so
+    /// the only width any of the three tables can report is the one its content
+    /// asks for.
+    fn reset() -> String {
+        format!(
+            "<style>
+                table {{ table-layout: auto; border-collapse: separate;
+                         border-spacing: 0; margin: 0; width: auto }}
+                td {{ padding: 0; border: 0 }}
+                .seed {{ width: {SEED_WIDTH_PX}px }}
+            </style>"
+        )
+    }
+
+    /// Three tables nested one inside the other, ending in a single cell that
+    /// carries `label` at an explicit width.
+    fn nested_tables(label: &str) -> String {
+        format!(
+            "<table><tr><td>\
+               <table><tr><td>\
+                 <table><tr><td class=\"seed\">{label}</td></tr></table>\
+               </td></tr></table>\
+             </td></tr></table>"
+        )
+    }
+
+    /// Lay `body` out and report each table row's used column widths, outermost
+    /// row first. The parsed document dies with this call, which is what lets a
+    /// later layout reuse its addresses.
+    fn column_widths(body: &str) -> Vec<Vec<f32>> {
+        #[derive(Default)]
+        struct ColumnWidths(Vec<Vec<f32>>);
+
+        impl LayoutVisitor for ColumnWidths {
+            fn visit_table_row(&mut self, row: &TableRow) {
+                self.0.push(row.content.column_widths.clone());
+            }
+        }
+
+        let document = parse_html_with_styles(&format!("{}{body}", reset()))
+            .expect("valid nested table fixture");
+        let rules = document
+            .stylesheets
+            .iter()
+            .flat_map(|stylesheet| parse_stylesheet(stylesheet))
+            .collect::<Vec<_>>();
+        let pages = layout_with_rules(&document.nodes, PAGE, Margin::uniform(0.0), &rules);
+        let mut widths = ColumnWidths::default();
+        for page in &pages {
+            for (_, element) in &page.elements {
+                visit_layout_tree(element.as_ref(), &mut widths);
+            }
+        }
+        widths.0
+    }
+
+    /// CSS 2.1 § 17.5.2.2: a cell is never narrower than its content, and the
+    /// content of each enclosing cell here is the whole table below it. With no
+    /// padding, border, or spacing anywhere in the nest there is nothing for a
+    /// level to add, so every level reports the same width — the innermost
+    /// declared width once the label fits inside it.
+    #[test]
+    fn a_nest_carries_the_innermost_width_out_to_every_level() {
+        for label in ["i", "mmmmmmmmmmmmmmmm"] {
+            let widths = column_widths(&nested_tables(label));
+
+            assert_eq!(widths.len(), 3, "one row per nesting level: {widths:?}");
+            for level in &widths {
+                assert_eq!(level.len(), 1, "one column per level: {widths:?}");
+                assert!(
+                    level[0] >= SEED_WIDTH_PT,
+                    "a column narrower than the innermost cell it contains: {widths:?}"
+                );
+            }
+            assert!(
+                widths.windows(2).all(|pair| pair[0] == pair[1]),
+                "a level widened or narrowed content it only passes through: {widths:?}"
+            );
+        }
+        assert_eq!(
+            column_widths(&nested_tables("i")),
+            vec![vec![SEED_WIDTH_PT]; 3],
+            "a label narrower than the declared width leaves that width used"
+        );
+    }
+
+    /// A table's used column widths follow from its own content and its own
+    /// containing block, so putting two differently sized nests in one document
+    /// must size each exactly as it is sized on its own.
+    #[test]
+    fn sibling_nests_are_sized_from_their_own_content() {
+        let narrow = nested_tables("i");
+        let wide = nested_tables("mmmmmmmmmmmmmmmm");
+        let narrow_alone = column_widths(&narrow);
+        let wide_alone = column_widths(&wide);
+        assert_ne!(
+            narrow_alone, wide_alone,
+            "the two nests must differ for this to prove anything"
+        );
+
+        let together = column_widths(&format!("{narrow}{wide}"));
+
+        assert_eq!(together, [narrow_alone, wide_alone].concat());
+    }
+
+    /// Layout is a function of the document alone: what was rendered before it
+    /// in this process cannot show through. A per-cell measurement keyed by DOM
+    /// address must therefore die with the layout that took it, well before a
+    /// later document can be handed the same addresses.
+    #[test]
+    fn a_nest_is_sized_the_same_after_an_earlier_document_is_freed() {
+        let narrow = nested_tables("i");
+        let wide = nested_tables("mmmmmmmmmmmmmmmm");
+        let narrow_alone = column_widths(&narrow);
+        let wide_alone = column_widths(&wide);
+        assert_ne!(
+            narrow_alone, wide_alone,
+            "the two nests must differ for this to prove anything"
+        );
+
+        assert_eq!(column_widths(&narrow), narrow_alone, "narrow after narrow");
+        assert_eq!(column_widths(&wide), wide_alone, "wide after narrow");
+        assert_eq!(column_widths(&narrow), narrow_alone, "narrow after wide");
     }
 }
