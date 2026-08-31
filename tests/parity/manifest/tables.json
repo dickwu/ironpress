@@ -1413,7 +1413,7 @@
     "category": "tables",
     "feature": "table-cell-children",
     "subfeature": "inline-block-text-flow",
-    "description": "An inline-block in table-cell text remains on the same line, contributes its atomic width and baseline, and paints its border and background.",
+    "description": "An inline-block in table-cell text remains on the same line, contributes its atomic width and baseline, and paints its border and background. Explicit room after the table keeps this fixture independent from exact fragmentainer-boundary behavior.",
     "file": "cases/tables/tables-cell-inline-block-flow.html",
     "kind": "feature",
     "oracle": "chrome",

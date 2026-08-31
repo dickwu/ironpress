@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!--
+  Standards-derived oracle for svg-text-letter-spacing-units.
+
+  CSS Text 3 applies letter-spacing between adjacent typographic character
+  units, never at a line edge. SVG 2 delegates letter-spacing to that model and
+  anchors each text chunk from its initial and final text positions. Blink 150
+  instead includes one trailing letter-spacing value in the anchored extent.
+  The x coordinates below cancel only that legacy Blink offset: half of .1em
+  for the middle-anchored text, and one 2pt value for the end-anchored text.
+  The text, styling, font selection, and rendered glyphs remain unchanged.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>svg text letter spacing units</title>
+<style>
+  @page { size: 352px 176px; margin: 0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #ffffff; }
+  body { padding: 16px; }
+  svg { display: block; background: #f4f1de; }
+</style>
+</head>
+<body>
+  <svg width="320" height="144" viewBox="0 0 320 144" xmlns="http://www.w3.org/2000/svg">
+    <path d="M160 8V64M296 76V136" stroke="#e07a5f" stroke-width="2"></path>
+    <g font-family="'Missing, Face', Parity\53 ans, serif" fill="#1d3557">
+      <text x="161.4" y="48" text-anchor="middle" font-size="28" letter-spacing=".1em">office</text>
+      <text x="298.6666667" y="116" text-anchor="end" font-size="28" style="letter-spacing: 2pt">A&#x200B;B</text>
+    </g>
+  </svg>
+</body>
+</html>

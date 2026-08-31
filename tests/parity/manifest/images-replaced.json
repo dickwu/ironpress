@@ -567,8 +567,12 @@
     "category": "images-replaced",
     "feature": "inline-svg",
     "subfeature": "text-letter-spacing-units",
-    "description": "SVG text resolves em and absolute letter-spacing, suppresses optional ligatures, anchors by typographic character units, ignores a zero-width format character, and resolves quoted or escaped font-family stack entries.",
+    "description": "SVG text resolves em and absolute letter-spacing, suppresses optional ligatures, anchors by typographic character units, ignores a zero-width format character, and resolves quoted or escaped font-family stack entries. The verified standards-derived source offsets Blink's legacy trailing-letter-spacing contribution so the oracle represents CSS Text 3 edge-trimmed spacing.",
     "file": "cases/images-replaced/svg-text-letter-spacing-units.html",
+    "reference_file": "references/images-replaced/svg-text-letter-spacing-units.html",
+    "reference": {
+      "status": "verified"
+    },
     "kind": "feature",
     "oracle": "chrome",
     "expected_support": "implemented",
