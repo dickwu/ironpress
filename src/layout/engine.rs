@@ -2159,6 +2159,10 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
     // element regardless of where in the tree it lives.
     let mut filter_defs: HashMap<String, ElementNode> = HashMap::new();
     collect_id_defs(nodes, &mut filter_defs);
+    // Owned by this layout and dropped with it, so the DOM addresses the table
+    // auto-sizing pass records as keys stay valid for exactly as long as the
+    // memo can be consulted.
+    let mut table_cell_sizing = super::table::TableCellSizingMemo::default();
     let mut env = LayoutEnv {
         rules,
         fonts: custom_fonts,
@@ -2166,6 +2170,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         resources,
         filter_defs: &filter_defs,
         filter_dpi: raster_quality.filter_dpi,
+        table_cell_sizing: &mut table_cell_sizing,
     };
     if let Some(root) =
         RootFormattingContext::from_projected_body(nodes, &body_style, available_width)

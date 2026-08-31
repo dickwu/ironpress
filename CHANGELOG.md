@@ -7,13 +7,6 @@
 - Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
   verify static and shared consumers across the native platform matrix.
 
-### Changed
-
-- Font setup reuses bounded process-lifetime caches: `add_font`/`@font-face`
-  faces and system-font resolution are memoized in capped LRU tables, and every
-  parsed font owns its shaping face, so a warm process stops re-parsing and
-  re-resolving the same fonts on each `convert()` — with byte-identical output.
-
 ## [1.6.0] — 2026-08-26
 
 ### Added

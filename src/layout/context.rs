@@ -5,6 +5,7 @@ use crate::style::font_metrics::FontMetrics;
 use std::collections::HashMap;
 
 use super::engine::CounterState;
+use super::table::TableCellSizingMemo;
 
 /// Shared mutable environment for the layout traversal.
 ///
@@ -22,6 +23,12 @@ pub(crate) struct LayoutEnv<'a> {
     /// Rasterization DPI for layout-time filter bitmaps such as replaced-image
     /// `filter: blur()` and `filter: drop-shadow()`.
     pub filter_dpi: f32,
+    /// Measurements already taken by the table auto-sizing pass, owned by the
+    /// current top-level layout. Auto table layout re-measures a cell once per
+    /// sizing pass at every nesting level, so a deeply nested cell is otherwise
+    /// measured exponentially often; borrowing the memo from here keeps it alive
+    /// exactly as long as the DOM it describes.
+    pub table_cell_sizing: &'a mut TableCellSizingMemo,
 }
 
 impl<'a> LayoutEnv<'a> {
