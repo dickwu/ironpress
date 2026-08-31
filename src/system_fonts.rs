@@ -1,11 +1,13 @@
+use crate::bounded_cache::BoundedProcessCache;
 use crate::parser::css::{CssRule, CssValue, FontStretch, parse_inline_style};
 use crate::parser::dom::DomNode;
 use crate::parser::ttf::{FontFaceIndex, TtfFont, parse_ttf_with_index};
 use crate::style::computed::{FontFamily, FontStack, parse_font_stack};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroUsize;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 const FONT_VARIANTS: &[FontVariant] = &[
     FontVariant::new(false, false),
@@ -482,8 +484,7 @@ pub(crate) fn load_emoji_fallback_font(fonts: &mut HashMap<String, TtfFont>) {
     let db = system_fontdb();
     for family in EMOJI_FALLBACK_FAMILIES {
         let query = SystemFontQuery::new(family, FontVariant::new(false, false));
-        if let Some(font) = query_fontdb_font(db, &query).or_else(|| query_fontconfig_font(&query))
-        {
+        if let Some(font) = load_system_font_cached(db, &query) {
             fonts.insert(EMOJI_FALLBACK_KEY.to_string(), font);
             return;
         }
@@ -732,13 +733,48 @@ fn load_family_variants(db: &fontdb::Database, family: &str, fonts: &mut HashMap
         match fonts.entry(query.variant_key()) {
             Entry::Occupied(_) => {}
             Entry::Vacant(slot) => {
-                let Some(font) = load_system_font(db, &query) else {
+                let Some(font) = load_system_font_cached(db, &query) else {
                     continue;
                 };
                 slot.insert(font);
             }
         }
     }
+}
+
+/// How many resolved variant keys stay resident.
+///
+/// A document asks for a handful of families, each in up to four variants, plus
+/// the fallbacks, so a few hundred entries hold several documents' worth. CSS
+/// can name unlimited families, and misses are remembered too, so the ceiling is
+/// what keeps document input from growing this table for the life of the
+/// process.
+const SYSTEM_FONT_RESOLUTION_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(256).expect("system-font resolution capacity is non-zero");
+
+/// Resolved system fonts, keyed by variant key (family plus bold and italic).
+///
+/// Resolution queries the process-wide fontdb and parses the matched face. Both
+/// steps are deterministic for a given key, so repeating them for every
+/// page-requested family and for the emoji fallback on every render is pure
+/// repeat work. An absent family is stored as `None` on purpose: that negative
+/// entry is what stops a repeated miss from re-querying fontdb and re-spawning
+/// `fc-match`, and the capacity above is what makes keeping it safe.
+static SYSTEM_FONT_RESOLUTION_CACHE: LazyLock<BoundedProcessCache<String, Option<TtfFont>>> =
+    LazyLock::new(|| BoundedProcessCache::new(SYSTEM_FONT_RESOLUTION_CAPACITY));
+
+/// Memoized [`load_system_font`].
+///
+/// The variant key fully determines resolution, including the ui-sans-serif
+/// preference path, so a cached value is always what a fresh call would return.
+fn load_system_font_cached(db: &fontdb::Database, query: &SystemFontQuery<'_>) -> Option<TtfFont> {
+    let key = query.variant_key();
+    if let Some(resolved) = SYSTEM_FONT_RESOLUTION_CACHE.get(&key) {
+        return resolved;
+    }
+    let resolved = load_system_font(db, query);
+    SYSTEM_FONT_RESOLUTION_CACHE.insert(key, resolved.clone());
+    resolved
 }
 
 fn load_system_font(db: &fontdb::Database, query: &SystemFontQuery<'_>) -> Option<TtfFont> {
@@ -911,6 +947,7 @@ mod tests {
             is_italic: false,
             text_metrics: Default::default(),
             data: std::sync::Arc::new(vec![]),
+            shaping: None,
         }
     }
 

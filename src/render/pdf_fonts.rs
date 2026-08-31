@@ -723,6 +723,7 @@ mod tests {
             is_italic: false,
             text_metrics: Default::default(),
             data: std::sync::Arc::new(Vec::new()), // empty ⟹ subsetting always fails → fallback_font path
+            shaping: None,
         }
     }
 
@@ -742,6 +743,7 @@ mod tests {
             is_italic: false,
             text_metrics: Default::default(),
             data: std::sync::Arc::new(Vec::new()),
+            shaping: None,
         }
     }
 

@@ -54,6 +54,7 @@ fn custom_font_embedding_in_pdf() {
         is_italic: false,
         text_metrics: Default::default(),
         data: std::sync::Arc::new(vec![0u8; 64]), // Minimal dummy font data
+        shaping: None,
     };
     let mut fonts = HashMap::new();
     fonts.insert("TestFont".to_string(), ttf);
@@ -143,6 +144,7 @@ fn render_run_glyphs_falls_back_to_standard_font_when_custom_shaping_fails() {
         is_italic: false,
         text_metrics: Default::default(),
         data: std::sync::Arc::new(vec![0u8; 64]),
+        shaping: None,
     };
     let mut fonts = HashMap::new();
     fonts.insert(
@@ -193,6 +195,7 @@ fn tj_test_font() -> crate::parser::ttf::TtfFont {
         is_italic: false,
         text_metrics: Default::default(),
         data: std::sync::Arc::new(Vec::new()),
+        shaping: None,
     }
 }
 
