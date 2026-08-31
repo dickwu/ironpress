@@ -6,6 +6,36 @@
 
 - Conan 2 and vcpkg source recipes package the existing C and C++ bindings and
   verify static and shared consumers across the native platform matrix.
+- `HtmlConverter::measure_sentinel_tops` lays a document out through the full
+  `convert()` pipeline without rendering and returns the y-position of every
+  sentinel marker block, giving callers exact per-block flow heights for
+  external pagination.
+- SVG `<text>` honors `letter-spacing` from the presentation attribute or an
+  inline style with any CSS `<length>` (`em` resolves against the text's font
+  size). Tracking is applied per typographic character unit: zero-width
+  formatting characters receive none, optional ligatures are suppressed while
+  tracking is active, and the tracked advance positions `text-anchor`.
+
+### Changed
+
+- Font setup reuses bounded process-lifetime caches: `add_font`/`@font-face`
+  faces and system-font resolution are memoized in capped LRU tables, and every
+  parsed font owns its shaping face, so a warm process stops re-parsing and
+  re-resolving the same fonts on each `convert()` — with byte-identical output.
+- Auto table layout memoizes each cell's intrinsic widths within a layout,
+  collapsing the exponential re-measurement of nested tables (a depth-6 nest
+  converts about twice as fast) with byte-identical output.
+
+### Fixed
+
+- SVG `<text>` with a CSS font-family list (`"MyFace, Helvetica"`) resolves
+  registered custom faces, including quoted names that contain commas, and
+  every font the SVG renderer binds is also subset and embedded; `<text>`
+  inside CSS background-image SVGs uses the registered custom fonts instead of
+  always falling back to standard fonts.
+- An inline-tagged `display: inline-block` inside a table cell (form fill-in
+  underlines, checkbox squares) flows inline with the cell's sibling text
+  again instead of dropping onto its own stacked line below it.
 - SVG `<text>` honors `letter-spacing` from the presentation attribute or an
   inline style with any CSS `<length>` (`em` resolves against the text's font
   size). Tracking is applied per typographic character unit: zero-width
