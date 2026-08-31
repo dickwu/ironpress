@@ -96,6 +96,17 @@ jobs:
           echo "warm-up probe: $metrics"
           [ "$metrics" = 'data-fontations-ex="80px,200px,320px"' ]
 
+      - name: Route chromium-browser to the snap for the generator
+        run: |
+          set -euo pipefail
+          # The runner image ships /usr/bin/chromium-browser, which the
+          # generator's candidate order prefers but which hangs headless. A
+          # PATH shim makes that first candidate resolve to the snap the
+          # committed oracles were produced with.
+          mkdir -p "$RUNNER_TEMP/chromium-bin"
+          ln -sf /snap/bin/chromium "$RUNNER_TEMP/chromium-bin/chromium-browser"
+          echo "$RUNNER_TEMP/chromium-bin" >> "$GITHUB_PATH"
+
       - name: Generate missing oracles
         env:
           PARITY_JOBS: "2"
