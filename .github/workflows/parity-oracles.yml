@@ -65,6 +65,7 @@ jobs:
         run: scripts/parity-install-runtime.sh
 
       - name: Install snap Chromium (the distribution the committed oracles were produced with)
+        if: matrix.categories != ''
         timeout-minutes: 15
         run: |
           set -euo pipefail
@@ -72,6 +73,7 @@ jobs:
           /snap/bin/chromium --version
 
       - name: Warm up the snap and verify the Fontations probe
+        if: matrix.categories != ''
         env:
           FC_FONTATIONS: "1"
         run: |
@@ -97,6 +99,7 @@ jobs:
           [ "$metrics" = 'data-fontations-ex="80px,200px,320px"' ]
 
       - name: Route chromium-browser to the snap for the generator
+        if: matrix.categories != ''
         run: |
           set -euo pipefail
           # The runner image ships /usr/bin/chromium-browser, which the
@@ -113,6 +116,7 @@ jobs:
           echo "$RUNNER_TEMP/chromium-bin" >> "$GITHUB_PATH"
 
       - name: Generate missing oracles
+        if: matrix.categories != ''
         env:
           PARITY_JOBS: "2"
           CATEGORIES: ${{ matrix.categories }}
@@ -124,12 +128,26 @@ jobs:
           scripts/parity-gen-refs.sh --check
           git status --short tests/parity
 
+      # Mirrors the upstream gate's own freshness step; --check needs no
+      # browser, so a baseline-only entry still authenticates refs.lock
+      # against the fixtures it is about to accept.
+      - name: Refs-freshness gate (refs.lock vs. current fixtures)
+        run: scripts/parity-gen-refs.sh --check
+
       - name: Run parity gate (committed PDF oracles)
         continue-on-error: true
         env:
           FONTCONFIG_FILE: ${{ github.workspace }}/tests/parity/fonts/fonts.conf
           PARITY_PDFTOPPM: /usr/bin/pdftoppm
-        run: scripts/parity.sh
+          # "baseline": true accepts the current full run as the reviewed
+          # regression baseline (tests/parity/README.md, "An intentional full
+          # baseline replacement must be explicit"); corpus and reference
+          # integrity still gate.
+          PARITY_UPDATE_BASELINE: ${{ matrix.baseline == true && '1' || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PARITY_UPDATE_BASELINE}" ]; then unset PARITY_UPDATE_BASELINE; fi
+          scripts/parity.sh
 
       - name: Upload oracles, lock, and reports
         if: always()
@@ -141,6 +159,7 @@ jobs:
           path: |
             tests/parity/oracles/
             tests/parity/refs.lock
+            tests/parity/baseline.json
             tests/parity/report.json
             tests/parity/REPORT.md
             tests/parity/reports/
