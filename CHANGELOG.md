@@ -11,7 +11,9 @@
 
 - An inline-tagged `display: inline-block` inside a table cell (form fill-in
   underlines, checkbox squares) flows inline with the cell's sibling text
-  again instead of dropping onto its own stacked line below it.
+  again instead of dropping onto its own stacked line below it; a cell whose
+  only content is such a box paints it, and a relatively positioned one paints
+  above its in-flow siblings.
 
 ## [1.6.0] — 2026-08-26
 
