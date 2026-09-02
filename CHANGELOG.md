@@ -10,8 +10,8 @@
 ### Changed
 
 - Auto table layout memoizes each cell's intrinsic widths within a layout,
-  collapsing the exponential re-measurement of nested tables (a depth-6 nest
-  converts about twice as fast) with byte-identical output.
+  avoiding repeated nested-table measurement while preserving byte-identical
+  output. The retained Criterion benchmark covers nesting depths 1 through 8.
 
 ## [1.6.0] — 2026-08-26
 
