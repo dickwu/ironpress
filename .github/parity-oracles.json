@@ -3,15 +3,5 @@
     "ref": "feat/port-unique-work-1.6.0",
     "categories": "",
     "baseline": true
-  },
-  {
-    "ref": "fix/table-cell-inline-block-flow",
-    "categories": "",
-    "baseline": true
-  },
-  {
-    "ref": "feat/svg-text-letter-spacing",
-    "categories": "",
-    "baseline": true
   }
 ]
