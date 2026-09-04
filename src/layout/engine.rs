@@ -2164,6 +2164,7 @@ pub(crate) fn layout_with_rules_and_fonts_raster_quality(
         containing_block: None,
         percent_height_cb: None,
         root_font_size: parent_style.root_font_size,
+        inline_size_indefinite: false,
     };
     // Build a document-wide `id -> element` map so `filter: url(#id)`
     // (css-filter-effects-1 §3) can resolve to its inline SVG `<filter>`
@@ -11606,6 +11607,7 @@ line 3</pre>
             containing_block: None,
             percent_height_cb: None,
             root_font_size: 16.0,
+            inline_size_indefinite: false,
         };
         assert!((ctx.available_width() - 400.0).abs() < f32::EPSILON);
     }
@@ -11626,6 +11628,7 @@ line 3</pre>
             containing_block: None,
             percent_height_cb: None,
             root_font_size: 16.0,
+            inline_size_indefinite: false,
         };
         assert!((ctx.available_height() - 842.0).abs() < f32::EPSILON);
     }
@@ -11646,6 +11649,7 @@ line 3</pre>
             containing_block: None,
             percent_height_cb: None,
             root_font_size: 16.0,
+            inline_size_indefinite: false,
         };
         assert!((ctx.available_height() - 300.0).abs() < f32::EPSILON);
     }
@@ -11671,6 +11675,7 @@ line 3</pre>
             }),
             percent_height_cb: None,
             root_font_size: 16.0,
+            inline_size_indefinite: false,
         };
         let child = ctx.with_parent(200.0, Some(150.0), 12.0);
         assert!((child.viewport.width - 595.0).abs() < f32::EPSILON);
@@ -11699,6 +11704,7 @@ line 3</pre>
             containing_block: None,
             percent_height_cb: None,
             root_font_size: 16.0,
+            inline_size_indefinite: false,
         };
         let cb = ContainingBlock {
             x: 50.0,
