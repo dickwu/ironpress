@@ -224,7 +224,8 @@ jobs:
     if: github.event_name == 'release'
     needs: [package, consumer]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Central may spend up to 30 minutes waiting for the published state.
+    timeout-minutes: 45
     environment: release
     steps:
       - uses: actions/checkout@v7
