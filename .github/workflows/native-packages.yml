@@ -62,10 +62,10 @@ jobs:
       - name: Detect the native Conan profile
         run: conan profile detect --force
       - name: Build and test the static package
-        run: conan create packaging/conan/all --version=1.6.0 --build=missing
+        run: conan create packaging/conan/all --version=1.7.0 --build=missing
       - name: Build and test the shared package
         run: >-
-          conan create packaging/conan/all --version=1.6.0 --build=missing
+          conan create packaging/conan/all --version=1.7.0 --build=missing
           -o "ironpress/*:shared=True"
 
   vcpkg:

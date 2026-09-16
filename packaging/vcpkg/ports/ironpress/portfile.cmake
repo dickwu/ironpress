@@ -2,15 +2,15 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO gastongouron/ironpress
     REF "v${VERSION}"
-    SHA512 216d4a9622908a654e093b5803fccc846d2f8e29caaee4c750e04c0096603b0b78537eac9e4eb91c38ea6b6a0f25681f9d96fb57932dd28870d87226e5fa9a44
+    SHA512 a0342384cc530fd2fa1bb470a53df097d8bbb49e3faa21dee3eb0cba0c8db27d2bb4e6db70e169d4e61245061b5cded19fc443d160a0f611a6b226b12751c891
     HEAD_REF main
 )
 
 vcpkg_download_distfile(
     CARGO_LOCK
-    URLS "https://raw.githubusercontent.com/gastongouron/ironpress/11256bdeed794c8721777d8c52d420dd6ec433e0/Cargo.lock"
+    URLS "https://raw.githubusercontent.com/gastongouron/ironpress/0266ae633b064832c375add242200ade1e21bd37/Cargo.lock"
     FILENAME "ironpress-${VERSION}-Cargo.lock"
-    SHA512 05feb581d5dcb3af3ad11b947283e5c1e873997bb74786b2949fe7d058efc5d91151dc55e22aeff9ad1bb7f076c9fe6237f25ce588ec9679fbd3225997cecf00
+    SHA512 c2ed6d40ff9e3c87e16cd5daec68f00b6a29b64dd47fa08d448af6a6ef673ee52e290dca7294bffe13b8be793c3ce1c9c9c0c1f771d5c7ca28d25719250b287e
 )
 configure_file("${CARGO_LOCK}" "${SOURCE_PATH}/Cargo.lock" COPYONLY)
 
