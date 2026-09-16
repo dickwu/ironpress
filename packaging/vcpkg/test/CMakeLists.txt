@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(ironpress_vcpkg_consumers LANGUAGES C CXX)
 
-find_package(Ironpress 1.6.0 EXACT CONFIG REQUIRED)
+find_package(Ironpress 1.7.0 EXACT CONFIG REQUIRED)
 
 add_executable(
     ironpress_c_consumer
