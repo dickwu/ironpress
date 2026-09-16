@@ -35,8 +35,8 @@ Install Conan 2, detect the native profile, then create both linkage variants:
 
 ```bash
 conan profile detect --force
-conan create packaging/conan/all --version=1.6.0 --build=missing
-conan create packaging/conan/all --version=1.6.0 --build=missing \
+conan create packaging/conan/all --version=1.7.0 --build=missing
+conan create packaging/conan/all --version=1.7.0 --build=missing \
   -o 'ironpress/*:shared=True'
 ```
 
@@ -46,7 +46,7 @@ renders a PDF from independent C and C++ consumers.
 After creating the package locally, a project can resolve it with:
 
 ```bash
-conan install --requires=ironpress/1.6.0 --build=missing
+conan install --requires=ironpress/1.7.0 --build=missing
 ```
 
 ## Validate vcpkg
@@ -82,6 +82,6 @@ the immutable source archive and its checksum are part of each recipe.
 5. Let the full native CI matrix pass before opening external registry updates.
 
 The `v1.6.0` source tag predates the committed workspace lockfile, so its recipe
-uses the immutable lockfile from the corresponding release merge. Future
-release tags include `Cargo.lock`, which remains pinned separately so an absent
-or mismatched lock cannot silently produce an unlocked package.
+uses the immutable lockfile from the corresponding release merge. Starting with
+`v1.7.0`, release tags include `Cargo.lock`, which remains pinned separately so
+an absent or mismatched lock cannot silently produce an unlocked package.
