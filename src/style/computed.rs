@@ -14780,6 +14780,25 @@ mod tests {
     }
 
     #[test]
+    fn line_break_anywhere_parses_inherits_and_resets() {
+        // css-text-3 §5.3: `line-break` is inherited, its initial value is
+        // `auto`, and only `anywhere` adds a soft wrap opportunity around
+        // every typographic character unit.
+        let parent = ComputedStyle::default();
+        let anywhere = compute_style(HtmlTag::Span, Some("line-break: anywhere"), &parent);
+        assert!(anywhere.line_break_anywhere);
+        let strict = compute_style(HtmlTag::Span, Some("line-break: strict"), &parent);
+        assert!(!strict.line_break_anywhere);
+
+        let inherited = compute_style(HtmlTag::Span, None, &anywhere);
+        assert!(inherited.line_break_anywhere);
+        let explicit = compute_style(HtmlTag::Span, Some("line-break: inherit"), &anywhere);
+        assert!(explicit.line_break_anywhere);
+        let initial = compute_style(HtmlTag::Span, Some("line-break: initial"), &anywhere);
+        assert!(!initial.line_break_anywhere);
+    }
+
+    #[test]
     fn color_inherited() {
         let mut parent = ComputedStyle::default();
         parent.color = Color::rgb(255, 0, 0);
